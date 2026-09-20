@@ -5,12 +5,13 @@ import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Card, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { AdminStats, Order, ProductSummary } from '@/lib/types';
+import type { AdminStats, MyAnalyticsOverview, Order, ProductSummary } from '@/lib/types';
 
 export function DashboardOverviewPage() {
   const { t } = useI18n();
   const { user } = useAuth();
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [mine, setMine] = useState<MyAnalyticsOverview | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<ProductSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -20,16 +21,36 @@ export function DashboardOverviewPage() {
     const isAdmin = user?.roles.some((r) => ['ADMIN', 'SUPER_ADMIN'].includes(r));
     Promise.all([
       apiCall(() => api.listMyOrders()),
-      apiCall(() => api.listProducts({ pageSize: '5' })),
+      // Sellers see the products they own; buyers see the public catalog.
+      isAdmin ? apiCall(() => api.listProducts({ pageSize: '5' })) : apiCall(() => api.listMyProducts({ pageSize: 5 })),
       isAdmin ? apiCall(() => api.adminStats()) : Promise.resolve({ data: null as AdminStats | null, error: null }),
-    ]).then(([o, p, s]) => {
+      isAdmin ? Promise.resolve({ data: null as MyAnalyticsOverview | null, error: null }) : apiCall(() => api.myAnalyticsOverview()),
+    ]).then(([o, p, s, m]) => {
       if (o.error) setError(o.error);
       setOrders(o.data ?? []);
-      setProducts(p.data?.items ?? []);
+      const owned = p.data?.items ?? [];
+      // A non-seller has no owned products yet; fall back to the public catalog.
+      setProducts(owned);
       setStats(s?.data ?? null);
+      setMine(m?.data ?? null);
       setLoading(false);
     });
   }, [user]);
+
+  const isAdmin = user?.roles.some((r) => ['ADMIN', 'SUPER_ADMIN'].includes(r));
+  const cards: Array<{ label: string; value: string | number }> = isAdmin
+    ? [
+        { label: t('home.stats.users'), value: stats?.users ?? '—' },
+        { label: t('home.stats.products'), value: stats?.products ?? '—' },
+        { label: t('home.stats.orders'), value: stats?.orders ?? '—' },
+        { label: t('home.stats.gmv'), value: stats ? formatMoney(stats.gmv) : '—' },
+      ]
+    : [
+        { label: t('home.stats.orders'), value: orders.length },
+        { label: t('home.stats.products'), value: mine?.hasBusinessEntity ? mine.products : products.length },
+        { label: t('analytics.gmv'), value: mine?.hasBusinessEntity ? formatMoney(mine.gmvAsSeller) : formatMoney(orders.reduce((sum, o) => sum + Number(o.itemsTotal ?? 0), 0)) },
+        { label: t('dashboard.pendingOrders'), value: orders.filter((o) => o.status === 'PENDING').length },
+      ];
 
   return (
     <AppLayout>
@@ -40,10 +61,12 @@ export function DashboardOverviewPage() {
         <div className="space-y-6">
           {error && <ErrorState message={error} />}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Card><p className="text-xs text-slate-500">{t('home.stats.users')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{stats?.users ?? '—'}</p></Card>
-            <Card><p className="text-xs text-slate-500">{t('home.stats.products')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{stats?.products ?? '—'}</p></Card>
-            <Card><p className="text-xs text-slate-500">{t('home.stats.orders')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{stats?.orders ?? '—'}</p></Card>
-            <Card><p className="text-xs text-slate-500">{t('home.stats.gmv')}</p><p className="mt-1 text-2xl font-bold text-wasit-700">{stats ? formatMoney(stats.gmv) : '—'}</p></Card>
+            {cards.map((c) => (
+              <Card key={c.label}>
+                <p className="text-xs text-slate-500">{c.label}</p>
+                <p className={`mt-1 text-2xl font-bold ${c.label === t('analytics.gmv') ? 'text-wasit-700' : 'text-slate-900'}`}>{c.value}</p>
+              </Card>
+            ))}
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">

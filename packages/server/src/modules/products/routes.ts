@@ -4,7 +4,7 @@ import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody, validateQuery, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
-import { createProduct, getProduct, listMyProducts, listProducts, updateProductStatus } from './service.js';
+import { createProduct, getProduct, listMyProducts, listMySellerEntities, listProducts, updateProductStatus } from './service.js';
 import { db } from '../../db/client.js';
 import { assertSellerOwnership as assertSellerOwnershipDb } from '../../lib/seller-ownership.js';
 
@@ -70,6 +70,12 @@ productsRoutes.get('/', validateQuery(listProductsSchema), async (c) => {
 });
 
 // Declared before `/:id` so "mine" is never parsed as a product id.
+productsRoutes.get('/mine/entities', requireAuth, async (c) => {
+  const ctx = getContext(c);
+  const items = await listMySellerEntities(ctx.db, ctx.user!.id);
+  return c.json({ success: true, data: { items } });
+});
+
 productsRoutes.get('/mine', requireAuth, validateQuery(myProductsQuerySchema), async (c) => {
   const query = getValidatedQuery<z.infer<typeof myProductsQuerySchema>>(c);
   const ctx = getContext(c);

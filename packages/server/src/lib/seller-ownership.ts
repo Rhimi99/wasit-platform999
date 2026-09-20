@@ -22,6 +22,36 @@ export async function resolveOwnedSellerIds(db: DB, userId: string): Promise<str
   return (r.rows ?? []).map((row) => row.id);
 }
 
+export interface OwnedSellerEntity {
+  id: string;
+  sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+  name: string;
+}
+
+/**
+ * Lists the seller entities owned by a user, with the display name and
+ * seller type needed to publish products. Keeps `seller_id` resolution and
+ * entity naming in one place so the UI never has to guess an entity id.
+ */
+export async function listOwnedSellerEntities(db: DB, userId: string): Promise<OwnedSellerEntity[]> {
+  const rows = await db.execute<{ id: string; seller_type: string; name: string }>(sql`
+    select id, seller_type, name from (
+      select id, user_id, 'SUPPLIER' as seller_type, company_name as name from suppliers
+      union all
+      select id, user_id, 'MERCHANT' as seller_type, store_name as name from merchants
+      union all
+      select id, user_id, 'COMPANY' as seller_type, legal_name as name from companies
+    ) owned where user_id = ${userId}
+    order by name
+  `) as never;
+  const r = rows as unknown as { rows: { id: string; seller_type: string; name: string }[] };
+  return (r.rows ?? []).map((row) => ({
+    id: row.id,
+    sellerType: row.seller_type as OwnedSellerEntity['sellerType'],
+    name: row.name,
+  }));
+}
+
 /**
  * Resolves the owning user id for a seller entity (supplier/merchant/company).
  * Inverse of {@link resolveOwnedSellerIds} — used when an entity id (e.g. the

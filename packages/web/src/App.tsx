@@ -10,7 +10,7 @@ import { MerchantsPage, MerchantsDetailPage } from './pages/MerchantsPage';
 import { CompaniesPage, CompaniesDetailPage } from './pages/CompaniesPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
-import { ForgotPasswordPage, ResetPasswordPage } from './pages/AuthPages';
+import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/AuthPages';
 import { CheckoutPage } from './pages/CheckoutPage';
 import { RequireAuth } from './components/layouts/AppLayout';
 import { DashboardOverviewPage } from './pages/DashboardOverviewPage';
@@ -24,7 +24,7 @@ import { DashboardInventoryPage, DashboardComparisonPage, DashboardSalesPage } f
 import { DashboardListPage, DashboardFinancePage, DashboardReportsPage } from './pages/DashboardListPages';
 import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
-import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage } from './pages/AdminPages';
+import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
@@ -52,6 +52,7 @@ export default function App() {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
 
       {/* Protected */}
       <Route path="/checkout" element={<RequireAuth><CheckoutPage /></RequireAuth>} />
@@ -90,6 +91,7 @@ export default function App() {
       <Route path="/admin" element={<RequireAuth><AdminOnly><AdminDashboardPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/analytics" element={<RequireAuth><AdminOnly><AdminAnalyticsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/users" element={<RequireAuth><AdminOnly><AdminUsersPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/products" element={<RequireAuth><AdminOnly><AdminProductsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ledger" element={<RequireAuth><AdminOnly><AdminLedgerPage /></AdminOnly></RequireAuth>} />

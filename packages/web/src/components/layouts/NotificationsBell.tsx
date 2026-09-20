@@ -89,7 +89,7 @@ export function NotificationsBell() {
                 >
                   <div className="flex w-full items-center justify-between">
                     <span className={`text-sm ${n.readAt ? 'font-medium text-slate-600' : 'font-semibold text-slate-800'}`}>
-                      {notifTitle(n, t('notifications.type.MESSAGE.NEW'))}
+                      {notifTitle(n, t)}
                     </span>
                     {!n.readAt && <span className="h-2 w-2 shrink-0 rounded-full bg-wasit-500" />}
                   </div>
@@ -112,7 +112,14 @@ export function NotificationsBell() {
   );
 }
 
-function notifTitle(n: NotificationItem, fallback: string): string {
+/**
+ * A notification carries the title the server wrote for it; older/plain rows
+ * fall back to the localized label for the type.
+ */
+function notifTitle(n: NotificationItem, t: (k: string) => string): string {
+  if (n.title) return n.title;
   if (n.data?.title && typeof n.data.title === 'string') return n.data.title;
-  return fallback;
+  const key = `notifications.type.${n.type}`;
+  const localized = t(key);
+  return localized === key ? n.type : localized;
 }

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, ApiClientError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { Card } from '@/components/ui';
@@ -44,6 +44,52 @@ export function ForgotPasswordPage() {
               <button className="btn-primary w-full" type="submit">Send</button>
             </form>
           )}
+        </Card>
+      </div>
+    </PublicLayout>
+  );
+}
+
+export function VerifyEmailPage() {
+  const { t } = useI18n();
+  const [params] = useSearchParams();
+  const token = params.get('token') ?? '';
+  const [state, setState] = useState<'pending' | 'done' | 'error'>('pending');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) {
+      setState('error');
+      setError(t('auth.verifyMissingToken'));
+      return;
+    }
+    let active = true;
+    (async () => {
+      try {
+        await api.verifyEmail(token);
+        if (active) setState('done');
+      } catch (err) {
+        if (!active) return;
+        setError(err instanceof ApiClientError ? err.message : String(err));
+        setState('error');
+      }
+    })();
+    return () => { active = false; };
+  }, [token, t]);
+
+  return (
+    <PublicLayout>
+      <div className="mx-auto flex max-w-md flex-col justify-center px-4 py-12">
+        <Card className="p-6">
+          <h1 className="text-xl font-bold text-slate-900">{t('auth.verifyTitle')}</h1>
+          {state === 'pending' && <p className="mt-4 text-sm text-slate-600">{t('common.loading')}</p>}
+          {state === 'done' && (
+            <div role="status">
+              <p className="mt-4 text-sm text-green-700">{t('auth.verifySuccess')}</p>
+              <Link to="/login" className="btn-primary mt-4 block text-center">{t('auth.login')}</Link>
+            </div>
+          )}
+          {state === 'error' && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}
         </Card>
       </div>
     </PublicLayout>

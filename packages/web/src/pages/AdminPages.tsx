@@ -337,6 +337,67 @@ export function AdminLedgerPage() {
   );
 }
 
+export function AdminProductsPage() {
+  const { t } = useI18n();
+  const [products, setProducts] = useState<Array<{ id: string; name: string; sku: string; status: string; sellerId: string; basePrice: string }>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    const res = await apiCall(() => api.adminProducts());
+    setProducts(res.data?.items ?? []);
+    setError(res.error);
+    setLoading(false);
+  };
+  useEffect(() => { void load(); }, []);
+
+  async function suspend(id: string) {
+    setBusyId(id);
+    const res = await apiCall(() => api.adminSuspendProduct(id));
+    if (res.error) setError(res.error);
+    setBusyId(null);
+    await load();
+  }
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.products')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : products.length === 0 ? <EmptyState title={t('common.noData')} /> : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>{t('nav.products')}</th><th>SKU</th><th>{t('field.seller')}</th><th>{t('common.price')}</th><th>{t('common.status')}</th><th /></tr></thead>
+            <tbody>
+              {products.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.name}</td>
+                  <td className="text-xs">{p.sku}</td>
+                  <td className="text-xs" dir="ltr">{p.sellerId}</td>
+                  <td>{formatMoney(p.basePrice)}</td>
+                  <td><Badge color={p.status === 'ACTIVE' ? 'green' : p.status === 'SUSPENDED' ? 'red' : 'slate'}>{p.status}</Badge></td>
+                  <td>
+                    {p.status !== 'SUSPENDED' && (
+                      <button
+                        type="button"
+                        disabled={busyId === p.id}
+                        onClick={() => void suspend(p.id)}
+                        className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+                      >
+                        {t('admin.suspend')}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}
+
 export function AdminAuditPage() {
   const { t } = useI18n();
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);

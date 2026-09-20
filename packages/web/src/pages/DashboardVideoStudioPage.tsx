@@ -31,7 +31,7 @@ export function DashboardVideoStudioPage() {
       apiCall(() => api.listMyMedia({ kind: 'MARKETING_VIDEO', limit: 50 })),
     ]);
     if (p.data) setProducts(p.data.items);
-    if (m.data) setLibrary(m.data.items);
+    if (m.data) setLibrary(m.data.items.filter((a) => a.status !== 'DELETED'));
     setError(p.error && m.error ? p.error : null);
     setLoading(false);
   }, []);
@@ -76,8 +76,8 @@ export function DashboardVideoStudioPage() {
         <Card>
           <form onSubmit={generate} className="grid gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <label className="label">{t('studio.product')} *</label>
-              <select value={productId} onChange={(e) => setProductId(e.target.value)} className="input" required>
+              <label className="label" htmlFor="v-product">{t('studio.product')} *</label>
+              <select id="v-product" value={productId} onChange={(e) => setProductId(e.target.value)} className="input" required>
                 <option value="">{t('studio.selectProduct')}</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -88,26 +88,26 @@ export function DashboardVideoStudioPage() {
               {products.length === 0 && <p className="mt-1 text-xs text-amber-600">{t('studio.noProducts')}</p>}
             </div>
             <div>
-              <label className="label">{t('studio.language')}</label>
-              <select value={language} onChange={(e) => setLanguage(e.target.value as never)} className="input">
+              <label className="label" htmlFor="v-language">{t('studio.language')}</label>
+              <select id="v-language" value={language} onChange={(e) => setLanguage(e.target.value as never)} className="input">
                 {LANGUAGES.map((l) => <option key={l} value={l}>{l.toUpperCase()}</option>)}
               </select>
             </div>
             <div>
-              <label className="label">{t('studio.audience')}</label>
-              <select value={audience} onChange={(e) => setAudience(e.target.value as never)} className="input">
+              <label className="label" htmlFor="v-audience">{t('studio.audience')}</label>
+              <select id="v-audience" value={audience} onChange={(e) => setAudience(e.target.value as never)} className="input">
                 {AUDIENCES.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>
             </div>
             <div>
-              <label className="label">{t('studio.style')}</label>
-              <select value={style} onChange={(e) => setStyle(e.target.value as never)} className="input">
+              <label className="label" htmlFor="v-style">{t('studio.style')}</label>
+              <select id="v-style" value={style} onChange={(e) => setStyle(e.target.value as never)} className="input">
                 {STYLES.map((s2) => <option key={s2} value={s2}>{s2}</option>)}
               </select>
             </div>
             <div>
-              <label className="label">{t('studio.duration')}</label>
-              <input
+              <label className="label" htmlFor="v-duration">{t('studio.duration')}</label>
+              <input id="v-duration"
                 type="number"
                 min={4}
                 max={60}

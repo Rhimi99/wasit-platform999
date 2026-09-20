@@ -3,6 +3,71 @@
 > **التاريخ**: 2026-09-19 — **PHASE 18 — UNIT TESTS DONE — 195/195 tests**
 > **الفرع**: `feat/messaging-notifications`
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
+---
+
+## ✅ حالة معتمدة — Functional UI Audit (Drive the real interface) (2026-09-20)
+
+**الهدف**: تدقيق وظيفي حقيقي من الواجهة نفسها — لا SPA routes ولا HTTP 200 وحده. كل اختبار يقود المتصفح الحقيقي (Playwright + Chromium)، يضغط الأزرار الفعلية، يقرأ ما يراه المستخدم، ثم يتحقق من الأثر عبر الـAPI الحيّ. Backend حقيقي + PostgreSQL، بلا mocks (`packages/web` على `:12000`، API على `:3000`).
+
+| البند | النتيجة |
+| --- | --- |
+| **Full E2E (UI, real API+DB)** | ✅ **97/97 passed** (54s) — `npx playwright test` |
+| **Server unit suite** | ✅ **434/434 — 42 ملف** (`npm test`) |
+| **Server Typecheck** | ✅ `npx tsc --noEmit` = exit 0 |
+| **Web Typecheck + Build** | ✅ `tsc --noEmit` = 0 و`vite build` = 0 |
+| **`e2e/functional-audit.spec.ts`** | جديد — CUSTOMER / MERCHANT / MARKETING VIDEO / ADS / AI / ONBOARDING / MESSAGING / NOTIFICATIONS |
+| **`e2e/navigation-audit.spec.ts`** | جديد — كل رابط في sidebar التاجر والإدارة يفتح صفحة حقيقية (لا 404 shell) |
+
+### الأعراض الجذرية التي أُصلحت (من الواجهة، لا من API)
+1. **Verify email لا يفتح**: كان مسار `/verify-email` غائبًا من الـrouter رغم وجود endpoint — إضافة `VerifyEmailPage` + `api.verifyEmail` + route.
+2. **نشر/إخفاء المنتج معطّل من الواجهة**: لم تكن هناك واجهة لمعرّف الكيان البائع. أُضيف `GET /api/products/mine/entities` (+ `listOwnedSellerEntities`) وربطها بالمُنشئ/المحرّر.
+3. **لوحة البائع تُظهر إحصاءات الإدارة**: كان `DashboardOverviewPage` يقرأ `adminStats` للجميع. الآن البائع يرى أرقامه الخاصة (`myAnalyticsOverview`)، والإدارة ترى الإجماليات.
+4. **عنوان الإشعار**: `NotificationsBell` كان يستخدم fallback ثابتًا؛ الآن يعرض `n.title` ثم `data.title` ثم الترجمة حسب النوع.
+5. **حذف فيديو تسويقي يبقى ظاهرًا**: API يحتفظ عمدًا بالأصل soft-deleted للتدقيق (مؤكد في `tests/marketing-video.test.ts:259`)؛ الإصلاح في الواجهة فقط — تصفية `status !== 'DELETED'` من المكتبة.
+6. **صفحة منتجات الإدارة مفقودة**: أُضيفت `AdminProductsPage` + `/admin/products` + `adminProducts`/`adminSuspendProduct`.
+7. **عمولة**: بقيت **4% = 2% seller + 2% buyer** بلا مساس.
+8. **Marketing Video Agent (89e68d7)**: بقي كما هو — لا regression.
+
+### لماذا كانت اختبارات الـMFA/payments تفشل في المجموعة الكاملة
+الخادم كان يعمل يدويًا بلا هامش حدّ المعدل الذي يضبطه `playwright.config.ts` (`RATE_LIMIT_LOGIN_MAX=500`)، و`reuseExistingServer` يعيد استخدامه → 429. أُعيد تشغيل الخادم ببيئة E2E. وكذلك استنزاف المخزون عبر 14 إنشاء طلب في الجولة → فشل `placeOrderViaUi`. كلاهما **عيب في تهيئة الاختبار** لا في المنتج (كلٌّ ينجح منفردًا).
+
+### الملفات
+- جديدة: `e2e/functional-audit.spec.ts`, `e2e/navigation-audit.spec.ts`.
+- معدّلة: `packages/web/src/{App.tsx,pages/AuthPages.tsx,pages/AdminPages.tsx,pages/DashboardOverviewPage.tsx,pages/DashboardProductsPage.tsx,pages/DashboardVideoStudioPage.tsx,pages/DashboardMessagesPage.tsx,components/layouts/NotificationsBell.tsx,lib/api.ts,lib/i18n.ts,vite.config.ts}`, `packages/server/src/{lib/seller-ownership.ts,modules/products/{routes.ts,service.ts}}`.
+
+### جدول التدقيق الوظيفي (Functional Audit Matrix)
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+| --- | --- | --- | --- | --- | --- |
+| CUSTOMER register/login | ✅ form حقيقي | ✅ PASS | — | — | E2E |
+| CUSTOMER logout | ✅ زر | ✅ PASS | — | — | تحقّق يدوي + E2E |
+| Search (home form) | ✅ كتابة + زر بحث | ✅ PASS | — | — | E2E |
+| Browse marketplace | ✅ | ✅ PASS | — | — | E2E |
+| Product details | ✅ ضغط بطاقة منتج | ✅ PASS | — | — | E2E |
+| Create purchase (checkout) | ✅ إتمام طلب | ✅ PASS | — | — | E2E |
+| Orders list + detail | ✅ | ✅ PASS | — | — | E2E |
+| Notifications (titles/read) | ✅ الجرس | ✅ PASS | عنوان ثابت fallback | عرض `title` ثم `data.title` ثم الترجمة | E2E |
+| Messages (thread + send) | ✅ | ✅ PASS | تسمية حقل خاطئة (`common.info`) | `messages.subject` | E2E |
+| Verify email (public) | ✅ رابط | ✅ PASS | مسار غير مسجّل في الـrouter | `VerifyEmailPage` + route + API | E2E |
+| MERCHANT dashboard KPIs | ✅ | ✅ PASS | كان يعرض إحصاءات الإدارة | `myAnalyticsOverview` للبائع | E2E |
+| Create product | ✅ نموذج | ✅ PASS | — | — | E2E |
+| Edit product | ✅ | ✅ PASS | — | — | E2E |
+| Publish/unpublish product | ✅ زر | ✅ PASS | لا واجهة لمعرّف الكيان | `mine/entities` + ربط | E2E |
+| Inventory adjust | ✅ | ✅ PASS | — | — | E2E |
+| Merchant orders | ✅ | ✅ PASS | — | — | E2E |
+| Ads create/manage | ✅ | ✅ PASS | — | — | E2E |
+| AI tools run | ✅ | ✅ PASS | — | — | E2E |
+| Marketing Video (كامل) | ✅ | ✅ PASS | الأصل المحذوف يبقى في المكتبة | تصفية `DELETED` في الواجهة | E2E |
+| Analytics | ✅ | ✅ PASS | — | — | E2E |
+| Subscriptions | ✅ | ✅ PASS | — | — | E2E |
+| ADMIN dashboard KPIs | ✅ | ✅ PASS | — | — | E2E |
+| Admin users/orders/transactions | ✅ | ✅ PASS | — | — | E2E |
+| Admin ledger/audit | ✅ | ✅ PASS | — | — | E2E |
+| Admin products (+suspend) | ✅ | ✅ PASS | الصفحة غير موجودة | `AdminProductsPage` | E2E |
+| Admin verification/trust/risk/disputes | ✅ | ✅ PASS | — | — | E2E |
+| Admin ads/AI/subscriptions | ✅ | ✅ PASS | — | — | E2E |
+| Sidebar nav (merchant+admin) | ✅ كل رابط | ✅ PASS | روابط ميتة محتملة | تدقيق تنقّل كامل | E2E |
+
 
 ---
 

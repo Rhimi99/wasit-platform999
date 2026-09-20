@@ -56,7 +56,7 @@ function NewThreadModal({ open, onClose, onCreated }: NewThreadModalProps) {
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-500">{t('common.info')}</label>
+            <label className="mb-1 block text-xs font-medium text-slate-500">{t('messages.subject')}</label>
             <input
               className="input"
               placeholder="Subject"

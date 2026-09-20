@@ -12,7 +12,7 @@ import { newId } from '../../lib/ids.js';
 import { toDecimal, assertNonNegative } from '../../lib/money.js';
 import { ensureInventoryItem } from '../../lib/inventory-engine.js';
 import { inventoryItems } from '../../db/schema/commerce_extras.js';
-import { resolveOwnedSellerIds } from '../../lib/seller-ownership.js';
+import { resolveOwnedSellerIds, listOwnedSellerEntities, type OwnedSellerEntity } from '../../lib/seller-ownership.js';
 
 export type SellerType = 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
 
@@ -47,6 +47,11 @@ export function slugify(value: string): string {
     .replace(/[^a-z0-9\u0600-\u06FF]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 200);
+}
+
+/** Lists the seller entities (supplier/merchant/company) owned by a user. */
+export async function listMySellerEntities(db: DB, userId: string): Promise<OwnedSellerEntity[]> {
+  return listOwnedSellerEntities(db, userId);
 }
 
 /** Lists every product owned by a user's business entities (any status). */

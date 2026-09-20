@@ -10,9 +10,11 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: Number(process.env.WEB_PORT ?? 5173),
     host: true,
     allowedHosts: [
+      'work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
+      'work-2-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
       'work-1-qpzssfljriaoounj.prod-runtime.all-hands.dev',
       'work-2-qpzssfljriaoounj.prod-runtime.all-hands.dev',
     ],

@@ -117,6 +117,9 @@ export const api = {
   async resetPassword(token: string, newPassword: string) {
     return request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) });
   },
+  async verifyEmail(token: string) {
+    return request('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
+  },
 
   // ---- Health ----
   async healthReady() {
@@ -141,6 +144,12 @@ export const api = {
     if (params?.pageSize) qs.set('pageSize', String(params.pageSize));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<{ items: ProductSummary[]; pagination: PaginationInfo }>(`/api/products/mine${suffix}`);
+  },
+  async listMySellerEntities() {
+    return request<{ items: Array<{ id: string; sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY'; name: string }> }>('/api/products/mine/entities');
+  },
+  async updateProductStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED' | 'SUSPENDED') {
+    return request<{ success: boolean }>(`/api/products/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
   },
 
   // ---- Media (marketing videos) ----
@@ -333,6 +342,12 @@ export const api = {
   },
   async adminAuditLogs() {
     return request<{ items: Array<Record<string, unknown>> }>('/api/admin/audit-logs');
+  },
+  async adminProducts() {
+    return request<{ items: Array<{ id: string; name: string; sku: string; status: string; sellerId: string; basePrice: string }> }>('/api/admin/products');
+  },
+  async adminSuspendProduct(id: string) {
+    return request<{ success: boolean }>(`/api/products/${id}/suspend`, { method: 'PATCH' });
   },
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
