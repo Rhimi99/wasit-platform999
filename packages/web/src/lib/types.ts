@@ -1,0 +1,772 @@
+// أنواع مشتركة للواجهة تعكس عقود الـ API الحقيقية للخادم
+
+export type UserRole = 'CUSTOMER' | 'MERCHANT' | 'SUPPLIER' | 'COMPANY' | 'MARKETER' | 'SUPPORT' | 'RISK' | 'DISPUTE' | 'ADMIN' | 'SUPER_ADMIN';
+
+export const USER_ROLES: UserRole[] = [
+  'CUSTOMER', 'MERCHANT', 'SUPPLIER', 'COMPANY', 'MARKETER',
+  'SUPPORT', 'RISK', 'DISPUTE', 'ADMIN', 'SUPER_ADMIN',
+];
+
+export interface User {
+  id: string;
+  email: string;
+  emailVerified: boolean;
+  isActive: boolean;
+  roles: UserRole[];
+}
+
+/** Login either returns a User or, when MFA is enabled, a pending challenge. */
+export type LoginResponse =
+  | (User & { mfaRequired: false })
+  | { mfaRequired: true; challengeToken: string; expiresAt: string };
+
+export interface MfaStatus {
+  mfaEnabled: boolean;
+  pendingEnrollment: boolean;
+}
+
+export interface MfaEnrollment {
+  secretBase32: string;
+  qrUri: string;
+  recoveryCodes: string[];
+}
+
+export interface ApiErrorShape {
+  code: string;
+  message: string;
+  statusCode?: number;
+  fieldErrors?: Record<string, string[]>;
+  traceId?: string;
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: ApiErrorShape;
+}
+
+export interface PaginationInfo {
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export type SellerType = 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
+
+export interface ProductSummary {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  nameFr: string | null;
+  slug: string;
+  brand: string | null;
+  sku: string;
+  basePrice: string;
+  currencyCode: string;
+  moq: number | null;
+  unit: string | null;
+  sellerId: string;
+  sellerType: SellerType;
+  categoryId: string;
+  countryId: string | null;
+  purchaseIntent: 'B2B' | 'B2C' | null;
+  status: string;
+  createdAt: string;
+  image: string | null;
+}
+
+export interface MediaAsset {
+  id: string;
+  kind: string;
+  status: string;
+  title: string;
+  productId: string | null;
+  campaignId: string | null;
+  mimeType: string;
+  extension: string;
+  sizeBytes: number;
+  durationSeconds: number | null;
+  width: number | null;
+  height: number | null;
+  provider: string;
+  language: string;
+  previewable: boolean;
+  downloadable: boolean;
+  createdAt: string;
+  updatedAt: string;
+  previewUrl: string | null;
+  downloadUrl: string | null;
+}
+
+export interface ProductDetail extends ProductSummary {
+  description: string | null;
+  barcode: string | null;
+  specifications: Record<string, unknown> | null;
+  isPublished: boolean;
+  images: Array<{ id: string; url: string; altText: string | null; isPrimary: boolean; sortOrder: number }>;
+  variants: Array<{ id: string; name: string; sku: string; price: string; attributes: Record<string, unknown> | null }>;
+  category: { id: string; name: string; nameAr: string | null; slug: string } | null;
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  nameFr: string | null;
+  slug: string;
+  parentId: string | null;
+  description: string | null;
+  icon: string | null;
+  isActive: boolean | null;
+  sortOrder: number | null;
+}
+
+export interface SupplierSummary {
+  id: string;
+  companyName: string;
+  slug: string;
+  verified: boolean | null;
+  countryId: string | null;
+  logoUrl: string | null;
+}
+
+export interface MerchantSummary {
+  id: string;
+  storeName: string;
+  slug: string;
+  verified: boolean | null;
+  countryId: string | null;
+  logoUrl: string | null;
+}
+
+export interface CompanySummary {
+  id: string;
+  legalName: string;
+  slug: string;
+  verified: boolean | null;
+  countryId: string | null;
+  logoUrl: string | null;
+}
+
+export interface SearchResultGroup {
+  type: string;
+  count: number;
+  items: Array<Record<string, unknown>>;
+}
+
+export interface SearchResponse {
+  query: string;
+  page: number;
+  pageSize: number;
+  results: SearchResultGroup[];
+}
+
+export type LibraryEntityType = 'PRODUCT' | 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+
+/** schema.org JSON-LD object returned by `/structured-data/:type/:id`. */
+export type JsonLd = Record<string, unknown>;
+
+export interface FavoriteRow {
+  id: string;
+  entityType: LibraryEntityType;
+  entityId: string;
+  createdAt: string;
+  title: string | null;
+  slug: string | null;
+  subtitle: string | null;
+  available: boolean;
+}
+
+export interface SavedItemRow {
+  id: string;
+  itemType: LibraryEntityType;
+  itemId: string;
+  notes: string | null;
+  createdAt: string;
+  title: string | null;
+  slug: string | null;
+  available: boolean;
+}
+
+export interface SearchHistoryRow {
+  id: string;
+  query: string;
+  filters: Record<string, unknown> | null;
+  resultsCount: string | null;
+  createdAt: string;
+}
+
+export interface LibraryListResponse<T> {
+  items: T[];
+  pagination: PaginationInfo;
+}
+
+export interface OrderItem {
+  id: string;
+  productId: string;
+  productName: string | null;
+  unitPrice: string;
+  quantity: number;
+  lineTotal: string;
+}
+
+export interface Order {
+  id: string;
+  orderNumber: string;
+  buyerId: string;
+  sellerId: string;
+  currencyCode: string;
+  itemsTotal: string;
+  commission: string;
+  buyerCommission: string;
+  paymentFee: string;
+  grandTotal: string;
+  status: string;
+  createdAt: string;
+  items?: OrderItem[];
+  seller?: { id: string; name: string; type: SellerType };
+}
+
+// ---- Inventory ----
+export interface InventoryItem {
+  id: string;
+  productId: string;
+  productVariantId: string | null;
+  merchantId: string;
+  quantity: number;
+  reservedQuantity: number;
+  lowStockThreshold: number;
+  availableQuantity: number;
+  lowStock: boolean;
+  outOfStock: boolean;
+  updatedAt: string;
+  productName: string;
+  productNameAr: string | null;
+  productSku: string;
+  productStatus: string;
+  variantSku: string | null;
+  variantName: string | null;
+  currencyCode: string;
+  basePrice: string;
+}
+
+export interface InventoryItemDetail extends InventoryItem {
+  product: {
+    id: string;
+    name: string;
+    nameAr: string | null;
+    sku: string;
+    basePrice: string;
+    currencyCode: string;
+    status: string;
+  } | null;
+  variant: { id: string; name: string; sku: string; price: string } | null;
+}
+
+export interface InventoryMovement {
+  id: string;
+  inventoryItemId: string;
+  movementType: 'PURCHASE' | 'SALE' | 'ADJUSTMENT' | 'RETURN' | 'RESERVATION' | 'RELEASE';
+  quantityChange: number;
+  reason: string | null;
+  referenceType: string | null;
+  referenceId: string | null;
+  createdById: string;
+  createdAt: string;
+}
+
+export interface Transaction {
+  id: string;
+  transactionNumber: string;
+  totalValue: string;
+  commission: string;
+  buyerCommission?: string;
+  paymentFee: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface LedgerEntry {
+  id: string;
+  transactionId?: string;
+  entryType: string;
+  direction: 'DEBIT' | 'CREDIT';
+  amount: string;
+  currencyCode: string;
+  payerId?: string | null;
+  beneficiaryId?: string | null;
+  paymentProvider?: string | null;
+  status: string;
+  createdAt: string;
+}
+
+export interface AdminStats {
+  users: number;
+  products: number;
+  orders: number;
+  gmv: number;
+}
+
+// ---- Analytics Engine (Phase 16) ----
+
+export interface PlatformOverview {
+  users: number;
+  activeUsers30d: number;
+  productOwners: number;
+  suppliers: number;
+  merchants: number;
+  companies: number;
+  products: number;
+  publishedProducts: number;
+  orders: number;
+  paidOrders: number;
+  gmv: number;
+  commission: number;
+  paymentFees: number;
+  avgOrderValue: number;
+  inventoryItems: number;
+  lowStock: number;
+  outOfStock: number;
+  activeCampaigns: number;
+  subscriptionsActive: number;
+  aiRequests: number;
+  dailyKpiCount: number;
+  currencyCode: string;
+}
+
+export interface RetentionSnapshot {
+  totalUsers: number;
+  usersCreated30d: number;
+  activeUsers30d: number;
+  activeUsers90d: number;
+  retentionRate30d: number;
+  newUserRetention: number;
+  sessionsLast30d: number;
+}
+
+export interface ConversionSnapshot {
+  orders: number;
+  paidOrders: number;
+  orders30d: number;
+  paidOrders30d: number;
+  conversionRate: number;
+  conversionRate30d: number;
+  avgOrderValue: number;
+  abandonedOrders: number;
+  users: number;
+  ordersPerUser: number;
+}
+
+export interface RevenueBreakdown {
+  transactionValue: number;
+  commission: number;
+  paymentFees: number;
+  refunds: number;
+  settlement: number;
+  netRevenue: number;
+  currencyCode: string;
+}
+
+export interface DailyKpiRow {
+  id: string;
+  date: string;
+  metricName: string;
+  metricValue: number;
+  dimensions: Record<string, unknown> | null;
+}
+
+export interface DashboardReportRow {
+  id: string;
+  reportCode: string;
+  title: string;
+  createdAt: string;
+}
+
+export interface MyAnalyticsOverview {
+  hasBusinessEntity: boolean;
+  sellerName: string | null;
+  products: number;
+  publishedProducts: number;
+  inventoryItems: number;
+  lowStock: number;
+  outOfStock: number;
+  ordersAsSeller: number;
+  gmvAsSeller: number;
+  commissionAsSeller: number;
+  customers: number;
+  disputesAsSeller: number;
+  avgOrderValue: number;
+  campaigns: number;
+  activeCampaigns: number;
+}
+
+export interface CommissionPolicy {
+  id: string;
+  name: string;
+  code: string;
+  rate: string;
+  isActive: boolean;
+  currencyCode?: string;
+  description?: string;
+}
+
+export interface SubscriptionPlan {
+  id: string;
+  code: string;
+  name: string;
+  price: string;
+  currencyCode: string;
+  isActive: boolean;
+  limits?: Record<string, unknown>;
+}
+
+export interface Country {
+  id: string;
+  isocode: string;
+  name: string;
+  nameAr: string | null;
+  nameFr: string | null;
+  isActive: boolean;
+  flag: string | null;
+  phoneCode: string | null;
+}
+
+export interface Currency {
+  id: string;
+  code: string;
+  symbol: string;
+  decimalPlaces: number;
+  isActive: boolean;
+}
+
+export interface Language {
+  id: string;
+  code: string;
+  name: string;
+  direction: 'rtl' | 'ltr';
+  isActive: boolean;
+}
+
+// ---- Messaging ----
+export interface ThreadParticipant {
+  userId: string;
+  displayName: string | null;
+  email: string;
+  roles: string[];
+  joinedAt: string;
+  lastReadAt: string | null;
+}
+
+export interface ThreadMessage {
+  id: string;
+  senderId: string;
+  body: string;
+  messageType: string;
+  status: 'SENT' | 'DELIVERED' | 'READ';
+  readAt: string | null;
+  createdAt: string;
+  isDeleted: boolean;
+}
+
+export interface ThreadSummary {
+  id: string;
+  subject: string | null;
+  relatedEntityType: string | null;
+  relatedEntityId: string | null;
+  isBlocked: boolean;
+  createdAt: string;
+  updatedAt: string;
+  participantCount: number;
+  unreadCount: number;
+  participants: Array<{ userId: string; displayName: string | null; email: string }>;
+  lastMessage: {
+    id: string;
+    body: string;
+    senderId: string;
+    senderName: string;
+    status: string;
+    createdAt: string;
+  } | null;
+}
+
+export interface ThreadDetail {
+  id: string;
+  subject: string | null;
+  relatedEntityType: string | null;
+  relatedEntityId: string | null;
+  isBlocked: boolean;
+  createdAt: string;
+  updatedAt: string;
+  participants: ThreadParticipant[];
+  messages: ThreadMessage[];
+}
+
+export interface MessagingSearchResponse {
+  threads: ThreadSummary[];
+  messages: Array<{
+    id: string;
+    threadId: string;
+    senderId: string;
+    body: string;
+    createdAt: string;
+    status: string;
+  }>;
+}
+
+// ---- Notifications ----
+export interface NotificationItem {
+  id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  data: Record<string, unknown> | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  unreadCount: number;
+}
+
+// ---- Phase 9: Verification + Trust + Risk + Disputes ----
+
+export type VerificationLevel = 'NONE' | 'BASIC' | 'VERIFIED' | 'BUSINESS_VERIFIED' | 'INTERNATIONAL_VERIFIED';
+
+export interface VerificationRequestRow {
+  id: string;
+  targetLevel: Exclude<VerificationLevel, 'NONE'>;
+  status: string;
+  documentType: string | null;
+  documentRef: string | null;
+  isBusiness: boolean;
+  businessId: string | null;
+  reviewNotes: string | null;
+  submittedAt: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+
+export interface VerificationStatusOverview {
+  currentLevel: VerificationLevel;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  activeRequest: VerificationRequestRow | null;
+  recentRequests: VerificationRequestRow[];
+  nextStep: string | null;
+}
+
+export interface VerificationPolicy {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  rules: Record<string, unknown>;
+  isActive: boolean;
+}
+
+export interface TrustScoreRow {
+  id: string;
+  userId: string;
+  score: number;
+  level: string;
+  factors: Record<string, unknown>;
+  summary: string | null;
+  effectiveAt: string;
+}
+
+export interface TrustOverview {
+  latest: TrustScoreRow | null;
+  explanation: string | null;
+  historyCount: number;
+}
+
+export interface DisputeSummary {
+  id: string;
+  disputeNumber: string;
+  orderId: string;
+  openedById: string;
+  openedByEmail: string | null;
+  reasonCode: string;
+  description: string;
+  status: string;
+  decision: string;
+  decisionNote: string | null;
+  assignedToId: string | null;
+  assignedToEmail: string | null;
+  appealAllowed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DisputeEventRow {
+  id: string;
+  disputeId: string;
+  actorId: string | null;
+  eventType: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface DisputeMessageRow {
+  id: string;
+  senderId: string;
+  senderEmail: string | null;
+  body: string;
+  isEvidence: boolean;
+  createdAt: string;
+}
+
+export interface DisputeEvidenceRow {
+  id: string;
+  uploadedById: string;
+  fileRef: string;
+  description: string | null;
+  contentType: string | null;
+  createdAt: string;
+}
+
+export interface DisputeDetail extends DisputeSummary {
+  countryId: string | null;
+  countryCode: string | null;
+  policySource: 'COUNTRY' | 'GLOBAL';
+  events: DisputeEventRow[];
+  messages: DisputeMessageRow[];
+  evidence: DisputeEvidenceRow[];
+  appeals: DisputeAppealRow[];
+}
+
+export interface AdminDisputePolicy {
+  id: string;
+  name: string;
+  description: string | null;
+  rules: Record<string, unknown>;
+  countryId: string | null;
+  countryCode: string | null;
+  version: number;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface AdminRetentionPolicy {
+  id: string;
+  name: string;
+  description: string | null;
+  rules: Record<string, unknown>;
+  countryId: string | null;
+  countryCode: string | null;
+  version: number;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface CountryPolicyGap {
+  id: string;
+  countryId: string;
+  countryCode: string | null;
+  status: 'DECISION_REQUIRED' | 'RESOLVED';
+  reason: string | null;
+  detectedAt: string;
+}
+
+export interface DisputeAppealRow {
+  id: string;
+  disputeId: string;
+  appealedById: string;
+  appealedByEmail: string | null;
+  reason: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  decidedBy: string | null;
+  decisionNote: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+
+export interface RiskProfileRow {
+  userId: string;
+  email: string | null;
+  currentScore: number;
+  level: string;
+  lastEvaluatedAt: string;
+  flags: Record<string, unknown>;
+}
+
+export interface RiskEventRow {
+  id: string;
+  userId: string;
+  eventType: string;
+  severity: string;
+  riskScore: number;
+  reasonCode: string;
+  recommendedAction: string | null;
+  details: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+// ---- Ads ----
+export interface CampaignSummary {
+  id: string;
+  advertiserId: string;
+  advertiserType: 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
+  title: string;
+  objective: string;
+  status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
+  budget: string;
+  spent: string;
+  currencyCode: string;
+  startsAt: string;
+  endsAt: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdCreativeRow {
+  id: string;
+  campaignId: string;
+  type: string;
+  title: string;
+  body: string | null;
+  mediaUrl: string | null;
+  targetUrl: string | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface CampaignDetail extends CampaignSummary {
+  creatives: AdCreativeRow[];
+}
+
+export interface CampaignStats {
+  campaignId: string;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  ctr: number;
+  cpc: string;
+  spent: string;
+  budget: string;
+}
+
+export interface CampaignListResponse {
+  items: CampaignSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ServedAdRow {
+  campaignId: string;
+  creativeId: string;
+  title: string;
+  body: string | null;
+  mediaUrl: string | null;
+  targetUrl: string | null;
+  objective: string;
+  advertiserType: string;
+}

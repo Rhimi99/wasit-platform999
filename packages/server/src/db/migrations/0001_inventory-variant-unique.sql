@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS "inventory_product_merchant_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "inventory_product_variant_merchant_idx" ON "inventory_items" USING btree ("product_id","merchant_id","product_variant_id") WHERE "inventory_items"."product_variant_id" is not null;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "inventory_variant_idx" ON "inventory_items" USING btree ("product_variant_id");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "inventory_product_merchant_idx" ON "inventory_items" USING btree ("product_id","merchant_id") WHERE "inventory_items"."product_variant_id" is null;

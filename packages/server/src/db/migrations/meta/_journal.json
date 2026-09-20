@@ -1,0 +1,167 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789304400127,
+      "tag": "0000_cheerful_maddog",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789326622024,
+      "tag": "0001_inventory-variant-unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789328085187,
+      "tag": "0002_messaging-status-readat",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789329849968,
+      "tag": "0003_redundant_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789387562838,
+      "tag": "0004_ai_core_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789499429115,
+      "tag": "0005_privacy_module",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789501255675,
+      "tag": "0006_mfa_recovery_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789623910404,
+      "tag": "0007_rainy_killraven",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789833333310,
+      "tag": "0008_overjoyed_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789833520386,
+      "tag": "0009_glamorous_luckman",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789837012930,
+      "tag": "0010_brief_absorbing_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789841468320,
+      "tag": "0011_glorious_toxin",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789847498329,
+      "tag": "0012_payment_multi_method",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789854554307,
+      "tag": "0013_sharp_umar",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789882914959,
+      "tag": "0014_outgoing_fabian_cortez",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789888264420,
+      "tag": "0015_peaceful_energizer",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789892812402,
+      "tag": "0016_breezy_lester",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789901913133,
+      "tag": "0017_unusual_mephistopheles",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789903903488,
+      "tag": "0018_wise_typhoid_mary",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789905654365,
+      "tag": "0019_big_lockheed",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789913553566,
+      "tag": "0020_productive_lester",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789913554566,
+      "tag": "0021_commission_split_data",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789922788340,
+      "tag": "0022_freezing_greymalkin",
+      "breakpoints": true
+    }
+  ]
+}

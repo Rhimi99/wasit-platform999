@@ -1,0 +1,1 @@
+ALTER TABLE "data_deletion_requests" ADD COLUMN "anonymization_log" jsonb;

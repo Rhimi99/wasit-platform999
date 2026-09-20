@@ -1,0 +1,376 @@
+import { useEffect, useState } from 'react';
+import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
+import { useI18n } from '@/lib/i18n-context';
+import { useAuth } from '@/lib/auth-context';
+import { AppLayout } from '@/components/layouts/AppLayout';
+import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
+import type { AdminStats, ConversionSnapshot, DailyKpiRow, LedgerEntry, Order, PlatformOverview, RetentionSnapshot, RevenueBreakdown, Transaction } from '@/lib/types';
+
+const LEDGER_ENTRY_KEYS: Record<string, string> = {
+  TRANSACTION_VALUE: 'ledger.entry.transactionValue',
+  COMMISSION: 'ledger.entry.commission',
+  PAYMENT_FEE: 'ledger.entry.paymentFee',
+  REFUND: 'ledger.entry.refund',
+  SETTLEMENT: 'ledger.entry.settlement',
+};
+
+function ledgerEntryTypeKey(entryType: string): string {
+  return LEDGER_ENTRY_KEYS[entryType] ?? entryType;
+}
+
+// Wrapper renders children only for admins (server also enforces /api/admin via requireRole).
+export function AdminOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const isAdmin = user?.roles.some((r) => ['ADMIN', 'SUPER_ADMIN'].includes(r));
+  if (user && !isAdmin) {
+    return (
+      <AppLayout>
+        <ErrorState message="Forbidden: Admin area" />
+      </AppLayout>
+    );
+  }
+  return <>{children}</>;
+}
+
+// Wrapper for staff engine pages (verification/trust/risk/disputes).
+// The server enforces granular permissions per endpoint (requirePermission).
+export function StaffOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const allowed = user?.roles.some((r) => ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'RISK', 'DISPUTE'].includes(r));
+  if (user && !allowed) {
+    return (
+      <AppLayout>
+        <ErrorState message="Forbidden: Staff area" />
+      </AppLayout>
+    );
+  }
+  return <>{children}</>;
+}
+
+export function AdminDashboardPage() {
+  const { t } = useI18n();
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall(() => api.adminStats()).then((res) => {
+      setStats(res.data);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, []);
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.kpis')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Card><p className="text-xs text-slate-500">{t('admin.users')}</p><p className="mt-1 text-3xl font-bold text-slate-900">{stats?.users ?? '—'}</p></Card>
+          <Card><p className="text-xs text-slate-500">{t('admin.products')}</p><p className="mt-1 text-3xl font-bold text-slate-900">{stats?.products ?? '—'}</p></Card>
+          <Card><p className="text-xs text-slate-500">{t('admin.orders')}</p><p className="mt-1 text-3xl font-bold text-slate-900">{stats?.orders ?? '—'}</p></Card>
+          <Card><p className="text-xs text-slate-500">{t('analytics.gmv')}</p><p className="mt-1 text-3xl font-bold text-wasit-700">{stats ? formatMoney(stats.gmv) : '—'}</p></Card>
+        </div>
+      )}
+    </AppLayout>
+  );
+}
+
+export function AdminAnalyticsPage() {
+  const { t } = useI18n();
+  const [overview, setOverview] = useState<PlatformOverview | null>(null);
+  const [retention, setRetention] = useState<RetentionSnapshot | null>(null);
+  const [conversion, setConversion] = useState<ConversionSnapshot | null>(null);
+  const [revenue, setRevenue] = useState<RevenueBreakdown | null>(null);
+  const [kpis, setKpis] = useState<DailyKpiRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [rolling, setRolling] = useState(false);
+  const [rollupMsg, setRollupMsg] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      apiCall(() => api.adminAnalyticsOverview()),
+      apiCall(() => api.adminAnalyticsRetention()),
+      apiCall(() => api.adminAnalyticsConversion()),
+      apiCall(() => api.adminAnalyticsRevenue()),
+      apiCall(() => api.adminAnalyticsDailyKpis(14)),
+    ]).then(([ov, rt, cv, rv, kp]) => {
+      setOverview(ov.data);
+      setRetention(rt.data);
+      setConversion(cv.data);
+      setRevenue(rv.data);
+      setKpis(kp.data?.items ?? []);
+      setError(ov.error ?? rt.error ?? cv.error ?? rv.error ?? kp.error);
+      setLoading(false);
+    });
+  }, [reloadKey]);
+
+  const handleRollup = async () => {
+    setRolling(true);
+    const res = await apiCall(() => api.adminAnalyticsRollup());
+    if (res.data) {
+      setKpis(res.data.items);
+      setRollupMsg(`${t('analytics.rollupInserted')}: ${res.data.inserted}`);
+    } else {
+      setRollupMsg(res.error);
+    }
+    setRolling(false);
+    setReloadKey((k) => k + 1);
+  };
+
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.analytics')} subtitle={t('analytics.adminSubtitle')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} /> : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card><p className="text-xs text-slate-500">{t('analytics.gmv')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.gmv)}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.users')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{overview?.users ?? 0}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.orders')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{overview?.orders ?? 0}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.commission')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.commission)}</p></Card>
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card><p className="text-xs text-slate-500">{t('analytics.activeUsers30d')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{overview?.activeUsers30d ?? 0}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.retentionRate30d')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{pct(retention?.retentionRate30d ?? 0)}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.conversionRate')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{pct(conversion?.conversionRate ?? 0)}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.avgOrderValue')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.avgOrderValue)}</p></Card>
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <Card>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-700">{t('analytics.revenueBreakdown')}</h3>
+              </div>
+              <dl className="mt-3 space-y-2 text-sm">
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.transactionValue')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.transactionValue)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.commission')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.commission)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.paymentFees')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.paymentFees)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.refunds')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.refunds)}</dd></div>
+                <div className="flex justify-between border-t border-slate-100 pt-2"><dt className="font-medium text-slate-700">{t('analytics.netRevenue')}</dt><dd className="font-bold text-slate-900">{formatMoney(revenue?.netRevenue)}</dd></div>
+              </dl>
+            </Card>
+            <Card>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-700">{t('analytics.dailyKpis')}</h3>
+                <button type="button" onClick={handleRollup} disabled={rolling} className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white disabled:opacity-50">
+                  {rolling ? '…' : t('analytics.rollup')}
+                </button>
+              </div>
+              {rollupMsg && <p className="mt-2 text-xs text-slate-500">{rollupMsg}</p>}
+              {kpis.length === 0 ? <p className="mt-3 text-sm text-slate-400">{t('common.noData')}</p> : (
+                <div className="mt-3 max-h-64 overflow-y-auto">
+                  {kpis.map((k) => (
+                    <div key={k.id} className="flex justify-between border-b border-slate-50 py-1 text-sm">
+                      <span className="text-slate-500" dir="ltr">{k.date.slice(0, 10)} · {k.metricName}</span>
+                      <span className="font-semibold text-slate-800">{k.metricName === 'gmv' || k.metricName === 'commission' ? formatMoney(k.metricValue) : k.metricValue}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        </>
+      )}
+    </AppLayout>
+  );
+}
+
+export function AdminUsersPage() {
+  const { t } = useI18n();
+  const [users, setUsers] = useState<Array<{ id: string; email: string; isActive: boolean; emailVerified: boolean; createdAt: string }>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall(() => api.adminUsers()).then((res) => {
+      setUsers(res.data?.items ?? []);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, []);
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.users')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : users.length === 0 ? <EmptyState title={t('common.noData')} /> : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>{t('field.email')}</th><th>{t('field.verified')}</th><th>{t('field.active')}</th><th>{t('common.date')}</th></tr></thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id}>
+                  <td dir="ltr">{u.email}</td>
+                  <td>{u.emailVerified ? <Badge color="green">✓</Badge> : <Badge>—</Badge>}</td>
+                  <td>{u.isActive ? <Badge color="green">{t('field.on')}</Badge> : <Badge color="red">{t('field.off')}</Badge>}</td>
+                  <td>{formatDate(u.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}
+
+export function AdminOrdersPage() {
+  const { t } = useI18n();
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall(() => api.adminOrders()).then((res) => {
+      setOrders(res.data?.items ?? []);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, []);
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.orders')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : orders.length === 0 ? <EmptyState title={t('common.noData')} /> : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>#</th><th>{t('common.status')}</th><th>{t('order.sellerCommission')}</th><th>{t('order.buyerCommission')}</th><th>{t('common.total')}</th><th>{t('common.date')}</th></tr></thead>
+            <tbody>
+              {orders.map((o) => (
+                <tr key={o.id}>
+                  <td>{o.orderNumber}</td>
+                  <td>{o.status}</td>
+                  <td>{formatMoney(o.commission, o.currencyCode)}</td>
+                  <td>{formatMoney(o.buyerCommission ?? '0', o.currencyCode)}</td>
+                  <td>{formatMoney(o.grandTotal, o.currencyCode)}</td>
+                  <td>{formatDate(o.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}
+
+export function AdminTransactionsPage() {
+  const { t } = useI18n();
+  const [txs, setTxs] = useState<Transaction[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall(() => api.adminTransactions()).then((res) => {
+      setTxs(res.data?.items ?? []);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, []);
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.transactions')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : txs.length === 0 ? <EmptyState title={t('common.noData')} /> : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>#</th><th>{t('common.total')}</th><th>{t('order.sellerCommission')}</th><th>{t('order.buyerCommission')}</th><th>{t('field.fee')}</th><th>{t('common.status')}</th></tr></thead>
+            <tbody>
+              {txs.map((tx) => (
+                <tr key={tx.id}>
+                  <td>{tx.transactionNumber}</td>
+                  <td>{formatMoney(tx.totalValue)}</td>
+                  <td>{formatMoney(tx.commission)}</td>
+                  <td>{formatMoney(tx.buyerCommission ?? '0')}</td>
+                  <td>{formatMoney(tx.paymentFee)}</td>
+                  <td>{tx.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}
+
+export function AdminLedgerPage() {
+  const { t } = useI18n();
+  const [entries, setEntries] = useState<LedgerEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall(() => api.adminLedger()).then((res) => {
+      setEntries(res.data?.items ?? []);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, []);
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.ledger')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : entries.length === 0 ? <EmptyState title={t('common.noData')} /> : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>{t('common.date')}</th><th>{t('field.type')}</th><th>{t('field.direction')}</th><th>{t('field.amount')}</th><th>{t('common.status')}</th></tr></thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.id}>
+                  <td>{formatDate(e.createdAt)}</td>
+                  <td>{t(ledgerEntryTypeKey(e.entryType))}</td>
+                  <td>{e.direction === 'CREDIT' ? <Badge color="green">{t('ledger.credit')}</Badge> : <Badge color="red">{t('ledger.debit')}</Badge>}</td>
+                  <td>{formatMoney(e.amount, e.currencyCode)}</td>
+                  <td>{e.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}
+
+export function AdminAuditPage() {
+  const { t } = useI18n();
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiCall(() => api.adminAuditLogs()).then((res) => {
+      setRows(res.data?.items ?? []);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, []);
+
+  return (
+    <AppLayout>
+      <SectionHeader title={t('admin.audit')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : rows.length === 0 ? <EmptyState title={t('common.noData')} /> : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>{t('common.date')}</th><th>{t('field.actor')}</th><th>{t('field.action')}</th><th>{t('field.entity')}</th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={String(r.id ?? '')}>
+                  <td>{String(r.createdAt ?? '').slice(0, 10)}</td>
+                  <td className="text-xs" dir="ltr">{String(r.actorId ?? '')}</td>
+                  <td>{String(r.action ?? '')}</td>
+                  <td>{String(r.entityType ?? '')}:{String(r.entityId ?? '')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}

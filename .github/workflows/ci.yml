@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast gate: type-check both packages and build the server bundle.
+  static:
+    name: Typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild argon2
+      - run: npm run typecheck
+      - run: npm run build -w @wasit/web
+      - run: npm run build:prod -w @wasit/server
+
+  # Unit + integration tests against a real PostgreSQL service.
+  test:
+    name: Unit & integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wasit
+          POSTGRES_PASSWORD: wasit_dev_password
+          POSTGRES_DB: wasit_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wasit -d wasit_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev
+      TEST_DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild argon2
+      # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
+      - run: npm test
+
+  # Full E2E (Playwright) against the real API + PostgreSQL, no mocks.
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: static
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wasit
+          POSTGRES_PASSWORD: wasit_dev_password
+          POSTGRES_DB: wasit_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wasit -d wasit_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: "true"
+      DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev
+      TEST_DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild argon2
+      # Prepare the dev database the webServer/globalSetup run against.
+      - run: npm run db:migrate
+      - run: npm run db:seed
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

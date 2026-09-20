@@ -1,0 +1,721 @@
+# CHECKPOINT — WASIT BUSINESS GLOBAL
+
+آخر تحديث: **2026-09-20**
+
+## Milestone C-1 — نموذج العمولة: 4% منقسمة 2% بائع + 2% مشتري (هذا الجلسة — مكتمل)
+
+### الهدف
+تعديل نموذج Wasit الأساسي من «3% على البائع فقط» إلى **4% من قيمة المعاملة، منقسمة 2% بائع + 2% مشتري**، بلا عمولة Wasit أساسية إضافية. رسوم مزوّد الدفع تبقى **منفصلة وغير متغيرة**.
+
+### ما نُفّذ
+- **محرك العمولة** (`lib/commission.ts`): يقرأ `rate`/`seller_rate`/`buyer_rate` من سياسة `commission_policies` فقط، ويعيد `totalAmount = sellerAmount + buyerAmount`. لا نسبة افتراضية في الكود؛ غياب سياسة مطابقة يفشل مغلقًا بـ`COMMISSION_POLICY_MISSING` (422).
+- **Migration `0021_commission_split_data.sql`** (إضافية غير مدمِّرة): تُحوّل صف `BASE` الشكلي القديم (`3%` بائع فقط) إلى `rate=0.04, seller_rate=0.02, buyer_rate=0.02`؛ السياسات المخصّصة من الأدمن لا تُمس؛ الطلبات التاريخية تحتفظ بأرقامها؛ `buyer_commission` افتراضيًا `0` للصفوف القديمة.
+- **محرك الطلب** (`modules/orders/service.ts`): يخزّن `orders.commission` = **الإجمالي 4%**، و`buyerCommission` = حصة المشتري (2%)، ويُسجّل قيدين في الـledger (SELLER وBUYER). `grandTotal` = قيمة البنود + حصة المشتري. قيد `TRANSACTION_VALUE` يبقى بقيمة البنود (لا تُدمج حصة المشتري في رصيد البائع).
+- **منع الازدواج**: كل تجميعات العمولة/الإيراد صارت `sum(commission)` وحده (analytics، unit-economics، KPI الوكيل، daily-kpis) — لأن `commission` يحمل الإجمالي أصلًا. `commission + buyer_commission` لم يُستخدم في أي تجميع. وحصة البائع (`commissionAsSeller`) تُحسب `sum(commission - buyer_commission)` (2%) لتظهر في بطاقة لوحة التاجر كحصة البائع لا الإجمالي.
+- **الواجهة وi18n**: جداول الأدمن للطلبات/المعاملات تعرض عمودَي حصة البائع/المشتري والإجمالي (`grandTotal`)؛ بطاقة دخل البائع في لوحة التاجر تعرض `sellerCommission`؛ مفاتيح ar/en/fr/zh مُحدَّثة (`order.commission` = إجمالي، وإضافة `order.sellerCommission`/`order.buyerCommission`).
+- **التوثيق**: `ARCHITECTURE.md`، `ARCHITECTURE_DECISIONS.md` (AD-006 مُعاد كتابته + AD-042 جديد)، `REVENUE_MODEL.md`، `e2e/marketplace.spec.ts`.
+
+### الاختبارات
+- الحزمة الكاملة للخادم: **41 ملف / 421 اختبار — كلها خضراء** (بما فيها `vertical-slice`، `payments`، `analytics`، `unit-economics`، `revenue`، `commission`).
+- `tests/analytics.test.ts` صار يتحقق صراحةً أن مجموع قيود COMMISSION في الـledger = عمولة الطلب الإجمالية (حرس ضد الازدواج).
+- `npm run typecheck` (server + web) يمر بلا أخطاء.
+
+### خارج النطاق / قرارات مطلوبة
+- كشف الاسترداد حاليًا `min(قيمة الطلب الفرعية, refund_amount)` — لا يعيد حصة عمولة المشتري. إن طُلب احتسابها في الاستردادات فهذا قرار تجاري/محاسبي (Decision Required).
+
+## Milestone C4 — MFA UI E2E: تحدي فعلي عند الدخول + واجهة كاملة (الجلسة السابقة — مكتمل)
+
+### الهدف
+إغلاق الفجوة C4 في `docs/PRODUCTION_GAP_LIST.md`: كان MFA "جاهزية backend" فقط — `enroll/confirm/disable/verify/status` موجودة، لكن **الدخول لا يتحدّى إطلاقًا**، فلا يوجد ما يُلزم المستخدم بالعامل الثاني، و**لا واجهة** لإدارة MFA. المطلوب: تحدي حقيقي عند الدخول + واجهة + E2E عبر الواجهة.
+
+### المكوّنات
+- `db/schema/auth.ts` — جدول `mfaChallenges` (`id`, `userId`, `tokenHash`, `attempts` افتراضي 0, `expiresAt`, `consumedAt`, `ipAddress`, `userAgent`, `createdAt` + فهرسان)؛ migration `0019_big_lockheed.sql` إضافية.
+- `lib/env.ts` — `MFA_CHALLENGE_TTL_MINUTES` (افتراضي 5) و`MFA_CHALLENGE_MAX_ATTEMPTS` (افتراضي 5).
+- `modules/auth/service.ts` — `loginUser` يعيد اتحادًا مميّزًا: `mfa_required` (يحمل `challengeToken` بلا أي كوكي) أو `success`؛ `completeMfaLogin` يستهلك التحدي (أحادي الاستخدام) ويؤكد TOTP أو رمز استرداد ثم يُصدر الجلسة عبر `issueSession` المشتركة. تحديث `users.mfaEnabled=false` يُبطل التحدي فورًا (فحص حالة الحساب).
+- `modules/auth/routes.ts` — `/login` يعالج `mfa_required`، ومسار `/mfa/challenge` الجديد (rate-limit + Audit `AUTH.MFA_CHALLENGE_ISSUED/FAILED` + `AUTH.LOGIN`).
+- الواجهة: `lib/types.ts` اتحاد `LoginResponse` بـ`mfaRequired`، `lib/api.ts` (`login`/`mfaChallenge`)، خطوة ثانية في `LoginPage`، وبطاقة `MfaCard` في `DashboardSecurityPage` (enroll/confirm/regenerate/disable) مع `testId` على `Card`/`Badge`، ومفاتيح i18n ar/en/fr.
+- توافق رجعي: شكل الاستجابة المسطّح (`id/email/emailVerified/roles`) بقي كما هو مع إضافة `mfaRequired` فقط.
+
+### التحقق
+- `mfa-login-challenge.test.ts` — 10/10 (تحدي عند الدخول بلا جلسة، TOTP صحيح/خاطئ، رمز استرداد، أحادية الاستخدام، العدّاد، انتهاء الصلاحية، تعطيل الحساب).
+- `e2e/mfa.spec.ts` — 2/2: (1) enroll→confirm→خروج→دخول يطالب بالعامل الثاني→verify→regenerate→disable→دخول بلا تحدٍّ؛ (2) رمز خاطئ يُرفض و`GET /api/auth/me` = 401. **كل الـE2E: 54/54**.
+- الحزمة الكاملة للخادم: **41 ملف / 418 اختبار**؛ `tsc --noEmit` للخادم والواجهة = 0؛ `build:prod` (esbuild) نظيف.
+- Smoke على `dist-bundle/index.cjs` تحت `NODE_ENV=production` مع Postgres حقيقي: login→enroll→confirm→logout→login(`mfaRequired:true`, بلا كوكي)→challenge(200 + جلسة)→me(200)→إعادة استخدام التحدي 401→رمز خاطئ 401→regenerate(10 أكواد)→disable→login بلا تحدٍّ. مسارات `dev/*` تُعيد 404 في production كما هو مقصود.
+
+### القرار
+تحدي MFA صفٌّ مستقل أحادي الاستخدام، لا flag داخل الجلسة — لا تُوجد جلسة قبل العامل الثاني. مسجَّل في `docs/ARCHITECTURE_DECISIONS.md` (AD-041).
+
+## Milestone C3 — Privacy/Consent موسّع + سياسات البلد (جلسة سابقة — مكتمل)
+
+### الهدف
+إغلاق الفجوة C3 في `docs/PRODUCTION_GAP_LIST.md`: كانت تغطية الخصوصية محصورة في `security-privacy.test.ts`، وقواعد الاحتفاظ بالبيانات **ثابتة في الكود** (`defaultRetentionDays: 90`, `preserves`, `legalHoldFinanciallyRequired`) داخل `modules/privacy/service.ts` — خرق مباشر للقاعدة #29 (لا قواعد تجارية/دولية مكتوبة في الكود).
+
+### المكوّنات
+- `db/schema/engine.ts` — `policyScopeEnum` يضم الآن `'PRIVACY'` (migration `0018_wise_typhoid_mary.sql`: `ALTER TYPE ... ADD VALUE`).
+- `modules/privacy/service.ts` — `resolveRetentionForUser(db, userId)`: يحلّ القاعدة عبر `resolveMergedPolicy` (scope `PRIVACY`, code `DATA_RETENTION`) من دولة المستخدم (من `profiles.countryId`) ثم العالمي؛ يُسجّل غياب صف الدولة في `countryPolicyGaps` كـ`DECISION_REQUIRED` (لا اختراع مدة قانونية) ويغلقها عند وجود تجاوز. `createDeletionRequest` يخزّن الحلّ (المدة، `preserves`، `policySource/id/version`، `countryCode`) في `data_deletion_requests.retentionPolicy` و`retentionUntil`.
+- `lib/country-policy-gaps.ts` — أنواع scope تشمل `PRIVACY`.
+- `modules/admin/policy-routes.ts` — `GET/PUT /api/admin/policies/retention` و`GET .../retention/resolved` (`admin:policies` + Audit who/what/old/new/when/reason + رفع `version`).
+- `scripts/seed.ts` — صف `DATA_RETENTION` عالمي (`defaultRetentionDays: 90` كقيمة seed لا كود).
+- ثوابت مقصودة البقاء: مجموعة السجلات المالية/التدقيقية المحفوظة إلزاميًا (`transaction_ledger`, `audit_logs`, `disputes`, `orders`, `invoices`) — التزام بنيوي لا سياسة؛ الدولة تضيف إليها عبر `preserves`.
+- الواجهة: بطاقة سياسة الاحتفاظ في `pages/AdminPolicyPages.tsx` + `api.adminRetentionPolicies/saveAdminRetentionPolicy` + مفاتيح i18n (ar/en/fr).
+
+### التحقق
+- `npx tsc --noEmit` (server + web) = 0؛ بناء الويب نظيف؛ `build:prod` نظيف.
+- **408/408 اختبار** (40 ملف، منها `privacy-retention-policy.test.ts` بـ9 حالات: seed/global resolve، window مخزّن من السياسة، gap ثم تجاوز دولة يحلّه، تغيير المدة لدولة فقط، 422/403/401، القوائم/resolved، تدقيق + bump نسخة، consent append-only).
+
+### القرار
+- قواعد الاحتفاظ سياسةُ Country في Policy Engine، والغياب `Decision Required`. مسجَّل في `docs/ARCHITECTURE_DECISIONS.md` (AD-040).
+
+## Milestone C2 — Observability / Tracing (جلسة سابقة — مكتمل)
+
+### الهدف
+إغلاق الفجوة C2 في `docs/PRODUCTION_GAP_LIST.md`: كان التشخيص محصورًا في `traceId` داخل `core`/`errors` بلا مؤشرات ولا لوج مركزي ولا تنبيه، فيصعب تشخيص الإنتاج. المطلوب: tracing موزّع + metrics + logging مركزي + alerting، مع ظهور `trace_id` في اللوج والاستجابة.
+
+### المكوّنات (خادم، `src/lib/observability/`)
+- `trace.ts` — سياق W3C Trace Context: تبنّي `traceparent` الوارد (مع رفض الشكل الخاطئ/الإصدار ff/المعرّفات الصفرية) أو `x-trace-id` المجرّد أو توليد معرّف؛ `spanId` جديد لكل قفزة؛ `formatTraceparent`/`outboundTraceparent` للانتشار.
+- `metrics.ts` — سجل Prometheus داخلي (counters/gauges/histograms) مع quantiles بالاستيفاء الخطي و`renderPrometheus`/`snapshot`.
+- `logger.ts` — سطر JSON واحد على stdout + حلقة محدودة (200) + تنقيح مفاتيح الأسرار + فلترة بالمستوى.
+- `alert-port.ts`/`notify.ts`/`resolve-notifier.ts`/`alerts.ts` — محرك قواعد (`database_down`/`http_error_ratio`/`http_p95_latency`/`rate_limit_rejections`/`alert_scheduler_stale`) بانتقالات FIRING/RESOLVED فقط، ومنفذ إشعار (`log` افتراضي، `webhook`).
+- `middleware/observability.ts` — بديل `logger()` في Hono: سطر لوج واحد + عدّاد/هيستوغرام لكل طلب مع وسم route منخفض الكاردينالية (تطبيع UUID/hex/أرقام → `:id`/`:n`).
+- `middleware/core.ts` — يحمل `TraceInfo` (traceId/spanId/parentId/flags) ويعيد `X-Trace-Id`؛ `middleware/errors.ts` و`lib/audit.ts` و`middleware/rate-limit.ts` تزيد عدّاداتها.
+- جدول `alert_events` (`schema/observability.ts` + migration `0017_unusual_mephistopheles.sql` إضافية) — انتقالات فقط.
+- `GET /metrics` (جذر، Prometheus) + مسارات admin `GET .../observability/{metrics,logs,alerts}` و`POST .../alerts/evaluate` (`admin:system` + Audit).
+- الـscheduler يشغّل تقييم التنبيهات عند `OBS_ALERTS_ENABLED=true`؛ `GET /api/health/channels` يعرض حالة الـnotifier.
+
+### التحقق
+- `npx tsc --noEmit` = 0؛ **399/399 اختبار** (39 ملف، منها `observability.test.ts` بـ23 حالة).
+- `build:prod` نظيف، وE2E حقيقي عبر `dist-bundle/index.cjs` مع Postgres: `traceparent` وارد ⇒ نفس `X-Trace-Id` في الاستجابة، `/metrics`=200 بمؤشرات حقيقية، `db_up=1` بعد tick، admin بلا جلسة=401، ومع جلسة admin: metrics/logs/alerts/evaluate=200 + Audit.
+
+### القرار
+- لا منصة خارجية ولا OpenTelemetry كامل؛ طبقات trace/metrics/log/alert على stdout + `/metrics` قابلة للربط بأي منصة. مسجَّل في `docs/ARCHITECTURE_DECISIONS.md` (AD-039).
+
+## Milestone C1 — Distributed Rate-Limit Store (جلسة سابقة — مكتمل)
+
+### الهدف
+إغلاق الفجوة C1 في `docs/PRODUCTION_GAP_LIST.md`: كان حدّ المعدل خريطةً داخل ذاكرة كل عملية، فبتشغيل أكثر من نسخة API تتضاعف الحدود الفعلية وتصبح غير فعّالة.
+
+### المكوّنات (خادم)
+- طبقة مخزن جديدة `src/lib/rate-limit/`: `port.ts` (العقد)، `memory.ts`، `postgres.ts`، `resolve.ts`.
+- جدول `rate_limit_counters` (`schema/rate_limit.ts` + migration `0016_breezy_lester.sql` إضافية) — عدّادات فقط، بلا PII.
+- `middleware/rate-limit.ts` يفوّض للمخزن؛ الموضوع `user:<id>` للمصادَق و`ip:<ip>` للمجهول.
+- purge دوري في `lib/scheduler.ts` + مسار `POST /api/admin/rate-limits/purge` (`admin:system` + Audit).
+- `GET /api/health/channels` يعرض `rateLimit.{store,durable}`.
+
+### التحقق
+- `npx tsc --noEmit` = 0؛ **376/376 اختبار** (38 ملف، منها `rate-limit.test.ts` بـ12 حالة).
+- `build:prod` نظيف، وE2E حقيقي عبر `dist-bundle/index.cjs` مع `RATE_LIMIT_STORE=postgres`: burst → `200×5 ثم 429×2`، `durable:true`، وثبات العدّاد عبر إعادة تشغيل العملية.
+
+### القرار
+- **لا Redis** (Postgres كافٍ، العقد يسمح بإضافته لاحقًا). مسجَّل في `docs/ARCHITECTURE_DECISIONS.md` (AD-038).
+
+## Milestone B1 — SEO (هذا الجلسة — مكتمل)
+
+### الهدف
+اكتشاف العام (المنتجات/الموردين/الشركات/التصنيفات/الأسواق) عبر محركات البحث: sitemap ديناميكي + robots + canonical + JSON-LD، دون كشف أي سطح خاص.
+
+### المكوّنات (خادم)
+- وحدة جديدة `src/modules/seo/`:
+  - `service.ts` — `buildSitemap` (رئيسية/سوق/موردون/تجّار/شركات/تصنيفات + منتجات `ACTIVE` **منشورة** + موردون/شركات/تجّار `is_active` + أسواق البلدان النشطة؛ سقف 5000؛ `lastmod` حيث توفّر)، `renderSitemapIndex` (XML مُهرَّب)، `renderRobots` (Allow للعام، Disallow لـ `/admin`/`/dashboard`/`/onboarding`/`/checkout`/auth/`/search`/`/api/`)، ودوال بناء الروابط.
+  - `jsonld.ts` — `productJsonLd` (schema.org Product + Offer، يُرفض غير ACTIVE/غير منشور)، `supplierJsonLd`/`companyJsonLd`/`merchantJsonLd` (Organization/Store، تُرفض غير النشطة)، `categoryJsonLd` (CollectionPage، يُرفض غير النشط)، `countryJsonLd` (Place، يُرفض غير النشط).
+  - `routes.ts` — `seoRoutes` مركّبة على الجذر (`/sitemap.xml`, `/robots.txt`, بلا مصادقة، بيانات عامة فقط) و`seoApiRoutes` على `/api/seo` (`GET /structured-data/:type/:id`؛ 404 لغير العام، 422 لنوع غير معروف).
+- `app.ts`: `app.route('/', seoRoutes)` و`app.route('/api/seo', seoApiRoutes)`.
+
+### المكوّنات (واجهة)
+- مكوّن `SeoHead` يزامن `title`/`description`/Open Graph/`canonical`/`robots`/JSON-LD.
+- ربطه بـ: Home (JSON-LD Organization)، Marketplace (noindex عند الفلاتر/الترقيم)، Search (noindex)، Product (Product JSON-LD)، Suppliers، Merchants، Companies، Categories.
+- صفحتان جديدتان: `/categories/:slug` و`/markets/:code` (بيانات حقيقية + canonical + JSON-LD).
+- `vite.config.ts`: وسيط الجذر لـ `/sitemap.xml` و`/robots.txt` (مثل `/api`).
+
+### النتائج
+- ✅ **272/272** اختبار خادم — 30 ملفًا (كان 262/29).
+- ✅ **49/49** اختبار E2E (كان 44/44).
+- ✅ بناء Web (tsc + vite) وبناء الخادم يمرّان.
+- ✅ Docs: `PRODUCTION_GAP_LIST.md` (B1 → ✅).
+
+## Milestone B6 — Favorites / Saved / Search History (مكتمل)
+
+### الهدف
+تفعيل جداول `favorites`/`saved_items`/`search_history` التي كانت موجودة دون استخدام، كميزة كاملة (UI → API → DB → RBAC → Tests).
+
+### المكوّنات
+- وحدة خادم جديدة `modules/customer-library` مركّبة على `/api/library`:
+  - المفضلة: `GET/POST /favorites`، `DELETE /favorites/:entityType/:entityId` (idempotent عند الإضافة).
+  - المحفوظات: `GET/POST /saved` (تحديث الملاحظات عند إعادة الحفظ)، `DELETE /saved/:itemType/:itemId`.
+  - سجل البحث: `GET/POST /search-history`، `DELETE /search-history` (مسح)، `DELETE /search-history/:id` (يملكه المستخدم فقط)، تشذيب تلقائي عند 200 سجل/مستخدم.
+  - تحقّق من وجود الكيان قبل الحفظ (404 بنيوي)، وإثراء العرض بالعنوان/Slug مع علم `available`.
+- صلاحيات جديدة في `@wasit/shared`: `favorite:manage`، `saved:manage`، `search:history:manage` — مُمنوحة صراحةً للأدوار (CUSTOMER/MERCHANT/SUPPLIER/COMPANY/MARKETER/ADMIN؛ SUPER_ADMIN شامل).
+- `GET /api/search` صار يستخدم `optionalAuth` ويسجّل بحث المستخدم المصادَق (best-effort، لا يكسر البحث).
+- الواجهة: صفحة `/dashboard/library` بثلاث تبويبات، أزرار مفضلة/حفظ على صفحة المنتج، عنصر تنقّل في الشريط الجانبي، مفاتيح i18n (ar/en/fr).
+
+### النتائج
+- ✅ **262/262** اختبار خادم — 29 ملفًا (كان 248/28).
+- ✅ **44/44** اختبار E2E (كان 39/39).
+- ✅ Docs: `PRODUCTION_GAP_LIST.md` (B5 و B6 → ✅).
+
+## Milestone B5 — Geo Testing (مكتمل)
+
+### الهدف
+إغلاق فجوة مخاطرة التوسّع: تغطية geo module (15 route) باختبارات حقيقية ضد PostgreSQL.
+
+### المكوّنات
+- `tests/geo.test.ts` — **16 حالة** تغطي:
+  - **countries**: القائمة تُظهر النشط فقط + ترقيم؛ بحث عبر الاسم العربي/الإنجليزي؛ الجلب `:id` و`by-code` (حالة أحرف غير حساسة)؛ إخفاء غير النشط بـ 404 بنيوي `NOT_FOUND`؛ id مجهول → 404.
+  - **regions**: حسب الدولة + ترقيم + بحث؛ الجلب id؛ إخفاء غير النشط.
+  - **cities**: حسب المنطقة وحسب الدولة (join)؛ بحث؛ الجلب id؛ إخفاء غير النشط.
+  - **currencies**: الترتيب حسب code؛ قواعد TND (decimals=3، symbol د.ت)؛ by-code/`id`؛ مجهول → 404.
+  - **languages**: ترتيب sortOrder (العربية أولًا)؛ `isRtl` للعربية؛ by-code/id؛ مجهول → 404.
+  - **exchange-rates**: فلترة `fromCode`/`toCode` مع تطبيع الحالة؛ قائمة فارغة مقبولة.
+- fixtures (بلد/منطقة/مدينة غير نشطة + سعر صرف) تُنظَّف بعد السويت.
+
+### النتائج
+- ✅ **248/248** اختبار خادم — 28 ملفًا (كان 232/27).
+- ✅ Docs: `PRODUCTION_GAP_LIST.md` (B5 → ✅).
+
+## Milestone B4 — Country Generalization (مكتمل)
+
+### الهدف
+إغلاق فجوة التوسّع: بلد ثانٍ + قواعد محلية + تفعيل من Admin، دون إعادة بناء الـ Core ودون أي `'TN'` hardcoded.
+
+### المكوّنات
+- **Seed**: `FR` (EUR، `fr`، region IDF) كسوق candidate غير مفعّل؛ `TN` يبقى المفعّل الوحيد.
+- **Admin** (`modules/admin/country-routes.ts`، صلاحية `admin:policies`):
+  - `GET /api/admin/countries` — كل الدول (نشطة/مرشحة) بحالتها وعملتها ولغتها و`activatedAt`.
+  - `PUT /api/admin/countries/:id/activation` — تفعيل/إيقاف مع `reason` إلزامي، تعيين `activatedAt` عند أول تفعيل، وAudit `COUNTRY.ACTIVATED`/`COUNTRY.DEACTIVATED` (before/after/reason).
+- **Web**: قسم "الأسواق والدول" في `/admin/policies` يعرض الدول وزرّ التفعيل/الإيقاف مع حقل السبب + i18n (ar/en/fr).
+- **ملاحظة**: تفعيل السوق قرار تجاري/قانوني؛ الآلية فقط هي ما بُني، ولا قواعد قانونية لكل بلد (`country_policy_gaps` من A5 تبقى DECISION_REQUIRED حتى تُعرَّف).
+
+### الاختبارات
+- `tests/country-activation.test.ts` — **6 حالات**: القائمة تُظهر المرشّح، التفعيل يضبط `is_active`/`activated_at` + Audit، دولة مجهولة → 404 `NOT_FOUND` بنيوي، سبب قصير → 422، SUPPORT/anon → 403/401، الإيقاف يعيد الحالة + Audit.
+
+### النتائج
+- ✅ **232/232** اختبار خادم — 27 ملفًا (كان 226/26).
+- ✅ **39/39** E2E (كان 38/38).
+- ✅ `tsc` (server + web) و`vite build` نظيفان.
+- ✅ Docs: `PRODUCTION_GAP_LIST.md` (B4 → ✅).
+
+## Milestone A5 — Per-Country Dispute Policy (مكتمل)
+
+### الهدف
+تحميل قواعد النزاع من `policies` حسب `countryId` مع fallback عالمي — آلية DB-driven بلا أي `if (country === 'TN')`. الوثيقة المرجعية لا تحدد مددًا أو إجراءات قانونية لكل بلد، لذا لم يُختَرع أي منها (تُسجَّل كـ DECISION_REQUIRED).
+
+### المكوّنات
+- **Policy Engine** (`lib/policy-engine.ts`): `resolvePolicy` (صف الدولة يتغلب على العالمي)، `resolveMergedPolicy` (دمج: الحقول الناقصة تُورَّث من العالمي، والقيم `undefined/null` لا تمسح قيمة عالمية)، `upsertCountryPolicy` (إنشاء/تحديث مع رفع الإصدار).
+- **Country resolver** (`lib/country.ts`): `resolveOrderCountry` يستنتج الدولة من كيان البائع (supplier/merchant/company) ثم من ملف المشتري — لا hardcode.
+- **Gap tracker** (`lib/country-policy-gaps.ts`): جدول `country_policy_gaps` (migration `0011_glorious_toxin`) يسجّل `DECISION_REQUIRED` عند دولة بلا سياسة محلية، ويوسمها `RESOLVED` عند إضافتها.
+- **Dispute service**: `getDisputePolicyForOrder` يُرجع `{ rules, source: 'COUNTRY'|'GLOBAL', countryId, countryCode, policyId, version }`؛ `resolveAppealRules` صار country-aware؛ `DisputeDetail` يحمل `countryId/countryCode/policySource`.
+- **API**: `GET /api/disputes/policies` (متوافق للخلف: بلا orderId يعيد `{rules}`؛ مع `orderId` يعيد السياق القُطري). `GET/PUT /api/admin/policies/dispute` + `GET /api/admin/policies/dispute/resolved` (صلاحية `admin:policies`، Audit لكل تغيير).
+- **Web**: صفحة `/admin/policies` (عرض السياسات + الفجوات المفتوحة + محرر قواعد لكل دولة) + مفتاح sidebar + i18n (ar/en/fr).
+- **Seed**: أُضيفت `FR` كسوق candidate غير مفعّل (مع منطقة) لإثبات الطبقات — تفعيله قرار تجاري/قانوني.
+
+### القرارات
+- **Country → Global layering** مع تسجيل فجوة عند غياب السياسة المحلية بدل اختراع قواعد (AD-020، AD-013).
+- **عقد متوافق للخلف** لـ `/api/disputes/policies` كي لا ينكسر A4 (AD-021).
+- **لا Wallet ولا حركة مالية** — السياسة تؤثر فقط على القرار/النافذة الزمنية.
+
+### الاختبارات
+- `tests/dispute-country-policy.test.ts` — **8 حالات**: fallback عالمي + تسجيل gap، تغلب سياسة الدولة + `source=COUNTRY`، عقد `?orderId=`، رفض استئناف خارج نافذة الدولة (FR=1 يوم) بينما العالمي = 7، منع غير الأدمن (403) من endpoints السياسة، إنشاء/تحديث يرفع الإصدار ويحل gap ويسجّل Audit، تحقق payload (422)، قائمة السياسات + الفجوات.
+- `tests/disputes.test.ts` — A4 مُصحَّح ليطابق الصف العالمي (`isNull(countryId)`) ويظل ناجحًا (10 حالات).
+
+### النتائج
+- ✅ **226/226** اختبار خادم — 26 ملفًا (كان 218/25).
+- ✅ **38/38** E2E (الـ 35 القائمة + 3 حالات في `e2e/policies.spec.ts`).
+- ✅ `tsc` (server + web) و`vite build` نظيفان.
+- ✅ Docs محدّثة: `PRODUCTION_GAP_LIST.md` (A5 → ✅) و`ARCHITECTURE_DECISIONS.md` (AD-020..022).
+
+## Milestone A4 — Dispute Appeal (مكتمل)
+
+### الهدف
+تفعيل حق الاستئناف على قرار النزاع. الجدول `dispute_appeals` كان موجودًا ومستوردًا لكن بلا مسار أو خدمة (A4 كان ❌ في gap list).
+
+### المكوّنات
+- **Schema**: توسيع `dispute_appeals` بـ `decision_note`/`decided_at`/`updated_at` + فهرس `status` (migration `0010_brief_absorbing_man`، مطبَّق عبر `drizzle-kit migrate` — لا DDL يدوي).
+- **Service** (`modules/disputes/service.ts`):
+  - `createDisputeAppeal` — للأطراف على الطلب فقط؛ مسموح فقط للنزاع `DECIDED`/`CLOSED` مع `appealAllowed=true`؛ dedupe لاستئناف `PENDING`؛ نافذة زمنية و`maxAppeals` مقروءة من سياسة `DISPUTE_RESOLUTION`.
+  - `listDisputeAppeals` — يخضع لنفس `requireDisputeAccessOrThrow` (طرف أو مشغّل).
+  - `reviewDisputeAppeal` — قبول يعيد فتح النزاع (`UNDER_REVIEW`) ويعطّل `appealAllowed`؛ رفض يترك القرار قائمًا؛ **تنحّي** من أصدر القرار الأصلي (403).
+  - أحداث `APPEALED`/`REOPENED`، وaudit `DISPUTE.APPEAL.CREATED`/`DISPUTE.APPEAL.REVIEWED`/`DISPUTE.REOPENED`، وإشعارات للمُسند إليه وللمستأنف.
+- **API**: `GET/POST /api/disputes/:id/appeals` (مستخدم)، `GET /api/admin/disputes/:id/appeals` و`POST /api/admin/disputes/:id/appeals/:appealId/review` (مشغّل؛ الصلاحيات الحالية `DISPUTE_REVIEW`/`DISPUTE_MANAGE` — لا تغيير في RBAC).
+- **Web**: بطاقة الاستئنافات + نموذج رفع الاستئناف في `DashboardDisputesPage`، وبطاقة مراجعة الاستئناف في `AdminDisputesPage`، ومفاتيح i18n بالعربية/الفرنسية/الإنجليزية/الصينية.
+
+### القرارات
+- **لا استئناف من الموظفين**: حق الاستئناف مملوك لأطراف الطلب فقط، منعًا لتضارب المصالح (الموظفون يراجعون).
+- **حدود الاستئناف من Policy** لا من الكود: العتبات الافتراضية (7 أيام، استئناف واحد) تُقرأ من `DISPUTE_RESOLUTION` مع fallback آمن إن غابت السياسة.
+- الاستئنافات لا تُنشئ Wallet ولا حركة مالية — إعادة فتح النزاع فقط.
+
+### الاختبارات
+- `tests/disputes.test.ts` — **10 حالات**: إنشاء استئناف + ظهوره (detail/list/audit/event)، منع غير الطرف (403) ومنعه من القراءة، رفض نزاع غير مبتوت (409)، منع الاستئناف المكرر أثناء PENDING، احتساب `maxAppeals`، نافذة الاستئناف المنتهية، `appealAllowed=false`، قبول يعيد الفتح + إشعار، تنحّي صاحب القرار (403) ثم قبول من مراجع آخر، تحقّق payload (422)، جلسة مطلوبة (401)، عقد سياسة الاستئناف.
+- `e2e/disputes.spec.ts` — **3 حالات** (Playwright، API حقيقي + PostgreSQL).
+
+### النتائج
+- ✅ **218/218** اختبار خادم — 25 ملفًا (كان 208/24).
+- ✅ **35/35** E2E (كان 32/32).
+- ✅ `tsc` (server + web) و`vite build` نظيفان.
+- ✅ Docs محدّثة: `PRODUCTION_GAP_LIST.md` (A4 → ✅).
+
+## Milestone 1 — Payment Kernel (مكتمل)
+
+### المكوّنات
+- **Provider Abstraction**: `packages/server/src/lib/payments/providers.ts` — واجهة `PaymentProviderPort` مع `manual` (offline/اختباري) و`stripe`-style HMAC، قابلة للتبديل دون لمس الخدمات. `mapEventType()` يطبّع أحداث المزوّد الداخلية.
+- **Intents**: `POST /api/payments/orders/:orderId/intent` — idempotent حسب `idempotencyKey`؛ إعادة المفتاح تُعيد الـ intent نفسه ولا تُنشئ ثانيًا. الجدول `payment_intents` (migration `0008`).
+- **Webhooks**: `POST /api/payment-webhooks` (خارج الجلسة، موقّع HMAC) — طبّع الحدث، idempotency عبر `(provider, event_id)`، تحديث حالة الطلب/الدفع، وتسجيل audit.
+- **Refunds**: `POST /api/payments/orders/:id/refunds` بصلاحية `refund:manage` — idempotency، منع over-refund، وقيد `REFUND` مقابل في Transaction Ledger. القراءة (`GET /orders/:id`, `GET /orders/:id/refunds`) مسموحة لطرفي الطلب (buyer/seller) عبر `assertOrderAccess`، وللمشغّلين عبر `payment:read`.
+- **UI**: `CheckoutPage.tsx` يُنشئ الطلب ثم يطلب الـ intent، ويعرض حالة الدفع (`payment.status`) من الـ API.
+
+### الإصلاحات الجذرية في هذه الجلسة
+- **DB migration drift**: قاعدة `wasit_dev` كانت متأخرة عن الـ journal بـ migration `0008` (8 صفوف journal مقابل 10 في `wasit_test`)، فكانت جداول الدفع غير موجودة → `500 relation "payment_intents" does not exist`. أُصلح بتشغيل الـ migrator الحقيقي (`drizzle-kit migrate`)، وأزيل أي DDL يدوي مطبَّق سابقًا. الآن dev عند 10/10 migrations مطابقًا للاختبار.
+- **Authorization bug**: `GET /api/payments/orders/:id` كان مقيَّدًا بـ `payment:read` (صلاحية مشغّلين فقط) فيُرفض المشتري على طلبه الخاص بـ 403، رغم أن الـ service يتحقق من الملكية. نُقل التقييد إلى ownership-scoped access في الـ service.
+- **E2E flakiness / fixture determinism**: الـ demo seeder idempotent ويحافظ على المخزون المستهلك، فتتراكم الطلبات حتى ينفد المخزون. أُضيف `SEED_RESET_STOCK=1` (يُستخدم في `e2e/global-setup.ts` فقط) لإعادة مخزون المنتجات التجريبية قبل كل دورة، وأُدخل مساعد `placeOrderViaUi` مشتركًا في `e2e/helpers.ts` يختار منتجًا يقبل الطلب.
+- **`refund.succeeded` mapping**: كان يُطابَق كنجاح دفع عام لأن `"succeed"` substring؛ نُقل فرع refund قبل الفرع العام.
+
+### النتائج
+- ✅ **208/208** اختبار خادم (`packages/server`) — 24 ملفًا.
+- ✅ **32/32** E2E (Playwright) — دورتان متتاليتان متطابقتان بعد إصلاح الـ fixture.
+- ✅ `npm run build` (server + web) ناجح؛ `tsc --noEmit` نظيف.
+- ✅ Docs محدّثة: `PRODUCTION_GAP_LIST.md` (A1/A2/A3 → ✅).
+
+### ملاحظة نموذج الإيراد
+لا Wallet. WASIT لا يحتفظ بأرصدة. الـ Ledger يسجّل فقط (value/commission/fees/refund/settlement/status). العمولة 4% (2% بائع + 2% مشتري) تأتي من Commission/Policy Engine — ليست hardcoded.
+
+## الوضع الحالي
+
+- الخادم يعمل على `http://localhost:3000` (Development)
+- الواجهة تعمل على `http://localhost:5173` (Vite dev, proxy `/api` → 3000)
+- البنية: Monorepo (server + web)
+- قاعدة البيانات: PostgreSQL `wasit_dev` + قاعدة اختبار `wasit_test`
+- `tsc` (typecheck server) — **ناجح (0 خطأ)**
+- `tsc` (typecheck web) — **ناجح (0 خطأ)**
+- الاختبارات التكاملية (vitest ضد `wasit_test`) — **56/56 ناجحة** (حتى PHASE 12: 45 سابقة + 11 جديدة للإعلانات) — آخر تحديث في قسم PHASE 12 أدناه
+- البناء الإنتاجي للويب (`npm run build`) — **ناجح**
+
+## وحدة Messaging & Communication (هذا الجلسة — مكتملة)
+
+### Backend (`packages/server/src/modules/messaging/` + `notifications/`)
+- محرك محادثات حقيقي على PostgreSQL: `threads`, `thread_participants`, `messages` (+ `status`/`read_at` via migration `0002`)
+- مسارات API:
+  - `GET /api/messages` — قائمة المحادثات مع `unreadCount`, `lastMessage`, `participants`, بحث (`?q=`) + pagination
+  - `POST /api/messages` — فتح محادثة مباشرة بين مستخدمين + إرسال أول رسالة
+  - `GET /api/messages/:threadId` — تفاصيل المحادثة + الرسائل + تعليم القراءة تلقائياً (read receipt)
+  - `POST /api/messages/:threadId/messages` — إرسال رسالة (SENT → DELIVERED → READ)
+  - `POST /api/messages/:threadId/read` — تعليم المحادثة مقروءة
+  - `GET /api/messages/search?q=` — بحث في المحادثات والرسائل (ILike، يدعم العربية)
+  - `GET /api/notifications` + `/unread-count` + `POST /:id/read` + `/read-all`
+- RBAC: `MESSAGE_SEND` + `MESSAGE_READ_OWN` (ممنوحة لكل الأدوار في `@wasit/shared`)
+- الملكية (Ownership): غير المشارك يحصل 403 على القراءة/الإرسال في محادثة ليست له
+- Validation (zod): رسالة فارغة/ضخمة مرفوضة (422)، الإرسال لنفسك مرفوض، مستخدم غير موجود → 404
+- كل إرسال/إنشاء محادثة يُسجَّل في Audit: `MESSAGING.THREAD_CREATE`, `MESSAGING.MESSAGE_SEND`
+- إشعارات فورية داخل المنصة عند كل رسالة جديدة (`MESSAGE.NEW`)
+
+### Frontend
+- `DashboardMessagesPage.tsx` — واجهة رسائل كاملة (RTL، رفين: قائمة محادثات + محادثة)، بحث مباشر، شارات غير مقروء، فقاعات مرسلة/مستلمة مع إيصال قراءة ✓/✓✓، صندوق إرسال (Enter للإرسال)، نافذة محادثة جديدة
+- `NotificationsBell.tsx` — جرس إشعارات في `TopHeader` مع عداد غير مقروء + قائمة منسدلة + تحديد الكل كمقروء + رابط للرسائل
+- i18n كاملة (ar/fr/en/zh) مع إزالة `messages.roadmap` ووضع مفاتيح حقيقية
+
+### Integration Tests (`tests/messaging.test.ts` — 10 اختبار)
+فتح محادثة + إشعار، unread/read status، منع المشارك غير المصرّح (403) قراءة/إرسال، منع الرسالة لنفسك، مستخدم غير موجود (404)، validation، auth (401)، بحث مع ملكية، إشعارات (قائمة/read-all)، منع كشف إشعارات الآخرين.
+
+### التحقق المباشر (Live E2E على الخادم)
+- curl: عميل → فتح محادثة مع مورد (عربي) → قائمة الطرفين مع unread صحيح → المورد يقرأ فيتحول status=READ → رد المورد يعيد unread للعميل → بحث عربي "قهوة" يجد الرسالة → إشعارات MESSAGE.NEW
+- المتصفح (customer1): فتح لوحة الرسائل → المحادثة تظهر باسم المورد + آخر رسالة + عداد غير مقروء 1 → فتح المحادثة → رسالة المورد status READ → كتابة رسالة عربية جديدة → تظهر SENT فوراً → بحث "قهوة" يصفّي للخيط الصحيح → جرس الإشعارات يعرض "1" → mark-all → صفر → محادثة جديدة مع merchantA تُنشأ فعلياً في DB وإشعار غير مقروء يصل merchantA
+
+### Checkpoint ZIP (2026-09-13)
+- الأرشيف: `WASIT_BUSINESS_GLOBAL_CHECKPOINT_MESSAGING.zip` — في جذر المشروع
+- يُستبعد منه: `node_modules`, `.env` (الأسرار), `dist`, `*.zip`، `.git`
+- يُوزَّع عبر `python3 -m http.server 12000` ثم `https://work-1-qpzssfljriaoounj.prod-runtime.all-hands.dev/WASIT_BUSINESS_GLOBAL_CHECKPOINT_MESSAGING.zip`
+- Commit الـ checkpoint: `188ca71` — `feat: complete messaging & notifications module`
+- **Push إلى GitHub**: غير ممكن بهذا الـ token (صلاحيات محدودة — `403 resource not accessible` / `push denied`). النية موثقة: إنشاء مستودع `wasit-business-global` والدفع عليه. لا remote مُعرّف حاليًا — ينفَّذ بمجرد توفر token بصلاحية `repo`.
+
+## وحدة Inventory (هذا الجلسة — مكتملة)
+
+### Backend (`packages/server/src/modules/inventory/` + `lib/inventory-engine.ts`)
+- سجلات مخزون على مستوى المنتج + المتغير (product/variant) مع `quantity`, `reservedQuantity`, `lowStockThreshold`
+- حركات ذرّية عبر `applyStockMovement`: `RESERVATION`, `RELEASE`, `SALE`, `PURCHASE`, `ADJUSTMENT`, `RETURN`
+- مسارات API:
+  - `GET /api/inventory` — قائمة مع filters (`LOW_STOCK`/`OUT_OF_STOCK`/`IN_STOCK`) + بحث + pagination
+  - `GET /api/inventory/:id` — تفاصيل صنف + `availableQuantity` + `lowStock` + `outOfStock`
+  - `POST /api/inventory/:id/adjust` — تعديل كمية (+/−) مع `movementType` و`reason`
+  - `PATCH /api/inventory/:id` — ضبط `quantity`/`reservedQuantity`/`lowStockThreshold`
+  - `GET /api/inventory/:id/movements` — سجل الحركات
+- RBAC: `INVENTORY_READ`/`INVENTORY_UPDATE`/`INVENTORY_MOVEMENT_CREATE` (#blocked for CUSTOMER → 403)
+- الملكية: `resolveOwnedSellerId` — يجد entity المورد/التاجر/الشركة المملوكة للمستخدم
+- كل تعديل يُسجَّل في Audit: `INVENTORY.ADJUST` مع before/after
+
+### Frontend (`packages/web/src/pages/DashboardInventoryPages.tsx`)
+- لوحة كاملة عربية/RT L: KPIs (إجمالي/متوفر/منخفض/نفد), جدول مخزون, فلاتر, بحث, pagination
+- نوافذ تعديل (إضافة/خصم/إعدادات), سجل حركات, شارات المخزون المنخفض, صفحة مقارنة الأسعار
+- ترجمة i18n (ar/en/fr/zh)
+
+### Integration Tests (`tests/inventory.test.ts` — 11 اختبار)
+قائمة، بحث، pagination, adjust, set, variants, منع وصول غير المالك, سجل الحركات.
+
+### إصلاحات أُثبتت بالاختبارات
+1. **ملكية الطلبات**: `getOrder`/`updateOrderStatus`/`listMyOrders` كانت تقارن seller entity ID بالمستخدم مباشرة → أضيف `ownedSellerIds()` — يحل 403 للموردين
+2. **دلالات الإلغاء**: الطلب PENDING (لم يُنفَّذ) → `releaseReservation` (بدل `restoreStockForCancelledOrder` الذي كان يخصم مرتين). الطلب المنفَّذ → استعادة + ledger return
+
+### Migration `0001`
+- فهارس فريدة جزئية على `inventory_items` (product+variant) لمنع تكرار سجلات المخزون
+
+### Seed Backfill (`seed-demo.ts`)
+- يُرجع المخزون للمنتجات الموجودة مسبقًا بدون سجلات مخزون عبر `ensureInventoryItem` + تعبئة الكميات من التعريفات
+- متحقق: `supplierA` → SUP-OO-5L-001 (qty 400, thr 40), SUP-DT-10K-002 (qty 120, thr 20)
+
+### التحقق المباشر (Live E2E على الخادم)
+- تسجيل مورد → إنشاء منتج `initialQuantity:50` → سطر المخزون يُنشأ تلقائياً
+- طلب عميل كمية 4 → **reserved 4, available 46**
+- تأكيد المورد → qty 46, reserved 0
+- طلب ثانٍ كمية 6 → reserved 6 → إلغاء → **reserved 0, qty بدون تغيير 46**
+- تعديل `+5` → qty 51; سجل الحركات يعرض 5 أحداث
+- عميل → `/api/inventory` → **403 FORBIDDEN**
+- المتصفح: تسجيل دخول مورد → خصم 10 بملاحظة عربية "جرد دوري" → الصف يصبح 110 → نافذة الحركات تعرض `SALE −10`
+
+### Checkpoint ZIP (2026-09-13)
+- الأرشيف: `WASIT_BUSINESS_GLOBAL_CHECKPOINT_INVENTORY.zip` (260KB، 144 ملف) — في جذر المشروع
+- يُستبعد منه: `node_modules`, `.env` (الأسرار), `dist`, `*.zip`، `.git`
+- يُشغَّل للتحميل عبر: `python3 -m http.server 12000` ثم `https://work-1-qpzssfljriaoounj.prod-runtime.all-hands.dev/WASIT_BUSINESS_GLOBAL_CHECKPOINT_INVENTORY.zip`
+- Commit الـ checkpoint: `a165bfa` — `feat: complete inventory module`
+
+### متغيرات Env جديدة
+- `RATE_LIMIT_REGISTER_MAX` (افتراضي 10), `RATE_LIMIT_LOGIN_MAX` (افتراضي 15) — مرفوعة في `vitest.config.ts` لتجنب 429 في الاختبارات
+
+## التحقق الفعلي من Admin (هذا الجلسة)
+
+1. **مصادقة (Authentication)**
+   - مستخدم غير مسجل → `401` على كل `/api/admin/*`
+   - تسجيل دخول عميل → `roles: ["CUSTOMER"]` بعد إصلاح خلل الدور اليتيم
+   - تسجيل دخول Admin → `roles: ["ADMIN","SUPER_ADMIN","CUSTOMER"]`
+   - مستخدم معطَّل → `403 "Account disabled"`
+2. **Admin Users**
+   - `GET /api/admin/users` → 200 مع 5 مستخدمين حقيقيين من DB
+   - `PATCH /api/admin/users/:id/status` → 200 يعطّل/يفعّل فعلياً (login بعد التعطيل فشل بـ403)
+   - الحالة تُسجَّل في Audit: `ADMIN.USER_STATUS` مع actorId
+3. **Transaction Ledger**
+   - `GET /api/admin/ledger` → 200: إدخالات حقيقية (TRANSACTION_VALUE 16150 دائن، COMMISSION 484.5 مدين، PAYMENT_FEE 323 مدين)
+3.5. **صلحت خلل عرض** في الويب: كانت الواجهة تقرأ `referenceType` بينما الـ API يعيد `entryType` — أضفت مفاتيح i18n `ledger.entry.*` وأظهرت الترجمة
+4. **Audit Logs**
+   - `GET /api/admin/audit-logs` → 200: سجلات حقيقية (AUTH.LOGIN, ADMIN.USER_STATUS, ORDER.CREATE, PRODUCT.CREATE, SUPPLIER/MERCHANT/COMPANY.CREATE, AUTH.REGISTER)
+5. **RBAC & Permissions**
+   - Admin → 200 على كل مسارات admin السبعة
+   - Customer → `403` على كل مسارات admin
+   - واجهة الويب: Customer يرى "Forbidden: Admin area" عند زيارة `/admin`
+6. **KPIs**
+   - `/api/admin/stats` → `{users:5, products:6, orders:1, gmv:16150}` — مطابق لعدّات DB المباشرة
+7. **أكواد الخطأ**
+   - `401` (غير مصدّق)، `403` (ممنوع/معطّل)، `404` (مورد غير موجود)، `409` (بريد مكرر)، `422` (validation)
+
+## ما تم إنجازه (مؤخراً)
+
+1. **إصلاح معالجة الأخطاء**: استبدال errorHandlerMiddleware بالتقاط `app.onError`
+   - أخطاء HTTP الصحيحة تعود الآن برموزها (403 بدل 500، 409 بدل 500، 422...)
+   - `traceId` يتضمن لكل استجابة خطأ
+2. **RBAC فعلي على الكيانات التجارية**:
+   - `POST /api/suppliers` → `requireRole('SUPPLIER')`
+   - `POST /api/merchants` → `requireRole('MERCHANT')`
+   - `POST /api/companies` → `requireRole('COMPANY')`
+   - متحقق live: CUSTOMER → 403، الأدوار الصحيحة → 201
+3. **وحدة Admin كاملة** (`/api/admin`):
+   - `requireAuth + requireRole('ADMIN', 'SUPER_ADMIN')` على كل المسار
+   - مسارات: `/stats`, `/users`, `/users/:id/status`, `/orders`, `/transactions`, `/ledger`, `/products`, `/audit-logs`
+   - Audit على تغيير حالة المستخدم
+   - متحققة live: ADMIN → 200، CUSTOMER → 403
+4. **اختبارات البنية التحتية**:
+   - `tests/setup.ts` يعيد إنشاء قاعدة اختبار + يجري migrations + seeder تلقائياً
+   - `tests/vertical-slice.test.ts` — اختبارات E2E (Register, Login, RBAC, Product, Search, Order, Commission, Ledger, Audit, MOQ, 401, وأمان إنشاء المستخدم)
+   - `tests/admin-access.test.ts` — اختبار Admin شامل (الوصول للـ7 مسارات، حظر CUSTOMER، سجل AUDIT عند تغيير الحالة)
+5. **إصلاح خلل `registerUser`** (أولوية النزاهة):
+   - كان يُدخل المستخدم قبل التحقق من وجود الدور → مستخدم يتيم بدون role عند فشل seed
+   - الآن يتم حل الدور قبل الإدخال → فشل عند عدم وجود الدور لا يترك سجلاً مكسوراً
+   - أُضيف اختبار انحدار "never creates an orphan user"
+6. **فصل tsconfig**:
+   - `tsconfig.json` (typecheck شامل مع tests، noEmit)
+   - `tsconfig.build.json` (build من src فقط)
+   - build script → `tsc -p tsconfig.build.json`
+
+## الاعتماديات المعتمدة
+
+- `hono@4.13.7` (param `'id'` يمكن أن يعيد `string | undefined` — استُخدم `!`)
+- `@wasit/shared` (PERMISSIONS / PermissionKey / ApiError / userHasAnyRole)
+- `drizzle-orm` (eq, and, asc, sql)
+- `argon2` (hashing)
+- `zod` (validation)
+- `decimal.js` (حسابات دقيقة)
+
+## البيانات المرجعية (Seed)
+
+- العمولة الأساسية: سياسة `BASE` 4% (2% بائع + 2% مشتري) في جدول `commission_policies` (`rate/seller_rate/buyer_rate`) — **ليست Hardcoded**
+- الخطط: `CUSTOMER_FREE`, `SMALL_MERCHANT` (19 TND/شهر), `COMPANY` (99 TND), `PRO_MAX` (299 TND)
+- سياسة `ANTI_FEE_EVASION` مُثبتة
+- دول/مناطق/مدن/عملات/لغات: Tunisia seed من الـ seeder
+
+## مستخدمو الاختبار (Dev / Demo Seed)
+
+كلمة المرور للجميع: `Passw0rd!2026`
+
+| الدور | البريد | ملاحظة |
+| --- | --- | --- |
+| CUSTOMER | `customer1@wasit.tn` | عميل عادي |
+| SUPPLIER | `suppliera@wasit.tn` | لديها مورد/منتجات |
+| MERCHANT | `merchanta@wasit.tn` | لديها تاجر/منتجات |
+| COMPANY | `companya@wasit.tn` | لديها شركة/منتجات |
+| ADMIN/SUPER_ADMIN | `admin@wasit.tn` | SUDO — كل صلاحيات admin |
+
+## المطلوب Next (بحسب PHASES المتبقية)
+
+- PHASE 10: Risk Engine (RiskEvents API) — **أُنجز** ضمن PHASE 9 (إدارة فقط)
+- PHASE 11: Disputes — **أُنجز** ضمن PHASE 9
+- PHASE 12: Advertising
+- PHASE 13: AI Core
+- PHASE 14: Subscriptions billing
+- PHASE 16: Analytics
+- PHASE 17-21: Security audit + E2E كامل + Perf + Staging + Production
+
+## PHASE 9 — Verification + Trust (المُنجز)
+
+### Backend
+- **Verification Engine** (`packages/server/src/modules/verification/`)
+  - `GET /api/verification/me` — حالة التحقق الحالية (المستوى/البريد/الهاتف/الطلب النشط/الخطوة التالية)
+  - `GET /api/verification/policies` — سياسات التحقق من Policy Engine (قابلة للتعديل حسب الدولة)
+  - `POST /api/verification/requests` — تقديم طلب تحقق (BASIC/VERIFIED/BUSINESS_VERIFIED/INTERNATIONAL_VERIFIED)
+  - `GET /api/verification/requests` — طلباتي
+  - Admin: `GET /api/admin/verification/requests` + `POST /api/admin/verification/requests/:id/review` (APPROVED/REJECTED + ملاحظات + Audit + إشعار)
+  - عند APPROVED تتحقق الشروط من Policy (مثال: BASIC → emailVerified + phoneVerified) وترفع مستوى المستخدم
+- **Trust Engine** (`packages/server/src/modules/trust/`)
+  - `GET /api/trust/me` — آخر درجة + تفسير + عدد السجل
+  - `GET /api/trust/me/history` — السجل
+  - `POST /api/trust/me/recompute` — إعادة احتساب (عوامل: عمر الحساب، البريد، الهاتف، مستوى التحقق، المعاملات الناجحة، النزاعات، الشكاوى، اكتمال الملف التجاري → درجة 0..100 قابلة للتفسير)
+  - Admin: `GET /api/admin/trust` + `POST /api/admin/trust/:userId/recompute`
+  - `trust-engine.ts` يستخدم `inArray(sellerId, ownedSellerIds)` لحلّ كيانات البيع المملوكة (`src/lib/seller-ownership.ts`) بدل `eq(sellerId, userId)`
+- **Risk Engine** (`packages/server/src/modules/risk/`) — إدارة فقط:
+  - `GET /api/admin/risk/profiles` + `GET /api/admin/risk/profiles/:userId` + `POST .../reassess`
+  - `GET /api/admin/risk/events` — الأحداث + مستوى المخاطر + Reason Codes + الإجراء الموصى به
+  - منفصل عن Trust Engine تماماً
+- **Dispute Center** (`packages/server/src/modules/disputes/`)
+  - `POST /api/disputes` (يتحقق من مشاركة الطرف عبر `isOrderParticipant`)، `GET /api/disputes`، `GET /api/disputes/:id`
+  - `POST /api/disputes/:id/messages` + `POST /api/disputes/:id/evidence`
+  - `GET /api/disputes/policies` — قواعد قابلة للتعديل حسب الدولة من Policy Engine
+  - Admin: assign / update status / decide + سجل أحداث (CREATED, MESSAGE_ADDED, EVIDENCE_ADDED, ASSIGNED, STATUS_CHANGED, DECIDED, APPEAL_REQUESTED) + إشعارات
+  - إصلاحان: `isOrderParticipant` عند عدم امتلاك كيان بيع (تجنّب SQL فارغ + Fallback `seller_id = userId`)؛ `listMyDisputes` تشمل Orders ذات `seller_id = userId`
+- **Permissions جديدة**: `VERIFICATION_READ/SUBMIT/REVIEW`, `TRUST_READ/RECOMPUTE`, `RISK_READ/REASSESS`, `DISPUTE_OPEN/READ/MESSAGE/DECIDE/ASSIGN` + منحها للأدوار (ADMIN/SUPER_ADMIN/SUPPORT/RISK/DISPUTE)
+- Migration `0003_redundant_golden_guardian.sql`: جدول `dispute_events` + `disputes.assigned_to_id`/`assigned_at` (مُطبَّقة على بيئة التطوير)
+
+### Web
+- `DashboardTrustPage` — بطاقة الدرجة + التفسير + السجل + إعادة الاحتساب (live)
+- `DashboardVerificationPage` — المستويات + النموذج + الطلبات + السياسات (live)
+- `DashboardDisputesPage` — القائمة + التفاصيل + الرسائل + الأدلة + الأحداث (live)
+- Admin: `AdminVerificationPage` (مراجعة/موافقة/رفض)، `AdminTrustPage`، `AdminRiskPage`، `AdminDisputesPage` (assign/status/decide)
+- `StaffOnly` guard للصفحات الإدارية الخاصة بالمحركات (ADMIN/SUPER_ADMIN/SUPPORT/RISK/DISPUTE) + روابط في الشريط الجانبي
+- ترجمات كاملة ar/en (fr/zh عبر fallback)
+
+### الاختبارات
+- `tests/verification-trust.test.ts` — 10 اختبارات (Policies, my status, submit BASIC, admin approve→level BASIC, trust recompute+history, risk role check alone denied, dispute create/list/staff decide, outsider 403, evidence/messages/events)
+- المجموعة الكاملة: **43/43 اجتياز** — typecheck نظيف (server + web) — `vite build` ناجح
+- Live E2E (curl + متصفح): register→verify→submit→approve→recompute→dispute→decide→عرض في لوحات الويب بأربع شاشات
+
+## إصلاح الرسوم المالية (Fee Policy Engine — هذا الجلسة)
+
+**المشكلة:** `orders/service.ts` كان يحسب رسوم الدفع بـ `itemsTotal.mul('0.02')` (Hardcoded 2%) وعمولة احتياطية `'0.03'` في الكود — وهذا ينتهك القاعدة "لا نسب مالية Hardcoded".
+
+**الإصلاح (الحد الأدنى):**
+- أُضيفت دالة `getPaymentFeeRate()` تقرأ سياسة الرسوم من جدول `payment_fee_policies` (سياسات قابلة للإدارة من Admin عبر DB، مثل العمولة).
+- استُبدل `'0.02'` بـ `percentRate + flatFee` من السياسة (مثال: 2% = `0.02` + `0`).
+- أُزيل الاحتياطي المالي من الكود إطلاقًا؛ محرك العمولة يفشل مغلقًا (`COMMISSION_POLICY_MISSING`) عند عدم مطابقة أي سياسة. الافتراضي 4% (2%+2%) يعيش فقط في DB (seed).
+- تمت إضافة `paymentFeePolicyId` إلى استجابة `createOrder` و Audit (`feePolicyId`).
+- `seed.ts` يُدخل الآن سياسة رسوم دفع افتراضية (`WASIT Default Processing Fee` — 2%) إن لم توجد.
+
+**الاختبارات:**
+- `tests/payment-fee-policy.test.ts` (2 اختبار): إدراج سياسة `1.5%+0.5` → الطلب يحسب `2.0000` ويُرجع policyId؛ إعادة السياسة للافتراضي 2% → الطلب يحسب `2.0000` وتظل العمولة 3% من seed.
+- المجموعة الكاملة: **45/45 ناجحة** — `tsc` نظيف (server+web) — build ناجح.
+
+## PHASE 12 — Advertising Engine (هذا الجلسة — مكتملة)
+
+### Backend (`packages/server/src/modules/ads/` — `service.ts` + `routes.ts`)
+- محرك إعلانات حقيقي على الجداول الموجودة في migrations: `campaigns`, `ad_creatives`, `ad_events`
+- مسارات API (مربوطة في `app.ts` عبر `/api/ads`):
+  - `POST /api/ads/campaigns` — إنشاء حملة (Validation zod: advertiserType enum, budget عدد عشري موجب، تواريخ صحيحة)
+  - `GET /api/ads/campaigns` — قائمة حملاتي (Owner isolation) مع فلاتر status + pagination
+  - `GET /api/ads/campaigns/:id` — تفاصيل + creatives (من يملك entity فقط أو Admin)
+  - `PATCH /api/ads/campaigns/:id` — تحديث (الحالة عبر `DRAFT→ACTIVE→PAUSED→COMPLETED/CANCELLED` محكوم بقواعد انتقال)
+  - `POST /api/ads/campaigns/:id/creatives` — إضافة creative (BANNER/TEXT/VIDEO) بعد التحقق من الملكية
+  - `GET /api/ads/campaigns/:id/stats` — إحصائيات (impressions/clicks/conversions/ctr/cpc/spent)
+  - `POST /api/ads/events` — تسجيل أحداث (IMPRESSION/CLICK/CONVERSION) — يتطلب حملة ACTIVE (خلاف ذلك 409) + خصم تكلفة التحويل من `spent`
+  - `GET /api/ads/served` — موضع العرض العام (يعيد creatives للحملات النشطة فقط — بدون auth حسب التصميم)
+  - `GET /api/ads/my-advertisers` — entities المملوكة للمستخدم (للواجهة)
+- RBAC: `AD_CREATE`, `AD_MANAGE`, `CAMPAIGN_CREATE`, `CAMPAIGN_MANAGE`, `ADMIN_ADS` — الأدوار MERCHANT/SUPPLIER/COMPANY/MARKETER تملك الإنشاء؛ CUSTOMER ممنوع (403)
+- Ownership: `assertOwnAdvertiser` يمنع الإنشاء/الإدارة على entity لا يملكها المستخدم
+- Audit: إنشاء/تحديث حملة و creative تُسجَّل عبر `writeAudit` (الإجراءات `ADS.CAMPAIGN_CREATE`, `ADS.CAMPAIGN_UPDATE`, `ADS.CREATIVE_CREATE`, `ADS.EVENT_RECORDED`)
+- إصلاح أثناء التطوير: `getMyCampaign` كان يعتمد على `owned = await assertOwnAdvertiser(...).catch(() => null)` — وبما أن `assertOwnAdvertiser` تُرجع `undefined` عند النجاح فكان `!undefined === true` يمنع حتى المالك؛ الحل `await assertOwnAdvertiser(...)` مباشرة ليرمي 403 من الدالة نفسها عند عدم الملكية
+
+### Web (ربط واجهة حقيقي — لا Mockup)
+- `DashboardAdsPage` استُبدل الـ Placeholder بواجهة كاملة (RTL، العربية افتراضية):
+  - نموذج إنشاء حملة (الجهة المعلنة من `my-advertisers`، الأهداف، الميزانية)
+  - قائمة حملاتي مع Badge الحالة + المنصرف/الميزانية
+  - تفاصيل عند فتح الحملة: إحصائيات live من `/stats` + أزرار إدارة الحالة (Activate/Pause/Resume/Cancel/End)
+  - نموذج إضافة creative لكل حملة
+  - قسم "الجهات المعلنة المملوكة"
+- `lib/api.ts`: دوال `listCampaigns/getCampaign/createCampaign/updateCampaign/addCreative/campaignStats/servedAds/myAdvertisers`
+- `lib/types.ts`: `CampaignSummary/CampaignDetail/CampaignStats/CampaignListResponse/AdCreativeRow/ServedAdRow`
+- i18n كاملة (ar/fr/en + zh fallback) — أزيل الاعتماد على `ads.roadmap` placeholder
+
+### الاختبارات (`tests/ads.test.ts` — 11 اختبار)
+401 للحملات بلا جلسة، 403 لـ CUSTOMER، إنشاء حملة SUPPLIER (ملكية entity)، رفض entity لا يملكها المستخدم، عزل قوائم الحملات بين حسابين، إضافة creatives وظهورها في التفاصيل، منع الوصول لحملة غير مملوكة (403)، تفعيل + serve + أحداث (impression/click/conversion) + استمرارها في DB + stats مع spent=1.0000، رفض أحداث لحملة غير ACTIVE (409)، الكشف عن حملات مستخدم، منع انتقال حالة غير صالح.
+
+### التحقق الحي (Live E2E على `wasit_dev` + متصفح)
+- curl: تسجيل الدخول `supplierA` → `my-advertisers` تعيد المورد → إنشاء حملة → إضافة creative → تفعيل → `served` (عام) يعيد الإعلان → أحداث 201 → stats (impressions=1/clicks=1/conversions=1, spent=0.5000)
+- المتصفح: دخول `supplierA` → `/dashboard/ads` → الحملة "Campagne Live E2E" تظهر (ACTIVE, المنصرف 0.5/150) → فتح الحملة يعرض الإحصائيات live والأزرار.
+
+## PHASE 18 — Full Testing (E2E)
+
+### أمر التشغيل
+```bash
+npm run test:e2e          # Playwright، يشغّل server + web تلقائياً ضد wasit_dev
+```
+
+### البنية (لا Mocks)
+- `playwright.config.ts` — `globalSetup` + `webServer` (server + vite)، `workers: 1`، baseURL = الويب مع proxy `/api`.
+- `e2e/global-setup.ts` — يشغّل `db:seed:demo` (idempotent، لا drop)، ثم يسجّل الدخول لكل دور عبر `POST /api/auth/login` الحقيقي ويحفظ `storageState` في `e2e/.auth/` (git-ignored).
+  - **Self-healing**: إذا فشل دخول دور بـ 401 (مثلاً بعد تشغيل اختبار استعادة كلمة المرور)، يصلح كلمة المرور عبر مسار forgot/reset الحقيقي — لا تعديل يدوي على البيانات.
+- `e2e/helpers.ts` — `DEMO_USERS`، `DEMO_PASSWORD`، `storageFor(role)`، `loginViaUi`.
+
+### التغطية (28/28 ناجحة — 3 دورات متتالية متطابقة)
+| الملف | ما يُثبته |
+|---|---|
+| `auth.spec.ts` (5) | رفض بيانات دخول خاطئة بخطأ accessible؛ دخول CUSTOMER مُهيّأ؛ forgot→reset→login→إرجاع كلمة المرور؛ ثبات الجلسة عبر reload |
+| `marketplace.spec.ts` | Home→Marketplace→بحث→تفاصيل منتج→Checkout→إنشاء طلب→تفاصيل الطلب مع **عمولة السيرفر 180,000 DT** (4% من 4500، تُقرأ من الـ API الحقيقي)؛ رفض طلب أقل من MOQ من الـ backend |
+| `rbac.spec.ts` | CUSTOMER ممنوع من `/admin` ومن `/api/inventory`؛ الطلبات غير المصادقة 401؛ SUPPLIER/MERCHANT dashboards؛ **إضافة مخزون تُحدّث الحركة server-side** (+2؛ قبل/بعد من جدول حقيقي)؛ ADMIN يقرأ users/orders/ledger/audit؛ **Ledger يعرض قيد العمولة**؛ **Audit يعرض ORDER.CREATE**؛ حساب ADMIN هو SUPER_ADMIN |
+| `ads.spec.ts` | SUPPLIER ينشئ حملة → تظهر في القائمة و`GET /api/ads/campaigns` يعيدها؛ CUSTOMER يُرفض 403 (RBAC server-side) |
+
+### الإصلاحات في هذه المرحلة
+- **عقد الطلب**: `api.createOrder` كان مُعلَّماً `{ id: string }` بينما الـ Backend يعيد `{ orderId, orderNumber, itemsTotal, commission, paymentFee, grandTotal, currencyCode, transactionId }` — `CheckoutPage` كان يقرأ `res.id` (undefined) فلا يظهر النجاح أبداً. صُحّح العقد في `packages/web/src/lib/api.ts` + `CheckoutPage.tsx`.
+- اختبار استعادة كلمة المرور يستخدم حساب `companyA` (غير مُستخدم في اختبارات الدوران) ويعيد كلمة المرور في `finally` عبر انتظار استجابة الـ API الفعلية (`waitForResponse`)، مع self-healing في global-setup كطبقة حماية إضافية.
+- إضافة `test-results/`, `playwright-report/`, `e2e/.auth/` إلى `.gitignore` (تحتوي cookies الجلسات).
+
+### الوضع
+- ✅ **195/195 اختبار وحدة/تكامل** (`npm test`) ناجحة.
+- ✅ **28/28 E2E** (Playwright) ناجحة، قابلة للإعادة دون تراكم بيانات.
+- ✅ `tsc` typecheck (server + web) — 0 خطأ.
+- ✅ 19 ملف spec للوحدة.
+
+## ملاحظات البنّاء
+
+- لا Wallet. WASIT لا يحتفظ برصيد المستخدمين.
+- لا يمكن تغيير النموذج التجاري (العمولة 4% = 2% بائع + 2% مشتري) من الكود.
+- أي تغيير تجاري محتمل هو من Policy Engine (Admin) مسجل في Audit.
+- قاعدة البيانات والـ schemas مطابقة لمتطلبات الوثيقة المرجعية.
+
+## Milestone — Payment Kernel متعدد المزوّدين + تكاملات تونس
+
+- **Port موسّع** (`lib/payments/port.ts`): `PaymentMethod{type, scheme}`، `ProviderCapability`، `getStatus?`، `requiresStatusRecheck?`، `supportedMethods()`. يظل العقد الوحيد؛ لا يتسرّب شيء خاص بمزوّد خارجه.
+- **Visa/Mastercard**: ليست مزوّدين — تُنمذج كـ`scheme` داخل `CARD`، والقبول عبر Gateway/Acquirer (AD-024). `MOBILE_WALLET` تحمل `D17`/`FLOUCI_WALLET`.
+- **Flouci adapter** (`lib/payments/flouci.ts`) حسب `docs.flouci.com`: `generate_payment`، `verify_payment/{id}`، `refund_payment`، auth `Bearer <PUBLIC>:<PRIVATE>`، المبالغ بالمليم. `accept_card=false` لمسار المحفظة.
+- **ClicToPay adapter** (`lib/payments/clictopay.ts`) حسب العقد العام: `register.do` (المبلغ minor units، `currency=788` لـTND) + `getOrderStatus.do`. Refund غير موثّق → يُرفض بوضوح ولا يُختَرع endpoint. الـhost والاعتمادات من SPS/البنك.
+- **D17/e-Dinar**: لا API عام → `DECISION REQUIRED` (AD-027)، بلا تكامل مخترع.
+- **Webhook آمن**: للمزوّدين بلا توقيع موثّق تُعاد قراءة الحالة من المزوّد (`getStatus`) ويُطابَق المبلغ مع الـintent قبل أي side-effect (AD-025).
+- **Method selection**: `POST /orders/:id/intent` يقبل `method`، يتحقق أن المزوّد النشط يدعمها فعليًا، ويخزّنها على الـintent. `GET /api/payments/methods` يعرض كل المزوّدين مع `available`/`reason` دون كشف أي مفتاح (AD-026).
+- **DB**: migration `0012_payment_multi_method.sql` (إضافة `method`/`scheme` لـ`payment_intents` — additive فقط).
+- **الواجهة**: `CheckoutPage` يجلب القنوات المتاحة ويعرض محدّد وسيلة الدفع؛ مفاتيح i18n ar/fr/en/zh.
+- **الاختبارات**: `tests/payment-adapters.test.ts` (16 وحدة، ضد خادم HTTP محلي يحاكي العقود الموثّقة)، `tests/payment-methods.test.ts` (9 تكامل عبر الـservice الحقيقي + DB)، e2e المدفوعات (6) — تشمل محاكاة مزوّد غير موقّع، رفض callback مزيّف بمبلغ مختلف، وidempotency.
+- **النتيجة**: 297/297 اختبار خادم، 51/51 E2E، typecheck/build نظيفان.
+
+## Milestone — CI/CD + حاويات إنتاجية (Phase 20/21)
+
+- **كان فارغًا**: `.github/workflows/` + لا Dockerfile/compose، وكان `npm run start` (tsc dist) **غير قابل للتشغيل فعلًا** (ESM بلا امتدادات + `@wasit/shared` كمصدر TS).
+- **إنتاج الخادم**: `build:prod` عبر esbuild → `dist-bundle/{index,seed,seed-demo}.cjs` (CJS، `argon2` external). سبب عدم سلوك مسار إعادة كتابة `tsc` موثّق في AD-028.
+- **صورة API** (`Dockerfile`): 3 مراحل، إنتاج فقط في runtime، `USER node`، `HEALTHCHECK` على `/api/health/ready`، وأصول migrations + drizzle-kit للتطبيق.
+- **صورة الويب** (`Dockerfile.web` + `deploy/nginx.conf`): SPA ثابت + proxy لـ`/api` و`/sitemap.xml` و`/robots.txt` (نفس الأصل → الكوكي يبقى same-origin كما في dev).
+- **Compose**: db (غير منشورة للمضيف) + api + web على 8080؛ `JWT_SECRET` إلزامي بلا افتراضي؛ مفاتيح الدفع من البيئة فقط.
+- **خطوة الإصدار** (AD-029): `migrate → seed → serve` داخل الحاوية. اكتُشف عمليًا أن قاعدة بلا بذر المرجع تفشل التسجيل بـ`Role CUSTOMER not seeded` (500)، لذا البذر جزء من الإصدار (idempotent).
+- **التحقق الفعلي**: build ناجح؛ ثلاث حاويات healthy؛ `/api/health/ready` عبر nginx=200؛ SPA=200؛ robots عبر proxy؛ تسجيل 201 → تفعيل البريد → دخول 200 → `GET /api/payments/methods` 200 (يعرض noop/manual/flouci/clictopay مع available/reason).
+- **CI**: `.github/workflows/ci.yml` — `static` + `test` + `e2e` على `postgres:16` حقيقية؛ `npm rebuild argon2`؛ رفع `playwright-report` عند الفشل؛ `concurrency` لإلغاء التشغيلات المتقادمة (AD-030).
+- **إضافة**: `esbuild@^0.24` في `packages/server` devDeps، سكربتات `build:prod`/`start:prod`/`seed:prod`/`typecheck` الجذرية، و`.dockerignore`.
+- **متبقٍ للفئات E/D**: staging مستضاف، WAL/جدولة backup، load testing، caching. (Redis rate-limit موزّع ✅ مُغلق في C1 عبر مخزن Postgres قابل للتبديل — AD-038؛ tracing/metrics/logging/alerting ✅ مُغلق في C2 عبر طبقات داخلية + `/metrics` — AD-039.)
+
+## Milestone — توصيل جدولة تجديد الاشتراكات (Phase 14)
+
+- **كان**: `rolloverDueSubscriptions` موجود لكن **غير موصول بأي route أو cron** — أي أن التجديد التلقائي لم يكن يحدث أبدًا في بيئة حقيقية رغم وجود الاختبار.
+- **Idempotency حقيقية**: التمديد صار تحديثًا شرطيًا على `(id, status=ACTIVE, endsAt=<القيمة المقروءة>)` — عامل واحد فقط يربح (optimistic lock)، والباقي يُحصى `skipped`. يمنع ازدواج التمديد وازدواج الفاتورة عند التزامن أو إعادة التشغيل.
+- **العقد**: `rolloverDueSubscriptions(db): { renewed, skipped, renewedIds }` بدل `number`.
+- **Route إداري**: `POST /api/subscriptions/admin/rollover` (يحتاج `SUBSCRIPTION_MANAGE`)، يُسجّل في Audit `SUBSCRIPTION.ROLLOVER_RUN` فقط عند وجود تجديد فعلي.
+- **Scheduler**: `src/lib/scheduler.ts` + `SCHEDULER_ENABLED` (افتراضي `false` حتى لا تعمل وظائف خلفية في الاختبارات) و`SUBSCRIPTION_ROLLOVER_INTERVAL_MINUTES`. يفشل الوظيفة بهدوء دون إسقاط العملية، `timer.unref()`، وإيقاف نظيف على SIGTERM/SIGINT. compose يفعّله (`true`) لأنه نشر أحادي.
+- **الاختبارات**: 298/298 خادم (كان 297). اختبار route يثبت: تشغيل يستدعي الخدمة، التشغيل الثاني `renewed=0`، Audit مسجّل، ورفض MERCHANT بـ403. اختبار الخدمة يثبت عدم ازدواج الفاتورة عند تشغيلين.
+
+## Milestone — توصيل بريد المعاملات (Phase 17 / B2)
+
+- **كان**: التسجيل يُنشئ توكن تحقق في `email_verification_tokens` ثم **لا يُرسله أحد**؛ فلا يمكن لأي مستخدم جديد تفعيل بريده والدخول. نفس الشيء لإعادة تعيين كلمة المرور (كان التوكن يُعاد في JSON للتطوير فقط).
+- **Port نظيف**: `lib/mail/port.ts` (نفس فلسفة `payments/port.ts`) + `SmtpMailTransport` (nodemailer؛ vendor-neutral: أي مزوّد يتكلم SMTP) + `LogMailTransport` (بديل بلا شبكة يطبع سطرًا مُقنَّعًا).
+- **الحل حسب `MAIL_TRANSPORT`**: `smtp` للإرسال الحقيقي، `log` للتطوير/CI. أي قيمة غير معروفة تعود إلى `log` حتى لا يُعطّل خطأ مطبعي التسجيل. `resetMailTransport()` كـtest seam.
+- **قوالب**: `buildVerificationEmail` / `buildPasswordResetEmail` بـar/fr/en (fallback للعربية) مع نص + HTML.
+- **`sendMail` لا يُسقط الطلب أبدًا**: فشل SMTP يُسجَّل `MAIL.FAILED` في Audit (مع الناقل والخطأ)، والإرسال الناجح يُسجَّل `MAIL.SENT` — فلا يفقد المستخدم حسابه بسبب انقطاع مؤقت، ويبقى أثر دائم لإعادة الإرسال.
+- **مسار dev**: `POST /api/auth/dev/verification-link` (404 في production، بنفس rate-limit التسجيل) يعيد رابطًا مبنيًا بالتوكن الحقيقي؛ و`issueEmailVerificationToken` يُبطل أي توكن سابق فلا يعمل إلا الأحدث.
+- **الخصوصية**: `/forgot-password` لم يعد يفرّق بين بريد موجود وغير موجود (لا `data` عند عدم وجود الحساب) — لا oracle لتعداد الحسابات.
+- **الاختبارات**: `mail.test.ts` — 9 حالات (resolution/status/templates/ar-fallback/التسجيل يُسجّل `MAIL.SENT` + dev link يتحقق + توكن مزوّر يُرفض + forgot موحّد). الإجمالي 307/307 (33 ملفًا). `nodemailer@6` مضمّن في bundle الـesbuild.
+
+## Milestone — تنفيذ الحذف الفعلي (Anonymization) — Phase 17 / B3
+
+- **كان**: `ANONYMIZED` مجرد قيمة في enum؛ `advanceDeletionStage` كان يحدّث العمود فقط ولا يمسّ أي PII. أي أن "الحذف" لم يكن يحدث فعلًا.
+- **`lib/anonymize.ts`**: يستبدل البريد بـ`anon-<hash>@anonymized.invalid` (فريد وغير قابل للعكس)، والهاتف/الاسم/الكنية بـnull، و`passwordHash` بـ`ANONYMIZED` غير الصالح كـargon2، ويعطّل الحساب (`isActive=false`, `isLocked=true`, `emailVerified=false`)، ويُصفّر `profiles` و`supplier_contacts`. **الصف يبقى** لأن ledger/الصفقات/النزاعات تشير إليه.
+- **حماية retention**: طلب `ANONYMIZED` أثناء نافذة استبقاء مفتوحة يُرفض 422 (`RETENTION_WINDOW_OPEN`)؛ `legalHoldOverride: true` يسمح مع تسجيل `PRIVACY.LEGAL_HOLD_OVERRIDE` في Audit. بعد انتهاء النافذة يعمل بدون override.
+- **الإثبات**: عمود `anonymization_log` (migration `0013`) يحفظ قائمة الحقول المُستبدلة + من + متى، مع `PRIVACY.DELETION_ANONYMIZED` في Audit. لا يُخزَّن أي PII قديم.
+- **الاختبارات**: حالتان جديدتان في `security-privacy.test.ts` — رفض 422 ثم override ينجح ويُدقّق، الصف محفوظ والبريد مُستبدل، و`argon2.verify` يفشل على القيمة الجديدة؛ وحالة انتهاء النافذة. الإجمالي 309/309.
+
+## Milestone — كشف تجاوز العمولة (Anti-Fee-Evasion) — Phase 10 / C5
+
+- **كان**: نموذج الإيراد الأساسي (عمولة 3% قديمًا) قابل للتجاوز بنقل الصفقة خارج المنصة عبر المحادثات، ولا يوجد أي كشف.
+- **`lib/fee-evasion.ts`**: محرّك إشارات بقواعد صريحة — رقم هاتف، بريد، قناة خارجية (WhatsApp/Telegram/…)، طريقة دفع مباشر (Western Union/حوالة/كاش)، وعبارة "خارج الوسيط/بدون عمولة". يدعم العربية والفرنسية/الإنجليزية. قاعدة واحدة تُنتج إشارة واحدة كحد أقصى كي لا تضخّم رسالة طويلة الدرجة.
+- **الربط**: عند `sendMessage` تُفحص الرسالة؛ إن ظهرت إشارات يُسجَّل `risk_events` بنوع `FEE_EVASION_SIGNAL` + قيد Audit `MESSAGING.FEE_EVASION_SIGNAL`، ويُرفع `risk_profiles` بوزن محدود (سقف 30). لا حجب تلقائي ولا عقوبة — القرار لمحرّك المخاطر/فريق المخاطر المنفصل.
+- **الخصوصية (مبدأ أساسي)**: يُخزَّن **رموز الإشارات فقط** (`signalCodes`) و`threadId`/`messageId`، ولا يُخزَّن نص الرسالة ولا الرقم/الرابط المطابق. الاختبار يتحقق أن `details` المُخزَّن لا يحتوي الرقم الخام ولا نص الرسالة.
+- **الاختبارات**: `fee-evasion.test.ts` — 10 حالات: 7 وحدات (عربي/إنجليزي لكل قاعدة، رسالة عمل عادية لا تُعلَّم، عدم تكرار نفس القاعدة) + 3 تكامل (تسجيل risk event ورفع الدرجة دون تسريب، رسالة نظيفة لا تُنشئ حدثًا، لا أعمدة مراقبة إضافية على الرسالة). الإجمالي 319/319.
+
+## Milestone — تحصيل فواتير الاشتراك عبر مزوّد الدفع (Phase 14 / B7)
+
+- **كان**: `rolloverDueSubscriptions` يُصدر فاتورة PENDING كل دورة، لكن **لا يوجد أي مسار يجعلها PAID** — أي أن إيراد الاشتراكات لم يكن يُحصَّل فعلًا، ولا دورة انتهاء/إلغاء.
+- **قاعدة حاكمة**: لا يُعلَّم أي invoice مدفوعًا مباشرة من caller. كل تحصيل يمر عبر **منفذ مزوّد الدفع** (`lib/payments/port.ts`) — الـmanual للتحصيل المكتبي، وأي مزوّد حقيقي عبر webhook. لم يُضَف مزوّد جديد.
+- **إعادة استخدام صحيحة**: `payment_intents` صار يقبل `subscription_id` (بديل nullable لـ`order_id`) مع فهرس، و**لم يُخلط** إيراد الاشتراك في `transactions`/`transaction_ledger` (تلك order-scoped وتُغذّي GMV) — الفاتورة PAID + `paidAt` + `externalRef` هي السجل المالي للاشتراك.
+- **المسار الكامل**: Subscription → PENDING invoice → `startInvoicePayment` (intent عبر المزوّد، idempotent بـ`subinv_<invoiceId>`) → `POST /me/invoices/:id/pay` (checkout URL) أو `POST /admin/invoices/:id/collect` (desk, `isOperator`) → webhook (`PAYMENT_SUCCEEDED`/`FAILED`) → `applyInvoicePaymentSucceeded/Failed` → invoice PAID/FAILED + subscription ACTIVE (تمديد)/PAST_DUE.
+- **التوجيه في الـwebhook**: `intentTarget()` يفرّق بين intent طلب وintent فاتورة؛ دفاع بعمق يمنع تسوية intent اشتراك كطلب. التوقيع يُتحقق أولًا، و(replay) بنفس `eventId` لا يُطبّق الأثر مرتين.
+- **Idempotency مزدوجة**: `startInvoicePayment` يعيد نفس الـintent لنفس المفتاح؛ و`applyInvoicePaymentSucceeded` تحديث شرطي على `(invoice, status=PENDING)` — عامل واحد يربح. `collectInvoicePayment` يفحص حالة الفاتورة **قبل** إعادة استخدام الـintent فيرفض 409 على المدفوع مسبقًا.
+- **الدورة**: `expireLapsedSubscriptions` — ملغى بعد `endsAt` → EXPIRED؛ PAST_DUE بعد grace (14 يوم) → EXPIRED + `autoRenew=false`. السcheduler يشغّل rollover ثم expiry كل دورة.
+- **الترقية**: migration `0014` آمنة/إضافية فقط (`order_id`/`transaction_id` يصيران nullable، إضافة `subscription_id` + فهرس). لا drop ولا حذف بيانات.
+- **الاختبارات**: `subscriptions-collection.test.ts` — 18 حالة: إنشاء intent + Audit، إعادة استخدام idempotent، رفض 403 لفاتورة الغير، تحصيل كامل + تمديد + Audit، 409 عند التكرار، قائمة dunning، تسوية عبر webhook موقّع (نجاح/فشل)، replay لا يمدّد مرتين، توقيع مزوّر يُرفض، دورة الانتهاء الثلاثية، وRBAC للمسارين. الإجمالي **337/337** (35 ملفًا)، typecheck ناجح.
+
+## Milestone — Dispute App: فتح النزاع من الواجهة (Phase 11 / B8)
+
+- **كان**: `api.createDispute` موجود في طبقة الـAPI لكن **لا مكوّن يستدعيه** — أي أن قدرة "إنشاء نزاع" لم تكن متاحة إطلاقًا لمستخدم الواجهة، وكان النزاع لا يُفتح إلا عبر استدعاء API مباشر. هذا يُصنّف Mockup/ناقص لا مكتملًا حسب Definition of Done (UI ↔ API ↔ Backend ↔ Tests).
+- **النموذج**: بطاقة "إنشاء نزاع" أعلى صفحة `/dashboard/disputes` — قائمة طلبات حقيقية من `GET /api/orders` (لا إدخال معرّف يدوي)، قائمة أسباب محصورة (NOT_RECEIVED/NOT_AS_DESCRIBED/DAMAGED/WRONG_ITEM/LATE_DELIVERY/QUALITY_ISSUE/OTHER)، ووصف بحد أدنى 10 أحرف (مطابق لقيد الخادم).
+- **الربط الكامل**: `POST /api/disputes` → عند النجاح تُعاد تحميل القائمة ويُفتح النزاع الجديد في لوحة التفاصيل فورًا، فيرى المستخدم رقم النزاع `DSP-…` وحالته OPEN. الخطأ يُعرض بـ`ErrorState` بلا ابتلاع.
+- **التوطين**: نصوص جديدة عبر مفاتيح فقط (`disputes.create.selectOrder/selectReason/noOrders` + `disputes.reason.*`) في ar/en، مع سقوط آمن للعربية في fr/zh كما هو نمط الملف — لا نص داخل المكوّن.
+- **الاختبار**: حالة E2E جديدة — العميل يسجّل الدخول، يمر بمسار الطلب الفعلي، يفتح `/dashboard/disputes`، يملأ النموذج بأزرار `data-testid`، ويؤكد ظهوره ثم وجوده OPEN في `GET /api/disputes`. كان الفشل الأول strict-mode (نمط `DSP-` يتكرر بين التشغيلات) فصار التأكيد على وصف فريد يحوي معرّف الطلب. **52/52 E2E** ناجحة، typecheck للخادم والواجهة 0 أخطاء، migration `0014` طُبِّق فعليًا على `wasit_dev` وقاعدة الاختبار.
+
+## Milestone — Unit Economics: CAC / LTV / Contribution Margin (Phase 16 / B9)
+
+- **الفجوة**: طبقة التحليلات كانت تعرض overview/retention/conversion فقط؛ لا CAC ولا LTV ولا هامش مساهمة، فلا يمكن قياس كلفة اكتساب العميل مقابل قيمته. (كانت الفجوة رقم 4 في ترتيب `DEVELOPMENT_ROADMAP.md`.)
+- **المصدر الحقيقي الوحيد**: لا قيم ثابتة ولا Mock. `newCustomers` = عدد المشترين الذين **أول** طلب لهم (بهذه العملة) وقع داخل النافذة (استعلام cohort بـ`min(created_at)`). `marketingSpend` = مجموع `revenue_accounts` حيث `line_type='COST'` و`category='MARKETING'` داخل النافذة وبالعملة نفسها. `grossMarginTotal` = `Σ(commission + payment_fee)` من `orders`.
+- **المعادلات**: `cac = spend ÷ newCustomers` (null إن لا cohort)، `ltvRealized = arpu = margin ÷ customersWithOrders`، `ltvProjected = (margin ÷ paidOrders) × ordersPerMonth × retentionMonths`، `ltvCacRatio = ltvRealized ÷ cac` (null إن كان CAC غائبًا/صفرًا)، `contributionMarginPct = margin ÷ GMV × 100`. كلها Decimal مع `ROUND_HALF_UP` لأربع منازل.
+- **الصدق التحليلي**: `ltvRealized` رقم محقَّق قابل للتدقيق، أما `ltvProjected` فنموذج صريح تُعاد افتراضاته في `assumptions` ولا يُقدَّم كحقيقة؛ و`basedOn` يوثّق المصادر والقيود (نطاق عملة واحدة، وأن `campaigns.spent` إيراد إعلاني لا تكلفة اكتساب).
+- **العزل**: الوحدة تفحص عملة واحدة فقط ولا تُصرّف بين العملات (لا Exchange Rate Engine)، تمامًا كسياسة `revenue/service.ts`.
+- **الواجهة البرمجية**: `GET /api/admin/analytics/unit-economics` (query: currency/windowDays/retentionMonths/ordersPerMonth بتحقق صارم → 422 بـ`fieldErrors`) و`GET /api/admin/analytics/cohorts`؛ كلاهما بصلاحية `ADMIN_ANALYTICS` (ADMIN/SUPER_ADMIN) وAudit `ANALYTICS.UNIT_ECONOMICS_READ`.
+- **الاختبارات**: `unit-economics.test.ts` — 10 حالات: الحساب النقي (CAC/ARPU/LTV محقَّق/مُقدّر/نسبة/هامش)، تقريب HALF_UP، القيم الصفرية وغياب cohort (null لا قسمة على صفر)، عزل العملة (صفوف عملة أخرى لا تدخل مجموعًا ولا تُنشئ cohort)، استبعاد spend الأقدم من النافذة، cohorts شهرية، و401/403/422/200+Audit عبر `createApp()` الحقيقي. للعزل تُستخدم عملة اصطناعية بدل `DELETE FROM orders` حمايةً لبيانات بقية الملفات.
+- **التحقق**: الخادم **347/347** (36 ملفًا)، `typecheck` للخادم والواجهة نظيف، و`vite build` للواجهة ناجح (78 module).
+
+## Milestone — سدّ فجوة SMS / التحقق بالهاتف (Phase 17 / B2 — إغلاق)
+
+- **الفجوة**: كان بريد المعاملات حقيقيًا (`lib/mail/`)، لكن **SMS غير موجود إطلاقًا** — جدول `phone_verification_tokens` غائب، و`users.phone` لم يكن يُكتب عند التسجيل، و`phoneVerified` لا يصبح true عبر أي مسار. أي أن المستويات الأولى من Verification Engine تعتمد على إشارة غير قابلة للإنتاج.
+- **Port موازٍ للبريد**: `lib/sms/port.ts` (`SmsTransport`/`SmsMessage`) + `HttpSmsTransport` (POST JSON إلى بوابة قابلة للضبط: URL، auth scheme `none|bearer|basic`، وأسماء حقول `to/text/from`) + `LogSmsTransport` (بدون شبكة) + `resolveSmsTransport()` حسب `SMS_TRANSPORT` (`log` افتراضيًا، وأي قيمة غير معروفة تعود إلى `log`) + `resetSmsTransport()` كـtest seam. لا بروتوكول SMS موحّد، لذلك **الـPort هو الضمانة** بأن تبديل المزوّد لا يمسّ مسار التحقق ولا الـroutes ولا الـAudit.
+- **استيعاب القواعد**: `sendSms` يكتب `SMS.SENT`/`SMS.FAILED` في Audit ولا يُسقط الطلب عند فشل البوابة. **لا يُخزَّن نص الرسالة ولا الرقم الكامل** — فقط الرقم مُقنَّعًا عبر `maskPhone` — لأن النص يحوي كود التحقق. `HttpSmsTransport` يعتبر أي non-2xx فشلًا ويُرفعه ليُسجَّل، مع timeout.
+- **التسجيل**: يقبل `phone` اختياريًا؛ `normalizePhone` يزيل المسافات/الأقواس ويتحقق من صيغة `+?digits` (6–20) وإلا 422. يُخزَّن الرقم مُطبَّعًا.
+- **المسار الكامل**: `POST /api/auth/phone/send` (auth، rate-limit 5/دقيقة) → كود 6 أرقام عبر `generateOtpCode`، **يُخزَّن hash فقط** في `phone_verification_tokens`، ويُبطل أي كود سابق → `POST /api/auth/phone/verify` (rate-limit 10/دقيقة) ⇒ `phone_verified=true` + Audit `AUTH.PHONE_VERIFIED`. `attempts` يمنع تخمين الكود: كل خطأ يزيد العدّاد، والكود يُرفض عند بلوغ `PHONE_VERIFY_MAX_ATTEMPTS` (افتراضي 5).
+- **إصلاح كامن**: `generateOtpCode` كان يسحب رقمًا عشوائيًا للتحقق من النطاق ورقمًا آخر للقيمة، فيمكن أن يُخرج كودًا من 5 أرقام ترفضه بوابة `z.string().length(6)`. أُعيد كتابته لسحب واحد مع `padStart(6,'0')`. (كانت دالة غير مستخدمة سابقًا، فظهر خللها الآن.)
+- **Health**: `GET /api/health/channels` يعرض `mail`/`sms` (transport/available) بلا أي أسرار — يؤكد أن التنفيذ يملك قناة حقيقية قبل الاعتماد عليها.
+- **Migration**: `0015` إضافية فقط (`CREATE TABLE phone_verification_tokens` + فهرسان)؛ طُبِّقت على `wasit_dev` وقاعدة الاختبار.
+- **التحقق**: `sms.test.ts` — 17 حالة (resolve/status/masking/templates + E2E حقيقي على DB: send+Audit دون تسريب الرقم، قبول via dev seam، كود خاطئ×5، shape خاطئ 422، 401 غير مصادق، resend يُبطل القديم، 422 بعد التحقق، `/api/health/channels`). الإجمالي **364/364** (37 ملفًا)، `typecheck` نظيف، حزمة esbuild تُبنى وتُشغَّل تحت Node العادي، وE2E يدوي عبر الحزمة على Postgres الحقيقي: register(phone)→send→dev code→verify ⇒ `phone_verified=t` و`token_hash` فقط في القاعدة.
+## Milestone — Marketing Video Generation Pipeline حقيقي (Phase 13 / Media)
+
+- **الفجوة**: `marketingVideos` في Marketing Agent كان **عقداً فقط** — `mediaUrl: null` مع `previewable/downloadable`، بلا توليد أو تخزين فعلي (الفجوة رقم 5 في التقرير المرجعي).
+- **Media Port (provider-agnostic)**: `lib/media/port.ts` يحدد `MediaStorage`، و`lib/media/video-types.ts` يحدد `VideoGenerationProvider`. التسجيل مركزي في `lib/media/resolve.ts` حسب `MEDIA_STORAGE` و`VIDEO_PROVIDER` — لا SDK مزوّد يُستورد في الطبقات العليا، تماماً مثل منافذ payments/AI.
+- **التخزين الخاص**: `LocalMediaStorage` يكتب تحت `MEDIA_STORAGE_DIR` (افتراضي `.wasit-media/`) بمفاتيح مبهمة، **لا ملفات ثابتة عامة**. التحقق من المفاتيح صار **لكل مقطع** فيسمح بالمفاتيح المتداخلة (`videos/<uuid>.mp4`) ويمنع أي تسرب مسار. يدعم `getRange` لطلبات HTTP Range (معاينة الفيديو داخل الصفحة).
+- **محرّك التوليد**: `StructuralVideoProvider` يُنتج **MP4 حقيقياً** (H.264/yuv420p/faststart، 720×1280، 25fps) عبر ffmpeg + libass، مع تشكيل عربي صحيح عبر خط Noto Sans Arabic المُجمَّع. الستايلات الأربعة (MODERN/MINIMAL/BOLD/ELEGANT) والجمهور (B2B/B2C) والمدة تُبنى في مشهد من 4 شرائح. `NoopVideoProvider` يفشل بصوت عالٍ للتعطيل الصريح.
+- **الروابط الموقّعة**: `lib/media/tokens.ts` — توكن قصير العمر (`MEDIA_DOWNLOAD_TTL_SECONDS`، افتراضي 900ث) يربط الأصل بمالكه. **المفتاح وحده لا يكفي للقراءة**؛ توكن غير صالح/منتهٍ ⇒ 401.
+- **الحوكمة**: التوليد يمرّ بصلاحية `media:upload` (RBAC حقيقي في الخادم، لا إخفاء زر). الملكية عبر `assertSellerOwnership` (المنتج يجب أن يخصّ كيان المستخدم) أو Admin، والمنتج يجب أن يكون **ACTIVE** وإلّا 422 `PRODUCT_NOT_ACTIVE`. كل render يُسجَّل في `ai_requests` (`MARKETING_VIDEO`) ويُجمَّع في `ai_usage` عبر AI Cost Control — لا تجاوز للـ budget.
+- **الـ API**: `POST /api/media/marketing-videos` (201 + أصل READY)، `GET /api/media/assets`، `GET /api/media/assets/:id`، `DELETE /api/media/assets/:id` (حذف ناعم DELETED مع إبقاء السجل للـ Audit)، `GET /api/media/assets/:id/content` (توكن + Range). إضافةً `GET /api/products/mine` لقائمة منتجات الكيانات المملوكة.
+- **الـ Agent**: Marketing Agent يعرض الآن `marketingVideos` حقيقية بروابط موقّعة (`mediaUrl`/`downloadUrl`) من `listRecentMarketingVideos()` — لا روابط مُلفَّقة، وعند غياب الفيديوهات يعيد قائمة فارغة + تلميح.
+- **الواجهة**: `DashboardVideoStudioPage` (`/dashboard/video-studio`) — اختيار منتج، لغة/جمهور/نمط/مدة، توليد، معاينة `<video>` داخلية، تنزيل، حذف، ومكتبة وسائط حقيقية. Nav مُقيّد بـ`media.use`. التوطين عبر مفاتيح `studio.*` في ar/fr/en/zh (لا نصوص داخل المكوّن).
+- **Health/Ops**: `GET /api/health/channels` يعرض `media.storage` و`media.video` (id/available/reason/async) بلا أسرار. `.wasit-media/` في `.gitignore`.
+- **الاختبارات**: `tests/marketing-video.test.ts` — 13 حالة: 401 غير مصادق، 403 لـCUSTOMER (RBAC)، 403 لمنتج تاجر آخر، 422 لمنتج غير ACTIVE، **MP4 حقيقي** (تحقق ftyp + حفظ DB + ظهور في المكتبة)، تشكيل عربي، عزل بين المستخدمين، توكن غير صالح، حذف ناعم، تعرّض Agent للوسائط الحقيقية، و`/mine` (ملكية/فارغ/401).
+- **التحقق**: الخادم **434/434** (42 ملفاً)، typecheck للخادم والواجهة نظيف، و`vite build` للواجهة ناجح.

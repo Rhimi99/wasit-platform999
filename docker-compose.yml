@@ -1,0 +1,96 @@
+# WASIT BUSINESS GLOBAL — production-like stack (web + api + postgres).
+# Dev credentials are placeholders: override in .env / a real secret store.
+# Never commit real secrets; this file reads them from the environment.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wasit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wasit_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-wasit_dev}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wasit} -d ${POSTGRES_DB:-wasit_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Not published to the host by default; only the api needs it.
+    expose:
+      - "5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wasit}:${POSTGRES_PASSWORD:-wasit_dev_password}@db:5432/${POSTGRES_DB:-wasit_dev}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set (>=32 chars)}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      API_URL: ${API_URL:-http://localhost:8080}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      # Only one provider is active; default keeps the platform from taking money.
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-noop}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      FLOUCI_BASE_URL: ${FLOUCI_BASE_URL:-https://developers.flouci.com}
+      FLOUCI_PUBLIC_KEY: ${FLOUCI_PUBLIC_KEY:-}
+      FLOUCI_PRIVATE_KEY: ${FLOUCI_PRIVATE_KEY:-}
+      CLICTOPAY_BASE_URL: ${CLICTOPAY_BASE_URL:-https://test.clictopay.com/payment/rest}
+      CLICTOPAY_USERNAME: ${CLICTOPAY_USERNAME:-}
+      CLICTOPAY_PASSWORD: ${CLICTOPAY_PASSWORD:-}
+      # Single-instance compose: the API itself runs the background scheduler.
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      SUBSCRIPTION_ROLLOVER_INTERVAL_MINUTES: ${SUBSCRIPTION_ROLLOVER_INTERVAL_MINUTES:-60}
+      # Transactional email. Defaults to the no-network fallback so a fresh boot
+      # never silently drops verification mail; set MAIL_TRANSPORT=smtp plus the
+      # SMTP_* vars to deliver for real.
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-log}
+      MAIL_FROM: ${MAIL_FROM:-WASIT BUSINESS GLOBAL <no-reply@wasit.tn>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      # Rate-limit counters. Compose runs a single API replica, where the
+      # in-process store is fine; set RATE_LIMIT_STORE=postgres before scaling
+      # to multiple replicas so the counters are actually shared.
+      RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-memory}
+      RATE_LIMIT_PURGE_INTERVAL_MINUTES: ${RATE_LIMIT_PURGE_INTERVAL_MINUTES:-15}
+      # Observability: structured JSON logs on stdout, Prometheus at /metrics,
+      # and alert-rule evaluation driven by the scheduler in this container.
+      # Set METRICS_TOKEN (and restrict the port) before exposing /metrics.
+      OBS_LOG_LEVEL: ${OBS_LOG_LEVEL:-info}
+      OBS_LOG_FORMAT: ${OBS_LOG_FORMAT:-json}
+      OBS_ALERTS_ENABLED: ${OBS_ALERTS_ENABLED:-true}
+      OBS_ALERT_INTERVAL_MINUTES: ${OBS_ALERT_INTERVAL_MINUTES:-5}
+      OBS_ALERT_NOTIFY: ${OBS_ALERT_NOTIFY:-log}
+      OBS_ALERT_WEBHOOK_URL: ${OBS_ALERT_WEBHOOK_URL:-}
+      OBS_ALERT_WEBHOOK_TOKEN: ${OBS_ALERT_WEBHOOK_TOKEN:-}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+    # Release step: apply migrations, seed reference data (roles/permissions/
+    # countries/currencies/categories/policies — idempotent), then serve.
+    command: sh -c "npx drizzle-kit migrate && node /app/dist-bundle/seed.cjs && node /app/dist-bundle/index.cjs"
+    expose:
+      - "3000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  db-data:

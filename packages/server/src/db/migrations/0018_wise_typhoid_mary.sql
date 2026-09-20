@@ -1,0 +1,1 @@
+ALTER TYPE "public"."policy_scope" ADD VALUE 'PRIVACY';

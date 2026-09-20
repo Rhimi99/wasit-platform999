@@ -1,0 +1,23 @@
+node_modules/
+dist/
+dist-bundle/
+build/
+.env
+.env.local
+*.log
+.DS_Store
+coverage/
+.turbo/
+*.zip
+*.tsbuildinfo
+# Local database backups — contain role password hashes / data; never commit.
+backups/*.dump
+backups/pg_globals.sql
+# Playwright E2E artifacts — session cookies + failure output must never be committed.
+test-results/
+playwright-report/
+e2e/.auth/
+
+# Local private media storage (generated marketing videos) — never committed
+.wasit-media/
+packages/server/.wasit-media/

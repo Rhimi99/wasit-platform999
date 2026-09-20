@@ -1,0 +1,1 @@
+ALTER TYPE "public"."refund_status" ADD VALUE 'FAILED';

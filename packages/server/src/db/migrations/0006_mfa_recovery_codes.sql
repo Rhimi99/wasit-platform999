@@ -1,0 +1,1 @@
+ALTER TABLE "authenticator_apps" ADD COLUMN "recovery_codes_hash" text;--> statement-breakpoint

@@ -1,0 +1,21 @@
+# Keep the build context small and secret-free.
+node_modules
+**/node_modules
+dist
+**/dist
+dist-bundle
+**/dist-bundle
+.git
+.github
+backups
+test-results
+playwright-report
+e2e/.auth
+*.zip
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+WASIT_BUSINESS_GLOBAL_*.zip
+docs
