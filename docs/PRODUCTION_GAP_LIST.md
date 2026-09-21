@@ -1,6 +1,7 @@
 # PRODUCTION GAP LIST — WASIT BUSINESS GLOBAL
 
 تاريخ التدقيق: 2026-09-19. مرتّبة حسب الاعتماد المنطقي (Dependency-first)، لا حسب التفضيل.
+آخر تحديث: **2026-09-21** — أُغلقت D1/D2/D3 بعد commit `fc8d368` (Load + فهارس مُثبَتة بـEXPLAIN + read cache).
 
 Legend: ✅ موجود ومختبر | 🟡 موجود جزئيًا | ❌ غير منفَّذ | ⚠️ موجود لكن غير متحقق/يحتاج اختبار
 
@@ -44,9 +45,9 @@ Legend: ✅ موجود ومختبر | 🟡 موجود جزئيًا | ❌ غير 
 
 | # | Gap | الحالة | لماذا مطلوب | الموجود حاليًا | المطلوب بالضبط | اختبار الإثبات | Phase |
 |---|---|---|---|---|---|---|---|
-| D1 | Load/Performance testing | ❌ | لا دليل سلوك تحت الحمل | لا يوجد | سيناريوهات k6/artillery + ميزانية أداء | تقرير p95 | 19 |
-| D2 | Query/index optimization | ⚠️ | استعلامات ساخنة | indexes في الـ schema | مراجعة EXPLAIN | خطة محسّنة | 19 |
-| D3 | Caching | 🟡 | تخفيف القراءات | pagination فقط | cache layer للقراءات الساخنة | hit rate + صحة | 19 |
+| D1 | Load/Performance testing | ✅ | لا دليل سلوك تحت الحمل | `lib/perf/load-runner.ts` (بلا اعتماديات) + `scripts/load-smoke.ts` + `npm run load:smoke` يقود الخادم الحقيقي عبر HTTP بميزانية p95 | — (مُنجَز) | 7 سيناريوهات 0% أخطاء، p95 4–21ms (cache on)؛ والمقابل cache off يظهر ~نصف الإنتاجية | `load-smoke` يُفشل عند تجاوز الميزانية + `tests/unit/load-runner.test.ts` (7 حالات) | 19 |
+| D2 | Query/index optimization | ✅ | استعلامات ساخنة | فهارس مركّبة مطابقة لأنماط «فلترة+ترتيب»: `products_public_created_idx`, `products_public_category_created_idx`, `orders_buyer_created_idx`, `orders_seller_created_idx`, `notifications_user_created_idx`, `messages_thread_created_idx`, `invoices_status_due_idx` (migration `0023` إضافية) | — (مُنجَز) | `explain-hot-queries.ts --synth=20000` يختار الفهرس المركّب في كل الاستعلامات الساخنة (0.018–0.036ms) داخل معاملة تُرجَع دائمًا (بلا تغيير للبيانات) | 19 |
+| D3 | Caching | ✅ | تخفيف القراءات | `cached()` على قراءات geo/categories/seo + invalidation عند الكتابة + `readCacheStatus()` عبر `/api/health/channels` | — (مُنجَز) | قياس مقارن: geo.countries 3595→1349 rps، categories 4405→2233، sitemap 4594→1050 عند إيقاف الـcache | `tests/unit/read-cache.test.ts` (7) + `tests/read-cache.test.ts` (9) | 19 |
 
 ## E. Staging / Production Gaps
 

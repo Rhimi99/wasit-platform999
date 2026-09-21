@@ -25,9 +25,10 @@
 | PHASE 16 | Analytics | ✅ overview/retention/conversion/revenue-breakdown/daily-kpis/reports + **CAC/LTV/Contribution Margin** (`unit-economics` + cohorts) |
 | PHASE 17 | Security + Privacy + Audit | ✅ security headers + argon2id + audit (24 module) + privacy consent/export/deletion مع **anonymization فعلي** + **Email وSMS إنتاجيان** (ports مزوّد-محايدة + تحقق الهاتف OTP) |
 | PHASE 18 | Full Testing + E2E | ✅ 364/364 وحدة/تكامل (37 ملف) + 52/52 E2E + typecheck 0/0 + build PASS |
-| PHASE 19 | Performance + Optimization | 🟡 بدأ جزئيًا — build إنتاجي (esbuild bundle) + HEALTHCHECK + non-root؛ Load/Caching/metrics لا تزال ⏳ |
+| PHASE 19 | Performance + Optimization | ✅ Load harness (p95 budget) + فهارس مركّبة مُثبَتة بـEXPLAIN + read cache (commit `fc8d368`)؛ build إنتاجي/HEALTHCHECK/non-root + metrics/tracing/rate-limit سابقًا |
 | PHASE 20 | Staging | 🟡 Docker Compose Stack كامل (db+api+web) + خطوة إصدار migrate→seed→serve + CI؛ بيئة staging مستضافة ⏳ |
 | PHASE 21 | Production Readiness | 🟡 Dockerfile/Dockerfile.web + CI + health checks + secrets من البيئة؛ Backups/WAL/monitoring/alerting ⏳ |
+| — (مستقبلي) | WASIT AI COPILOT (اختياري للتاجر) | ⏳ مواصفة فقط — طبقة تنسيق/محادثة فوق الـAgents القائمة؛ لا يحذف ولا يدمج أي Agent، وكل الـ11 وكيلًا تبقى مستقلة؛ extensible عبر Agent Registry؛ لا يتجاوز RBAC؛ تأكيد التاجر للإجراءات المالية؛ نتائج من بيانات فعلية؛ Audit لكل action. التفاصيل في `docs/AI_ARCHITECTURE.md` §6.5 و`docs/ARCHITECTURE_DECISIONS.md` (AD-043). **غير منفَّذ ولا مُقنَّن في أي Phase.** |
 
 ## الأولويات القادمة (حسب الاعتماد المنطقي)
 
