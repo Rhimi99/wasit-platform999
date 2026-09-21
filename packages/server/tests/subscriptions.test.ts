@@ -301,6 +301,148 @@ describe('Subscriptions — admin endpoints', () => {
   });
 });
 
+describe('Subscriptions — UI contract (/dashboard/subscriptions)', () => {
+  // The web page reads exactly these three endpoints; the shape asserted here is
+  // the shape the UI renders, so a change to any of them breaks the page loudly.
+  it('serves a plan catalog whose prices are backend-owned (no hardcoded UI numbers)', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-plans');
+    const client = makeClient(app, cookie);
+    const res = await client.req('/api/subscriptions/plans');
+    expect(res.status).toBe(200);
+    const items = res.data.data.items as Array<Record<string, unknown>>;
+    expect(items.length).toBeGreaterThan(0);
+    for (const p of items) {
+      expect(typeof p.id).toBe('string');
+      expect(typeof p.code).toBe('string');
+      expect(typeof p.priceMonthly).toBe('string');
+      expect(typeof p.priceYearly).toBe('string');
+      expect(typeof p.currencyCode).toBe('string');
+      expect(typeof p.planTarget).toBe('string');
+    }
+    // The real seeded catalog must contain a non-zero priced plan, otherwise the
+    // page would render a grid of zeros and silently look "fine".
+    expect(items.some((p) => Number(p.priceMonthly) > 0)).toBe(true);
+  });
+
+  it('reports the owner a null subscription, then the newly created one after subscribe', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-me');
+    const client = makeClient(app, cookie);
+
+    const before = await client.req('/api/subscriptions/me');
+    expect(before.status).toBe(200);
+    expect(before.data.data.subscription).toBeNull();
+
+    const plans = (await client.req('/api/subscriptions/plans')).data.data.items as Array<{ id: string }>;
+    const created = await client.req('/api/subscriptions/subscribe', {
+      method: 'POST',
+      body: { planId: plans[0].id, billingCycle: 'YEARLY' },
+    });
+    expect(created.status).toBe(200);
+    expect(created.data.data.subscription.planId).toBe(plans[0].id);
+    expect(created.data.data.subscription.billingCycle).toBe('YEARLY');
+
+    const after = await client.req('/api/subscriptions/me');
+    expect(after.data.data.subscription).not.toBeNull();
+    expect(after.data.data.subscription.id).toBe(created.data.data.subscription.id);
+  });
+
+  it('returns the owner invoices including the one minted by subscribe', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-invoices');
+    const client = makeClient(app, cookie);
+    const plans = (await client.req('/api/subscriptions/plans')).data.data.items as Array<{ id: string }>;
+    await client.req('/api/subscriptions/subscribe', {
+      method: 'POST',
+      body: { planId: plans[0].id, billingCycle: 'MONTHLY' },
+    });
+
+    const res = await client.req('/api/subscriptions/me/invoices');
+    expect(res.status).toBe(200);
+    const items = res.data.data.items as Array<Record<string, unknown>>;
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    for (const inv of items) {
+      expect(typeof inv.invoiceNumber).toBe('string');
+      expect(typeof inv.amount).toBe('string');
+      expect(typeof inv.status).toBe('string');
+    }
+  });
+
+  it('changes the plan the UI shows as current, and returns 404 (not 500) for an unknown plan', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-change');
+    const client = makeClient(app, cookie);
+    const plans = (await client.req('/api/subscriptions/plans')).data.data.items as Array<{ id: string }>;
+    await client.req('/api/subscriptions/subscribe', { method: 'POST', body: { planId: plans[0].id } });
+
+    const target = plans[plans.length - 1];
+    const changed = await client.req('/api/subscriptions/me/plan', {
+      method: 'PATCH',
+      body: { planId: target.id, billingCycle: 'MONTHLY' },
+    });
+    expect(changed.status).toBe(200);
+    expect(changed.data.data.subscription.planId).toBe(target.id);
+
+    // A missing plan must be a clean 404 so the UI shows an error state, not a 500.
+    const missing = await client.req('/api/subscriptions/me/plan', {
+      method: 'PATCH',
+      body: { planId: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  it('cancels the subscription and turns auto-renew off, then 404s a second cancel', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-cancel');
+    const client = makeClient(app, cookie);
+    const plans = (await client.req('/api/subscriptions/plans')).data.data.items as Array<{ id: string }>;
+    const created = await client.req('/api/subscriptions/subscribe', { method: 'POST', body: { planId: plans[0].id } });
+    const subId = created.data.data.subscription.id;
+
+    const res = await client.req('/api/subscriptions/me/cancel', { method: 'POST', body: {} });
+    expect(res.status).toBe(200);
+    expect(res.data.data.cancelled).toBe(true);
+
+    // The row is cancelled in place (not deleted) so billing history survives.
+    const rows = await db.select().from(subscriptions).where(eq(subscriptions.id, subId)).limit(1);
+    expect(rows[0].cancelledAt).not.toBeNull();
+    expect(rows[0].autoRenew).toBe(false);
+    expect(rows[0].status).toBe('CANCELLED');
+
+    // The active-subscription endpoint no longer surfaces it, and a second cancel is a
+    // clean 404 rather than acting on an already-cancelled subscription.
+    const me = await client.req('/api/subscriptions/me');
+    expect(me.data.data.subscription).toBeNull();
+    const again = await client.req('/api/subscriptions/me/cancel', { method: 'POST', body: {} });
+    expect(again.status).toBe(404);
+  });
+
+  it('returns a clean 404 when subscribing or cancelling without an active subscription', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-none');
+    const client = makeClient(app, cookie);
+    const cancel = await client.req('/api/subscriptions/me/cancel', { method: 'POST', body: {} });
+    expect(cancel.status).toBe(404);
+
+    const plans = (await client.req('/api/subscriptions/plans')).data.data.items as Array<{ id: string }>;
+    const unknown = await client.req('/api/subscriptions/subscribe', {
+      method: 'POST',
+      body: { planId: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(unknown.status).toBe(404);
+    expect(plans.length).toBeGreaterThan(0);
+  });
+
+  it('lets the owner start payment for their generated invoice through the UI route', async () => {
+    const { cookie } = await createUserWithRole('CUSTOMER', 'ui-pay');
+    const client = makeClient(app, cookie);
+    const plans = (await client.req('/api/subscriptions/plans')).data.data.items as Array<{ id: string }>;
+    await client.req('/api/subscriptions/subscribe', { method: 'POST', body: { planId: plans[0].id } });
+    const invoices = (await client.req('/api/subscriptions/me/invoices')).data.data.items as Array<{ id: string; status: string }>;
+    const pending = invoices.find((i) => i.status === 'PENDING');
+    expect(pending).toBeTruthy();
+
+    const pay = await client.req(`/api/subscriptions/me/invoices/${pending!.id}/pay`, { method: 'POST', body: {} });
+    expect(pay.status).toBe(201);
+    expect(pay.data.data.externalRef).toBeTruthy();
+  });
+});
+
 describe('Subscriptions — rollover service', () => {
   it('rolls over a due autoRenew subscription and creates a new invoice', async () => {
     const { cookie, id } = await createUserWithRole('CUSTOMER', 'roll');

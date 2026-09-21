@@ -2,6 +2,46 @@
 
 آخر تحديث: **2026-09-21**
 
+## Milestone E — Subscription UI Integration: ربط صفحة الاشتراكات بالـBackend الحقيقي (هذه الجلسة — مكتمل)
+
+### الهدف
+ربط `DashboardSubscriptionsPage` بالكامل بخدمة الاشتراكات القائمة، وإزالة كل الأسعار/البيانات المثبّتة في الواجهة. لا تغيير على schema ولا migrations (لم يُثبَت أي احتياج).
+
+### ما نُفّذ
+- **طبقة أنواع/API في الواجهة**: أُضيفت أنواع الاشتراك (`PlanTarget`, `SubscriptionStatus`, `BillingCycle`, أنواع العرض) في `lib/types.ts`، ودوال `api` (`listSubscriptionPlans`, `mySubscription`, `mySubscriptionInvoices`, `subscribeToPlan`, `changeSubscriptionPlan`, `cancelSubscription`, `paySubscriptionInvoice`) في `lib/api.ts`.
+- **RBAC**: `subscriptions.manage` و`subscription.own` مع ربط الأدوار في `lib/rbac.ts`.
+- **الصفحة**: أُعيدت كتابة `DashboardSubscriptionsPage` لتقرأ الخطط/الاشتراك/الفواتير من الخادم، مع تبديل MONTHLY/YEARLY، واشترك/غيّر/ألغِ/ادفع، وشعار «خطتك الحالية»، وجدول فواتير — كل الأرقام من الـAPI. الأسعار المثبّتة (`19`/`99`) حُذفت.
+- **التوطين**: مفاتيح `sub.*` في `ar/fr/en/zh`، وحُذفت **56** مفتاحًا ميتًا خاصًا بشكل الخطط المثبّت سابقًا (تحقّقنا أن لا مرجع باقٍ لها).
+- **الخادم**: `service.ts` يرمي `ApiError.notFound(...)` بدل `Error` العادية ⇒ استجابات 4xx نظيفة بدل 500.
+
+### الاختبارات والتحقق
+- **Server suite**: **464/464 — 45 ملف** (زادت 7 حالات جديدة لعقد الواجهة في `subscriptions.test.ts`).
+- **Typecheck** (server + web) = 0، **Build** (server + web) = نظيف.
+- **E2E وظيفي جديد**: `SUBSCRIPTIONS — live catalog, subscribe, change, cancel` يقود الواجهة فعليًا (سعر مُطابق للـBackend شهريًا/سنويًا، اشتراك، ظهور الفاتورة، تغيير خطة، إلغاء) ويؤكد الأثر عبر الـAPI الحيّ. **`functional-audit.spec.ts` = 42/42**، و`navigation-audit` + `rbac` = 14/14.
+
+### إصلاح جنبي حقيقي (Test isolation — ليس في المنتج)
+`tests/revenue.test.ts` كان يجمّع `transaction_ledger`/`invoices`/`ai_usage` على مستوى الجدول كله بعملة `TND`، وبقية الملفات تترك صفوف COMMISSION حقيقية ⇒ الاختبار كان يعتمد على ترتيب تشغيل الملفات. أُعيد إنتاجه على `master` النظيف (فشل ثابت تسلسليًا) ثم أُصلح بعزل كل حالة على عملة خاصة (`ZLC`/`ZIN`/`ZAT`/`ZAU`/`ZOR`/`ZOC`) فيصبح الاستعلام المقيّد بالعملة حاويًا لصفوفه فقط.
+
+### خارج النطاق / غير مُتغيّر
+- **العمولة كما هي**: 4% = 2% بائع + 2% مشتري.
+- **Marketing Video Agent (89e68d7)**: بلا مساس — لا regression.
+- لا DB reset/drop/push، ولا حذف بيانات اختبار ضرورية.
+
+### جدول التدقيق الوظيفي (Subscription UI Integration)
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+| --- | --- | --- | --- | --- | --- |
+| Subscription plan catalog | ✅ `/dashboard/subscriptions` | ✅ PASS | أسعار مثبّتة في الواجهة | قراءة `GET /api/subscriptions/plans` | E2E + server |
+| Monthly/Yearly toggle | ✅ زرّان | ✅ PASS | — | يعرض سعر الخادم المخزَّن | E2E |
+| Subscribe | ✅ زر اشترك | ✅ PASS | — | `POST /api/subscriptions/subscribe` + reload | E2E + server |
+| Change plan | ✅ زر تغيير الخطة | ✅ PASS | — | `PATCH /api/subscriptions/me/plan` | E2E + server |
+| Cancel | ✅ زر إلغاء + تأكيد | ✅ PASS | — | `POST /api/subscriptions/me/cancel` | E2E + server |
+| Current-plan badge | ✅ | ✅ PASS | — | `planId === subscription.planId` | E2E |
+| Invoices table | ✅ | ✅ PASS | — | `GET /api/subscriptions/me/invoices` | E2E + server |
+| Pay invoice | ✅ زر دفع | ✅ PASS | — | `POST /me/invoices/:id/pay` | server |
+| Unknown plan error | — | ✅ PASS | `Error` عادية ⇒ 500 | `ApiError.notFound` | server |
+| Plan grid (admin surface) | ✅ صفحة التاجر | ✅ PASS | — | — | E2E |
+
 ## Milestone D — Performance/Scale: Load + Index + Caching (هذه الجلسة — مكتمل)
 
 ### الهدف

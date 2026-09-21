@@ -1,4 +1,4 @@
-import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi } from './helpers';
+import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi, loginViaUi } from './helpers';
 
 /**
  * Functional audit (UI-driven, real backend + PostgreSQL, no mocks).
@@ -170,9 +170,74 @@ test.describe('MERCHANT — full seller surface', () => {
     expect(body.data.agents.length).toBeGreaterThan(0);
   });
 
-  test('subscriptions page renders the plan grid', async ({ page }) => {
+  test('subscriptions page renders the plan grid from the backend', async ({ page }) => {
     await page.goto('/dashboard/subscriptions');
     await expect(page.getByRole('heading', { name: /الاشتراك|Subscription/i }).first()).toBeVisible();
+    await expect.poll(async () => page.locator('[data-testid^="sub-plan-"]').count()).toBeGreaterThan(0);
+  });
+});
+
+test.describe('SUBSCRIPTIONS — live catalog, subscribe, change, cancel', () => {
+  // No stored session: the flow needs an account with no pre-existing subscription.
+  test('drives the real subscription backend entirely through the UI', async ({ page }) => {
+    const unique = `subui-${Date.now()}@wasit.tn`;
+    const reg = await page.request.post('/api/auth/register', {
+      data: { email: unique, password: DEMO_PASSWORD, firstName: 'Sub', role: 'CUSTOMER' },
+    });
+    expect(reg.status()).toBe(201);
+    // Registration requires a verified email before login (no mailbox locally), so
+    // complete the real dev verification flow through the API, then log in via the UI.
+    const link = await page.request.post('/api/auth/dev/verification-link', { data: { email: unique } });
+    const { token } = (await link.json()).data as { token: string };
+    const verified = await page.request.post('/api/auth/verify-email', { data: { token } });
+    expect(verified.ok()).toBeTruthy();
+    await loginViaUi(page, unique);
+    await expect(page).toHaveURL(/\/dashboard/);
+
+    await page.goto('/dashboard/subscriptions');
+    await expect(page.getByRole('heading', { name: /الاشتراك|Subscription/i }).first()).toBeVisible();
+
+    const planCards = page.locator('[data-testid^="sub-plan-"]');
+    await expect.poll(async () => planCards.count()).toBeGreaterThan(0);
+
+    // The rendered price must equal the backend's stored monthly price — proof the
+    // UI is no longer hardcoding `19`/`99`.
+    const plansBody = await (await page.request.get('/api/subscriptions/plans')).json();
+    const plans = plansBody.data.items as Array<{ id: string; code: string; priceMonthly: string }>;
+    const firstPlan = plans[0];
+    const expectedAmount = Number(firstPlan.priceMonthly).toFixed(3).replace('.', ',');
+    await expect(page.getByTestId(`sub-price-${firstPlan.code}`)).toContainText(expectedAmount);
+
+    // Switching to yearly must render the backend's stored yearly price too.
+    await page.getByTestId('sub-cycle-YEARLY').click();
+    const yearlyExpect = Number(plans[0].priceYearly).toFixed(3).replace('.', ',');
+    await expect(page.getByTestId(`sub-price-${firstPlan.code}`)).toContainText(yearlyExpect);
+    await page.getByTestId('sub-cycle-MONTHLY').click();
+
+    // Subscribe from the UI, then confirm the effect through the API and the UI.
+    await planCards.first().getByRole('button', { name: /اشترك|Subscribe/i }).click();
+    await expect(page.getByText(/تم تفعيل الاشتراك|Subscription activated/i).first()).toBeVisible();
+    const meBody = await (await page.request.get('/api/subscriptions/me')).json();
+    expect(meBody.data.subscription.planId).toBe(firstPlan.id);
+    await expect(page.getByTestId('sub-current-badge')).toBeVisible();
+
+    // The invoice minted by subscribe is listed in the UI table.
+    const invoicesBody = await (await page.request.get('/api/subscriptions/me/invoices')).json();
+    expect(invoicesBody.data.items.length).toBeGreaterThan(0);
+    await expect(page.getByTestId(`sub-invoice-${invoicesBody.data.items[0].id}`)).toBeVisible();
+
+    // Change to a different plan through the UI.
+    await planCards.nth(1).getByRole('button', { name: /تغيير الخطة|Change plan/i }).click();
+    await expect(page.getByText(/تم تغيير الخطة|Plan changed/i).first()).toBeVisible();
+    const changed = await (await page.request.get('/api/subscriptions/me')).json();
+    expect(changed.data.subscription.planId).toBe(plans[1].id);
+
+    // Cancel through the UI (accepting the confirm dialog) and verify the backend.
+    page.once('dialog', (d) => void d.accept());
+    await page.getByTestId('sub-cancel').click();
+    await expect(page.getByText(/تم إلغاء الاشتراك|Subscription cancelled/i).first()).toBeVisible();
+    const afterCancel = await (await page.request.get('/api/subscriptions/me')).json();
+    expect(afterCancel.data.subscription).toBeNull();
   });
 });
 

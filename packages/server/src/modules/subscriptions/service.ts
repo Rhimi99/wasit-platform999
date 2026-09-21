@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { Decimal } from 'decimal.js';
+import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
   subscriptionPlans,
@@ -125,7 +126,7 @@ export async function subscribeToPlan(
     .where(and(eq(subscriptionPlans.id, planId), eq(subscriptionPlans.isActive, true)))
     .limit(1);
   const plan = planRows[0];
-  if (!plan) throw new Error('PLAN_NOT_FOUND');
+  if (!plan) throw ApiError.notFound('Plan');
 
   const existing = await getMySubscription(db, userId);
   if (existing) return existing;
@@ -174,10 +175,10 @@ export async function changeMyPlan(
     .where(and(eq(subscriptionPlans.id, planId), eq(subscriptionPlans.isActive, true)))
     .limit(1);
   const plan = planRows[0];
-  if (!plan) throw new Error('PLAN_NOT_FOUND');
+  if (!plan) throw ApiError.notFound('Plan');
 
   const existing = await getMySubscription(db, userId);
-  if (!existing) throw new Error('NO_ACTIVE_SUBSCRIPTION');
+  if (!existing) throw ApiError.notFound('Active subscription');
 
   const currentPlanRows = await db
     .select()
@@ -224,7 +225,7 @@ export async function changeMyPlan(
 
 export async function cancelMySubscription(db: DB, userId: string): Promise<{ cancelled: boolean }> {
   const existing = await getMySubscription(db, userId);
-  if (!existing) throw new Error('NO_ACTIVE_SUBSCRIPTION');
+  if (!existing) throw ApiError.notFound('Active subscription');
 
 
   await db
@@ -337,7 +338,7 @@ export async function setPlanActive(db: DB, planId: string, isActive: boolean): 
     .set({ isActive, updatedAt: new Date() })
     .where(eq(subscriptionPlans.id, planId))
     .returning();
-  if (rows.length === 0) throw new Error('PLAN_NOT_FOUND');
+  if (rows.length === 0) throw ApiError.notFound('Plan');
   return toPlanView(rows[0]);
 }
 

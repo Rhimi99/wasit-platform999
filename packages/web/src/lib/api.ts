@@ -12,6 +12,7 @@ import type {
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
+  PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -789,6 +790,39 @@ export const api = {
   },
   async deleteSearchHistoryEntry(id: string) {
     return request<{ id: string }>(`/api/library/search-history/${id}`, { method: 'DELETE' });
+  },
+
+  // ---- Subscriptions (plans + own subscription are owned by the backend) ----
+  async listSubscriptionPlans(target?: PlanTarget) {
+    const suffix = target ? `?target=${target}` : '';
+    return request<{ items: SubscriptionPlan[] }>(`/api/subscriptions/plans${suffix}`);
+  },
+  async mySubscription() {
+    return request<{ subscription: MySubscription | null }>('/api/subscriptions/me');
+  },
+  async mySubscriptionInvoices() {
+    return request<{ items: SubscriptionInvoice[] }>('/api/subscriptions/me/invoices');
+  },
+  async subscribeToPlan(planId: string, billingCycle: BillingCycle = 'MONTHLY') {
+    return request<{ subscription: MySubscription }>('/api/subscriptions/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ planId, billingCycle }),
+    });
+  },
+  async changeSubscriptionPlan(planId: string, billingCycle: BillingCycle = 'MONTHLY') {
+    return request<{ subscription: MySubscription }>('/api/subscriptions/me/plan', {
+      method: 'PATCH',
+      body: JSON.stringify({ planId, billingCycle }),
+    });
+  },
+  async cancelSubscription() {
+    return request<{ cancelled: boolean }>('/api/subscriptions/me/cancel', { method: 'POST' });
+  },
+  async paySubscriptionInvoice(invoiceId: string, idempotencyKey?: string) {
+    return request<{ checkoutUrl: string | null }>(`/api/subscriptions/me/invoices/${invoiceId}/pay`, {
+      method: 'POST',
+      body: JSON.stringify(idempotencyKey ? { idempotencyKey } : {}),
+    });
   },
 };
 

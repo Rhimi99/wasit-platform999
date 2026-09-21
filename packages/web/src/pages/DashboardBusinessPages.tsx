@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { useI18n } from '@/lib/i18n-context';
+import { useAuth } from '@/lib/auth-context';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import { api, apiCall, formatMoney } from '@/lib/api';
-import type { CampaignStats, CampaignSummary, MyAnalyticsOverview } from '@/lib/types';
+import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
+import type { CampaignStats, CampaignSummary, MyAnalyticsOverview, SubscriptionPlan, MySubscription, SubscriptionInvoice, BillingCycle } from '@/lib/types';
 
 export function DashboardAdsPage() {
   const { t } = useI18n();
@@ -735,27 +736,262 @@ export function DashboardAIPage() {
 }
 
 export function DashboardSubscriptionsPage() {
-  const { t } = useI18n();
-  const plans = [
-    { name: 'CUSTOMER', price: t('sub.free'), features: [t('sub.feature.browse'), t('sub.feature.ordersB2C'), t('sub.feature.basicVerification')] },
-    { name: 'SMALL MERCHANT', price: `19 ${t('sub.monthly')}`, features: [t('sub.feature.productListing'), t('sub.feature.inventory'), t('sub.feature.ownAnalytics')] },
-    { name: 'COMPANY', price: `99 ${t('sub.monthly')}`, features: [t('sub.feature.multiUser'), t('sub.feature.ads'), t('sub.feature.aiTools')] },
-    { name: 'PRO MAX', price: `299 ${t('sub.monthly')}`, features: [t('sub.feature.allEngines'), t('sub.feature.prioritySupport'), t('sub.feature.apiAccess')] },
-  ];
+  const { t, locale } = useI18n();
+  const { can } = useAuth();
+  const mayManageOwn = can('subscription.own');
+
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [subscription, setSubscription] = useState<MySubscription | null>(null);
+  const [invoices, setInvoices] = useState<SubscriptionInvoice[]>([]);
+  const [cycle, setCycle] = useState<BillingCycle>('MONTHLY');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = async () => {
+    setError(null);
+    const [plansRes, subRes, invRes] = await Promise.all([
+      apiCall(() => api.listSubscriptionPlans()),
+      apiCall(() => api.mySubscription()),
+      apiCall(() => api.mySubscriptionInvoices()),
+    ]);
+    setPlans(plansRes.data?.items ?? []);
+    setSubscription(subRes.data?.subscription ?? null);
+    setInvoices(invRes.data?.items ?? []);
+    setError(plansRes.error ?? subRes.error ?? invRes.error);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const planName = (p: { name?: string; nameAr?: string | null; nameFr?: string | null; planName?: string; planNameAr?: string | null; planNameFr?: string | null }) => {
+    const en = p.name ?? p.planName ?? '';
+    const ar = p.nameAr ?? p.planNameAr;
+    const fr = p.nameFr ?? p.planNameFr;
+    if (locale === 'ar' && ar) return ar;
+    if (locale === 'fr' && fr) return fr;
+    return en;
+  };
+
+  // Price is always the backend value; the cycle only selects which stored price to show.
+  const priceFor = (p: SubscriptionPlan) =>
+    cycle === 'YEARLY' ? { amount: p.priceYearly, suffix: t('sub.perYear') } : { amount: p.priceMonthly, suffix: t('sub.perMonth') };
+
+  const run = async (key: string, fn: () => Promise<unknown>, successKey: string) => {
+    setBusy(key);
+    setNotice(null);
+    const res = await apiCall(() => fn());
+    setBusy(null);
+    if (res.error) { setError(res.error); return; }
+    setNotice(t(successKey));
+    await load();
+  };
+
+  const handleSubscribe = (plan: SubscriptionPlan) =>
+    run(`subscribe:${plan.id}`, () => api.subscribeToPlan(plan.id, cycle), 'sub.subscribedNotice');
+
+  const handleChange = (plan: SubscriptionPlan) =>
+    run(`change:${plan.id}`, () => api.changeSubscriptionPlan(plan.id, cycle), 'sub.changedNotice');
+
+  const handleCancel = () => {
+    if (!window.confirm(t('sub.cancelConfirm'))) return;
+    void run('cancel', () => api.cancelSubscription(), 'sub.cancelledNotice');
+  };
+
+  const handlePay = (invoice: SubscriptionInvoice) =>
+    run(`pay:${invoice.id}`, () => api.paySubscriptionInvoice(invoice.id), 'sub.payStartedNotice');
+
+  const featureEntries = (features: Record<string, unknown> | null) =>
+    features ? Object.entries(features) : [];
+
+  const statusColor = (s: string) =>
+    s === 'ACTIVE' ? 'green' : s === 'TRIAL' ? 'teal' : s === 'PAST_DUE' ? 'amber' : s === 'CANCELLED' || s === 'EXPIRED' ? 'red' : 'slate';
+
+  if (loading) {
+    return (
+      <AppLayout>
+        <SectionHeader title={t('sub.title')} />
+        <Spinner />
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout>
-      <SectionHeader title={t('sub.title')} />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {plans.map((p) => (
-          <Card key={p.name} className="flex flex-col">
-            <h3 className="font-bold text-slate-800">{p.name}</h3>
-            <p className="mt-1 text-2xl font-bold text-wasit-700">{p.price}</p>
-            <ul className="mt-3 flex-1 space-y-1 text-xs text-slate-500">
-              {p.features.map((f) => <li key={f}>• {f}</li>)}
-            </ul>
-          </Card>
-        ))}
-      </div>
+      <SectionHeader
+        title={t('sub.title')}
+        subtitle={t('sub.subtitle')}
+        action={(
+          <div className="flex items-center gap-1 rounded-md border border-slate-200 p-0.5" role="group" aria-label={t('sub.billingCycle')}>
+            {(['MONTHLY', 'YEARLY'] as BillingCycle[]).map((c) => (
+              <button
+                key={c}
+                type="button"
+                data-testid={`sub-cycle-${c}`}
+                onClick={() => setCycle(c)}
+                className={`rounded px-3 py-1 text-xs font-medium ${cycle === c ? 'bg-wasit-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+              >
+                {t(c === 'MONTHLY' ? 'sub.billing.monthly' : 'sub.billing.yearly')}
+              </button>
+            ))}
+          </div>
+        )}
+      />
+
+      {error && <ErrorState message={error} onRetry={() => void load()} />}
+      {notice && <div role="status" className="mb-4 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">{notice}</div>}
+
+      {/* Current subscription — plan, status, dates, renewal, straight from the backend. */}
+      <Card className="mb-6" testId="sub-current">
+        <h3 className="mb-3 text-sm font-bold text-slate-800">{t('sub.current.title')}</h3>
+        {subscription ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-xs text-slate-400">{t('sub.current.plan')}</p>
+              <p className="font-semibold text-slate-800">{planName(subscription)}</p>
+              <p className="text-xs text-slate-400">{subscription.planCode}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">{t('common.status')}</p>
+              <Badge color={statusColor(subscription.status)}>{subscription.status}</Badge>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">{t('sub.billingCycle')}</p>
+              <p className="text-sm text-slate-700">{t(subscription.billingCycle === 'YEARLY' ? 'sub.billing.yearly' : 'sub.billing.monthly')}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">{t('sub.autoRenew')}</p>
+              <p className="text-sm text-slate-700">{t(subscription.autoRenew ? 'sub.autoRenew.on' : 'sub.autoRenew.off')}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">{t('sub.startedAt')}</p>
+              <p className="text-sm text-slate-700">{formatDate(subscription.startsAt)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">{t('sub.endsAt')}</p>
+              <p className="text-sm text-slate-700">{formatDate(subscription.endsAt)}</p>
+            </div>
+            {subscription.cancelledAt && (
+              <div>
+                <p className="text-xs text-slate-400">{t('sub.cancelledAt')}</p>
+                <p className="text-sm text-slate-700">{formatDate(subscription.cancelledAt)}</p>
+              </div>
+            )}
+            {mayManageOwn && (
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  data-testid="sub-cancel"
+                  disabled={busy !== null}
+                  onClick={handleCancel}
+                  className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {busy === 'cancel' ? t('common.processing') : t('sub.cancel')}
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">{t('sub.noSubscription')}</p>
+        )}
+      </Card>
+
+      {/* Plan catalog — every price and feature comes from GET /api/subscriptions/plans. */}
+      <h3 className="mb-3 text-sm font-bold text-slate-800">{t('sub.plansTitle')}</h3>
+      {plans.length === 0 ? (
+        <EmptyState title={t('common.noData')} hint={t('sub.plansTitle')} />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {plans.map((p) => {
+            const isCurrent = subscription?.planId === p.id;
+            const price = priceFor(p);
+            return (
+              <Card key={p.id} className="flex flex-col" testId={`sub-plan-${p.code}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="font-bold text-slate-800">{planName(p)}</h3>
+                  {isCurrent && <Badge color="green" testId="sub-current-badge">{t('sub.currentPlan')}</Badge>}
+                </div>
+                <p className="mt-1 text-2xl font-bold text-wasit-700" data-testid={`sub-price-${p.code}`}>
+                  {formatMoney(price.amount, p.currencyCode)}
+                  <span className="ms-1 text-xs font-normal text-slate-400">{price.suffix}</span>
+                </p>
+                <p className="mt-1 text-xs text-slate-400">{t(`sub.target.${p.planTarget}`)}</p>
+                <ul className="mt-3 flex-1 space-y-1 text-xs text-slate-500">
+                  {featureEntries(p.features).map(([k, v]) => (
+                    <li key={k}>• {k}: {String(v)}</li>
+                  ))}
+                </ul>
+                {mayManageOwn && (
+                  <button
+                    type="button"
+                    disabled={busy !== null || isCurrent}
+                    onClick={() => void (subscription ? handleChange(p) : handleSubscribe(p))}
+                    className={`mt-3 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
+                      isCurrent ? 'bg-slate-300' : 'bg-wasit-600 hover:bg-wasit-700'
+                    }`}
+                  >
+                    {isCurrent
+                      ? t('sub.currentPlan')
+                      : subscription
+                        ? t('sub.changePlan')
+                        : t('sub.subscribe')}
+                  </button>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Invoices — the user's own subscription billing history. */}
+      <h3 className="mb-3 mt-6 text-sm font-bold text-slate-800">{t('sub.invoices.title')}</h3>
+      {invoices.length === 0 ? (
+        <EmptyState title={t('sub.noInvoices')} hint={t('sub.invoices.title')} />
+      ) : (
+        <Card className="overflow-x-auto">
+          <table className="table-base">
+            <thead>
+              <tr>
+                <th>{t('sub.invoices.number')}</th>
+                <th>{t('common.status')}</th>
+                <th>{t('sub.invoices.amount')}</th>
+                <th>{t('sub.invoices.dueAt')}</th>
+                <th>{t('sub.invoices.paidAt')}</th>
+                {mayManageOwn && <th>{t('common.actions')}</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((inv) => (
+                <tr key={inv.id} data-testid={`sub-invoice-${inv.id}`}>
+                  <td>{inv.invoiceNumber}</td>
+                  <td><Badge color={statusColor(inv.status)}>{inv.status}</Badge></td>
+                  <td>{formatMoney(inv.amount, inv.currencyCode)}</td>
+                  <td>{formatDate(inv.dueAt)}</td>
+                  <td>{formatDate(inv.paidAt)}</td>
+                  {mayManageOwn && (
+                    <td>
+                      {inv.status === 'PENDING' && (
+                        <button
+                          type="button"
+                          disabled={busy !== null}
+                          onClick={() => void handlePay(inv)}
+                          className="rounded-md bg-wasit-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-wasit-700 disabled:opacity-50"
+                        >
+                          {busy === `pay:${inv.id}` ? t('common.processing') : t('sub.invoices.pay')}
+                        </button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
       <p className="mt-4 text-xs text-slate-400">{t('sub.priceHint')}</p>
     </AppLayout>
   );

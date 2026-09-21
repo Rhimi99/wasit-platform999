@@ -31,6 +31,7 @@ export type Feature =
   | 'risk.manage'
   | 'verification.submit'
   | 'subscriptions.manage'
+  | 'subscription.own'
   | 'messages'
   | 'library';
 
@@ -38,21 +39,25 @@ export type Feature =
 const ROLE_FEATURES: Record<UserRole, ReadonlySet<Feature>> = {
   CUSTOMER: new Set<Feature>([
     'order.create', 'verification.submit', 'payment.view' as Feature, 'messages', 'library',
+    'subscription.own',
   ]),
   MERCHANT: new Set<Feature>([
     'product.create', 'product.manage.own', 'order.create', 'order.manage',
     'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
     'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
+    'subscription.own',
   ]),
   SUPPLIER: new Set<Feature>([
     'product.create', 'product.manage.own', 'supplier.create', 'supplier.update',
     'order.manage', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use',
     'analytics.own', 'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
+    'subscription.own',
   ]),
   COMPANY: new Set<Feature>([
     'company.create', 'company.update', 'order.create', 'order.manage',
     'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
     'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
+    'subscription.own',
   ]),
   MARKETER: new Set<Feature>([
     'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own', 'library',

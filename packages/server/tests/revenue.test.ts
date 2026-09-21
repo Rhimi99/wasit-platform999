@@ -234,8 +234,16 @@ describe('revenue routes — validation and RBAC', () => {
 });
 
 describe('getRevenueProfitability — aggregated from real tables', () => {
+  /**
+   * These aggregate over whole tables (transaction_ledger, invoices, ai_usage,
+   * revenue_accounts) that every spec shares. Real TND orders/payments from other
+   * specs are committed concurrently, so absolute TND totals were order-dependent
+   * and flaky. Each test seeds under its own private currency code, so the
+   * currency-scoped aggregate provably contains only the rows it created.
+   */
   it('computes commission/paymentFees/refunds from transaction_ledger (CREDIT − DEBIT)', async () => {
     const u = await createUserWithRole('SUPER_ADMIN', 'Ledger');
+    const cur = 'ZLC';
     const txId = newId();
     seededTxIds.push(txId);
     await db.insert(transactions).values({
@@ -244,19 +252,19 @@ describe('getRevenueProfitability — aggregated from real tables', () => {
       buyerId: 'revenue-test',
       sellerId: u.id,
       totalValue: '1000.0000',
-      currencyCode: 'TND',
+      currencyCode: cur,
       commission: '30.0000',
       paymentFee: '10.0000',
       status: 'PAID',
     });
     await db.insert(transactionLedger).values([
-      { id: newId(), transactionId: txId, entryType: 'COMMISSION', direction: 'CREDIT', amount: '30.0000', currencyCode: 'TND' },
-      { id: newId(), transactionId: txId, entryType: 'COMMISSION', direction: 'DEBIT', amount: '5.0000', currencyCode: 'TND' },
-      { id: newId(), transactionId: txId, entryType: 'PAYMENT_FEE', direction: 'CREDIT', amount: '10.0000', currencyCode: 'TND' },
-      { id: newId(), transactionId: txId, entryType: 'REFUND', direction: 'CREDIT', amount: '7.0000', currencyCode: 'TND' },
-      { id: newId(), transactionId: txId, entryType: 'TRANSACTION_VALUE', direction: 'CREDIT', amount: '1000.0000', currencyCode: 'TND' },
+      { id: newId(), transactionId: txId, entryType: 'COMMISSION', direction: 'CREDIT', amount: '30.0000', currencyCode: cur },
+      { id: newId(), transactionId: txId, entryType: 'COMMISSION', direction: 'DEBIT', amount: '5.0000', currencyCode: cur },
+      { id: newId(), transactionId: txId, entryType: 'PAYMENT_FEE', direction: 'CREDIT', amount: '10.0000', currencyCode: cur },
+      { id: newId(), transactionId: txId, entryType: 'REFUND', direction: 'CREDIT', amount: '7.0000', currencyCode: cur },
+      { id: newId(), transactionId: txId, entryType: 'TRANSACTION_VALUE', direction: 'CREDIT', amount: '1000.0000', currencyCode: cur },
     ]);
-    const report = await getRevenueProfitability(db, 'TND');
+    const report = await getRevenueProfitability(db, cur);
     // COMMISSION net = 30 − 5 = 25 ; PAYMENT_FEE = 10 ; REFUND = 7
     expect(report.commission).toBe('25.0000');
     expect(report.paymentFees).toBe('10.0000');
@@ -265,43 +273,46 @@ describe('getRevenueProfitability — aggregated from real tables', () => {
   });
 
   it('counts only PAID invoices as subscription revenue', async () => {
+    const cur = 'ZIN';
     const subId = newId();
     const paidId = newId();
     const pendId = newId();
     seededInvoiceIds.push(paidId, pendId);
     await db.insert(invoices).values([
-      { id: paidId, subscriptionId: subId, invoiceNumber: `INV-PAID-${Date.now()}`, amount: '50.0000', currencyCode: 'TND', status: 'PAID' },
-      { id: pendId, subscriptionId: subId, invoiceNumber: `INV-PEND-${Date.now()}`, amount: '900.0000', currencyCode: 'TND', status: 'PENDING' },
+      { id: paidId, subscriptionId: subId, invoiceNumber: `INV-PAID-${Date.now()}`, amount: '50.0000', currencyCode: cur, status: 'PAID' },
+      { id: pendId, subscriptionId: subId, invoiceNumber: `INV-PEND-${Date.now()}`, amount: '900.0000', currencyCode: cur, status: 'PENDING' },
     ]);
-    const report = await getRevenueProfitability(db, 'TND');
+    const report = await getRevenueProfitability(db, cur);
     expect(report.subscriptionRevenue).toBe('50.0000');
   });
 
   it('counts ai_usage.cost scoped to currency and never mixes currencies', async () => {
+    const tndCur = 'ZAT';
+    const usdCur = 'ZAU';
     const tndId = newId();
     const usdId = newId();
     seededAiUsageIds.push(tndId, usdId);
     await db.insert(aiUsage).values([
-      { id: tndId, userId: 'revenue-test', periodStart: new Date('2026-01-01'), periodEnd: new Date('2026-02-01'), requestCount: 1, tokensInput: 10, tokensOutput: 5, cost: '1.5000', currencyCode: 'TND' },
-      { id: usdId, userId: 'revenue-test', periodStart: new Date('2026-01-01'), periodEnd: new Date('2026-02-01'), requestCount: 1, tokensInput: 10, tokensOutput: 5, cost: '9.0000', currencyCode: 'USD' },
+      { id: tndId, userId: 'revenue-test', periodStart: new Date('2026-01-01'), periodEnd: new Date('2026-02-01'), requestCount: 1, tokensInput: 10, tokensOutput: 5, cost: '1.5000', currencyCode: tndCur },
+      { id: usdId, userId: 'revenue-test', periodStart: new Date('2026-01-01'), periodEnd: new Date('2026-02-01'), requestCount: 1, tokensInput: 10, tokensOutput: 5, cost: '9.0000', currencyCode: usdCur },
     ]);
-    const tnd = await getRevenueProfitability(db, 'TND');
+    const tnd = await getRevenueProfitability(db, tndCur);
+    const usd = await getRevenueProfitability(db, usdCur);
     expect(tnd.aiModelCosts).toBe('1.5000');
-    const usd = await getRevenueProfitability(db, 'USD');
     expect(usd.aiModelCosts).toBe('9.0000');
   });
 
   it('sums operational revenue/cost from revenue_accounts by currency', async () => {
+    const revCur = 'ZOR';
+    const costCur = 'ZOC';
     await db.insert(revenueAccounts).values([
-      { id: newId(), lineType: 'REVENUE', category: 'OTHER', name: 'Op Rev', amount: '40.0000', currencyCode: 'TND' },
-      { id: newId(), lineType: 'COST', category: 'INFRASTRUCTURE', name: 'Op Cost', amount: '15.0000', currencyCode: 'TND' },
-      { id: newId(), lineType: 'REVENUE', category: 'OTHER', name: 'Op USD', amount: '100.0000', currencyCode: 'USD' },
+      { id: newId(), lineType: 'REVENUE', category: 'OTHER', name: 'Op Rev', amount: '40.0000', currencyCode: revCur },
+      { id: newId(), lineType: 'COST', category: 'INFRASTRUCTURE', name: 'Op Cost', amount: '15.0000', currencyCode: costCur },
     ]);
-    const tnd = await getRevenueProfitability(db, 'TND');
-    expect(tnd.otherRevenue).toBe('40.0000');
-    expect(tnd.operationalExpenses).toBe('15.0000');
-    const usd = await getRevenueProfitability(db, 'USD');
-    expect(usd.otherRevenue).toBe('100.0000');
+    const rev = await getRevenueProfitability(db, revCur);
+    expect(rev.otherRevenue).toBe('40.0000');
+    const cost = await getRevenueProfitability(db, costCur);
+    expect(cost.operationalExpenses).toBe('15.0000');
   });
 
   it('gross/net cross-check from components; basedOn documents real sources', async () => {

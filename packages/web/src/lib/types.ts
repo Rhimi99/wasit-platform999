@@ -410,14 +410,60 @@ export interface CommissionPolicy {
   description?: string;
 }
 
+export type PlanTarget = 'CUSTOMER' | 'MERCHANT' | 'SUPPLIER' | 'COMPANY' | 'GLOBAL';
+
+export type SubscriptionStatus = 'ACTIVE' | 'TRIAL' | 'PAST_DUE' | 'CANCELLED' | 'EXPIRED';
+
+export type BillingCycle = 'MONTHLY' | 'YEARLY';
+
+/** Mirrors the backend `SubscriptionPlanView` — the only source of plan prices. */
 export interface SubscriptionPlan {
   id: string;
   code: string;
   name: string;
-  price: string;
+  nameAr: string | null;
+  nameFr: string | null;
+  planTarget: PlanTarget;
+  priceMonthly: string;
+  priceYearly: string;
   currencyCode: string;
+  features: Record<string, unknown> | null;
+  limits: Record<string, unknown> | null;
   isActive: boolean;
-  limits?: Record<string, unknown>;
+  isDefault: boolean;
+  sortOrder: number;
+}
+
+/** Mirrors the backend `MySubscriptionView`. */
+export interface MySubscription {
+  id: string;
+  planId: string;
+  planCode: string;
+  planName: string;
+  planNameAr: string | null;
+  planNameFr: string | null;
+  status: SubscriptionStatus;
+  billingCycle: string;
+  autoRenew: boolean;
+  startsAt: string | null;
+  endsAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Mirrors the backend `InvoiceView` for subscription invoices. */
+export interface SubscriptionInvoice {
+  id: string;
+  subscriptionId: string;
+  invoiceNumber: string;
+  amount: string;
+  currencyCode: string;
+  status: string;
+  externalRef: string | null;
+  dueAt: string | null;
+  paidAt: string | null;
+  createdAt: string;
 }
 
 export interface Country {
