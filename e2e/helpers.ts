@@ -49,10 +49,28 @@ export async function placeOrderViaUi(page: Page): Promise<string> {
   const count = await links.count();
   for (let i = 0; i < count; i++) hrefs.push((await links.nth(i).getAttribute('href'))!);
 
+  const diag: string[] = [];
+
   for (const href of hrefs) {
     await page.goto(href);
+
+    // The auth context hydrates the persisted session asynchronously. Until it
+    // resolves, ProductDetailsPage renders the logged-out CTA (which points at
+    // /login) and hides the saved/favorite actions — so wait for the signed-in
+    // header before touching the order link, or the click would bail to /login.
+    const signedIn = page.getByRole('link', { name: /لوحة التحكم|Dashboard/i }).first();
+    const hydrated = await signedIn.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true).catch(() => false);
+    if (!hydrated) {
+      diag.push(`${href}: session did not hydrate`);
+      continue;
+    }
+
     const orderLink = page.getByRole('link', { name: /اطلب|Order/i }).first();
-    if (!(await orderLink.isVisible().catch(() => false))) continue;
+    const ctaReady = await orderLink.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true).catch(() => false);
+    if (!ctaReady) {
+      diag.push(`${href}: order CTA never appeared`);
+      continue;
+    }
     await orderLink.click();
     await expect(page).toHaveURL(/\/checkout/);
 
@@ -70,7 +88,8 @@ export async function placeOrderViaUi(page: Page): Promise<string> {
       expect(res.ok()).toBeTruthy();
       return (body.data[0] as { id: string }).id;
     }
+    diag.push(`${href}: rejected with "${(await rejected.first().innerText().catch(() => '')).trim()}"`);
   }
 
-  throw new Error('No in-stock product was available to place an order');
+  throw new Error(`No order could be placed. Diagnostics:\n${diag.join('\n')}`);
 }

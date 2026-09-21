@@ -520,6 +520,108 @@ export interface CollectResult {
   periodEnd: string;
 }
 
+// ---------------------------------------------------------------------------
+// Admin AI governance — mirrors `modules/admin/ai-routes.ts`. Every field is a
+// real column returned by the backend; nothing here is invented client-side.
+// ---------------------------------------------------------------------------
+
+export type AgentTaskStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'rejected';
+
+export interface AiAdminBudget {
+  id: string;
+  userId: string | null;
+  roleTarget: string | null;
+  period: 'DAILY' | 'MONTHLY';
+  maxRequests: number | null;
+  maxTokensInput: number | null;
+  maxTokensOutput: number | null;
+  maxCost: string | null;
+  currencyCode: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface AiAdminModel {
+  id: string;
+  key: string;
+  displayName: string;
+  provider: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  inputPer1k: string;
+  outputPer1k: string;
+  currencyCode: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+/** Aggregated usage for the current monthly window + every configured budget. */
+export interface AiAdminUsage {
+  window: { start: string; end: string };
+  totals: {
+    requests: number;
+    tokensInput: number;
+    tokensOutput: number;
+    cost: string;
+    distinctUsers: number;
+  };
+  budgets: AiAdminBudget[];
+}
+
+export interface AiAdminRequestRow {
+  id: string;
+  userId: string;
+  requestType: string;
+  model: string;
+  tokensInput: number;
+  tokensOutput: number;
+  cost: string;
+  currencyCode: string;
+  status: string;
+  latencyMs: number;
+  createdAt: string;
+}
+
+export interface AgentRegistryRow {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  requiresHumanApproval: boolean;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface AgentTaskRow {
+  id: string;
+  agentKey: string;
+  requestedBy: string;
+  input: Record<string, unknown>;
+  status: AgentTaskStatus;
+  result: unknown;
+  error: { message?: string } | null;
+  requiresApproval: boolean;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectionReason: string | null;
+  cost: string;
+  model: string;
+  latencyMs: number;
+  createdAt: string;
+}
+
+export interface AgentTaskDecision {
+  id: string;
+  status: AgentTaskStatus;
+}
+
 
 export interface Country {
   id: string;

@@ -28,6 +28,7 @@ import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUser
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
 import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
+import { AdminAiPage } from './pages/AdminAiPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 
 export default function App() {
@@ -103,6 +104,7 @@ export default function App() {
       <Route path="/admin/disputes" element={<RequireAuth><StaffOnly><AdminDisputesPage /></StaffOnly></RequireAuth>} />
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/ai" element={<RequireAuth><AdminOnly><AdminAiPage /></AdminOnly></RequireAuth>} />
 
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

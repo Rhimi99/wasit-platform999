@@ -14,6 +14,7 @@ import type {
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
+  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -856,6 +857,67 @@ export const api = {
   },
   async adminExpireLapsedSubscriptions() {
     return request<ExpireLapsedResult>('/api/subscriptions/admin/expire-lapsed', { method: 'POST' });
+  },
+
+  // ---- Admin AI governance (server enforces AI_MANAGE / ADMIN_AI) ----
+  async adminAiUsage() {
+    return request<AiAdminUsage>('/api/admin/ai/usage');
+  },
+  async adminAiRequests(limit = 50) {
+    return request<{ items: AiAdminRequestRow[] }>(`/api/admin/ai/requests?limit=${limit}`);
+  },
+  async adminAiBudgets() {
+    return request<{ items: AiAdminBudget[] }>('/api/admin/ai/budgets');
+  },
+  async adminUpsertAiBudget(data: {
+    userId?: string | null;
+    roleTarget?: string | null;
+    period: 'DAILY' | 'MONTHLY';
+    maxRequests?: number | null;
+    maxCost?: string | null;
+    currencyCode?: string;
+    isActive?: boolean;
+  }) {
+    return request<AiAdminBudget>('/api/admin/ai/budgets', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminAiModels() {
+    return request<{ items: AiAdminModel[] }>('/api/admin/ai/models');
+  },
+  async adminUpsertAiModel(data: {
+    key: string;
+    displayName: string;
+    provider: string;
+    contextWindow?: number;
+    maxOutputTokens?: number;
+    inputPer1k?: string;
+    outputPer1k?: string;
+    currencyCode?: string;
+    isActive?: boolean;
+  }) {
+    return request<AiAdminModel>('/api/admin/ai/models', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminAiAgents() {
+    return request<{ items: AgentRegistryRow[] }>('/api/admin/ai/agents');
+  },
+  async adminAiTasks(params: { status?: string; agentKey?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentTaskRow[] }>(`/api/admin/ai/tasks${suffix}`);
+  },
+  async decideAgentTask(taskId: string, decision: 'APPROVE' | 'REJECT', reason?: string) {
+    return request<AgentTaskDecision>(`/api/ai/tasks/${taskId}/${decision === 'APPROVE' ? 'approve' : 'reject'}`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, reason: reason ?? null }),
+    });
   },
 };
 

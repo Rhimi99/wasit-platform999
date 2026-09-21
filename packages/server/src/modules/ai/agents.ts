@@ -139,6 +139,15 @@ export async function listAgents(db: DB): Promise<AgentDefinition[]> {
   }));
 }
 
+/**
+ * Raw registry rows for admin oversight. Seeds the catalogue first so the
+ * admin desk is never empty on a database where no user has invoked an agent.
+ */
+export async function listRegistryAgents(db: DB) {
+  await ensureAgentRegistrySeeded(db);
+  return db.select().from(agentRegistry).orderBy(desc(agentRegistry.createdAt));
+}
+
 async function getAgentDef(db: DB, agentKey: string): Promise<AgentDefinition> {
   await ensureAgentRegistrySeeded(db);
   const found = AGENT_CATALOGUE.find((a) => a.key === agentKey);

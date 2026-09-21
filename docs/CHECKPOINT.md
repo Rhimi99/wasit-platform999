@@ -2,7 +2,87 @@
 
 آخر تحديث: **2026-09-21**
 
-## Milestone F — Admin Subscriptions UI: لوحة إدارة الاشتراكات داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+## Milestone G.1 — إغلاق تذبذب E2E: إصلاح سببي جذري (هذه الجلسة — مكتمل)
+
+### الهدف
+اختفاء "تذبذب" اختبارات الطلب (`payments`/`marketplace`/`disputes`/`functional-audit`) الذي كان يظهر بشكل عشوائي في اختبار مختلف كل تشغيل. المطلوب سبب حقيقي لا إخفاء خطأ.
+
+### السببان الجذريان (لا علاقة للـHTTP 200)
+1. **تصادم أرقام المستندات ⇒ 500 على `POST /api/orders`**:
+   - `packages/server/src/lib/ids.ts › generateBusinessNumber` كان يبني اللاحقة من عدّاد داخل العملية (`counter.c` يعود إلى 0 مع كل إعادة تشغيل) + `Math.random()*1296` فقط.
+   - بادئة التاريخ `YYMMDD` ثابتة لكل مستندات اليوم، فالفضاء الفعلي للتفرد ≈ 1296 قيمة لكل إعادة تشغيل.
+   - إعادة تشغيل الخادم في كل تشغيل E2E تُعيد العدّاد ⇒ إعادة إصدار `TXN-…`/`ORD-…` مستخدمة سابقًا ⇒ `duplicate key value violates unique constraint "transactions_tx_number_idx"` ⇒ **500 Internal server error** في الواجهة.
+   - **الإصلاح**: لاحقة عشوائية 8 محارف من CSPRNG (`randomInt`) — `36^8 ≈ 2.8e12` لكل يوم — مع الحفاظ على نفس الصيغة المقروءة والطول (`TXN-YYMMDD-XXXXXXXX` ≤ 40 حرفًا كحد العمود). حُذف `baseN`/`counter` الميتان.
+2. **سباق تحميل جلسة المصادقة في مساعد E2E**:
+   - `e2e/helpers.ts › placeOrderViaUi` كان يفحص `isVisible()` فورًا بعد الانتقال لصفحة المنتج. `auth-context` يُهيّئ الجلسة المحفوظة **بشكل غير متزامن**، وقبل اكتمالها تعرض `ProductDetailsPage` زر "اطلب" من فئة الزائر (يشير إلى `/login`) أو لا تعرضه أصلًا حسب توقيت الرسم.
+   - النتيجة: النقر يذهب لـ`/login` (أو لا يجد الرابط) ⇒ لا يُنشأ طلب إطلاقًا، ويظهر الخطأ المضلّل "No in-stock product".
+   - **الإصلاح**: انتظار ظهور رابط الهيدر للمستخدم المسجّل (`لوحة التحكم`/`Dashboard`) ثم `waitFor({state:'visible'})` على زر الطلب فعلًا، بدلًا من الفحص اللحظي. أُبقيت تشخيصات غنية عند فشل كل المنتجات.
+
+### الاختبارات والتحقق
+- جديد: `packages/server/tests/unit/business-numbers.test.ts` — 3 حالات (تفرد 100k رسمة، تفرد 500k على نفس اليوم، الصيغة والطول). **نجحت**.
+- `payments.spec.ts`: **10/10** تشغيل متتالٍ (كان يفشل في ~2‑3 من كل 10 قبل الإصلاح).
+- **Full E2E**: **112/112 × 3 تشغيلات متتالية** نظيفة.
+- **Server**: 47 ملفًا / **482/482**.
+- **Typecheck** (server + web) و**Build** (server + web) = نظيف.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**.
+- **Marketing Video Agent (89e68d7)** بلا مساس.
+- لا DB reset/drop/push، ولا migrations، ولا حذف بيانات اختبار.
+
+## Milestone G — Admin AI Governance UI: لوحة حوكمة الذكاء الاصطناعي داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+
+### الهدف
+سدّ فجوة "قدرة خلفية بلا واجهة" في وحدة الذكاء الاصطناعي: كل مسارات `/api/admin/ai/*` (الاستخدام، الطلبات، النماذج، الميزانيات، الوكلاء، المهام + اعتماد/رفض المهام الحساسة) كانت منفّذة ومختبرة خادميًا، لكن **لا صفحة ولا استدعاء واحد من الواجهة**. بُنيت لوحة `/admin/ai` بتبويبات تعمل على الخادم الحقيقي فقط — بلا schema ولا migrations ولا قيم مثبّتة. القاعدة `3198171` كأساس.
+
+### التنقيح (Recon) قبل التنفيذ
+- `grep` على `packages/web/src` يُظهر **صفر** استخدام لـ`/admin/ai` (لا `api.*`، لا صفحة، لا route، لا nav) — بينما الصفحة/المسارات موجودة في `modules/admin/ai-routes.ts` ومحمية بـ`AI_MANAGE`/`ADMIN_AI` (يملكها ADMIN وSUPER_ADMIN).
+- بوابة الاعتماد البشري (`requiresHumanApproval`) للوكلاء الحساسين (sales/ads/b2b/risk/dispute/development) قدرة عمل حقيقية لم يكن للأدمن أي طريق إليها إلا استدعاء API خام.
+- فحص `AdminAnalyticsPage` وadmin observability: الأول موجود ويقرأ مساراته (لا فجوة)، والثاني وحدة مستقلة خارج نطاق هذه الجلسة (سُجّل كفجوة متبقية أدناه).
+
+### ما نُفّذ
+- **الواجهة (صفحة جديدة)**: `AdminAiPage.tsx` — ستة تبويبات: نظرة عامة، الطلبات، النماذج، الميزانيات، الوكلاء، المهام.
+  - نظرة عامة: بطاقات KPI (طلبات/مستخدمون مميّزون/رموز إدخال/إخراج/كلفة) + نافذة الاستخدام، كلها من `GET /admin/ai/usage` مباشرة.
+  - الطلبات: جدول من `GET /admin/ai/requests` + شارة حالة لكل صف.
+  - النماذج: كتالوج `GET /admin/ai/models` بأسعار الإدخال/الإخراج لكل 1k.
+  - الميزانيات: `GET /admin/ai/budgets` (الهدف، الدورة، الحدود، الحالة).
+  - الوكلاء: `GET /admin/ai/agents` مع تمييز "يتطلب اعتمادًا بشريًا" مقابل "تلقائي".
+  - المهام: `GET /admin/ai/tasks` + عدّاد "بانتظار الاعتماد"، وأزرار **اعتماد/رفض** تظهر فقط عندما `status === 'awaiting_approval'` وتستدعي `POST /api/ai/tasks/:id/approve|reject` ثم تُعيد التحميل من الخادم.
+  - كل عملية عرض رسالة نجاح/خطأ عبر `ErrorState`/شريط حالة — لا إخفاء أخطاء ولا تعطيل أزرار للتغطية.
+- **التسجيل**: مسار `/admin/ai` داخل `AdminOnly` في `App.tsx` + عنصر `admin.aiGovernance` في `ADMIN_NAV`.
+- **طبقة API/الأنواع**: `adminAiUsage`, `adminAiRequests`, `adminAiBudgets`, `adminUpsertAiBudget`, `adminAiModels`, `adminUpsertAiModel`, `adminAiAgents`, `adminAiTasks`, `decideAgentTask` + أنواع `AiAdminUsage`, `AiAdminModel`, `AiAdminBudget`, `AiAdminRequestRow`, `AgentRegistryRow`, `AgentTaskRow`, `AgentTaskDecision`.
+- **إصلاح سبب حقيقي (لا إخفاء)**: مسار `GET /admin/ai/agents` كان يقرأ جدول `agent_registry` مباشرة، بينما التهيئة (`ensureAgentRegistrySeeded`) تحدث فقط في المسار الموجّه للمستخدم `/api/ai/agents`. على قاعدة لم يستدعِ فيها أي مستخدم وكيلًا، **تبويب الوكلاء يظهر فارغًا**. أُضيفت `listRegistryAgents()` في `modules/ai/agents.ts` (تُهيّئ ثم تقرأ) واستُخدمت في المسار الإداري — فأصبح الكتالوج مضمونًا دائمًا.
+- **التوطين**: مفاتيح `adminAi.*` + `admin.aiGovernance` في `ar/en/fr/zh` (لا نصوص داخل المكوّن، وسقوط آمن للعربية كما هو نمط الملف).
+
+### الاختبارات والتحقق
+- **Server**: `tests/admin-ai.test.ts` — **14 حالة**: 401 لكل مسار إداري، 403 لـCUSTOMER وMERCHANT، عقد `/usage` (كل الحقول)، كتالوج النماذج (بما فيه `local-heuristic`)، سجل الوكلاء مع علم الاعتماد، **regression**: المسار الإداري يُهيّئ ويُعيد الكتالوج كاملًا بعد `DELETE FROM agent_registry`، مجموعات `{items:[]}`، فلترة المهام بـstatus/agentKey، upsert ميزانية + Audit + 422 بلا هدف، ودورة اعتماد/رفض كاملة لمهمة مُبوَّبة + 409 عند إعادة القرار. الإجمالي **479/479 — 46 ملفًا**.
+- **E2E**: `e2e/admin-ai.spec.ts` — **6/6** على Postgres حقيقي: فتح اللوحة من الشريط الجانبي ومطابقة KPI لحمولة `/usage` الحيّة + تبويبات النماذج/الوكلاء، ظهور مهمة `sales-agent` المُبوَّبة في الطابور واعتمادها من الواجهة ثم التحقق خادميًا وظهورها `approved`، رفض مهمة `b2b-agent`، ظهور ميزانية أُنشئت عبر العقد نفسه، ظهور صف في تبويب الطلبات بعد استدعاء AI حقيقي، وRBAC (تاجر: Forbidden في الواجهة + 403 لكل مسارات admin AI).
+- **Browser Functional Smoke**: أُضيف `/admin/ai` إلى قائمة `ADMIN_PAGES` في `e2e/functional-audit.spec.ts` (وأُضيف `/admin/subscriptions` المفقود من القائمة سابقًا) ليغطي التدقيق الوظيفي العام اللوحة تلقائيًا.
+- **إجمالي E2E**: **112/112** ناجحة.
+- **Typecheck** (server + web) = 0 أخطاء، **Build** (server + web) = نظيف.
+
+### خارج النطاق / غير مُتغيّر
+- **العمولة كما هي**: 4% = 2% بائع + 2% مشتري.
+- **Marketing Video Agent (89e68d7)**: بلا مساس — لا regression.
+- لا DB reset/drop/push، ولا migrations، ولا حذف بيانات اختبار ضرورية.
+- **فجوة متبقية (لم تُبنَ هذه الجلسة)**: لوحة admin observability (`/api/admin/observability/{metrics,logs,alerts,evaluate}`) لا تزال بلا واجهة — مرشّح الجلسة القادمة.
+
+### جدول التدقيق الوظيفي (Admin AI Governance UI)
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+| --- | --- | --- | --- | --- | --- |
+| Admin nav → AI desk | ✅ رابط الشريط الجانبي `/admin/ai` | ✅ PASS | لا Route ولا عنصر nav ولا صفحة | `AdminAiPage` + مسار داخل AdminOnly + `admin.aiGovernance` | E2E + server |
+| Overview KPIs (usage window/totals) | ✅ تبويب نظرة عامة | ✅ PASS | لا استدعاء لـ`/admin/ai/usage` من الواجهة | ربط البطاقات بحمولة `/usage` الحيّة | E2E + server |
+| Requests feed | ✅ تبويب الطلبات | ✅ PASS | لا واجهة لـ`/admin/ai/requests` | جدول من الخادم + شارة حالة | E2E + server |
+| Models catalogue | ✅ تبويب النماذج | ✅ PASS | لا واجهة للكتالوج | جدول من `/admin/ai/models` بأسعار/1k | E2E + server |
+| Budgets list | ✅ تبويب الميزانيات | ✅ PASS | لا واجهة للميزانيات | جدول من `/admin/ai/budgets` | E2E + server |
+| Agents registry (+approval gate) | ✅ تبويب الوكلاء | ✅ PASS | المسار الإداري كان يقرأ الجدول بلا تهيئة ⇒ فارغ | `listRegistryAgents()` تُهيّئ ثم تقرأ | E2E + server (regression) |
+| Tasks queue + pending count | ✅ تبويب المهام | ✅ PASS | لا واجهة للمهام | جدول `/admin/ai/tasks` + عدّاد awaiting | E2E + server |
+| Approve gated agent task | ✅ زر اعتماد | ✅ PASS | لا واجهة تستدعي مسار الاعتماد | `POST /api/ai/tasks/:id/approve` + reload | E2E + server |
+| Reject gated agent task | ✅ زر رفض | ✅ PASS | لا واجهة تستدعي مسار الرفض | `POST /api/ai/tasks/:id/reject` + reload | E2E + server |
+| RBAC (merchant/customer blocked) | ✅ `/admin/ai` + APIs | ✅ PASS | — | AdminOnly + `AI_MANAGE`/`ADMIN_AI` خادميًا | E2E + server |
+
+## Milestone F — Admin Subscriptions UI: لوحة إدارة الاشتراكات داخل لوحة الأدمن (جلسة سابقة — مكتمل)
 
 ### الهدف
 بناء واجهة إدارة اشتراكات داخل Admin Dashboard وربطها الكامل بخدمة الاشتراكات القائمة (`SUBSCRIPTION_MANAGE` = ADMIN/SUPER_ADMIN). لا schema ولا migrations جديدة (لم يُثبَت أي احتياج)؛ قاعدة `5732916` كأساس.

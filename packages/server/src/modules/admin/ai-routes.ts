@@ -8,8 +8,9 @@ import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import { writeAudit } from '../../lib/audit.js';
 import { newId } from '../../lib/ids.js';
 import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
-import { agentRegistry, agentTasks } from '../../db/schema/agents.js';
+import { agentTasks } from '../../db/schema/agents.js';
 import { adminUsageSummary } from '../ai/service.js';
+import { listRegistryAgents } from '../ai/agents.js';
 
 const budgetSchema = z
   .object({
@@ -188,7 +189,7 @@ adminAiRoutes.post('/models', validateBody(modelSchema), async (c) => {
 // ----- Agents & tasks (admin oversight) ------------------------------------
 adminAiRoutes.get('/agents', async (c) => {
   const ctx = getContext(c);
-  const rows = await ctx.db.select().from(agentRegistry).orderBy(desc(agentRegistry.createdAt));
+  const rows = await listRegistryAgents(ctx.db);
   return c.json({ success: true, data: { items: rows } });
 });
 
