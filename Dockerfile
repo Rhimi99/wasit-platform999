@@ -22,6 +22,12 @@ RUN npm run build:prod
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+# Runtime system packages for the marketing-video renderer: ffmpeg (with
+# libass + fontconfig) and the DejaVu/CJK fonts the renderer's default style
+# references. Without these the structural renderer fails at generate time.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-cjk \
+  && rm -rf /var/lib/apt/lists/*
 # Production dependencies only, resolved from the lockfile for reproducibility.
 COPY package.json package-lock.json ./
 COPY packages/server/package.json packages/server/package.json
@@ -31,6 +37,8 @@ RUN npm ci --omit=dev --ignore-scripts && npm rebuild argon2 && npm cache clean 
 
 # Bundled server + seed scripts (shared source is inlined; argon2 from node_modules).
 COPY --from=build /app/packages/server/dist-bundle ./dist-bundle
+# Arabic shaping font for the video renderer (libass reads it via VIDEO_FONTS_DIR).
+COPY packages/server/assets/fonts packages/server/assets/fonts
 # Migration assets + config so the release step can run drizzle-kit migrate.
 COPY packages/server/drizzle.config.ts packages/server/drizzle.config.ts
 COPY packages/server/src/db/migrations packages/server/src/db/migrations
@@ -38,7 +46,10 @@ COPY packages/server/src/db/schema packages/server/src/db/schema
 # drizzle-kit is a devDependency; the release image needs it to migrate.
 RUN npm install --no-save --ignore-scripts drizzle-kit@0.28.1 typescript@5.6.3
 
-# Run unprivileged.
+# Run unprivileged. The media directory must exist in the image owned by the
+# runtime user, because Docker seeds a fresh named volume from this path —
+# otherwise the first upload hits EACCES on the root-owned mountpoint.
+RUN mkdir -p /app/.wasit-media
 RUN chown -R node:node /app
 USER node
 

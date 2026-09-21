@@ -30,7 +30,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER:-wasit}:${POSTGRES_PASSWORD:-wasit_dev_password}@db:5432/${POSTGRES_DB:-wasit_dev}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set (>=32 chars)}
@@ -48,6 +48,9 @@ services:
       CLICTOPAY_PASSWORD: ${CLICTOPAY_PASSWORD:-}
       # Single-instance compose: the API itself runs the background scheduler.
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      # Opt-in escape hatch for pre-production QA without a real mailbox. Must
+      # stay false in production (the API refuses to boot with it true there).
+      ALLOW_DEV_TOOLING: ${ALLOW_DEV_TOOLING:-false}
       SUBSCRIPTION_ROLLOVER_INTERVAL_MINUTES: ${SUBSCRIPTION_ROLLOVER_INTERVAL_MINUTES:-60}
       # Transactional email. Defaults to the no-network fallback so a fresh boot
       # never silently drops verification mail; set MAIL_TRANSPORT=smtp plus the
@@ -76,6 +79,17 @@ services:
       OBS_ALERT_WEBHOOK_TOKEN: ${OBS_ALERT_WEBHOOK_TOKEN:-}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # Read cache for hot reference reads (geo/categories/SEO). Off by default
+      # so tests see the source; a deployment turns it on with a TTL it accepts.
+      CACHE_ENABLED: ${CACHE_ENABLED:-false}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
+      # Marketing videos are written to private storage; the volume below keeps
+      # them across container restarts instead of losing them with the layer.
+      MEDIA_STORAGE: local
+      MEDIA_STORAGE_DIR: /app/.wasit-media
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+    volumes:
+      - media-data:/app/.wasit-media
     # Release step: apply migrations, seed reference data (roles/permissions/
     # countries/currencies/categories/policies — idempotent), then serve.
     command: sh -c "npx drizzle-kit migrate && node /app/dist-bundle/seed.cjs && node /app/dist-bundle/index.cjs"
@@ -91,6 +105,16 @@ services:
       - api
     ports:
       - "${WEB_PORT:-8080}:80"
+    # Probe through nginx itself so the check covers the edge, not just the
+    # container being up. `api` is a declared dependency, so by the time nginx
+    # serves traffic the upstream name resolves.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
 volumes:
   db-data:
+  media-data:

@@ -14,6 +14,9 @@ import type { RenderSpec, RenderedVideo, VideoGenerationProvider } from './video
 function resolveFfmpegPath(): string | null {
   if (env.VIDEO_FFMPEG_PATH && existsSync(env.VIDEO_FFMPEG_PATH)) return env.VIDEO_FFMPEG_PATH;
   const candidates = [
+    // System package (the API image installs ffmpeg + libass via apt).
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
     path.resolve(process.cwd(), 'node_modules/ffmpeg-static/ffmpeg'),
     path.resolve(process.cwd(), '../../node_modules/ffmpeg-static/ffmpeg'),
     path.resolve(process.cwd(), '../node_modules/ffmpeg-static/ffmpeg'),

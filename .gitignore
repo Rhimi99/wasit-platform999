@@ -21,3 +21,6 @@ e2e/.auth/
 # Local private media storage (generated marketing videos) — never committed
 .wasit-media/
 packages/server/.wasit-media/
+
+# Staging env with real secrets — never commit.
+.env.staging

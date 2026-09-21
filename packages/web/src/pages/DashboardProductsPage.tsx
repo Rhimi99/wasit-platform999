@@ -133,7 +133,7 @@ export function DashboardCreateProductPage() {
       <SectionHeader title={t('form.newProduct')} />
       <Card className="max-w-2xl p-6">
         {done ? (
-          <p className="rounded bg-green-50 p-3 text-sm text-green-800">{t('order.createSuccess')}</p>
+          <p className="rounded bg-green-50 p-3 text-sm text-green-800">{t('product.createSuccess')}</p>
         ) : loadingEntities ? (
           <Spinner />
         ) : entities.length === 0 ? (

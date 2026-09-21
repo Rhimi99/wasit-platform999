@@ -126,7 +126,7 @@ test.describe('MERCHANT — full seller surface', () => {
     await page.locator('#p-price').fill('12.5');
     await page.getByRole('button', { name: /حفظ|Save/i }).click();
 
-    await expect(page.getByText(/تم إنشاء الطلب بنجاح|Order created successfully/i).first()).toBeVisible();
+    await expect(page.getByText(/تم إنشاء المنتج بنجاح|Product created successfully/i).first()).toBeVisible();
 
     // The new product must be visible to the user on the products page.
     await page.goto('/dashboard/products');

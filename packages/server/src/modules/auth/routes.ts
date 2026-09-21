@@ -32,7 +32,7 @@ import {
   devPhoneCode,
 } from './service';
 import { ApiError } from '@wasit/shared';
-import { env } from '../../lib/env';
+import { env, devToolingEnabled, cookieSecure } from '../../lib/env';
 
 const mfaEnrollSchema = z.object({});
 const mfaConfirmSchema = z.object({ code: z.string().length(6).regex(/^\d{6}$/) });
@@ -112,7 +112,7 @@ authRoutes.post(
       httpOnly: true,
       sameSite: 'Lax',
       path: '/',
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure,
       maxAge: 30 * 86400,
     });
     return c.json({ success: true, data: { ...result.session.user, mfaRequired: false } });
@@ -136,7 +136,7 @@ authRoutes.post(
       httpOnly: true,
       sameSite: 'Lax',
       path: '/',
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure,
       maxAge: 30 * 86400,
     });
     return c.json({ success: true, data: { ...session.user, mfaRequired: false } });
@@ -163,8 +163,8 @@ authRoutes.post(
   rateLimit({ windowSeconds: 60, max: registerRateMax, keyPrefix: 'auth-dev-verify' }),
   validateBody(devVerificationSchema),
   async (c) => {
-    if (process.env.NODE_ENV === 'production') {
-      throw new ApiError(404, 'NOT_FOUND', 'Not available in production');
+    if (!devToolingEnabled) {
+      throw new ApiError(404, 'NOT_FOUND', 'Not available in this environment');
     }
     const body = getValidatedBody<z.infer<typeof devVerificationSchema>>(c);
     const ctx = getContext(c);
@@ -212,8 +212,8 @@ authRoutes.post(
   rateLimit({ windowSeconds: 60, max: registerRateMax, keyPrefix: 'auth-dev-phone' }),
   validateBody(devVerificationSchema),
   async (c) => {
-    if (process.env.NODE_ENV === 'production') {
-      throw new ApiError(404, 'NOT_FOUND', 'Not available in production');
+    if (!devToolingEnabled) {
+      throw new ApiError(404, 'NOT_FOUND', 'Not available in this environment');
     }
     const body = getValidatedBody<z.infer<typeof devVerificationSchema>>(c);
     const ctx = getContext(c);
@@ -248,7 +248,7 @@ authRoutes.post(
       // production the token is delivered by email and never returned. An empty
       // token (unknown address) is omitted so the response stays uniform.
       data:
-        process.env.NODE_ENV === 'production' || !resetToken ? undefined : { devResetToken: resetToken },
+        !devToolingEnabled || !resetToken ? undefined : { devResetToken: resetToken },
     });
   },
 );
@@ -399,15 +399,15 @@ authRoutes.post(
 );
 
 // Dev/test helper: generate a TOTP for a given base32 secret at the current time.
-// Not exposed in production.
+// Not exposed in deployed environments.
 authRoutes.post(
   '/mfa/dev-totp',
   requireAuth,
   rateLimit({ windowSeconds: 60, max: 30, keyPrefix: 'auth-mfa-devtotp' }),
   async (c) => {
     const ctx = getContext(c);
-    if (process.env.NODE_ENV === 'production') {
-      return c.json({ success: false, message: 'Not available in production' }, 403 as never);
+    if (!devToolingEnabled) {
+      return c.json({ success: false, message: 'Not available in this environment' }, 403 as never);
     }
     const body = (await c.req.json().catch(() => ({}))) as { secretBase32?: string };
     if (!body.secretBase32) return c.json({ success: false, message: 'secretBase32 required' }, 400 as never);

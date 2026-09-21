@@ -74,6 +74,18 @@ const envSchema = z.object({
   MFA_CHALLENGE_TTL_MINUTES: z.coerce.number().int().positive().default(5),
   /** Max wrong TOTP/recovery attempts before a login challenge is invalidated. */
   MFA_CHALLENGE_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  /**
+   * Re-exposes the dev-only token-surfacing routes on a deployed environment so
+   * a pre-production stack can be exercised without a real mailbox or SMS
+   * gateway. Off by default and refused in production: enabling it lets anyone
+   * who can reach the API mint verification links, phone codes, reset tokens and
+   * TOTP codes for any address. Staging-only, deliberately opt-in, never used
+   * with real user data.
+   */
+  ALLOW_DEV_TOOLING: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Rate-limit store. `memory` keeps counters in-process (dev / tests / a
   // single instance). `postgres` shares counters across instances so limits
   // hold when the API is scaled out — no extra infrastructure required.
@@ -158,3 +170,47 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+/**
+ * Dev-only convenience routes (surfacing verification links, phone codes and
+ * reset tokens) exist so an environment without a reachable mailbox or SMS
+ * gateway can finish those flows. They are on for local development and tests.
+ * A deployed environment must opt in explicitly with `ALLOW_DEV_TOOLING=true`
+ * (staging only — production is refused below), because anyone who can reach the
+ * API could otherwise mint tokens for any address.
+ */
+export const devToolingEnabled =
+  env.NODE_ENV === 'development' || env.NODE_ENV === 'test' || env.ALLOW_DEV_TOOLING;
+
+if (env.NODE_ENV === 'production' && env.ALLOW_DEV_TOOLING) {
+  // eslint-disable-next-line no-console
+  console.error('Refusing to start: ALLOW_DEV_TOOLING cannot be enabled in production.');
+  process.exit(1);
+}
+
+/**
+ * The committed development secret must never sign sessions on a deployed
+ * environment. `staging` is reachable over the network just like production, so
+ * a forgotten `JWT_SECRET` there would let anyone forge a session. Fail closed at
+ * boot rather than start with a publicly known signing key.
+ */
+const DEV_JWT_SECRET = 'dev-only-secret-not-for-production-please-change-me-1234567890';
+if ((env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') && env.JWT_SECRET === DEV_JWT_SECRET) {
+  // eslint-disable-next-line no-console
+  console.error(
+    `Refusing to start: JWT_SECRET is the committed development default in ${env.NODE_ENV}. ` +
+      'Set JWT_SECRET (>=32 chars) from the environment or a secret store.',
+  );
+  process.exit(1);
+}
+
+/**
+ * Whether the session cookie is marked `Secure`. Production keeps its previous
+ * always-secure behavior. Staging is decided by the public URL scheme: a staging
+ * stack served over plain HTTP on localhost must not set `Secure`, or the browser
+ * drops the cookie and login fails silently, while an HTTPS staging deployment
+ * must set it.
+ */
+export const cookieSecure =
+  env.NODE_ENV === 'production' ||
+  (env.NODE_ENV === 'staging' && env.APP_URL.startsWith('https://'));

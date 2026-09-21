@@ -1,10 +1,11 @@
 import type { Context, Next } from 'hono';
-import { env } from '../lib/env';
+import { env, cookieSecure } from '../lib/env';
 
 /**
  * Security headers middleware.
- * HSTS is only applied in production/HTTPS — never in dev/localhost where it
- * would lock the browser into HTTPS and break local testing.
+ * HSTS is only applied for HTTPS deployments — never over plain HTTP on
+ * localhost where it would lock the browser into HTTPS and break local testing.
+ * `cookieSecure` carries the same resolved notion of "this deployment is HTTPS".
  */
 export async function securityHeaders(c: Context, next: Next): Promise<Response | void> {
   c.header('X-Content-Type-Options', 'nosniff');
@@ -12,11 +13,10 @@ export async function securityHeaders(c: Context, next: Next): Promise<Response 
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
-  const isProd = env.NODE_ENV === 'production';
   const isLocal =
     c.req.url.startsWith('http://localhost') ||
     c.req.url.startsWith('http://127.0.0.1');
-  if (isProd && !isLocal) {
+  if (cookieSecure && !isLocal) {
     c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
 

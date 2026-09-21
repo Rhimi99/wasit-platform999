@@ -5,6 +5,32 @@
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
 ---
 
+## ✅ حالة معتمدة — PHASE 20: STAGING / E1 (2026-09-21)
+
+**الهدف**: فصل بيئة Staging عن الإنتاج، تأمين أسرارها، وإكمال مسار `migrate → seed → serve` مع Health checks، ثم التحقق من الدخول والتسجيل من الواجهة الحقيقية على الـStack المُعاد بناؤه.
+
+| البند | النتيجة |
+| --- | --- |
+| **Staging stack (compose, rebuilt)** | ✅ `project-api-1` / `project-web-1` / `project-db-1` كلها **healthy** على `:8080` |
+| **Health** | ✅ `/`, `/api/health/live`, `/api/health/ready` = 200 عبر nginx |
+| **Migrate → Seed → Serve (DB نظيف)** | ✅ migrations + seed المرجعي ثم boot ناجح، `/api/health/ready` = `ready/db connected` |
+| **Secrets** | ✅ `JWT_SECRET` (64 hex) و`POSTGRES_PASSWORD` (48 hex) عشوائية، مختلفة عن افتراضي التطوير |
+| **حرس الإنتاج** | ✅ `NODE_ENV=production` + `ALLOW_DEV_TOOLING=true` ⇒ رفض البدء؛ `staging` + JWT الافتراضي الملتزم ⇒ رفض البدء |
+| **Cookie `Secure`** | ✅ لا يُضبط على staging عبر HTTP محلي (وإلا لفشل الدخول صامتًا)، ويُضبط على HTTPS/الإنتاج |
+| **Login/Registration من الواجهة** | ✅ register → verify-email → login (201/200/200) ثم دخول من المتصفح |
+| **Browser Functional Smoke (staging)** | ✅ **12/12** صفحة تاجر حقيقية بلا `role=alert` وبلا أي HTTP ≥400 |
+| **Full E2E (UI, real API+DB)** | ✅ **97/97 passed** |
+| **Server unit suite** | ✅ **457/457 — 45 ملف** |
+| **Typecheck + build (server/web)** | ✅ نظيف |
+
+### قرارات الإصلاح في هذه المرحلة
+1. **إزالة قاعدة مدة الفيديو 35–120ث**: كانت تغييرًا سلوكيًا غير مطلوب (لا سند في المستندات ولا في المتطلبات)، وتُخالف Marketing Video Agent المثبَّت، وتكسر اختبار E2E كان ناجحًا. أُرجعت نافذة المدة إلى `4–60` كما في المستودع الملتزم.
+2. **رسالة إنشاء المنتج**: كانت صفحة إنشاء المنتج تعرض نص «تم إنشاء الطلب بنجاح»؛ صُحّحت إلى «تم إنشاء المنتج بنجاح» عبر مفتاح `product.createSuccess` في اللغات الأربع، وحُدِّث تأكيد E2E ليطابق الوظيفة الفعلية.
+3. **عمولة**: بقيت **4% = 2% seller + 2% buyer** بلا مساس.
+4. **Marketing Video Agent**: بقي كما هو — لا regression.
+
+---
+
 ## ✅ حالة معتمدة — Functional UI Audit (Drive the real interface) (2026-09-20)
 
 **الهدف**: تدقيق وظيفي حقيقي من الواجهة نفسها — لا SPA routes ولا HTTP 200 وحده. كل اختبار يقود المتصفح الحقيقي (Playwright + Chromium)، يضغط الأزرار الفعلية، يقرأ ما يراه المستخدم، ثم يتحقق من الأثر عبر الـAPI الحيّ. Backend حقيقي + PostgreSQL، بلا mocks (`packages/web` على `:12000`، API على `:3000`).
