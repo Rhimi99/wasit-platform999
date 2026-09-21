@@ -240,12 +240,57 @@ describe('Subscriptions — admin endpoints', () => {
 
     const listRes = await client.req('/api/subscriptions/admin/plans');
     expect(listRes.status).toBe(200);
+    expect((listRes.data.data.items as unknown[]).length).toBeGreaterThan(0);
 
     const subsRes = await client.req('/api/subscriptions/admin/subscriptions');
     expect(subsRes.status).toBe(200);
 
     const invRes = await client.req('/api/subscriptions/admin/invoices');
     expect(invRes.status).toBe(200);
+  });
+
+  it('admin subscription/invoice rows carry the owning user and plan (UI contract)', async () => {
+    const { cookie, id: customerId } = await createUserWithRole('CUSTOMER', 'adminui');
+    const customer = makeClient(app, cookie);
+    const plansRes = await customer.req('/api/subscriptions/plans');
+    const plan = (plansRes.data.data.items as Array<{ id: string; code: string; name: string }>).find(
+      (p) => p.code === 'SMALL_MERCHANT',
+    )!;
+    const subRes = await customer.req('/api/subscriptions/subscribe', {
+      method: 'POST',
+      body: { planId: plan.id, billingCycle: 'MONTHLY' },
+    });
+    expect(subRes.status).toBe(200);
+
+    const { cookie: adminCookie } = await createUserWithRole('ADMIN', 'adminuiview');
+    const admin = makeClient(app, adminCookie);
+
+    const subsRes = await admin.req('/api/subscriptions/admin/subscriptions');
+    expect(subsRes.status).toBe(200);
+    const row = (subsRes.data.data.items as Array<Record<string, unknown>>).find(
+      (s) => s.userId === customerId,
+    );
+    expect(row).toBeTruthy();
+    expect(row!.planCode).toBe('SMALL_MERCHANT');
+    expect(row!.planName).toBe(plan.name);
+    expect(typeof row!.userEmail).toBe('string');
+    expect(String(row!.userEmail)).toContain('@');
+    expect(row!.status).toBe('ACTIVE');
+    expect(row!.autoRenew).toBe(true);
+
+    const invRes = await admin.req('/api/subscriptions/admin/invoices');
+    expect(invRes.status).toBe(200);
+    const inv = (invRes.data.data.items as Array<Record<string, unknown>>).find(
+      (i) => i.userId === customerId,
+    );
+    expect(inv).toBeTruthy();
+    expect(inv!.status).toBe('PENDING');
+    expect(inv!.invoiceNumber).toBeTruthy();
+    expect(inv!.currencyCode).toBe('TND');
+
+    const pendingRes = await admin.req('/api/subscriptions/admin/invoices/pending');
+    expect(pendingRes.status).toBe(200);
+    expect((pendingRes.data.data.items as Array<Record<string, unknown>>).some((i) => i.id === inv!.id)).toBe(true);
   });
 
   it('denies admin endpoints for a role without SUBSCRIPTION_MANAGE', async () => {

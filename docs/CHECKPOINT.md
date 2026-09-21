@@ -2,7 +2,54 @@
 
 آخر تحديث: **2026-09-21**
 
-## Milestone E — Subscription UI Integration: ربط صفحة الاشتراكات بالـBackend الحقيقي (هذه الجلسة — مكتمل)
+## Milestone F — Admin Subscriptions UI: لوحة إدارة الاشتراكات داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+
+### الهدف
+بناء واجهة إدارة اشتراكات داخل Admin Dashboard وربطها الكامل بخدمة الاشتراكات القائمة (`SUBSCRIPTION_MANAGE` = ADMIN/SUPER_ADMIN). لا schema ولا migrations جديدة (لم يُثبَت أي احتياج)؛ قاعدة `5732916` كأساس.
+
+### التنقيح (Recon) قبل التنفيذ
+- المسارات الخلفية موجودة ومختبرة سابقًا (`adminListPlans`, `setPlanActive`, `adminListSubscriptions`, `adminListInvoices`, `listPendingInvoices`, `collectInvoicePayment`, `rollover`, `expire-lapsed`) لكن **لا صفحة أدمن تستدعيها** — كانت قدرة خلفية بلا واجهة (ناقص حسب Definition of Done).
+- `ADMIN_NAV` في `AppSidebar.tsx` لا يحوي اشتراكات، و`App.tsx` لا يسجّل `/admin/subscriptions`.
+
+### ما نُفّذ
+- **الخادم (إثراء العقد للواجهة بلا تغيير schema)**: `adminListSubscriptions` و`adminListInvoices` صارا يُنضّمان (`leftJoin`) إلى `users` و`subscription_plans` ويُعيدان `userEmail`/`userName`، و`planCode`/`planName`، و`status`/`billingCycle`/`autoRenew`/`startsAt`/`endsAt`/`cancelledAt`/`paidAt`/`dueAt`/`externalRef`. أنواع جديدة `AdminSubscriptionView`/`AdminInvoiceView` في `modules/subscriptions/types.ts`. المستخدم/الخطة لم يكونا ظاهرين في الواجهة سابقًا (كان userId/planCode فقط).
+- **الواجهة (صفحة جديدة)**: `AdminSubscriptionPages.tsx` — `AdminSubscriptionsPage` بأربعة تبويبات: الاشتراكات، الخطط، الفواتير، التحصيل والمتابعة (Dunning).
+  - الخطط: بطاقات بأسماء/أسعار شهرية وسنوية من الخادم (بلا قيم مثبّتة) + زر تفعيل/تعطيل (`PATCH /admin/plans/:id/active`) يظهر/يختفي حسب `isActive`.
+  - الاشتراكات: جدول (المستخدم، الخطة، الحالة، البداية/النهاية، التجديد التلقائي، دورة الفوترة).
+  - الفواتير: جدول (الرقم، المستخدم، المبلغ، الحالة، الاستحقاق/الدفع) + زر تحصيل للـPENDING (`POST /admin/invoices/:id/collect`).
+  - Dunning: قائمة الفواتير المعلّقة (`/admin/invoices/pending`) + تشغيل التجديد (`POST /admin/rollover`) وتشغيل إنهاء المنتهية (`POST /admin/expire-lapsed`).
+  - كل زر يعرض رسالة نجاح/خطأ، ويُعيد التحميل من الخادم — لا إخفاء للأخطاء ولا أزرار معطّلة للتغطية.
+- **التسجيل**: مسار `/admin/subscriptions` داخل `AdminOnly` في `App.tsx`، وعنصر `admin.subscriptions` في `ADMIN_NAV`.
+- **طبقة API/الأنواع**: `adminSubscriptionPlans`, `adminSetPlanActive`, `adminSubscriptions`, `adminSubscriptionInvoices`, `adminPendingSubscriptionInvoices`, `adminCollectSubscriptionInvoice`, `adminRunSubscriptionRollover`, `adminExpireLapsedSubscriptions` + أنواع `AdminSubscription`, `AdminSubscriptionInvoice`, `CollectResult`, `RolloverResult`, `ExpireLapsedResult`.
+- **التوطين**: مفاتيح `adminSub.*` + `admin.subscriptions` + `common.active/inactive` في `ar/en/fr/zh`.
+
+### الاختبارات والتحقق
+- **Server**: **465/465 — 45 ملف**. حالة جديدة في `subscriptions.test.ts` تتحقّق من عقد الواجهة: صف الاشتراك يحمل بريد المالك و`planCode`/`planName`، وصف الفاتورة يحمل بريد المالك وحالة PENDING، وظهورها في قائمة dunning.
+- **E2E**: `e2e/admin-subscriptions.spec.ts` — **6/6**: فتح اللوحة من الشريط الجانبي وقراءة خطط/اشتراكات/فواتير حقيقية، مطابقة السعر المعروض لـ`Intl` مقابل `priceMonthly` من الخادم (لا ثابت)، تفعيل/تعطيل خطة والتحقق من الأثر خادميًا ثم الاسترجاع، ظهور اشتراك عميل حقيقي وفاتورته، تحصيل فاتورة PENDING ⇒ PAID في الواجهة والخادم، ظهور قائمة dunning وتشغيل التجديد، وRBAC (تاجر محجوب UI + 403 API).
+- **إجمالي E2E**: **104/104** (شمل payments/auth السابقة — كانت تفشل سابقًا فقط لأن سيرفرًا يدويًا رُفع بلا `RATE_LIMIT_LOGIN_MAX`؛ عند تشغيل Playwright يدير الخوادم بإعداداته تمرّ كلها).
+- **Typecheck** (server + web) = 0، **Build** (server + web) = نظيف.
+
+### خارج النطاق / غير مُتغيّر
+- **العمولة كما هي**: 4% = 2% بائع + 2% مشتري.
+- **Marketing Video Agent (89e68d7)**: بلا مساس — لا regression.
+- لا DB reset/drop/push، ولا migrations، ولا حذف بيانات اختبار ضرورية.
+
+### جدول التدقيق الوظيفي (Admin Subscriptions UI)
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+| --- | --- | --- | --- | --- | --- |
+| Admin nav → subscriptions desk | ✅ رابط الشريط الجانبي `/admin/subscriptions` | ✅ PASS | المسار غير مسجّل في App.tsx ولا في ADMIN_NAV | تسجيل Route داخل AdminOnly + عنصر nav | E2E + server |
+| Plans tab renders live prices | ✅ تبويب الخطط | ✅ PASS | بطاقات بلا مصدر بيانات | قراءة `GET /admin/plans` وعرض السعر من الخادم | E2E |
+| Activate/deactivate plan | ✅ زر تفعيل/تعطيل | ✅ PASS | لا واجهة تستدعي `setPlanActive` | `PATCH /admin/plans/:id/active` + reload | E2E + server |
+| Subscriptions list (user/plan/status) | ✅ تبويب الاشتراكات | ✅ PASS | `adminListSubscriptions` كان يُعيد userId/planCode فقط | `leftJoin users/plans` + حقول عرض | E2E + server |
+| Invoices list (owner/amount/status) | ✅ تبويب الفواتير | ✅ PASS | `adminListInvoices` كان بلا مالك | `leftJoin subscriptions/users` + حقول عرض | E2E + server |
+| Collect pending invoice | ✅ زر تحصيل | ✅ PASS | لا واجهة تستدعي مسار التحصيل | `POST /admin/invoices/:id/collect` (manual provider) ثم التحقق PAID | E2E + server |
+| Dunning pending queue | ✅ تبويب Dunning | ✅ PASS | لا واجهة لقائمة dunning | `GET /admin/invoices/pending` | E2E + server |
+| Run renewal rollover | ✅ زر تشغيل التجديد | ✅ PASS | لا واجهة للمسار | `POST /admin/rollover` | E2E + server |
+| Expire lapsed subscriptions | ✅ زر إنهاء المنتهية | ✅ PASS | لا واجهة للمسار | `POST /admin/expire-lapsed` | E2E |
+| RBAC (merchant blocked) | ✅ `/admin/subscriptions` + API | ✅ PASS | — | AdminOnly + `SUBSCRIPTION_MANAGE` خادميًا | E2E |
+
+## Milestone E — Subscription UI Integration: ربط صفحة الاشتراكات بالـBackend الحقيقي (جلسة سابقة — مكتمل)
 
 ### الهدف
 ربط `DashboardSubscriptionsPage` بالكامل بخدمة الاشتراكات القائمة، وإزالة كل الأسعار/البيانات المثبّتة في الواجهة. لا تغيير على schema ولا migrations (لم يُثبَت أي احتياج).

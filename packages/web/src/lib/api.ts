@@ -13,6 +13,7 @@ import type {
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
+  AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -823,6 +824,38 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(idempotencyKey ? { idempotencyKey } : {}),
     });
+  },
+
+  // ---- Admin subscriptions (server enforces SUBSCRIPTION_MANAGE) ----
+  async adminSubscriptionPlans() {
+    return request<{ items: SubscriptionPlan[] }>('/api/subscriptions/admin/plans');
+  },
+  async adminSetPlanActive(planId: string, isActive: boolean) {
+    return request<{ plan: SubscriptionPlan }>(`/api/subscriptions/admin/plans/${planId}/active`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    });
+  },
+  async adminSubscriptions() {
+    return request<{ items: AdminSubscription[] }>('/api/subscriptions/admin/subscriptions');
+  },
+  async adminSubscriptionInvoices() {
+    return request<{ items: AdminSubscriptionInvoice[] }>('/api/subscriptions/admin/invoices');
+  },
+  async adminPendingSubscriptionInvoices() {
+    return request<{ items: SubscriptionInvoice[] }>('/api/subscriptions/admin/invoices/pending');
+  },
+  async adminCollectSubscriptionInvoice(invoiceId: string, idempotencyKey?: string) {
+    return request<CollectResult>(`/api/subscriptions/admin/invoices/${invoiceId}/collect`, {
+      method: 'POST',
+      body: JSON.stringify(idempotencyKey ? { idempotencyKey } : {}),
+    });
+  },
+  async adminRunSubscriptionRollover() {
+    return request<RolloverResult>('/api/subscriptions/admin/rollover', { method: 'POST' });
+  },
+  async adminExpireLapsedSubscriptions() {
+    return request<ExpireLapsedResult>('/api/subscriptions/admin/expire-lapsed', { method: 'POST' });
   },
 };
 

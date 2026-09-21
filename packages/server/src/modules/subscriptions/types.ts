@@ -37,6 +37,37 @@ export interface MySubscriptionView {
   updatedAt: string;
 }
 
+export interface AdminSubscriptionView {
+  id: string;
+  userId: string;
+  userEmail: string | null;
+  userName: string | null;
+  planCode: string;
+  planName: string;
+  status: string;
+  billingCycle: string;
+  autoRenew: boolean;
+  startsAt: string | null;
+  endsAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+}
+
+export interface AdminInvoiceView {
+  id: string;
+  subscriptionId: string;
+  userId: string | null;
+  userEmail: string | null;
+  invoiceNumber: string;
+  amount: string;
+  currencyCode: string;
+  status: string;
+  externalRef: string | null;
+  dueAt: string | null;
+  paidAt: string | null;
+  createdAt: string;
+}
+
 export interface InvoiceView {
   id: string;
   subscriptionId: string;

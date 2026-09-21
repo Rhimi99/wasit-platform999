@@ -27,6 +27,7 @@ import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
 import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
+import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 
 export default function App() {
@@ -101,6 +102,7 @@ export default function App() {
       <Route path="/admin/risk" element={<RequireAuth><StaffOnly><AdminRiskPage /></StaffOnly></RequireAuth>} />
       <Route path="/admin/disputes" element={<RequireAuth><StaffOnly><AdminDisputesPage /></StaffOnly></RequireAuth>} />
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
 
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

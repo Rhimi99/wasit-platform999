@@ -466,6 +466,61 @@ export interface SubscriptionInvoice {
   createdAt: string;
 }
 
+/** Mirrors the backend `AdminSubscriptionView` — one row per subscription. */
+export interface AdminSubscription {
+  id: string;
+  userId: string;
+  userEmail: string | null;
+  userName: string | null;
+  planCode: string;
+  planName: string;
+  status: SubscriptionStatus;
+  billingCycle: string;
+  autoRenew: boolean;
+  startsAt: string | null;
+  endsAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+}
+
+/** Mirrors the backend `AdminInvoiceView` — includes the owning user for the admin desk. */
+export interface AdminSubscriptionInvoice {
+  id: string;
+  subscriptionId: string;
+  userId: string | null;
+  userEmail: string | null;
+  invoiceNumber: string;
+  amount: string;
+  currencyCode: string;
+  status: string;
+  externalRef: string | null;
+  dueAt: string | null;
+  paidAt: string | null;
+  createdAt: string;
+}
+
+export interface RolloverResult {
+  renewed: number;
+  skipped: number;
+  renewedIds: string[];
+}
+
+export interface ExpireLapsedResult {
+  expired: number;
+  expiredIds: string[];
+}
+
+export interface CollectResult {
+  invoiceId: string;
+  subscriptionId: string;
+  amount: string;
+  currencyCode: string;
+  paidAt: string;
+  subscriptionStatus: string;
+  periodEnd: string;
+}
+
+
 export interface Country {
   id: string;
   isocode: string;

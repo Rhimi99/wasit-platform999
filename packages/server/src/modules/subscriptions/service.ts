@@ -10,7 +10,10 @@ import {
   subscriptionStatusEnum,
 } from '../../db/schema/subscriptions.js';
 import { generateInvoiceNumber, newId } from '../../lib/ids';
+import { users } from '../../db/schema/auth.js';
 import type {
+  AdminInvoiceView,
+  AdminSubscriptionView,
   InvoiceView,
   MySubscriptionView,
   PlanTarget,
@@ -350,43 +353,71 @@ export async function adminListPlans(db: DB): Promise<SubscriptionPlanView[]> {
   return rows.map(toPlanView);
 }
 
-export async function adminListSubscriptions(db: DB): Promise<Array<{ id: string; userId: string; planCode: string; status: string; billingCycle: string; createdAt: string }>> {
+export async function adminListSubscriptions(db: DB): Promise<AdminSubscriptionView[]> {
   const rows = await db
     .select({
       id: subscriptions.id,
       userId: subscriptions.userId,
+      email: users.email,
+      firstName: users.firstName,
+      lastName: users.lastName,
       planCode: subscriptionPlans.code,
+      planName: subscriptionPlans.name,
       status: subscriptions.status,
       billingCycle: subscriptions.billingCycle,
+      autoRenew: subscriptions.autoRenew,
+      startsAt: subscriptions.startsAt,
+      endsAt: subscriptions.endsAt,
+      cancelledAt: subscriptions.cancelledAt,
       createdAt: subscriptions.createdAt,
     })
     .from(subscriptions)
     .innerJoin(subscriptionPlans, eq(subscriptions.planId, subscriptionPlans.id))
+    .leftJoin(users, eq(subscriptions.userId, users.id))
     .orderBy(desc(subscriptions.createdAt))
-     .limit(100);
+    .limit(100);
   return rows.map((r) => ({
     id: r.id,
     userId: r.userId,
+    userEmail: r.email,
+    userName: [r.firstName, r.lastName].filter(Boolean).join(' ') || null,
     planCode: r.planCode,
+    planName: r.planName,
     status: r.status,
     billingCycle: r.billingCycle,
+    autoRenew: r.autoRenew,
+    startsAt: r.startsAt?.toISOString() ?? null,
+    endsAt: r.endsAt?.toISOString() ?? null,
+    cancelledAt: r.cancelledAt?.toISOString() ?? null,
     createdAt: r.createdAt.toISOString(),
   }));
 }
 
-export async function adminListInvoices(db: DB): Promise<Array<{ id: string; subscriptionId: string; invoiceNumber: string; amount: string; status: string; createdAt: string }>> {
+export async function adminListInvoices(db: DB): Promise<AdminInvoiceView[]> {
   const rows = await db
-    .select()
+    .select({
+      invoice: invoices,
+      userId: subscriptions.userId,
+      email: users.email,
+    })
     .from(invoices)
+    .leftJoin(subscriptions, eq(invoices.subscriptionId, subscriptions.id))
+    .leftJoin(users, eq(subscriptions.userId, users.id))
     .orderBy(desc(invoices.createdAt))
-     .limit(100);
+    .limit(100);
   return rows.map((r) => ({
-    id: r.id,
-    subscriptionId: r.subscriptionId,
-    invoiceNumber: r.invoiceNumber,
-    amount: r.amount.toString(),
-    status: r.status,
-    createdAt: r.createdAt.toISOString(),
+    id: r.invoice.id,
+    subscriptionId: r.invoice.subscriptionId,
+    userId: r.userId,
+    userEmail: r.email,
+    invoiceNumber: r.invoice.invoiceNumber,
+    amount: r.invoice.amount.toString(),
+    currencyCode: r.invoice.currencyCode,
+    status: r.invoice.status,
+    externalRef: r.invoice.externalRef,
+    dueAt: r.invoice.dueAt?.toISOString() ?? null,
+    paidAt: r.invoice.paidAt?.toISOString() ?? null,
+    createdAt: r.invoice.createdAt.toISOString(),
   }));
 }
 
