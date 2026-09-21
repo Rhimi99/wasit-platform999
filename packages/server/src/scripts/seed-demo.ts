@@ -15,11 +15,13 @@ import { createMerchant } from '../modules/merchants/service';
 import { createCompany } from '../modules/companies/service';
 import { createProduct } from '../modules/products/service';
 import { createOrder } from '../modules/orders/service';
+import { openDirectThread, sendMessage } from '../modules/messaging/service';
 import { users, userRoles, roles } from '../db/schema/auth';
 import { suppliers, merchants, companies } from '../db/schema/trade';
 import { categories, products } from '../db/schema/products';
 import { countries } from '../db/schema/geo';
 import { orders } from '../db/schema/commerce';
+import { threads, threadParticipants } from '../db/schema/messaging';
 import { inventoryItems } from '../db/schema/commerce_extras';
 import { ensureInventoryItem } from '../lib/inventory-engine';
 
@@ -278,6 +280,37 @@ async function main(): Promise<void> {
       }, { actorId: buyer, ipAddress: '127.0.0.1' });
       console.log('Demo order created ✓');
     }
+  }
+
+  // محادثة تجريبية — تُنشأ عبر openDirectThread/sendMessage الحقيقيين كي تظهر
+  // لوحة الرسائل بمحتوى فعلي لكل مستخدم تجريبي بدلًا من قائمة فارغة.
+  const customerThreads = await db
+    .select({ id: threads.id })
+    .from(threads)
+    .innerJoin(threadParticipants, eq(threadParticipants.threadId, threads.id))
+    .where(eq(threadParticipants.userId, customer.userId))
+    .limit(1);
+
+  if (customerThreads.length === 0) {
+    const { threadId } = await openDirectThread(
+      db,
+      customer.userId,
+      {
+        participantUserId: supplierUser.userId,
+        subject: 'استفسار عن زيت الزيتون العضوي',
+        body: 'مرحبًا، ما هي الكمية المتاحة للتصدير من زيت الزيتون العضوي 5 لتر؟',
+      },
+      { ipAddress: '127.0.0.1' },
+    );
+    // A reply from the counterparty so the thread shows a real back-and-forth.
+    await sendMessage(
+      db,
+      supplierUser.userId,
+      threadId,
+      { body: 'أهلًا بك، لدينا 400 علبة جاهزة للتصدير حاليًا ويمكن زيادة الكمية عند الطلب.' },
+      { ipAddress: '127.0.0.1' },
+    );
+    console.log('Demo conversation created ✓');
   }
 
   console.log('Demo Seed complete.');

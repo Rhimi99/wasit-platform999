@@ -79,6 +79,17 @@ export const products = pgTable(
     categoryIdx: index('products_category_idx').on(t.categoryId),
     countryIdx: index('products_country_idx').on(t.countryId),
     statusIdx: index('products_status_idx').on(t.status),
+    // The public catalogue lists `is_published AND status='ACTIVE'` ordered by
+    // newest first; a single-column status index cannot serve both the filter
+    // and the sort.
+    publicCreatedIdx: index('products_public_created_idx').on(t.isPublished, t.status, t.createdAt),
+    // Category browse applies the same visibility filter within one category.
+    publicCategoryCreatedIdx: index('products_public_category_created_idx').on(
+      t.categoryId,
+      t.isPublished,
+      t.status,
+      t.createdAt,
+    ),
   }),
 );
 

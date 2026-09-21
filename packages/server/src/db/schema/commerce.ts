@@ -87,6 +87,10 @@ export const orders = pgTable(
     buyerIdx: index('orders_buyer_idx').on(t.buyerId, t.buyerType),
     sellerIdx: index('orders_seller_idx').on(t.sellerId, t.sellerType),
     statusIdx: index('orders_status_idx').on(t.status),
+    // Buyer and seller order history is always "mine, newest first"; the sort
+    // is not served by the plain buyer/seller index.
+    buyerCreatedIdx: index('orders_buyer_created_idx').on(t.buyerId, t.createdAt),
+    sellerCreatedIdx: index('orders_seller_created_idx').on(t.sellerId, t.createdAt),
   }),
 );
 

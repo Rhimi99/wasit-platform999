@@ -9,6 +9,8 @@ import { categories } from '../../db/schema/products.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
 import { slugify } from '../products/service.js';
+import { cached, invalidateCache } from '../../lib/cache/resolve.js';
+import { CACHE_PREFIX, REFERENCE_DATA_TTL_SECONDS } from '../../lib/cache/keys.js';
 
 const createCategorySchema = z.object({
   name: z.string().min(2).max(200),
@@ -24,13 +26,22 @@ export const categoriesRoutes = new Hono();
 
 categoriesRoutes.get('/', async (c) => {
   const ctx = getContext(c);
-  const rows = await ctx.db.select().from(categories).where(eq(categories.isActive, true)).orderBy(asc(categories.sortOrder));
+  const rows = await cached(`${CACHE_PREFIX.CATEGORIES}active`, REFERENCE_DATA_TTL_SECONDS, () =>
+    ctx.db
+      .select()
+      .from(categories)
+      .where(eq(categories.isActive, true))
+      .orderBy(asc(categories.sortOrder)),
+  );
   return c.json({ success: true, data: rows });
 });
 
 categoriesRoutes.get('/:id', async (c) => {
   const ctx = getContext(c);
-  const rows = await ctx.db.select().from(categories).where(eq(categories.id, c.req.param('id'))).limit(1);
+  const id = c.req.param('id')!;
+  const rows = await cached(`${CACHE_PREFIX.CATEGORIES}by-id:${id}`, REFERENCE_DATA_TTL_SECONDS, () =>
+    ctx.db.select().from(categories).where(eq(categories.id, id)).limit(1),
+  );
   if (rows.length === 0) {
     return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Category not found', statusCode: 404 } }, 404 as never);
   }
@@ -58,5 +69,6 @@ categoriesRoutes.post('/', requireAuth, requirePermission(PERMISSIONS.PRODUCT_MA
     entityId: id,
     after: { name: body.name },
   });
+  await invalidateCache(CACHE_PREFIX.CATEGORIES);
   return c.json({ success: true, data: { id } }, 201 as never);
 });

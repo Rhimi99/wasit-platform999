@@ -111,6 +111,18 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   METRICS_TOKEN: z.string().optional(),
+  // Read cache for hot, rarely-changing reference reads (geo catalogue,
+  // categories, SEO sitemap). Disabled by default so tests and one-off commands
+  // always see the source; each deployment enables it with a TTL it is happy to
+  // serve stale. Values are invalidated by prefix on the writes that change them.
+  CACHE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** Lifetime of a cached read, in seconds. */
+  CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
+  /** Upper bound on cached entries; the LRU evicts beyond this. */
+  CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(500),
   // Media storage. Assets (product marketing videos) are written to private
   // storage and served only through authenticated/owned API routes — never as
   // static files. `local` is the on-disk driver; the port is pluggable so an

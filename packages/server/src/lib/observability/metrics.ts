@@ -309,6 +309,9 @@ function init(): void {
   );
   metrics.counter('wasit_http_errors_total', 'HTTP 5xx responses', ['route', 'status']);
   metrics.counter('wasit_rate_limit_rejections_total', 'Requests rejected by the rate limiter', ['prefix']);
+  metrics.counter('wasit_cache_lookups_total', 'Read-cache lookups', ['result']);
+  metrics.counter('wasit_cache_invalidations_total', 'Read-cache entries invalidated by a write');
+  metrics.gauge('wasit_cache_entries', 'Live read-cache entries');
   metrics.counter('wasit_audit_writes_total', 'Audit log rows written');
   metrics.counter('wasit_alerts_fired_total', 'Alert transitions to firing', ['rule']);
   metrics.counter('wasit_alert_notifications_total', 'Alert notifications delivered', ['channel', 'result']);

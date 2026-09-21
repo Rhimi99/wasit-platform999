@@ -6,6 +6,7 @@ import { smsStatus } from '../../lib/sms/resolve.js';
 import { rateLimitStoreStatus } from '../../lib/rate-limit/resolve.js';
 import { alertStatus } from '../../lib/observability/resolve-notifier.js';
 import { describeMediaProviders } from '../../lib/media/resolve.js';
+import { readCacheStatus } from '../../lib/cache/resolve.js';
 
 export const healthRoutes = new Hono();
 
@@ -33,6 +34,7 @@ healthRoutes.get('/channels', async (c) =>
     mail: mailStatus(),
     sms: smsStatus(),
     rateLimit: rateLimitStoreStatus(getDb(c)),
+    cache: await readCacheStatus(),
     observability: { alerts: alertStatus() },
     media: await describeMediaProviders(),
     timestamp: new Date().toISOString(),

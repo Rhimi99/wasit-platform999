@@ -90,5 +90,9 @@ export const invoices = pgTable(
   },
   (t) => ({
     subscriptionIdx: index('invoices_subscription_idx').on(t.subscriptionId),
+    // Dunning lists all PENDING invoices ordered by due date.
+    statusDueIdx: index('invoices_status_due_idx').on(t.status, t.dueAt),
+    // Payment-intent reconciliation looks a subscription's invoices up by status.
+    subscriptionStatusIdx: index('invoices_subscription_status_idx').on(t.subscriptionId, t.status),
   }),
 );

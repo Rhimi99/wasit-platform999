@@ -7,6 +7,8 @@ import { validateBody, getValidatedBody } from '../../middleware/validate';
 import { requireAuth, requirePermission } from '../../middleware/auth';
 import { countries } from '../../db/schema/geo';
 import { writeAudit } from '../../lib/audit';
+import { invalidateCache } from '../../lib/cache/resolve';
+import { CACHE_PREFIX } from '../../lib/cache/keys';
 
 /**
  * Admin control over market activation. A country row can be seeded as a
@@ -64,6 +66,10 @@ adminCountryRoutes.put('/:id/activation', validateBody(activationSchema), async 
     before: { isActive: before.isActive },
     after: { isActive, reason },
   });
+
+  // The geo catalogue is cached; a market going live must not stay hidden
+  // behind a stale read.
+  await invalidateCache(CACHE_PREFIX.GEO);
 
   return c.json({ success: true, data: { id, code: before.code, isActive } });
 });

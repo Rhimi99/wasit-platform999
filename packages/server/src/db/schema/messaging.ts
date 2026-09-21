@@ -61,6 +61,8 @@ export const messages = pgTable(
   (t) => ({
     threadIdx: index('messages_thread_idx').on(t.threadId),
     senderIdx: index('messages_sender_idx').on(t.senderId),
+    // A thread renders oldest-first; pair the sort with the thread filter.
+    threadCreatedIdx: index('messages_thread_created_idx').on(t.threadId, t.createdAt),
   }),
 );
 
@@ -79,6 +81,9 @@ export const notifications = pgTable(
   (t) => ({
     userIdx: index('notifications_user_idx').on(t.userId),
     readIdx: index('notifications_read_idx').on(t.userId, t.readAt),
+    // The bell lists a user's notifications newest first; the userId index
+    // alone leaves the sort to an in-memory pass.
+    userCreatedIdx: index('notifications_user_created_idx').on(t.userId, t.createdAt),
   }),
 );
 

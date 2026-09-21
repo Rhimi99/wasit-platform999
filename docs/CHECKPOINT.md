@@ -1,6 +1,34 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-20**
+آخر تحديث: **2026-09-21**
+
+## Milestone D — Performance/Scale: Load + Index + Caching (هذه الجلسة — مكتمل)
+
+### الهدف
+إغلاق فجوات الأداء D1/D2/D3 في `docs/PRODUCTION_GAP_LIST.md`: لا دليل سلوك تحت الحمل (D1)، لا مراجعة EXPLAIN للفهارس (D2)، ولا طبقة cache للقراءات الساخنة (D3).
+
+### ما نُفّذ
+- **D1 — Load harness:** `lib/perf/load-runner.ts` (بلا اعتماديات خارجية) + `scripts/load-smoke.ts` + سكربت `npm run load:smoke`. يقود الخادم الحقيقي عبر HTTP ويفشل إن تجاوز p95 الميزانية.
+  - **النتيجة الفعلية (CACHE_ENABLED=true):** 7 سيناريوهات، 0% أخطاء، p95 بين 4ms و21ms (geo.countries 11ms، geo.languages 7ms، categories.list 8ms، products.list 21ms، search.all 18ms، seo.sitemap 4ms، health.ready 7ms).
+  - **القياس المقابل (CACHE_ENABLED=false):** geo.countries p95 23ms (3595→1349 rps)، geo.languages 13ms (5039→1987 rps)، categories.list 12ms (4405→2233 rps)، seo.sitemap 12ms (4594→1050 rps). الـcache يضاعف الإنتاجية على القراءات الثابتة — تأثير مقيس لا مُدّعى.
+- **D2 — Indexes:** فهارس مركّبة مطابقة لأنماط «فلترة + ترتيب» الحقيقية: `products_public_created_idx`، `products_public_category_created_idx`، `orders_buyer_created_idx`، `orders_seller_created_idx`، `notifications_user_created_idx`، `messages_thread_created_idx`، `invoices_status_due_idx`.
+  - Migration إضافية فقط (بلا drop/reset/push) وطُبّقت على `wasit_dev`.
+  - **إثبات بالـEXPLAIN:** أداة دائمة `scripts/explain-hot-queries.ts` (تُشغَّل بـ`--synth=N`). عند 20 ألف صف مُصنَّع داخل معاملة **تُرجَع دائمًا (ROLLBACK)** — فلا تتغيّر قاعدة البيانات — يختار المُخطِّط الفهرس المركّب في كل الاستعلامات الساخنة: `products.public_list` 0.033ms، `products.public_by_category` 0.018ms، `orders.by_buyer` 0.022ms، `orders.by_seller` 0.018ms، `notifications.list` 0.024ms، `invoices.pending_due` 0.029ms، `audit.recent` 0.036ms.
+  - ملاحظة منهجية: `notifications.unread_count` يظهر Seq Scan عندما تكون كل الصفوف غير مقروءة (لا فائدة من الفهرس)، وبعد جعل المرشّح انتقائيًا يستخدم `notifications_read_idx` (2.1ms) — سلوك مُخطِّط صحيح لا فجوة فهرس.
+- **D3 — Read cache:** `cached()` على قراءات geo/categories/seo مع invalidation عند الكتابة، و`readCacheStatus()` مكشوفة عبر `/api/health/channels`.
+
+### الاختبارات
+- `tests/unit/load-runner.test.ts` (7)، `tests/unit/read-cache.test.ts` (7)، `tests/read-cache.test.ts` (9).
+- الحزمة الكاملة: **45 ملف / 457 اختبار — كلها خضراء**؛ `npm run typecheck` (server + web) = 0؛ `npm run build` نظيف.
+- **E2E حقيقي عبر الواجهة: 97/97** (`npx playwright test`) — بلا mocks، على Postgres حقيقي.
+
+### إصلاح انحدار حقيقي (Functional)
+`MESSAGING — opens an existing thread, sends a message and sees it renders` كان يفشل: **السبب الجذري** أن `seed-demo.ts` لم يُنشئ أي محادثة إطلاقًا، فصفحة الرسائل فارغة لكل الحسابات التجريبية — وهو عينًا عَرَض «الواجهة تفتح لكن الوظائف لا تعمل».
+- **الإصلاح (بيانات، لا إخفاء خطأ):** أنشأنا محادثة تجريبية عبر `openDirectThread` + `sendMessage` الحقيقيين (عميل ↔ مورّد) داخل الـseeder، بشرط عدم وجود محادثة سابقة (idempotent، بلا حذف بيانات).
+- **إعادة الاختبار من الواجهة:** المحادثة تظهر، وكتابة رسالة والضغط على «إرسال» تُظهر الرسالة فعليًا — ✓ 1 passed (514ms) وسجلّات الخادم `POST /api/messages/:threadId/messages → 201` ثم `GET` → 200.
+
+### خارج النطاق
+- ميزانية p95 حاليًا على مجموعة بيانات صغيرة (منتجات 6، طلبات 1)؛ الفهارس مُثبَتة بـEXPLAIN عند 20 ألف صف لكن قياس الحمل على بيانات ضخمة مؤجّل.
 
 ## Milestone C-1 — نموذج العمولة: 4% منقسمة 2% بائع + 2% مشتري (هذا الجلسة — مكتمل)
 

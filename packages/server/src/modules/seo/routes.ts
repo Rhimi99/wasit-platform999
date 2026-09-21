@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { getDb } from '../../lib/request-context.js';
 import { ApiError } from '@wasit/shared';
+import { cached } from '../../lib/cache/resolve.js';
+import { CACHE_PREFIX } from '../../lib/cache/keys.js';
 import {
   buildSitemap,
   renderRobots,
@@ -22,9 +24,15 @@ import {
  */
 export const seoRoutes = new Hono();
 
+/** Sitemap changes slowly; a short TTL bounds staleness while absorbing repeat hits. */
+const SEO_SITEMAP_TTL_SECONDS = 60;
+
 seoRoutes.get('/sitemap.xml', async (c) => {
   const db = getDb(c);
-  const entries = await buildSitemap(db);
+  // A crawler can hit the sitemap far more often than the catalogue changes;
+  // caching the built entries under a short TTL keeps the per-request cost a
+  // response render rather than a set of catalogue scans.
+  const entries = await cached(`${CACHE_PREFIX.SEO}sitemap`, SEO_SITEMAP_TTL_SECONDS, () => buildSitemap(db));
   return c.body(renderSitemapIndex(entries), 200, {
     'Content-Type': 'application/xml; charset=utf-8',
     'Cache-Control': 'public, max-age=3600',
