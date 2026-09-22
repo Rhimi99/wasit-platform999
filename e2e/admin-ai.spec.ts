@@ -70,7 +70,109 @@ test.describe('Admin AI governance desk', () => {
     expect(after.status).toBe('rejected');
   });
 
-  test('a budget created through the API shows in the desk and persists', async ({ page }) => {
+  test('creates a model from the desk and reads it back from the server', async ({ page }) => {
+    // Fixed key: the model catalogue has no delete route by design, so re-runs
+    // must upsert the same row rather than accumulate fixtures.
+    const key = 'e2e-model-desk';
+
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-models').click();
+    await page.getByTestId('admin-ai-model-key').fill(key);
+    await page.getByTestId('admin-ai-model-name').fill('E2E Smoke Model');
+    await page.getByTestId('admin-ai-model-provider').fill('local');
+    await page.getByTestId('admin-ai-model-input').fill('0.25');
+    await page.getByTestId('admin-ai-model-output').fill('0.75');
+    await page.getByTestId('admin-ai-model-submit').click();
+
+    await expect(page.getByText(/Model saved|تم حفظ النموذج/).first()).toBeVisible();
+    const row = page.getByTestId(`admin-ai-model-${key}`);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText('E2E Smoke Model');
+
+    // Prove the write landed server-side and not just in component state.
+    const list = (await (await page.request.get('/api/admin/ai/models')).json()).data.items as Array<
+      { id: string; key: string; inputPer1k: string; isActive: boolean }
+    >;
+    const persisted = list.find((m) => m.key === key);
+    expect(persisted).toBeTruthy();
+
+    // Deactivate through the row action, then confirm via the API.
+    await page.getByTestId(`admin-ai-model-toggle-${key}`).click();
+    await expect(page.getByText(/Model deactivated|تم إيقاف النموذج/).first()).toBeVisible();
+    const after = (await (await page.request.get('/api/admin/ai/models')).json()).data.items as Array<
+      { key: string; isActive: boolean }
+    >;
+    expect(after.find((m) => m.key === key)?.isActive).toBe(false);
+
+    // Restore so the shared catalogue is unchanged for other tests.
+    await page.request.post('/api/admin/ai/models', {
+      data: { key, displayName: 'E2E Smoke Model', provider: 'local', isActive: true },
+    });
+  });
+
+  test('editing a model pre-fills the form and updates in place', async ({ page }) => {
+    const key = 'e2e-model-edit';
+    await page.request.post('/api/admin/ai/models', {
+      data: { key, displayName: 'Before Edit', provider: 'local', isActive: true },
+    });
+
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-models').click();
+    const row = page.getByTestId(`admin-ai-model-${key}`);
+    await expect(row).toBeVisible();
+
+    await page.getByTestId(`admin-ai-model-edit-${key}`).click();
+    await expect(page.getByTestId('admin-ai-model-name')).toHaveValue('Before Edit');
+    await page.getByTestId('admin-ai-model-name').fill('After Edit');
+    await page.getByTestId('admin-ai-model-submit').click();
+    await expect(page.getByText(/Model saved|تم حفظ النموذج/).first()).toBeVisible();
+
+    await expect(page.getByTestId(`admin-ai-model-${key}`)).toContainText('After Edit');
+    const rows = (await (await page.request.get('/api/admin/ai/models')).json()).data.items as Array<
+      { id: string; key: string; displayName: string }
+    >;
+    const matches = rows.filter((m) => m.key === key);
+    expect(matches.length).toBe(1);
+    expect(matches[0].displayName).toBe('After Edit');
+  });
+
+  test('creates a budget from the desk and toggles it from the row', async ({ page }) => {
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-budgets').click();
+    await page.getByTestId('admin-ai-budget-role').selectOption('COMPANY');
+    await page.getByTestId('admin-ai-budget-maxreq').fill('131');
+    await page.getByTestId('admin-ai-budget-maxcost').fill('12.5000000000');
+    await page.getByTestId('admin-ai-budget-submit').click();
+
+    await expect(page.getByText(/Budget saved|تم حفظ الميزانية/).first()).toBeVisible();
+
+    const budgets = (await (await page.request.get('/api/admin/ai/budgets')).json()).data.items as Array<
+      { id: string; roleTarget: string | null; period: string; maxRequests: number | null; isActive: boolean }
+    >;
+    const company = budgets.find((b) => b.roleTarget === 'COMPANY');
+    expect(company).toBeTruthy();
+    expect(company?.maxRequests).toBe(131);
+
+    await expect(page.getByTestId(`admin-ai-budget-${company!.id}`)).toContainText('131');
+
+    // Toggle from the row and verify the persisted flag flips.
+    await page.getByTestId(`admin-ai-budget-toggle-${company!.id}`).click();
+    await expect(page.getByText(/Budget deactivated|تم إيقاف الميزانية/).first()).toBeVisible();
+    const after = (await (await page.request.get('/api/admin/ai/budgets')).json()).data.items as Array<
+      { id: string; isActive: boolean }
+    >;
+    expect(after.find((b) => b.id === company!.id)?.isActive).toBe(false);
+
+    // Leave the row active again so other specs see the seeded state.
+    await page.request.post('/api/admin/ai/budgets', {
+      data: {
+        roleTarget: 'COMPANY', period: company!.period,
+        maxRequests: 131, currencyCode: 'USD', isActive: true,
+      },
+    });
+  });
+
+  test('a budget written by the API shows in the desk and persists', async ({ page }) => {
     const upsert = await page.request.post('/api/admin/ai/budgets', {
       data: {
         roleTarget: 'SUPPLIER',

@@ -7,7 +7,7 @@ import { auditLogs } from '../src/db/schema/audit.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import argon2 from 'argon2';
 import { and, eq } from 'drizzle-orm';
-import { aiBudgets } from '../src/db/schema/ai.js';
+import { aiBudgets, aiModels } from '../src/db/schema/ai.js';
 
 /**
  * Admin AI governance — contract + RBAC for the surfaces the new `/admin/ai`
@@ -207,6 +207,61 @@ describe('Admin AI governance desk (contract + RBAC)', () => {
       body: { period: 'MONTHLY', isActive: true },
     });
     expect(r.status).toBe(422);
+  });
+
+  it('rejects a budget targeting both userId and roleTarget (422)', async () => {
+    const { client } = await createStaffUser('ADMIN');
+    const r = await client.req('/api/admin/ai/budgets', {
+      method: 'POST',
+      body: { userId: randomUUID(), roleTarget: 'MERCHANT', period: 'MONTHLY' },
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it('upserts a model through the desk contract (insert then update by key)', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const key = `e2e-model-${Date.now()}`;
+
+    const created = await admin.client.req('/api/admin/ai/models', {
+      method: 'POST',
+      body: {
+        key,
+        displayName: 'Smoke Model',
+        provider: 'local',
+        contextWindow: 8000,
+        maxOutputTokens: 1024,
+        inputPer1k: '0.5000000000',
+        outputPer1k: '1.5000000000',
+        currencyCode: 'USD',
+        isActive: true,
+      },
+    });
+    expect(created.status).toBe(201);
+    const modelId = created.data.data.id as string;
+    expect(created.data.data.key).toBe(key);
+
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.action, 'AI.MODEL_UPSERTED'), eq(auditLogs.entityId, modelId)));
+    expect(audit.length).toBeGreaterThan(0);
+
+    // The same key must update in place, never insert a second row.
+    const updated = await admin.client.req('/api/admin/ai/models', {
+      method: 'POST',
+      body: { key, displayName: 'Smoke Model v2', provider: 'local', isActive: false },
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.data.data.id).toBe(modelId);
+    expect(updated.data.data.displayName).toBe('Smoke Model v2');
+    expect(updated.data.data.isActive).toBe(false);
+
+    const list = await admin.client.req('/api/admin/ai/models');
+    const rows = (list.data.data.items as Array<{ id: string }>).filter((m) => m.id === modelId);
+    expect(rows.length).toBe(1);
+
+    // Cleanup so the shared catalogue stays as seeded for other tests.
+    await db.delete(aiModels).where(eq(aiModels.id, modelId));
   });
 
   it('runs an approval-gated agent task end-to-end from the desk (approve → completed)', async () => {

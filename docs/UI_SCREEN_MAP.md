@@ -92,6 +92,13 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `/admin/reports` — `AdminReportsPage.tsx` (محروس بـ`AdminOnly`، مدخل تنقّل «التقارير» في `AppSidebar`): نموذج إنشاء تقرير (`admin-reports-form`: `admin-report-code/title/data` + `admin-report-submit` يرفض JSON غير صالح في الواجهة) وجدول `admin-reports-table` لكل التقارير المحفوظة من `GET /api/admin/analytics/reports`، وزر `admin-report-view-<id>` يبدّل عرض المحتوى المخزّن في `admin-report-detail`. صلاحية `admin:analytics` على الخادم.
 - ترجمات كاملة ar/fr/en/zh.
 
+### مكتب حوكمة الذكاء الاصطناعي (مكتمل — B17)
+
+- `/admin/ai` — `AdminAiPage.tsx`: تبويب **النماذج** فيه نموذج إنشاء/تحديث (`admin-ai-model-form`: key/name/provider/context/maxout/currency/input/output + مفتاح التفعيل) مربوط بـ`POST /api/admin/ai/models` (upsert بـ`key`)، وكل صف (`admin-ai-model-<key>`) فيه زر **تعديل** (`admin-ai-model-edit-<key>` يملأ النموذج ويبدّله إلى تحديث) وزر **تفعيل/إيقاف** (`admin-ai-model-toggle-<key>`).
+- تبويب **الميزانيات**: نموذج (`admin-ai-budget-form`: الهدف حسب الدور أو المستخدم + الدورة + حد الطلبات/الكلفة + العملة) مربوط بـ`POST /api/admin/ai/budgets` (upsert لهدف+دورة، يرفض الخادم إرسال `userId` و`roleTarget` معًا)، وكل صف (`admin-ai-budget-<id>`) فيه زر تفعيل/إيقاف (`admin-ai-budget-toggle-<id>`).
+- Audit على الخادم: `AI.MODEL_UPSERTED` و`AI.BUDGET_UPSERTED`؛ الصلاحية `AI_MANAGE`/`ADMIN_AI` بلا تغيير.
+- ترجمات كاملة ar/fr/en/zh.
+
 ### مكتبة العميل (مكتملة — B6)
 
 - `/dashboard/library` — `DashboardLibraryPage.tsx`: ثلاث تبويبات (المفضلة / المحفوظات / سجل البحث)، إزالة عنصر، مسح السجل، روابط مباشرة للكيان، شارة "لم يعد متاحًا" عند حذف الكيان

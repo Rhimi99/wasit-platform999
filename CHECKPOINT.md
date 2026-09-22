@@ -5,6 +5,39 @@
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
 ---
 
+## ✅ حالة معتمدة — B17: ADMIN AI GOVERNANCE WRITES (2026-09-22)
+
+**الهدف**: إغلاق الفجوة الداخلية التالية بعد B16 حسب ترتيب الـroadmap. المسارات الخادمية للكتابة في حوكمة الذكاء كانت **منفَّذة ومُختبَرة**، لكن **صفر مستدعين في الواجهة**: تبويبا «النماذج» و«الميزانيات» في `/admin/ai` كانا جدولي قراءة فقط، ودالتا العميل `adminUpsertAiModel`/`adminUpsertAiBudget` بلا مستدعٍ. الأسوأ أن `adminUpsertAiModel` لم يكن له **أي اختبار خادمي** إطلاقًا — فالـupsert بالنموذج كان غير مُثبَت من أي سطح.
+
+**دليل الفجوة قبل الإصلاح**:
+- `packages/web/src/lib/api.ts`: `adminUpsertAiModel` و`adminUpsertAiBudget` معرَّفتان؛ `grep -r` في `packages/web/src/**` ⇒ **0 مستدعين**.
+- `packages/web/src/pages/AdminAiPage.tsx`: تبويبا `models`/`budgets` جدولا عرض فقط (6 أعمدة، بلا عمود إجراءات ولا نموذج).
+- `packages/server/src/modules/admin/ai-routes.ts`: `POST /models` و`POST /budgets` موجودان مع Audit.
+- `packages/server/tests/admin-ai.test.ts`: يغطّي `POST /budgets` فقط؛ **لا اختبار لـ`POST /models`** (والـe2e كان يُنشئ الميزانية عبر `page.request` لا عبر الواجهة).
+
+**ما تم**:
+
+| البند | النتيجة |
+| --- | --- |
+| **نموذج النماذج في الواجهة** | ✅ `admin-ai-model-form` (key/name/provider/context/maxout/currency/input/output/تفعيل) → `POST /api/admin/ai/models`؛ upsert بـ`key` فلا يتكرّر الصف |
+| **تعديل نموذج** | ✅ زر `admin-ai-model-edit-<key>` يملأ النموذج ويحوّل الزر إلى «حفظ التعديل» + إلغاء |
+| **تفعيل/إيقاف نموذج** | ✅ زر `admin-ai-model-toggle-<key>` يقلب `isActive` عبر نفس الـupsert، مع Badge محدَّث من الخادم |
+| **نموذج الميزانيات** | ✅ `admin-ai-budget-form`: الهدف حسب الدور أو المستخدم (واحد فقط)، الدورة، حد الطلبات، حد الكلفة، العملة → `POST /api/admin/ai/budgets` |
+| **تفعيل/إيقاف ميزانية** | ✅ زر `admin-ai-budget-toggle-<id>` |
+| **نتيجة مرئية للمستخدم** | ✅ إشعار نجاح لكل عملية، الصف الجديد/المحدَّث يظهر فورًا من الخادم (لا حالة محلية فقط) |
+| **i18n** | ✅ مفاتيح `adminAi.model.*`/`adminAi.budget.*` الجديدة + `common.activate`/`common.deactivate` + `common.actions` (المفقودة في fr/zh) في ar/fr/en/zh |
+| **Server tests** | ✅ `admin-ai.test.ts` (+3): upsert نموذج insert→update بالـ`key` نفسه، قيد `AI.MODEL_UPSERTED`، بقاء صف واحد، ثم تنظيف الصف؛ رفض `userId`+`roleTarget` معًا 422 |
+| **E2E من الواجهة** | ✅ `e2e/admin-ai.spec.ts` (+3 حالات حقيقية: إنشاء نموذج من النموذج ثم التحقق من الخادم وإيقافه من الصف ثم استرجاعه؛ تعديل يملأ النموذج ويحدّث في المكان بلا صف مُكرَّر؛ إنشاء ميزانية وتبديلها مع التحقق من الراية المخزَّنة) |
+| **Full E2E** | ✅ **158/158 passed** (155 قبل هذا البند + 3) |
+| **Server suite** | ✅ **524/524 — 51 ملف** |
+| **Typecheck + build** | ✅ `@wasit/server` + `@wasit/web` نظيفان و`vite build` ناجح |
+
+**ملاحظة صريحة**: سلوك الإلغاء في زر الجلسات/المنتجات لم يُلمَس؛ الكتابة الجديدة تُمرَّر عبر نفس الـupsert الخادمي القائم (بلا مسار خادمي جديد وبلا migration — الجداول `ai_models`/`ai_budgets` موجودة من قبل).
+
+**دون مساس**: Commission Policy 4% = 2%+2%، وMarketing Video Agent (commit `89e68d7`)، وPrice Comparison، وOrder Lifecycle، وUnit Economics UI، وG/H/I/J، وE2–E5، وB10–B16.
+
+---
+
 ## ✅ حالة معتمدة — B16: ADMIN REPORTS UI (2026-09-22)
 
 **الهدف**: إغلاق الفجوة الداخلية التالية بعد B15 حسب ترتيب الـroadmap. الفجوة لم تكن في قدرة الخادم — `GET/POST /api/admin/analytics/reports` منفَّذان ومُختبَران — بل في **سطح المستخدم**: لا صفحة `/admin/reports` ولا مدخل تنقّل ولا أي مستهلك لدالتي العميل `adminAnalyticsReports()`/`adminCreateAnalyticsReport()`، فالمشغّل لا يستطيع إنشاء تقرير من المنتج ولا رؤيته. وكشف التدقيق سببًا حقيقيًا إضافيًا: `listDashboardReports` كانت تُسقط `reportData` من الاستجابة ⇒ التقرير المحفوظ **صالح للكتابة فقط** ولا يمكن قراءة محتواه حتى عبر API.
