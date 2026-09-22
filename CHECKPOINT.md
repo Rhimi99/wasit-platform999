@@ -280,7 +280,7 @@
 - `packages/server/tests/inventory.test.ts` — 6 اختبارات تكامل جديدة
 
 ### القرار التالي
-- **PENDING التالي**: Price Comparison Engine (Module مطلوب صراحةً §15) أو توسيع E2E (PHASE 18). لا Module جديد حتى أمر منفصل.
+- **PENDING السابق (مُنجَز الآن)**: Price Comparison Engine — نُفِّذ كوحدة كاملة (انظر القسم أدناه). توسيع E2E مستمر عبر المواصفات المضافة.
 
 ---
 
@@ -658,4 +658,39 @@
 2. Commit مرجعي: `chore: create master project checkpoint` (يشمل التغييرات غير الملتزمة لـ Phase 15 — لا حذف).
 3. إنشاء `WASIT_BUSINESS_GLOBAL_MASTER_CHECKPOINT_2026-09-14.zip` (بدون `.env`/secrets؛ يتضمن `.env.example`).
 4. إنشاء `WASIT_BUSINESS_GLOBAL_ADVANCED_STATUS_REPORT_2026-09-14.md`.
-5. **توقف** — لا نبدأ Phase 16 حتى أمر منفصل.
+
+---
+
+## ✅ PRICE COMPARISON ENGINE — وحدة كاملة ومتحقَّقة (2026-09-22)
+
+**الهدف**: سدّ أول فجوة وظيفية موثّقة (B10 في `docs/PRODUCTION_GAP_LIST.md`) — «مقارنة أسعار/موردين» على `/price-comparison?query=` (مذكورة في `UI_SCREEN_MAP.md`). الصفحة السابقة كانت **قائمة منتجات مسطّحة** مرتّبة بالسعر (`DashboardComparisonPage`)، أي لا مقارنة فعلية.
+
+### ما تغيّر (لا migration، لا جدول جديد)
+- **Backend وحدة جديدة** `packages/server/src/modules/comparison/{service,routes}.ts` مربوطة في `app.ts` على `GET /api/price-comparison` (عام) و`GET /api/price-comparison/categories`.
+  - تجميع **نفس المنتج** حسب `barcode` وإن غاب فالاسم المُطبَّع (lower/trim/collapse whitespace) — `sku` فردي ولا يصلح للتجميع عبر بائعين.
+  - **عزل العملة إلزامي**: العملة جزء من مفتاح المجموعة — لا تُدمج أسعار بعملات مختلفة ولا يُدّعى أنها قابلة للمقارنة.
+  - كل مجموعة: `sellerCount`/`offerCount`/`lowestPrice`/`highestPrice`/`priceSpread`؛ كل عرض: `isLowestPrice` + `priceDeltaFromLowest`، مرتبة تصاعديًا.
+  - بيانات البائع من جداول `suppliers`/`merchants`/`companies` بـjoin محمي بالنوع (`and seller_type=`)، مع `verified`/`countryId`/`logoUrl`.
+  - **`availability` نطاق تقريبي فقط** (IN_STOCK/LOW_STOCK/OUT_OF_STOCK/UNKNOWN) من المخزون مقابل عتبة الانخفاض — **لا تُسرَّب كمية المخزون** في استجابة عامة.
+  - فلترة بالبحث/الفئة/الدولة/العملة + `comparableOnly` (افتراضيًا مجموعات فيها بائعان+) + ترقيم.
+- **Frontend**: صفحة عامة جديدة `/price-comparison` (`PriceComparisonPage.tsx`) — بحث + فلتر فئة + بطاقة لكل منتج (اسم مُعرّب، بائع/نوعه/موثّق، سعر، وسم «الأقل سعرًا»، فرق السعر، الحد الأدنى، التوفر، رابط المنتج) بتصميم RTL ومفاتيح i18n جديدة في ar/fr/en/zh. ربط في `PublicHeader` (سطح المكتب + الجوال) وفي `AppSidebar` (CUSTOMER/MERCHANT/COMPANY/SUPPLIER). `DashboardComparisonPage` أصبحت تستدعي المحرك الحقيقي بدل القائمة المسطّحة.
+- **بيانات Demo إضافية (إضافية وإيدمبوتنت)**: بذرة `seed-demo.ts` تضيف منتجين قابلين للمقارنة (زيت زيتون 1ل + تمر دقلة نور 5كغ) — نفس الباركود من بائعين مختلفين بأسعار مختلفة، عبر `createProduct` نفسه (لا إدراج مباشر).
+
+### التحقق الفعلي
+- `price-comparison.test.ts` — **9/9** (عام بلا مصادقة؛ تجميع باركود ببائعين + ترتيب سعر/فرق؛ عدم دمج عملات؛ نطاق توفر بلا كمية؛ إخفاء غير المنشور؛ منع تسريب حقول خاصّة؛ فلترة/ترقيم؛ 422 عملة غير صالحة؛ الفئات).
+- `e2e/price-comparison.spec.ts` — **6/6** من الواجهة الحقيقية (رابط الرئيسية؛ مقارنة حقيقية مرتّبة؛ فتح المنتج؛ حالة فراغ؛ تحديث URL بالفلترة؛ داشبورد التاجر).
+- الحزمة الكاملة: `npm test -w @wasit/server` ⇒ **50 ملف / 517 اختبار ناجح**؛ E2E التراجعية (`marketplace` + `navigation-audit` + `functional-audit`) ⇒ **57/57**؛ typecheck server+web ⇒ **0 أخطاء**؛ build الويب ⇒ **PASS**.
+- لا مساس بـ `89e68d7` (Marketing Video) ولا بسياسة العمولة 4% = 2%+2%؛ لا `db reset/drop/push`.
+
+### الملفات
+- `packages/server/src/modules/comparison/service.ts` (جديد)
+- `packages/server/src/modules/comparison/routes.ts` (جديد)
+- `packages/server/src/app.ts` (ربط المسار)
+- `packages/server/src/scripts/seed-demo.ts` (عروض قابلة للمقارنة)
+- `packages/server/tests/price-comparison.test.ts` (جديد)
+- `packages/web/src/pages/PriceComparisonPage.tsx` (جديد)
+- `packages/web/src/App.tsx`، `components/layouts/PublicLayout.tsx`، `components/layouts/AppSidebar.tsx`، `pages/DashboardInventoryPages.tsx`، `lib/api.ts`، `lib/types.ts`، `lib/i18n.ts`
+- `e2e/price-comparison.spec.ts` (جديد)
+
+### القرار التالي
+- **متابعة أولويات `docs/PRODUCTION_GAP_LIST.md`**: لا فجوة Critical متبقية؛ البنود الباقية بنية خارجية (E1/E4/E5) أو مواصفة مستقبلية (AI Copilot). لا Module جديد حتى أمر منفصل.

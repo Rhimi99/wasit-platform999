@@ -14,6 +14,7 @@ function NavItems() {
       <Link to="/#a-propos" className="nav-link">{t('nav.about')}</Link>
       <Link to="/#solutions" className="nav-link">{t('nav.solutions')}</Link>
       <Link to="/marketplace" className="nav-link">{t('nav.markets')}</Link>
+      <Link to="/price-comparison" className="nav-link">{t('nav.priceComparison')}</Link>
       <Link to="/#ressources" className="nav-link">{t('nav.resources')}</Link>
       <Link to="/#contact" className="nav-link">{t('nav.contact')}</Link>
     </>
@@ -79,6 +80,7 @@ export function PublicHeader() {
             <Link to="/#a-propos" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.about')}</Link>
             <Link to="/#solutions" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.solutions')}</Link>
             <Link to="/marketplace" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.markets')}</Link>
+            <Link to="/price-comparison" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.priceComparison')}</Link>
             <Link to="/#ressources" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.resources')}</Link>
             <Link to="/#contact" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.contact')}</Link>
             {!isAuthenticated ? (

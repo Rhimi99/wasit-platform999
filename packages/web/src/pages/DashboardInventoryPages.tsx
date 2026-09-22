@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, apiCall, formatDate } from '@/lib/api';
+import { Link } from 'react-router-dom';
+import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { InventoryItem, InventoryMovement, ProductSummary } from '@/lib/types';
+import type { ComparisonGroup, InventoryItem, InventoryMovement } from '@/lib/types';
 
 type StockFilter = 'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'IN_STOCK';
 
@@ -331,42 +332,96 @@ function MovementsPanel({ item, movements, onClose }: { item: InventoryItem; mov
 
 // Price Comparison Engine compares product/price/qty/conditions across sellers.
 export function DashboardComparisonPage() {
-  const { t } = useI18n();
-  const [products, setProducts] = useState<ProductSummary[]>([]);
+  const { t, locale } = useI18n();
+  const [groups, setGroups] = useState<ComparisonGroup[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [input, setInput] = useState('');
 
-  useEffect(() => {
-    apiCall(() => api.listProducts({ pageSize: '30', sort: 'price_asc' })).then((res) => {
-      setProducts(res.data?.items ?? []);
+  const load = useCallback(() => {
+    setLoading(true);
+    apiCall(() => api.comparePrices({ query, pageSize: 20 })).then((res) => {
+      setGroups(res.data?.items ?? []);
       setError(res.error);
       setLoading(false);
     });
-  }, []);
+  }, [query]);
+
+  useEffect(() => load(), [load]);
 
   return (
     <AppLayout>
-      <SectionHeader title={t('dashboard.priceComparison')} />
-      {loading ? <Spinner /> : error ? <ErrorState message={error} /> : products.length === 0 ? (
-        <EmptyState title={t('common.noData')} />
+      <SectionHeader
+        title={t('dashboard.priceComparison')}
+        subtitle={t('comparison.subtitle')}
+        action={
+          <Link to="/price-comparison" className="text-sm font-medium text-wasit-700 hover:underline">
+            {t('comparison.title')} →
+          </Link>
+        }
+      />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setQuery(input.trim());
+        }}
+        className="mb-4 flex flex-wrap items-center gap-2"
+      >
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={t('comparison.searchPlaceholder')}
+          className="input max-w-md"
+          aria-label={t('comparison.searchPlaceholder')}
+          data-testid="dashboard-comparison-search-input"
+        />
+        <button type="submit" className="btn-primary shrink-0" data-testid="dashboard-comparison-search-button">
+          {t('comparison.compare')}
+        </button>
+      </form>
+      {loading ? (
+        <Spinner />
+      ) : error ? (
+        <ErrorState message={error} onRetry={load} />
+      ) : groups.length === 0 ? (
+        <EmptyState title={t('comparison.empty')} hint={t('comparison.emptyHint')} />
       ) : (
-        <Card className="overflow-x-auto">
-          <table className="table-base">
-            <thead><tr><th>{t('nav.products')}</th><th>{t('field.sku')}</th><th>{t('common.price')}</th><th>{t('field.moq')}</th><th>{t('common.currency')}</th><th>{t('field.sellerType')}</th></tr></thead>
-            <tbody>
-              {products.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.name}</td>
-                  <td className="text-xs">{p.sku}</td>
-                  <td className="font-semibold text-wasit-700">{p.basePrice}</td>
-                  <td>{p.moq ?? 1}</td>
-                  <td>{p.currencyCode}</td>
-                  <td>{p.sellerType}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+        <div className="flex flex-col gap-4">
+          {groups.map((group) => (
+            <Card key={group.key} testId="dashboard-comparison-group" className="overflow-x-auto">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-800">
+                  {locale === 'ar' && group.nameAr ? group.nameAr : group.name}
+                </span>
+                <Badge color="teal">
+                  {group.sellerCount} {t('comparison.sellers')} · {t('comparison.spread')}{' '}
+                  {formatMoney(group.priceSpread, group.currencyCode)}
+                </Badge>
+              </div>
+              <table className="table-base">
+                <thead>
+                  <tr>
+                    <th>{t('comparison.seller')}</th>
+                    <th className="text-end">{t('common.price')}</th>
+                    <th className="text-end">{t('field.moq')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.offers.map((offer) => (
+                    <tr key={offer.productId}>
+                      <td>{offer.seller.name ?? t('comparison.unknownSeller')}</td>
+                      <td className="text-end font-semibold text-wasit-700">
+                        {formatMoney(offer.basePrice, offer.currencyCode)}
+                      </td>
+                      <td className="text-end">{offer.moq}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          ))}
+        </div>
       )}
     </AppLayout>
   );

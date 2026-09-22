@@ -16,6 +16,7 @@ function baseNav(roleKey: string): NavItem[] {
   const common: NavItem[] = [
     { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
     { to: '/dashboard/orders', key: 'dashboard.orders', icon: '🧾' },
+    { to: '/dashboard/comparison', key: 'dashboard.priceComparison', icon: '⚖️' },
     { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
     { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
     { to: '/dashboard/security', key: 'dashboard.security', icon: '🔐' },
@@ -30,6 +31,7 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
         { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
         { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
+        { to: '/dashboard/comparison', key: 'dashboard.priceComparison', icon: '⚖️' },
         { to: '/dashboard/orders', key: 'dashboard.orders', icon: '🧾' },
         { to: '/dashboard/analytics', key: 'dashboard.analytics', icon: '📈' },
         { to: '/dashboard/ads', key: 'dashboard.ads', icon: '📣', feature: 'ads.manage' },
@@ -51,6 +53,7 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
         { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
         { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
+        { to: '/dashboard/comparison', key: 'dashboard.priceComparison', icon: '⚖️' },
         { to: '/dashboard/orders', key: 'dashboard.orders', icon: '🧾' },
         { to: '/dashboard/sales', key: 'dashboard.sales', icon: '💰' },
         { to: '/dashboard/analytics', key: 'dashboard.analytics', icon: '📈' },

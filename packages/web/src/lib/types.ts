@@ -161,6 +161,55 @@ export interface SearchResponse {
   results: SearchResultGroup[];
 }
 
+export type AvailabilityBand = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'UNKNOWN';
+
+export interface ComparisonOffer {
+  productId: string;
+  productSlug: string;
+  name: string;
+  currencyCode: string;
+  basePrice: string;
+  moq: number;
+  unit: string;
+  availability: AvailabilityBand;
+  seller: {
+    id: string | null;
+    type: SellerType;
+    name: string | null;
+    slug: string | null;
+    verified: boolean;
+    countryId: string | null;
+    logoUrl: string | null;
+  };
+  isLowestPrice: boolean;
+  priceDeltaFromLowest: string;
+}
+
+export interface ComparisonGroup {
+  key: string;
+  matchedBy: 'BARCODE' | 'NAME';
+  name: string;
+  nameAr: string | null;
+  nameFr: string | null;
+  brand: string | null;
+  barcode: string | null;
+  categoryId: string;
+  categoryName: string | null;
+  categoryNameAr: string | null;
+  currencyCode: string;
+  offerCount: number;
+  sellerCount: number;
+  lowestPrice: string;
+  highestPrice: string;
+  priceSpread: string;
+  offers: ComparisonOffer[];
+}
+
+export interface PriceComparisonResponse {
+  items: ComparisonGroup[];
+  pagination: PaginationInfo;
+}
+
 export type LibraryEntityType = 'PRODUCT' | 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
 
 /** schema.org JSON-LD object returned by `/structured-data/:type/:id`. */

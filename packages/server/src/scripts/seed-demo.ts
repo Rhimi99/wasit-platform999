@@ -188,6 +188,40 @@ async function main(): Promise<void> {
       description: 'Retail POS terminal bundle with printers and software license.',
       initialQuantity: 15, lowStockThreshold: 2,
     },
+    // عروض قابلة للمقارنة — نفس المنتج بباركود مشترك من بائعين مختلفين بأسعار مختلفة،
+    // كي تظهر محرك مقارنة الأسعار ببيانات حقيقية (لا Mock).
+    {
+      sellerId: supplierId, sellerType: 'SUPPLIER' as const, categoryId: FOOD_CAT,
+      name: 'Extra Virgin Olive Oil 1L Bottle', nameAr: 'زيت زيتون بكر ممتاز زجاجة 1 لتر',
+      sku: 'SUP-OO-1L-003', barcode: '6191234500011', basePrice: '28.5000', moq: 12, unit: 'bottle',
+      brand: 'Tunisian Harvest', purchaseIntent: 'B2B' as const,
+      description: 'Cold-pressed extra virgin olive oil in 1L retail bottles.',
+      initialQuantity: 300, lowStockThreshold: 30,
+    },
+    {
+      sellerId: merchantId, sellerType: 'MERCHANT' as const, categoryId: FOOD_CAT,
+      name: 'Extra Virgin Olive Oil 1L Bottle', nameAr: 'زيت زيتون بكر ممتاز زجاجة 1 لتر',
+      sku: 'MER-OO-1L-004', barcode: '6191234500011', basePrice: '32.0000', moq: 1, unit: 'bottle',
+      brand: 'Tunisian Harvest', purchaseIntent: 'B2C' as const,
+      description: 'Cold-pressed extra virgin olive oil, 1L retail bottle.',
+      initialQuantity: 40, lowStockThreshold: 5,
+    },
+    {
+      sellerId: companyId, sellerType: 'COMPANY' as const, categoryId: FOOD_CAT,
+      name: 'Deglet Nour Dates 5kg Box', nameAr: 'تمر دقلة نور صندوق 5 كغ',
+      sku: 'COM-DT-5K-003', barcode: '6191234500028', basePrice: '52.0000', moq: 20, unit: 'box',
+      brand: 'GTI Co.', purchaseIntent: 'B2B' as const,
+      description: 'Export-grade Deglet Nour dates, 5kg boxes.',
+      initialQuantity: 80, lowStockThreshold: 10,
+    },
+    {
+      sellerId: supplierId, sellerType: 'SUPPLIER' as const, categoryId: FOOD_CAT,
+      name: 'Deglet Nour Dates 5kg Box', nameAr: 'تمر دقلة نور صندوق 5 كغ',
+      sku: 'SUP-DT-5K-004', barcode: '6191234500028', basePrice: '47.5000', moq: 50, unit: 'box',
+      brand: 'Tunisian Harvest', purchaseIntent: 'B2B' as const,
+      description: 'Hand-sorted Deglet Nour dates packed in 5kg boxes.',
+      initialQuantity: 150, lowStockThreshold: 20,
+    },
   ];
 
   for (const p of productDefinitions) {
@@ -203,6 +237,7 @@ async function main(): Promise<void> {
       description: p.description,
       brand: p.brand,
       sku: p.sku,
+      barcode: 'barcode' in p ? p.barcode : undefined,
       currencyCode: 'TND',
       basePrice: p.basePrice,
       moq: p.moq,

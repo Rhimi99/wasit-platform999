@@ -4,6 +4,7 @@ import { MarketplacePage } from './pages/MarketplacePage';
 import { CategoriesPage } from './pages/CategoriesPage';
 import { CategoryPage, MarketPage } from './pages/MarketPages';
 import { SearchPage } from './pages/SearchPage';
+import { PriceComparisonPage } from './pages/PriceComparisonPage';
 import { ProductDetailsPage } from './pages/ProductDetailsPage';
 import { SuppliersPage, SuppliersDetailPage } from './pages/SuppliersPage';
 import { MerchantsPage, MerchantsDetailPage } from './pages/MerchantsPage';
@@ -43,6 +44,7 @@ export default function App() {
       <Route path="/categories/:slug" element={<CategoryPage />} />
       <Route path="/markets/:code" element={<MarketPage />} />
       <Route path="/search" element={<SearchPage />} />
+      <Route path="/price-comparison" element={<PriceComparisonPage />} />
       <Route path="/products/:id" element={<ProductDetailsPage />} />
       <Route path="/suppliers" element={<SuppliersPage />} />
       <Route path="/suppliers/:id" element={<SuppliersDetailPage />} />

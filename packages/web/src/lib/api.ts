@@ -10,6 +10,7 @@ import type {
   FavoriteRow, LibraryEntityType, LibraryListResponse, SavedItemRow, SearchHistoryRow,
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
+  PriceComparisonResponse,
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
@@ -142,6 +143,14 @@ export const api = {
   },
   async getProduct(id: string) {
     return request<ProductDetail>(`/api/products/${id}`);
+  },
+  // ---- Price Comparison ----
+  async comparePrices(params: Record<string, string | number | undefined> = {}) {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== '') qs.set(k, String(v));
+    }
+    return request<PriceComparisonResponse>(`/api/price-comparison?${qs.toString()}`);
   },
   async listMyProducts(params?: { page?: number; pageSize?: number }) {
     const qs = new URLSearchParams();
