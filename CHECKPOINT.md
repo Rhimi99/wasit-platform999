@@ -29,6 +29,35 @@
 
 ---
 
+## ✅ حالة معتمدة — F3: EXTERNAL AI PROVIDER VERIFICATION (2026-09-22)
+
+**الهدف**: إغلاق أول بند غير مكتمل فعليًا بعد E5 حسب ترتيب roadmap/PRODUCTION_GAP_LIST: `F3 — AI provider خارجي مُتحقق`. F4 (Marketing Video) مُثبَت أنه منفَّذ في `89e68d7` ولم يُمَس.
+
+**٣ bugs حقيقية اكتُشفت وأُصلحت** (لم تكن مجرد نقص اختبار):
+
+| # | السبب الجذري | الأثر قبل الإصلاح |
+| --- | --- | --- |
+| 1 | `provider.ts` تغليف معكوس: `env.AI_MODEL ?? 'gpt-4o-mini'` — و`AI_MODEL` قيمته الافتراضية `''` في zod فتُستخدم السلسلة الفارغة (`??` لا يلتقط الفارغ) | مزوّد خارجي مع مفتاح صالح يُبلَّغ `isAvailable()===false` ⇒ كل نداء ينحدر صامتًا إلى المحرك المحلي؛ الـAI المدفوع لا يعمل أبدًا |
+| 2 | `runtime.ts`: `input.modelKey ?? env.AI_MODEL?.length ? env.AI_MODEL : 'local-heuristic'` — أسبقية عوامل JavaScript خاطئة | `modelKey` القادم من الراوتر يُتجاهَل، والطراز يُختار من env أو يسقط إلى `local` |
+| 3 | `resolveAiRoute` كانت تُرجع مُمثِّل مزوّد **غير متاح** في مسار الانحدار، ولا تُترجم مفتاح الكتالوج إلى اسم الطراز لدى المزوّد، و`runAIFeature` كانت تُعيد حل المزوّد بنفسها فتُهمل اختيار الراوتر | اختيار المزوّد/القدرة يُبتلع؛ لا يوجد أي مكان يُمرَّر فيه الطراز المُوجَّه إلى المزوّد |
+
+**ما تغيّر**:
+- `lib/ai/provider.ts`: أسبقية `model` لكل نداء (`opts.model` يتقدم على افتراضي المحول)، `VENDOR_DEFAULT_MODELS`، حراسة `vendorFetch` بحد زمني (`AI_REQUEST_TIMEOUT_MS`) وتحويل أخطاء النقل/الحالة إلى 503 آمن **دون بثّ جسم المزوّد** (لا تسريب مفتاح/هوية الحساب)، وتسجيل التفاصيل في اللوج فقط.
+- `lib/ai/types.ts`: `AIProviderCallOptions.model` (الطراز الموجَّه لكل نداء).
+- `lib/ai/routing.ts`: أسبقية صريحة (طلب > سياسة القدرة > `AI_MODEL` > `AI_DEFAULT_MODEL`)، `vendorModel` (ترجمة مفتاح الكتالوج → اسم المزوّد)، ومسار انحدار يُنشئ `LocalHeuristicProvider` فعّالًا مباشرة.
+- `lib/ai/runtime.ts`: أسبقية طراز صحيحة، تمرير `provider`/`vendorModel` من الراوتر، ربط السعر بالمزوّد **الفعلّي** (مزوّد مجاني لا يُفوتر بسعر مدفوع)، وتسجيل صف `ai_requests` بحالة `UNAVAILABLE`/`FAILED` بلا فاتورة tokens عند فشل المزوّد.
+- `modules/ai/routes.ts`: تمرير المزوّد المُوجَّه والطراز. `modules/ai/service.ts`: تقرير `defaultModel` الصحيح.
+
+**الإثبات**: `tests/ai-provider-routing.test.ts` (16 حالة) يشغّل **خادم HTTP محلي حقيقي** يعمل كطرف مزوّد، فتسلك المحوّلات `OpenAIChatCompletionsProvider`/`AnthropicProvider`/`LocalHeuristicProvider` مسارها الكامل (round-trip HTTP حقيقي، بلا Mock لمنطق AI ولا مفتاح حقيقي): نجاح + قراءة usage + تمرير الطراز الموجَّه، 401 → 503 آمن بلا تسريب، timeout فعلي (إلغاء)، غياب المفاتيح → 503، وأسبقية الطراز/المزوّد/السعر وعدم كتابة المفتاح في حلقة اللوج.
+
+**تمييز صريح للإثبات**: **integration verified by tests = ✅** (تكامل حقيقي مقابل خادم HTTP محلي). **real external credential smoke test = ❌ لم يُنفَّذ** لعدم وجود مفتاح مزوّد حقيقي في البيئة؛ لا يُدَّعى أنه verified.
+
+**الاختبارات**: Server suite **508/508 — 49 ملف** (+16). Full E2E **128/128**. `typecheck` + `build` نظيفان.
+
+**دون مساس**: Commission Policy 4% = 2%+2%، Marketing Video Agent (`89e68d7`)، لا Security/Cyber agent، لا db reset/drop/push.
+
+---
+
 ## ✅ حالة معتمدة — PHASE 20: STAGING / E1 (2026-09-21)
 
 **الهدف**: فصل بيئة Staging عن الإنتاج، تأمين أسرارها، وإكمال مسار `migrate → seed → serve` مع Health checks، ثم التحقق من الدخول والتسجيل من الواجهة الحقيقية على الـStack المُعاد بناؤه.

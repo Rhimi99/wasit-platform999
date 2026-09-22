@@ -65,5 +65,5 @@ Legend: ✅ موجود ومختبر | 🟡 موجود جزئيًا | ❌ غير 
 |---|---|---|---|---|---|---|---|
 | F1 | Roadmap drift | ✅ مُصلَح | دقة التوثيق | حُدِّث `docs/DEVELOPMENT_ROADMAP.md` 2026-09-19 | الحفاظ على التحديث | مراجعة دورية | — |
 | F2 | Disputes tests | ✅ | النزاعات كانت بلا اختبار | `disputes.test.ts` (10) + `dispute-country-policy.test.ts` (8) + `e2e/disputes.spec.ts` (3) | — (مُنجَز) | `disputes.test.ts` + `dispute-country-policy.test.ts` (18 حالة) + E2E نزاعات | 11 |
-| F3 | AI provider خارجي مُتحقق | ⚠️ | ضمان عمل المزوّد الحقيقي | `OpenAIChatCompletionsProvider` موجود | اختبار تكامل مع مزوّد | call → usage مسجّل | 13/19 |
-| F4 | Marketing video generation | 🟡 | ميزة إعلانية | عقد معاينة/تنزيل، `mediaUrl: null` | media storage/generation | فيديو قابل للتنزيل | 13 |
+| F3 | AI provider خارجي مُتحقق | ✅ (تكامل) | ضمان عمل المزوّد الحقيقي | `OpenAIChatCompletionsProvider` + `AnthropicProvider` + مسار `resolveAiRoute`/`runAIFeature` مُصلَّح | اختبار تكامل مع مزوّد (بلا اعتماد على مفتاح حقيقي) | `call → usage مسجّل` عبر خادم HTTP محلي حقيقي | tests/ai-provider-routing (16 حالة) | 13/19 |
+| F4 | Marketing video generation | ✅ | ميزة إعلانية | مُنفَّذ في `89e68d7`: مُصيّر ffmpeg/libass حقيقي → MP4 + معاينة/تنزيل/حذف + عزل وسائط | — (مُنجَز) | فيديو MP4 حقيقي قابل للمعاينة/التنزيل | `marketing-video.test.ts` (11/11 يمرّ مستقلًا) + E2E | 13 |

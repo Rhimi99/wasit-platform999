@@ -19,7 +19,7 @@
 | PHASE 10 | Risk + Fraud | ✅ risk profiles/events + reason codes + اختبارات |
 | PHASE 11 | Dispute Center | ✅ إنشاء/رسائل/أدلة + admin assign/status/decide + **الاستئناف (Appeal)** + سياسة per-country (COUNTRY→GLOBAL) + اختبارات مخصصة (18 حالة) + E2E (3) |
 | PHASE 12 | Advertising | ✅ campaigns/creatives/events + stats + RBAC + اختبارات + E2E |
-| PHASE 13 | AI Core + AI Agents | ✅ 21 route + 11 وكيلاً + cost-control/budgets + provider قابل للتبديل (OpenAI-compatible) |
+| PHASE 13 | AI Core + AI Agents | ✅ 21 route + 11 وكيلاً + cost-control/budgets + provider قابل للتبديل (OpenAI-compatible + Anthropic) + أسبقية طراز/مزوّد صحيحة + timeout و503 آمن بلا تسريب + اختبار تكامل حقيقي للأطراف (16 حالة) |
 | PHASE 14 | Subscriptions + Revenue | ✅ خطط/subscribe/change/cancel/فواتير + rollover موصول بـ`POST /api/subscriptions/admin/rollover` + scheduler in-process (idempotent عبر optimistic lock) + **تحصيل الفواتير عبر منفذ الدفع** + دورة PAST_DUE/EXPIRED؛ revenue report/scenario موجود |
 | PHASE 15 | Admin Dashboard | ✅ stats/entities + engines + AI + analytics + audit |
 | PHASE 16 | Analytics | ✅ overview/retention/conversion/revenue-breakdown/daily-kpis/reports + **CAC/LTV/Contribution Margin** (`unit-economics` + cohorts) |

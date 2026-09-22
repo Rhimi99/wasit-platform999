@@ -1,5 +1,6 @@
 import { env } from '../env';
 import { ApiError } from '@wasit/shared';
+import { logger } from '../observability/logger';
 import type { AIProvider, AIProviderCallOptions, AIProviderCallResult } from './types';
 
 /** Deterministic pseudo-token estimate for providers that do not report usage. */
@@ -53,6 +54,36 @@ export class NoopProvider implements AIProvider {
 }
 
 /**
+ * Shared HTTP call guard for vendor adapters: applies a hard timeout and maps
+ * transport failures to a stable 503 without echoing the vendor body (which can
+ * contain account identifiers or partial prompts) back to the caller.
+ */
+async function vendorFetch(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), env.AI_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    const aborted = (err as Error).name === 'AbortError';
+    // Detail goes to the server log only; the client gets a stable message.
+    logger.error('AI provider transport failure', {
+      provider: 'vendor',
+      aborted,
+      error: (err as Error).message,
+    });
+    throw ApiError.serviceUnavailable(aborted ? 'AI provider request timed out' : 'AI provider is unreachable');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Maps a non-2xx vendor response to a 503 carrying only the status code. */
+function vendorError(status: number): ApiError {
+  logger.error('AI provider returned an error status', { providerStatus: status });
+  return ApiError.serviceUnavailable(`AI provider error (${status})`);
+}
+
+/**
  * OpenAI-compatible Chat Completions provider. Uses the standard
  * /chat/completions shape so any compatible endpoint (OpenAI, providers
  * exposing the same API) can be plugged without core changes.
@@ -70,14 +101,16 @@ class OpenAIChatCompletionsProvider implements AIProvider {
       throw ApiError.serviceUnavailable('AI provider is not configured');
     }
     const base = env.AI_BASE_URL?.trim() || 'https://api.openai.com/v1';
-    const res = await fetch(`${base}/chat/completions`, {
+    // A per-call model (from the router/catalogue) wins over the configured default.
+    const model = opts.model?.trim() || this.model;
+    const res = await vendorFetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: this.model,
+        model,
         messages: [
           ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
           { role: 'user', content: opts.user },
@@ -86,10 +119,7 @@ class OpenAIChatCompletionsProvider implements AIProvider {
         temperature: opts.temperature ?? 0.2,
       }),
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw ApiError.serviceUnavailable(`AI provider error (${res.status}): ${text.slice(0, 200)}`);
-    }
+    if (!res.ok) throw vendorError(res.status);
     const json = (await res.json()) as {
       model?: string;
       choices?: Array<{ message?: { content?: string } }>;
@@ -100,7 +130,7 @@ class OpenAIChatCompletionsProvider implements AIProvider {
     const tokensOutput = json.usage?.completion_tokens ?? estimateTokens(content);
     return {
       content,
-      model: json.model ?? this.model,
+      model: json.model ?? model,
       tokensInput,
       tokensOutput,
       cost: '0', // resolved later via the model catalogue in cost-control
@@ -123,7 +153,8 @@ class AnthropicProvider implements AIProvider {
       throw ApiError.serviceUnavailable('AI provider is not configured');
     }
     const base = env.AI_ANTHROPIC_BASE_URL?.trim() || 'https://api.anthropic.com/v1';
-    const res = await fetch(`${base}/messages`, {
+    const model = opts.model?.trim() || this.model;
+    const res = await vendorFetch(`${base}/messages`, {
       method: 'POST',
       headers: {
         'x-api-key': this.apiKey,
@@ -131,16 +162,13 @@ class AnthropicProvider implements AIProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: this.model,
+        model,
         max_tokens: opts.maxTokens ?? 1024,
         system: opts.system ?? undefined,
         messages: [{ role: 'user', content: opts.user }],
       }),
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw ApiError.serviceUnavailable(`AI provider error (${res.status}): ${text.slice(0, 200)}`);
-    }
+    if (!res.ok) throw vendorError(res.status);
     const json = (await res.json()) as {
       model?: string;
       content?: Array<{ text?: string }>;
@@ -149,7 +177,7 @@ class AnthropicProvider implements AIProvider {
     const content = json.content?.[0]?.text ?? '';
     return {
       content,
-      model: json.model ?? this.model,
+      model: json.model ?? model,
       tokensInput: json.usage?.input_tokens ?? estimateTokens(opts.user),
       tokensOutput: json.usage?.output_tokens ?? estimateTokens(content),
       cost: '0',
@@ -159,19 +187,33 @@ class AnthropicProvider implements AIProvider {
 }
 
 /**
+ * Vendor-facing default model per adapter. Used when neither a per-call model
+ * nor `AI_MODEL` is set. Note these must be vendor names (`gpt-4o-mini`), not
+ * catalogue keys; the router translates keys before calling.
+ */
+export const VENDOR_DEFAULT_MODELS = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-20250514',
+} as const;
+
+/**
  * Resolves the configured AI provider. The resolver is deliberately small and
  * reads configuration from env — the AI Core itself never hardcodes a vendor.
  */
 export function resolveProvider(): AIProvider {
   const provider = (env.AI_PROVIDER ?? 'local-heuristic').toLowerCase();
+  // `AI_MODEL` defaults to '' in the env schema, so `||` (not `??`) is required
+  // here: with `??` a configured key plus an unset model reported the provider
+  // as unavailable and silently degraded every call to the local engine.
+  const model = env.AI_MODEL?.trim() || '';
 
   switch (provider) {
     case 'noop':
       return new NoopProvider();
     case 'openai':
-      return new OpenAIChatCompletionsProvider(env.AI_API_KEY ?? '', env.AI_MODEL ?? 'gpt-4o-mini');
+      return new OpenAIChatCompletionsProvider(env.AI_API_KEY ?? '', model || VENDOR_DEFAULT_MODELS.openai);
     case 'anthropic':
-      return new AnthropicProvider(env.AI_API_KEY ?? '', env.AI_MODEL ?? 'claude-sonnet-4');
+      return new AnthropicProvider(env.AI_API_KEY ?? '', model || VENDOR_DEFAULT_MODELS.anthropic);
     case 'local-heuristic':
     default:
       return new LocalHeuristicProvider();

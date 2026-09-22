@@ -14,12 +14,17 @@ const envSchema = z.object({
   APP_URL: z.string().default('http://localhost:5173'),
   API_URL: z.string().default('http://localhost:3000'),
   AI_PROVIDER: z.string().default('none'),
+  // Optional deployment-wide model override. It is only consulted when a caller
+  // does not name a model; a capability route or explicit request model always
+  // wins, because the DB catalogue is the source of truth for routing.
   AI_MODEL: z.string().default(''),
   AI_DEFAULT_MODEL: z.string().default('openai-gpt-4o-mini'),
   AI_API_KEY: z.string().optional(),
   AI_BASE_URL: z.string().optional(),
   AI_ANTHROPIC_BASE_URL: z.string().optional(),
   AI_BUDGET_MONTHLY_USD: z.coerce.number().default(100),
+  /** Hard ceiling on a single outbound provider call, so a hung vendor cannot pin a request. */
+  AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   // Payments — provider-agnostic. `PAYMENT_PROVIDER=noop` keeps the platform
   // from taking money until an acquirer is contracted and configured.
   // `flouci` and `clictopay` are online adapters; `manual` is the offline desk

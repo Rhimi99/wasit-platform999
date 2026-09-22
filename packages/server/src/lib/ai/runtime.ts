@@ -4,8 +4,9 @@ import type { DB } from '../../db/client';
 import { aiModels } from '../../db/schema/ai';
 import { eq } from 'drizzle-orm';
 import { env } from '../env';
-import type { AIFeatureResult } from './types';
+import type { AIFeatureResult, AIProvider } from './types';
 import { resolveProvider, estimateTokens } from './provider';
+import { logger } from '../observability/logger';
 import {
   assertWithinBudget,
   recordAiRequest,
@@ -79,7 +80,22 @@ export interface RunFeatureInput {
   system?: string;
   user: string;
   maxTokens?: number;
+  /**
+   * Catalogue model key. When absent, the deployment default (`AI_MODEL`, then
+   * `AI_DEFAULT_MODEL`) applies. Never silently ignored.
+   */
   modelKey?: string;
+  /**
+   * Vendor-facing model the adapter must call. Supplied by the router for a
+   * catalogue key like `openai-gpt-4o-mini` → `gpt-4o-mini`. Defaults to
+   * `modelKey` when the caller already passes a vendor name.
+   */
+  vendorModel?: string;
+  /**
+   * Provider instance chosen by the router. When supplied it is used directly so
+   * a routed provider is never replaced by an independently resolved one.
+   */
+  provider?: AIProvider;
   metadata?: Record<string, unknown>;
 }
 
@@ -96,14 +112,25 @@ export interface RunFeatureOutput {
 /**
  * Executes an AI feature end-to-end:
  * resolve provider → pre-budget check → provider call → cost calc → record → usage.
+ *
+ * A failure is recorded as a failed `ai_requests` row so the usage/cost ledger
+ * stays consistent with reality, then re-thrown unchanged for the caller.
  */
 export async function runAIFeature(
   db: DB,
   input: RunFeatureInput,
 ): Promise<RunFeatureOutput> {
-  const provider = resolveProvider();
-  const modelKey = input.modelKey ?? env.AI_MODEL?.length ? env.AI_MODEL : 'local-heuristic';
+  // Precedence: explicit caller model → deployment AI_MODEL → AI_DEFAULT_MODEL.
+  const requestedModelKey = input.modelKey?.trim() || env.AI_MODEL?.trim() || env.AI_DEFAULT_MODEL;
+  // The router may have chosen a provider; otherwise resolve from configuration.
+  const provider = input.provider ?? resolveProvider();
+  // Price follows the provider that actually runs the call. A free local engine
+  // must not be billed at a paid model's catalogue rate just because a paid
+  // model was requested and then degraded away for lack of credentials.
+  const isFree = provider.id === 'local-heuristic' || provider.id === 'noop';
+  const modelKey = isFree ? 'local-heuristic' : requestedModelKey;
   const price = await resolveModelPrice(db, modelKey);
+  const vendorModel = isFree ? 'local-heuristic' : (input.vendorModel?.trim() || modelKey);
 
   const period = 'MONTHLY';
   const estimated = estimateBudget({ system: input.system, user: input.user, maxTokens: input.maxTokens }, price);
@@ -116,13 +143,42 @@ export async function runAIFeature(
   await assertWithinBudget(db, input.userId, input.roles, period, snapshot, env.AI_BUDGET_MONTHLY_USD);
 
   const started = Date.now();
-  const result = await provider.call({
-    system: input.system,
-    user: input.user,
-    maxTokens: input.maxTokens ?? 256,
-    temperature: 0.2,
-    budgetPeriod: period,
-  });
+  let result;
+  try {
+    result = await provider.call({
+      system: input.system,
+      user: input.user,
+      maxTokens: input.maxTokens ?? 256,
+      temperature: 0.2,
+      budgetPeriod: period,
+      model: vendorModel,
+    });
+  } catch (err) {
+    const latencyMs = Date.now() - started;
+    // Persist the failed attempt (no tokens billed) so the ledger and the audit
+    // trail reflect that a provider call was made and did not succeed.
+    await recordAiRequest(db, {
+      userId: input.userId,
+      requestType: input.requestType,
+      model: modelKey,
+      tokensInput: 0,
+      tokensOutput: 0,
+      cost: '0',
+      currencyCode: price.currencyCode,
+      status: (err as { statusCode?: number }).statusCode === 503 ? 'UNAVAILABLE' : 'FAILED',
+      latencyMs,
+      metadata: {
+        ...(input.metadata ?? {}),
+        provider: provider.id,
+        errorName: (err as Error).name,
+        providerStatus: (err as { statusCode?: number }).statusCode ?? null,
+      },
+    }).catch((recordErr) => {
+      // Never mask the provider failure with a bookkeeping failure.
+      logger.error('Failed to record a failed AI request', { error: (recordErr as Error).message });
+    });
+    throw err;
+  }
   const latencyMs = Date.now() - started;
 
   // Exact cost from the measured tokens.
@@ -138,7 +194,7 @@ export async function runAIFeature(
     currencyCode: price.currencyCode,
     status: 'SUCCESS',
     latencyMs,
-    metadata: input.metadata ?? undefined,
+    metadata: { ...(input.metadata ?? {}), provider: provider.id },
   });
 
   const window = currentPeriodWindow(period);

@@ -16,6 +16,12 @@ export interface AIProviderCallOptions {
   maxTokens?: number;
   temperature?: number;
   budgetPeriod: string;
+  /**
+   * The catalogue model key the router selected. Adapters must send this to the
+   * vendor instead of their constructor default, otherwise routing a capability
+   * to a different model silently keeps calling the default one.
+   */
+  model?: string;
 }
 
 export interface AIProviderCallResult {

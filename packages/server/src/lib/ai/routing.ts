@@ -4,7 +4,7 @@ import Decimal from 'decimal.js';
 import type { DB } from '../../db/client';
 import { aiModels } from '../../db/schema/ai';
 import { ApiError } from '@wasit/shared';
-import { resolveProvider } from './provider';
+import { resolveProvider, LocalHeuristicProvider } from './provider';
 import type { AIProvider } from './types';
 import { resolveModelPrice, type ModelPrice } from './runtime';
 import { env } from '../env';
@@ -43,10 +43,28 @@ export interface ResolvedRoute {
   providerId: string;
   provider: AIProvider;
   price: ModelPrice;
+  /**
+   * The model the vendor adapter must actually call. For catalogue keys such as
+   * `openai-gpt-4o-mini` this is the vendor-facing name (`gpt-4o-mini`), so a
+   * routed capability reaches the chosen model instead of the adapter default.
+   */
+  vendorModel: string;
 }
+
+/** Catalogue key → vendor-facing model name. Unknown keys pass through unchanged. */
+const VENDOR_MODEL_NAMES: Record<string, string> = {
+  'openai-gpt-4o-mini': 'gpt-4o-mini',
+  'anthropic-claude-sonnet-4': 'claude-sonnet-4-20250514',
+};
 
 /**
  * Resolves a routable provider+model for a capability (task type).
+ *
+ * Precedence for the model key, highest first:
+ *   1. an explicit caller request (`requestedModel`)
+ *   2. the capability policy for `requestType`
+ *   3. the deployment default (`AI_DEFAULT_MODEL`)
+ *   4. the free local engine
  *
  * - Reads pricing from the DB catalogue (`ai_models`).
  * - Falls back to `local-heuristic` when the requested provider is not
@@ -61,7 +79,7 @@ export async function resolveAiRoute(
 ): Promise<ResolvedRoute> {
   const preferred = requestedModel && requestedModel.length > 0
     ? requestedModel
-    : CAPABILITY_MODEL_POLICY[requestType] ?? env.AI_DEFAULT_MODEL ?? 'openai-gpt-4o-mini';
+    : (CAPABILITY_MODEL_POLICY[requestType] ?? env.AI_MODEL ?? env.AI_DEFAULT_MODEL ?? 'openai-gpt-4o-mini');
 
   const allowedMax = maxAllowedModelForRoles(roles);
   const targetKey = allowedMax && preferred !== 'local-heuristic' && preferred !== 'noop'
@@ -75,25 +93,26 @@ export async function resolveAiRoute(
 
   if (wantsPaid && provider.isAvailable() && targetProviderId !== 'local-heuristic' && targetProviderId !== 'noop') {
     const price = await resolveModelPrice(db, targetKey);
-    return { modelKey: targetKey, providerId: targetProviderId, provider, price };
+    return {
+      modelKey: targetKey,
+      providerId: targetProviderId,
+      provider,
+      price,
+      vendorModel: VENDOR_MODEL_NAMES[targetKey] ?? targetKey,
+    };
   }
 
   // Degrade to the deterministic local engine (free, real WASIT analytics).
-  const localProvider = resolveProvider();
-  if (localProvider.id === 'local-heuristic') {
-    const price = await resolveModelPrice(db, 'local-heuristic');
-    return { modelKey: 'local-heuristic', providerId: localProvider.id, provider: localProvider, price };
-  }
-
-  // Provider configured but pointing at a model not in the catalogue — fall back.
-  const fallbackProviderId = 'local-heuristic';
-  const fallback = resolveProvider();
+  // Constructed directly so this branch is correct regardless of what
+  // AI_PROVIDER points at when the configured vendor has no credentials.
+  const local = new LocalHeuristicProvider();
   const price = await resolveModelPrice(db, 'local-heuristic');
   return {
     modelKey: 'local-heuristic',
-    providerId: fallbackProviderId,
-    provider: fallback,
+    providerId: local.id,
+    provider: local,
     price,
+    vendorModel: 'local-heuristic',
   };
 }
 

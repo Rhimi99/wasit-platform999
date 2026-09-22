@@ -22,7 +22,7 @@ export async function getAiStatus(db: DB, userId: string, roles: UserRole[]): Pr
   const provider = resolveProvider();
   const window = currentPeriodWindow('MONTHLY');
   const usage = await aiUsageForPeriod(db, userId, window.start, window.end);
-  const defaultModel = env.AI_MODEL?.length ? env.AI_MODEL : 'local-heuristic';
+  const defaultModel = env.AI_MODEL?.trim().length ? env.AI_MODEL : env.AI_DEFAULT_MODEL;
   return {
     provider: provider.id,
     providerAvailable: provider.isAvailable(),

@@ -125,6 +125,8 @@ aiRoutes.post('/run', requirePermission(PERMISSIONS.AI_USE), validateBody(runSch
     user: body.user,
     maxTokens: body.maxTokens ?? 256,
     modelKey: route.modelKey,
+    vendorModel: route.vendorModel,
+    provider: route.provider,
     metadata: body.metadata,
   });
   await writeAudit(ctx.db, {
