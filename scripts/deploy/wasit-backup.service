@@ -1,0 +1,22 @@
+[Unit]
+Description=WASIT BUSINESS GLOBAL — nightly PostgreSQL backup
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+# Run as the deploy user that owns the app checkout, so the backups directory
+# (which holds database contents) is not world-readable.
+User=wasit
+Group=wasit
+WorkingDirectory=/srv/wasit
+# DATABASE_URL is read from the app's environment file, never hard-coded here.
+EnvironmentFile=/srv/wasit/.env
+ExecStart=/srv/wasit/scripts/backup-db.sh
+# A backup that hangs is worse than one that fails: bound it.
+TimeoutStartSec=1800
+# Don't page anyone because a backup was slow; the timer's own status is enough.
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

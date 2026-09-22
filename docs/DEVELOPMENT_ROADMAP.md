@@ -27,7 +27,7 @@
 | PHASE 18 | Full Testing + E2E | ✅ 364/364 وحدة/تكامل (37 ملف) + 52/52 E2E + typecheck 0/0 + build PASS |
 | PHASE 19 | Performance + Optimization | ✅ Load harness (p95 budget) + فهارس مركّبة مُثبَتة بـEXPLAIN + read cache (commit `fc8d368`)؛ build إنتاجي/HEALTHCHECK/non-root + metrics/tracing/rate-limit سابقًا |
 | PHASE 20 | Staging | 🟡 Docker Compose Stack كامل (db+api+web) + خطوة إصدار migrate→seed→serve + CI؛ بيئة staging مستضافة ⏳ |
-| PHASE 21 | Production Readiness | 🟡 Dockerfile/Dockerfile.web + CI + health checks + secrets من البيئة؛ Backups/WAL/monitoring/alerting ⏳ |
+| PHASE 21 | Production Readiness | 🟡 Dockerfile/Dockerfile.web + CI + health checks + secrets من البيئة؛ **Backups (مؤتمتة + مُختبَرة + مجدولة عبر compose/cron/systemd) + monitoring/alerting (قاعدة `backup_stale` فعّالة)** ✅ | بيئة إنتاج مستضافة + WAL/تشفير نسخ + جسر تنبيه مركزي ⏳ |
 | — (مستقبلي) | WASIT AI COPILOT (اختياري للتاجر) | ⏳ مواصفة فقط — طبقة تنسيق/محادثة فوق الـAgents القائمة؛ لا يحذف ولا يدمج أي Agent، وكل الـ11 وكيلًا تبقى مستقلة؛ extensible عبر Agent Registry؛ لا يتجاوز RBAC؛ تأكيد التاجر للإجراءات المالية؛ نتائج من بيانات فعلية؛ Audit لكل action. التفاصيل في `docs/AI_ARCHITECTURE.md` §6.5 و`docs/ARCHITECTURE_DECISIONS.md` (AD-043). **غير منفَّذ ولا مُقنَّن في أي Phase.** |
 
 ## الأولويات القادمة (حسب الاعتماد المنطقي)

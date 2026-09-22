@@ -5,6 +5,30 @@
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
 ---
 
+## ✅ حالة معتمدة — E4/E5: BACKUP AUTOMATION + MONITORING/ALERTING (2026-09-22)
+
+**الهدف**: إكمال آخر بند فعلي متبقٍّ في Deployment/Staging Hardening حسب ترتيب الـroadmap — تشغيل النسخ الاحتياطي تلقائيًا، وربطه بالمراقبة بحيث لا يموت الجدول صامتًا.
+
+| البند | النتيجة |
+| --- | --- |
+| **خدمة `backup` في compose** | ✅ تنسخ فور الإقلاع ثم كل `BACKUP_INTERVAL_SECONDS` (افتراضي 86400)؛ صورة `postgres:16` لتطابق عميل `pg_dump` مع الخادم؛ النسخ ناجح فعليًا داخل الـStack |
+| **قلب النسخ (heartbeat)** | ✅ `scripts/backup-db.sh` يكتب `.last-success.json` و`checksums.sha256` بعد كل نجاح؛ الـapi يقرأه **قراءة فقط** عبر volume `backup-data` |
+| **`/api/health/channels`** | ✅ يعرض `backup.lastSuccessAt` و`backup.ageHours` و`backup.maxAgeHours` (بلا أسرار) |
+| **قاعدة `backup_stale`** | ✅ جديدة: CRITICAL عند تجاوز العمر `BACKUP_MAX_AGE_HOURS` (26) أو غياب القلب؛ خاملة إن لم يُضبط `BACKUP_HEARTBEAT_FILE` |
+| **إطلاق حقيقي** | ✅ تقادم القلب إلى 54.19h ⇒ `POST /api/admin/observability/alerts/evaluate` ⇒ `fired: ["backup_stale"]`، ثم صف FIRING في `alert_events`، ثم RESOLVED بعد تجديد القلب |
+| **إصلاح bug حقيقي (state بعد restart)** | ✅ كانت حالة القواعد in-memory فقط؛ بعد restart يبقى صف FIRING معلّقًا وتُكرَّر الإطلاقات. الآن تُعاد الحالة من `alert_events` عند أول تقييم لكل عملية ⇒ انتقال صحيح FIRING→RESOLVED بلا تكرار |
+| **جدولة خارج الحاويات** | ✅ `scripts/deploy/backup.cron` + `wasit-backup.service`/`.timer` |
+| **توثيق** | ✅ `docs/DEPLOYMENT.md` §4/§5/§6 مُحدَّثة (تشغيل/مراقبة/تنبيه) |
+| **Server unit suite** | ✅ **492/492 — 48 ملف** (+3 اختبارات جديدة: قاعدة `backup_stale`، خمولها، rehydration) |
+| **Full E2E (UI, real API+DB)** | ✅ **128/128 passed** (+1 اختبار متصفح جديد لتقادم القلب عبر الواجهة) |
+| **Typecheck + build** | ✅ نظيف (`@wasit/server` + `@wasit/web`) |
+
+**ملاحظة اختبار معروفة**: تشغيل `observability.test.ts` منفردًا يُظهر فشلًا واحدًا في اختبار حلقة اللوج (`buffers recent records...`)، وهو فشل قائم مسبقًا في `HEAD` وسببه ترتيب حلقة اللوج المُشتركة بين الملفات، وليس من هذا التغيير — المجموعة الكاملة نظيفة.
+
+**دون مساس**: Commission Policy 4% = 2%+2%، وMarketing Video Agent (commit `89e68d7`).
+
+---
+
 ## ✅ حالة معتمدة — PHASE 20: STAGING / E1 (2026-09-21)
 
 **الهدف**: فصل بيئة Staging عن الإنتاج، تأمين أسرارها، وإكمال مسار `migrate → seed → serve` مع Health checks، ثم التحقق من الدخول والتسجيل من الواجهة الحقيقية على الـStack المُعاد بناؤه.

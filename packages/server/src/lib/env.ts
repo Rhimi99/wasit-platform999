@@ -116,6 +116,12 @@ const envSchema = z.object({
   OBS_ALERT_NOTIFY: z.enum(['log', 'webhook']).default('log'),
   OBS_ALERT_WEBHOOK_URL: z.string().default(''),
   OBS_ALERT_WEBHOOK_TOKEN: z.string().optional(),
+  // Backup heartbeat. The nightly backup writes a small JSON file after each
+  // successful run; the `backup_stale` alert rule reads it and fires when the
+  // schedule silently stops. Empty path = the rule is disabled, because a
+  // deployment without scheduled backups must not page about missing ones.
+  BACKUP_HEARTBEAT_FILE: z.string().default(''),
+  BACKUP_MAX_AGE_HOURS: z.coerce.number().positive().default(26),
   // Prometheus scrape endpoint. A bearer token is optional; without one the
   // endpoint is intended to be reachable only from the scraping network.
   METRICS_ENABLED: z

@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import path from 'node:path';
 
 const WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
@@ -46,6 +47,9 @@ export default defineConfig({
         // Exercise the real payment kernel offline (no external acquirer calls).
         PAYMENT_PROVIDER: 'manual',
         PAYMENT_WEBHOOK_SECRET: 'e2e-webhook-secret-0123456789',
+        // Point the backup-freshness alert at a scratch heartbeat so the
+        // observability spec can age it on disk and prove the alert fires.
+        BACKUP_HEARTBEAT_FILE: path.resolve('.e2e/backup-heartbeat.json'),
       },
     },
     {

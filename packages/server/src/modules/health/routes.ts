@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
+import { readFileSync } from 'node:fs';
 import { pingDb } from '../../db/client.js';
 import { getDb } from '../../lib/request-context.js';
+import { env } from '../../lib/env.js';
 import { mailStatus } from '../../lib/mail/resolve.js';
 import { smsStatus } from '../../lib/sms/resolve.js';
 import { rateLimitStoreStatus } from '../../lib/rate-limit/resolve.js';
@@ -24,6 +26,30 @@ healthRoutes.get('/ready', async (c) => {
   }
 });
 
+// Backup freshness, read from the heartbeat the backup script writes. This is
+// the operator-visible half of the `backup_stale` alert: a deployment can see
+// whether its schedule is alive without querying the filesystem directly.
+function backupStatus(): {
+  configured: boolean;
+  heartbeat: string;
+  lastSuccessAt: string | null;
+  ageHours: number | null;
+  maxAgeHours: number;
+} {
+  const path = env.BACKUP_HEARTBEAT_FILE;
+  const maxAgeHours = env.BACKUP_MAX_AGE_HOURS;
+  if (!path) {
+    return { configured: false, heartbeat: '', lastSuccessAt: null, ageHours: null, maxAgeHours };
+  }
+  try {
+    const at = (JSON.parse(readFileSync(path, 'utf8')) as { at?: string }).at ?? null;
+    const ageHours = at ? Number(((Date.now() - new Date(at).getTime()) / 3_600_000).toFixed(2)) : null;
+    return { configured: true, heartbeat: path, lastSuccessAt: at, ageHours, maxAgeHours };
+  } catch {
+    return { configured: true, heartbeat: path, lastSuccessAt: null, ageHours: null, maxAgeHours };
+  }
+}
+
 // Outbound channel configuration (no credentials). Useful to confirm that a
 // deployment has a real transport before relying on email/SMS verification.
 // `observability.alerts` reports the active alert notifier so an operator can
@@ -37,6 +63,7 @@ healthRoutes.get('/channels', async (c) =>
     cache: await readCacheStatus(),
     observability: { alerts: alertStatus() },
     media: await describeMediaProviders(),
+    backup: backupStatus(),
     timestamp: new Date().toISOString(),
   }),
 );

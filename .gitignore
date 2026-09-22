@@ -11,12 +11,13 @@ coverage/
 *.zip
 *.tsbuildinfo
 # Local database backups — contain role password hashes / data; never commit.
-backups/*.dump
-backups/pg_globals.sql
+backups/
 # Playwright E2E artifacts — session cookies + failure output must never be committed.
 test-results/
 playwright-report/
 e2e/.auth/
+# Scratch backup heartbeat written by the E2E run
+.e2e/
 
 # Local private media storage (generated marketing videos) — never committed
 .wasit-media/

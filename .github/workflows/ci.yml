@@ -60,6 +60,31 @@ jobs:
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
+  # Backup/restore drill: proves a dump can actually be restored and that the
+  # safety rails refuse a corrupt archive or a live target. Real PostgreSQL, no mocks.
+  backup-drill:
+    name: Backup & restore drill
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wasit
+          POSTGRES_PASSWORD: wasit_dev_password
+          POSTGRES_DB: wasit_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wasit -d wasit_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/backup-restore.test.sh
+
   # Full E2E (Playwright) against the real API + PostgreSQL, no mocks.
   e2e:
     name: E2E (Playwright)

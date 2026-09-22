@@ -1,0 +1,14 @@
+[Unit]
+Description=WASIT BUSINESS GLOBAL — nightly PostgreSQL backup timer
+
+[Timer]
+# 02:30 UTC daily, with a random delay so a fleet of hosts does not all hammer
+# the database at the same second.
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=900
+# If the host was asleep/asleep at the scheduled time, run on resume.
+Persistent=true
+Unit=wasit-backup.service
+
+[Install]
+WantedBy=timers.target

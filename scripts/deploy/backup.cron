@@ -1,0 +1,16 @@
+# WASIT BUSINESS GLOBAL — backup schedule (cron format)
+#
+# Install with:  crontab -e   (paste this line, adjusting the path)
+# or system-wide by copying to /etc/cron.d/wasit-backup with a User= field.
+#
+# The script reads DATABASE_URL from the environment. cron does not inherit a
+# login shell, so point it at the deployment and make sure PATH contains the
+# PostgreSQL client tools (or set PG_BIN in .env).
+#
+# Retention is enforced by the script itself (BACKUP_RETENTION_COUNT, default 7),
+# so this line only has to run; pruning happens at the end of each run.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 02:30 UTC every day. Log to a file so a silent failure is still discoverable.
+30 2 * * * . /srv/wasit/.env && /srv/wasit/scripts/backup-db.sh >> /var/log/wasit-backup.log 2>&1

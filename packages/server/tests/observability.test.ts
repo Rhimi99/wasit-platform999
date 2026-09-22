@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import argon2 from 'argon2';
 import { eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
@@ -18,6 +21,7 @@ import {
   firingAlerts,
   resetAlertState,
   schedulerStaleRule,
+  backupStaleRule,
   type AlertRule,
 } from '../src/lib/observability/alerts.js';
 import { setAlertNotifier, resolveAlertNotifier, alertStatus } from '../src/lib/observability/resolve-notifier.js';
@@ -84,9 +88,13 @@ afterAll(async () => {
   await closeDb();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   clearRecentLogs();
   resetAlertState();
+  // Alert state is rehydrated from the DB, so a leftover FIRING row from an
+  // interrupted run would make the "fires once" assertions non-deterministic.
+  await db.delete(alertEvents).where(eq(alertEvents.rule, 'test_rule'));
+  await db.delete(alertEvents).where(eq(alertEvents.rule, 'test_rule_resolve'));
 });
 
 describe('Trace context (W3C traceparent)', () => {
@@ -312,6 +320,69 @@ describe('Alert engine', () => {
     const ruleStale = schedulerStaleRule(1);
     const first = await evaluateAlerts(db, [ruleStale]);
     expect(first.fired).toHaveLength(0);
+  });
+
+  it('fires backup_stale when the heartbeat is missing or old, quiet when fresh', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wasit-backup-'));
+    const heartbeat = join(dir, '.last-success.json');
+    try {
+      const rule = backupStaleRule(heartbeat, 26);
+      // No file yet: unreadable heartbeat is itself the incident.
+      expect(await rule.evaluate({ db, now: new Date() })).toMatchObject({ reason: 'unreadable' });
+
+      // A fresh heartbeat is healthy.
+      writeFileSync(heartbeat, JSON.stringify({ at: new Date().toISOString() }));
+      expect(await rule.evaluate({ db, now: new Date() })).toBeNull();
+
+      // An old heartbeat fires, with the age in the details.
+      const old = new Date(Date.now() - 30 * 3_600_000).toISOString();
+      writeFileSync(heartbeat, JSON.stringify({ at: old }));
+      const fired = await rule.evaluate({ db, now: new Date() });
+      expect(fired).toMatchObject({ threshold: 26 });
+      expect((fired as { ageHours: number }).ageHours).toBeGreaterThan(26);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps backup_stale inert when no heartbeat is configured', async () => {
+    const rule = backupStaleRule('', 26);
+    expect(await rule.evaluate({ db, now: new Date() })).toBeNull();
+  });
+
+  it('resolves an orphaned FIRING row left by a restart instead of duplicating it', async () => {
+    // A rule that was firing when the process died: the row is in the DB, the
+    // in-memory state is gone. Simulate the restart by clearing state only.
+    await db.insert(alertEvents).values({
+      id: randomUUID(),
+      rule: 'test_rule_resolve',
+      severity: 'WARNING',
+      status: 'FIRING',
+      summary: 'left over from a crashed process',
+      details: { reason: 'restart' },
+      startedAt: new Date(Date.now() - 60_000),
+    });
+
+    let firing = false;
+    const toggleRule: AlertRule = {
+      name: 'test_rule_resolve',
+      severity: 'WARNING',
+      summary: 'toggle',
+      async evaluate() {
+        return firing ? { value: 1 } : null;
+      },
+    };
+
+    resetAlertState();
+    // Rehydration must adopt the open row, so the already-false condition
+    // resolves it rather than inserting a second FIRING event.
+    const result = await evaluateAlerts(db, [toggleRule]);
+    expect(result.fired).toHaveLength(0);
+    expect(result.resolved).toContain('test_rule_resolve');
+
+    const rows = await db.select().from(alertEvents).where(eq(alertEvents.rule, 'test_rule_resolve'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('RESOLVED');
   });
 });
 

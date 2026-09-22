@@ -1,5 +1,7 @@
-import { sql } from 'drizzle-orm';
+import { sql, and, eq, desc } from 'drizzle-orm';
+import { readFileSync } from 'node:fs';
 import type { DB } from '../../db/client';
+import { env } from '../env';
 import { newId } from '../ids';
 import { metrics } from './metrics';
 import { logger } from './logger';
@@ -138,12 +140,51 @@ export function schedulerStaleRule(maxStaleMinutes: number): AlertRule {
   };
 }
 
+/**
+ * Backup freshness. The nightly backup writes a heartbeat file on success; if
+ * the newest one is missing or too old, the schedule has stopped working and
+ * nobody would otherwise notice until a restore is needed. The rule is inert
+ * unless BACKUP_HEARTBEAT_FILE is configured, so tests and deployments without
+ * a schedule do not page.
+ */
+export function backupStaleRule(
+  heartbeatPath: string = env.BACKUP_HEARTBEAT_FILE,
+  maxAgeHours: number = env.BACKUP_MAX_AGE_HOURS,
+): AlertRule {
+  return {
+    name: 'backup_stale',
+    severity: 'CRITICAL',
+    summary: `Last successful database backup is older than ${maxAgeHours}h`,
+    async evaluate() {
+      if (!heartbeatPath) return null; // rule disabled
+      let at: string | undefined;
+      try {
+        const raw = readFileSync(heartbeatPath, 'utf8');
+        at = (JSON.parse(raw) as { at?: string }).at;
+      } catch {
+        return { heartbeat: heartbeatPath, reason: 'unreadable' };
+      }
+      if (!at) return { heartbeat: heartbeatPath, reason: 'no timestamp' };
+      const ageHours = (Date.now() - new Date(at).getTime()) / 3_600_000;
+      if (!Number.isFinite(ageHours)) return { heartbeat: heartbeatPath, reason: 'bad timestamp' };
+      if (ageHours <= maxAgeHours) return null;
+      return {
+        heartbeat: heartbeatPath,
+        lastSuccessAt: at,
+        ageHours: Number(ageHours.toFixed(2)),
+        threshold: maxAgeHours,
+      };
+    },
+  };
+}
+
 export function defaultRules(): AlertRule[] {
   return [
     databaseDownRule,
     errorRatioRule(0.25),
     p95LatencyRule(2.5),
     rateLimitRule(200),
+    backupStaleRule(),
   ];
 }
 
@@ -156,6 +197,32 @@ interface RuleState {
 }
 
 const states = new Map<string, RuleState>();
+let rehydrated = false;
+
+/**
+ * Alert transitions are tracked in memory for speed, but the events themselves
+ * live in the database. After a restart the in-memory state is empty while the
+ * rows are not, so a rule that was FIRING would never emit its RESOLVED row and
+ * a still-matched condition would insert a duplicate FIRING. Seed the state
+ * from the newest event per rule once per process to close that gap.
+ */
+async function rehydrateStates(db: DB): Promise<void> {
+  if (rehydrated) return;
+  rehydrated = true;
+  try {
+    const open = await db
+      .select()
+      .from(alertEvents)
+      .where(eq(alertEvents.status, 'FIRING'))
+      .orderBy(desc(alertEvents.startedAt));
+    for (const row of open) {
+      if (states.has(row.rule)) continue;
+      states.set(row.rule, { firing: true, eventId: row.id, firedAt: row.startedAt });
+    }
+  } catch (err) {
+    logger.error('alert state rehydration failed', { error: (err as Error).message });
+  }
+}
 
 export interface EvaluationResult {
   evaluated: number;
@@ -172,6 +239,7 @@ export async function evaluateAlerts(
   db: DB,
   rules: AlertRule[] = defaultRules(),
 ): Promise<EvaluationResult> {
+  await rehydrateStates(db);
   const now = new Date();
   const fired: string[] = [];
   const resolved: string[] = [];
@@ -305,4 +373,5 @@ export function lastAlertEvaluationAt(): Date | null {
 export function resetAlertState(): void {
   states.clear();
   lastEvaluationAt = null;
+  rehydrated = false;
 }

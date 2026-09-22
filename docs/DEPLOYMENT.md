@@ -75,15 +75,20 @@ RATE_LIMIT_PURGE_INTERVAL_MINUTES=15
 
 ## 4. Backups
 
-- PostgreSQL wal-g/pg_dump دورية (مجدولة في Staging/Prod).
-- الاحتفاظ بآخر N backups.
-- رزم الأمان: التشفير أثناء التخزين، ونقل عبر موثوق.
+النسخ الاحتياطي منفّذ كسكربتات قابلة للتشغيل غير التفاعلي، مع تحقق سلامة وتراجع آمن:
+
+- `scripts/backup-db.sh` — ينسخ `pg_dump -Fc` لكل قاعدة + `pg_globals.sql`، ويكتب `manifest.json` و`checksums.sha256` و`table-counts.tsv`، ويطبّق الاحتفاظ (`BACKUP_RETENTION_COUNT`، الافتراضي 7) وينظّف أي مجلد ناقص. يكتب قلب النجاح `.last-success.json` بعد كل تشغيل ناجح.
+- `scripts/restore-db.sh` — يتحقق من `checksums.sha256` قبل الاستعادة، ويرفض الكتابة فوق قاعدة حيّة إلا بـ `--allow-live`، ويرفض هدفًا موجودًا إلا بـ `--force`، ويتحقق من أعداد الصفوف بعد الاستعادة.
+- `scripts/backup-restore.test.sh` — تمرين حقيقي (نسخ/استعادة/فقدان بيانات/استرجاع/احتفاظ) بلا mocks.
+- **الجدولة**: في `docker compose` توجد خدمة `backup` (صورة `postgres:16` لتطابق عميل `pg_dump` مع الخادم) تنسخ فور الإقلاع ثم كل `BACKUP_INTERVAL_SECONDS` (الافتراضي 86400). خارج الحاويات استخدم `scripts/deploy/backup.cron` أو وحدات systemd في `scripts/deploy/wasit-backup.{service,timer}`.
+- **المراقبة**: خدمة `backup` و`api` تتشاركان volume `backup-data`؛ الـapi يقرأ القلب (قراءة فقط) عبر `BACKUP_HEARTBEAT_FILE` ويعرض عمره في `GET /api/health/channels`، وقاعدة `backup_stale` تُطلق تنبيهًا CRITICAL إذا تجاوز العمر `BACKUP_MAX_AGE_HOURS` (الافتراضي 26). إن لم يُضبط `BACKUP_HEARTBEAT_FILE` تبقى القاعدة خاملة.
+- رزم الأمان: التشفير أثناء التخزين، ونقل عبر موثوق، وعدم التزام النسخ في Git (`backups/*.dump` و`pg_globals.sql` و`.last-success.json`).
 
 ## 5. Health Checks
 
 - `GET /api/health/live` — توقف عملية.
 - `GET /api/health/ready` — فحص اتصال DB.
-- `GET /api/health/channels` — حالة قنوات الإرسال وحدّ المعدل والإشعارات (بلا أسرار).
+- `GET /api/health/channels` — حالة قنوات الإرسال وحدّ المعدل والإشعارات (بلا أسرار)، إضافة إلى `backup` (آخر نسخة ناجحة وعمرها وحدّ التنبيه).
 - (فكرة) إضافة readiness لـ AI/provider في المستقبل.
 
 ## 6. Logging & Monitoring
@@ -91,7 +96,7 @@ RATE_LIMIT_PURGE_INTERVAL_MINUTES=15
 - **Logs**: كل سجل هو سطر JSON واحد على stdout (`OBS_LOG_FORMAT=json`، أو `pretty` للقراءة المحلية)، يجمعها أي منصة حاويات (Docker/systemd/K8s). السجلات تحمل `traceId` والمسارات والأخطاء. حلقة داخلية محدودة (200 سجل) تتيح `GET /api/admin/observability/logs`؛ لا تُخزَّن أسرار (تنقيح تلقائي).
 - **Tracing**: ترويسة W3C `traceparent` الواردة تُتبنّى فيبقى الطلب على trace واحد عبر الخدمات؛ تُعاد الترويسة `X-Trace-Id`، ويحمل كل خطأ `traceId`. `traceFromHeaders` يولّد معرّفًا عند غيابها.
 - **Metrics**: `GET /metrics` بصيغة Prometheus (`METRICS_ENABLED=true`، وتوكن Bearer اختياري عبر `METRICS_TOKEN`). يشمل `wasit_http_requests_total`/`wasit_http_request_duration_seconds`/`wasit_http_errors_total`/`wasit_rate_limit_rejections_total`/`wasit_audit_writes_total`/`wasit_alerts_fired_total`/`wasit_alert_notifications_total` + `wasit_db_up`/`wasit_uptime_seconds`/`wasit_build_info`. **حين لا يوجد `METRICS_TOKEN`، يجب تقييد `/metrics` على شبكة السحب** (security group/firewall) لأنه بلا مصادقة.
-- **Alerting**: محرك قواعد يُشغَّل من الـscheduler (`SCHEDULER_ENABLED=true` و`OBS_ALERTS_ENABLED=true`، كل `OBS_ALERT_INTERVAL_MINUTES`) أو يدويًا من `POST /api/admin/observability/alerts/evaluate`. القواعد: `database_down`، `http_error_ratio`، `http_p95_latency`، `rate_limit_rejections`، `alert_scheduler_stale`. التنبيه يُرسل عبر `OBS_ALERT_NOTIFY` (`log` افتراضي؛ `webhook` مع `OBS_ALERT_WEBHOOK_URL` لجسر Slack/PagerDuty) وتُحفظ انتقالاته في `alert_events`.
+- **Alerting**: محرك قواعد يُشغَّل من الـscheduler (`SCHEDULER_ENABLED=true` و`OBS_ALERTS_ENABLED=true`، كل `OBS_ALERT_INTERVAL_MINUTES`) أو يدويًا من `POST /api/admin/observability/alerts/evaluate`. القواعد: `database_down`، `http_error_ratio`، `http_p95_latency`، `rate_limit_rejections`، `alert_scheduler_stale`، `backup_stale` (تتطلب `BACKUP_HEARTBEAT_FILE`). التنبيه يُرسل عبر `OBS_ALERT_NOTIFY` (`log` افتراضي؛ `webhook` مع `OBS_ALERT_WEBHOOK_URL` لجسر Slack/PagerDuty) وتُحفظ انتقالاته في `alert_events`. يُعاد تحميل حالة القواعد المفتوحة من `alert_events` عند الإقلاع، فينتقل قاعدة كانت FIRING قبل restart إلى RESOLVED بدلًا من ترك صف معلّق أو تكرار FIRING.
 - سجل audit في DB (مستقل عن اللوج التشغيلي).
 - **ربط منصة خارجية**: أجّه جامع السجلات إلى stdout، وPrometheus إلى `/metrics`؛ لا يوجد تنسيق خاص بالمنصة.
 

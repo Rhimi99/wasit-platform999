@@ -77,6 +77,10 @@ services:
       OBS_ALERT_NOTIFY: ${OBS_ALERT_NOTIFY:-log}
       OBS_ALERT_WEBHOOK_URL: ${OBS_ALERT_WEBHOOK_URL:-}
       OBS_ALERT_WEBHOOK_TOKEN: ${OBS_ALERT_WEBHOOK_TOKEN:-}
+      # The backup service writes the heartbeat into the shared volume; the API
+      # reads it so `backup_stale` fires when the schedule dies.
+      BACKUP_HEARTBEAT_FILE: ${BACKUP_HEARTBEAT_FILE:-/backups/.last-success.json}
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       # Read cache for hot reference reads (geo/categories/SEO). Off by default
@@ -90,6 +94,8 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
     volumes:
       - media-data:/app/.wasit-media
+      # Read-only: the API only reads the backup heartbeat to alert on it.
+      - backup-data:/backups:ro
     # Release step: apply migrations, seed reference data (roles/permissions/
     # countries/currencies/categories/policies — idempotent), then serve.
     command: sh -c "npx drizzle-kit migrate && node /app/dist-bundle/seed.cjs && node /app/dist-bundle/index.cjs"
@@ -115,6 +121,36 @@ services:
       start_period: 10s
       retries: 3
 
+  # Scheduled database backup. Uses the postgres image because pg_dump must
+  # match the server major version and the scripts need no runtime beyond the
+  # PostgreSQL client tools. It sleeps until the next interval rather than
+  # relying on host cron, so a compose deployment is self-contained.
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wasit}:${POSTGRES_PASSWORD:-wasit_dev_password}@db:5432/${POSTGRES_DB:-wasit_dev}
+      BACKUP_ROOT: /backups
+      BACKUP_RETENTION_COUNT: ${BACKUP_RETENTION_COUNT:-7}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - backup-data:/backups
+      - ./scripts:/scripts:ro
+    # Run a backup immediately on boot (so a fresh deployment is protected
+    # within minutes), then every BACKUP_INTERVAL_SECONDS.
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          /scripts/backup-db.sh || echo "backup run failed (will retry next interval)"
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+        done
+
 volumes:
   db-data:
   media-data:
+  backup-data:

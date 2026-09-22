@@ -1,4 +1,6 @@
 import { test, expect, storageFor } from './helpers';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * Admin observability desk — functional audit driven from the browser.
@@ -82,6 +84,50 @@ test.describe('Admin observability desk', () => {
     for (const a of snap.alerts.firing as Array<{ rule: string }>) {
       await expect(page.getByTestId(`admin-obs-firing-${a.rule}`)).toBeVisible();
     }
+  });
+
+  test('backup freshness is reported and a stale heartbeat raises a CRITICAL alert in the UI', async ({ page }) => {
+    const heartbeat = path.resolve('.e2e/backup-heartbeat.json');
+    fs.mkdirSync(path.dirname(heartbeat), { recursive: true });
+
+    // Healthy schedule: a fresh heartbeat reports age ~0 and nothing fires.
+    fs.writeFileSync(heartbeat, JSON.stringify({ at: new Date().toISOString() }));
+    const healthy = (await (await page.request.get('/api/health/channels')).json()).backup;
+    expect(healthy.configured).toBe(true);
+    expect(healthy.ageHours).toBeLessThan(1);
+
+    await page.goto('/admin/observability');
+    await page.getByTestId('admin-obs-tab-alerts').click();
+    await page.getByTestId('admin-obs-evaluate').click();
+    await page.getByTestId('admin-obs-tab-overview').click();
+    await expect(page.getByTestId('admin-obs-firing-backup_stale')).toHaveCount(0);
+
+    // The schedule stops: age the heartbeat past the 26h threshold on disk, then
+    // evaluate through the real scheduler path (the same code the interval runs).
+    const aged = new Date(Date.now() - 30 * 3_600_000).toISOString();
+    fs.writeFileSync(heartbeat, JSON.stringify({ at: aged }));
+    const stale = (await (await page.request.get('/api/health/channels')).json()).backup;
+    expect(stale.ageHours).toBeGreaterThan(26);
+
+    await page.getByTestId('admin-obs-tab-alerts').click();
+    await page.getByTestId('admin-obs-evaluate').click();
+    await page.getByTestId('admin-obs-tab-overview').click();
+    await expect(page.getByTestId('admin-obs-firing-backup_stale')).toBeVisible();
+
+    // The firing rule must be persisted, not just rendered from local state.
+    const firing = (await (await page.request.get('/api/admin/observability/alerts?status=FIRING')).json()).data;
+    expect((firing as Array<{ rule: string; severity: string }>).some(
+      (r) => r.rule === 'backup_stale' && r.severity === 'CRITICAL',
+    )).toBe(true);
+
+    // Recovery: a fresh heartbeat resolves it on the next evaluation.
+    fs.writeFileSync(heartbeat, JSON.stringify({ at: new Date().toISOString() }));
+    await page.getByTestId('admin-obs-tab-alerts').click();
+    await page.getByTestId('admin-obs-evaluate').click();
+    await page.getByTestId('admin-obs-tab-overview').click();
+    await expect(page.getByTestId('admin-obs-firing-backup_stale')).toHaveCount(0);
+    const after = (await (await page.request.get('/api/admin/observability/alerts?status=FIRING')).json()).data;
+    expect((after as Array<{ rule: string }>).some((r) => r.rule === 'backup_stale')).toBe(false);
   });
 });
 
