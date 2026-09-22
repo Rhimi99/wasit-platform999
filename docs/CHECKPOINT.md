@@ -2,7 +2,40 @@
 
 آخر تحديث: **2026-09-22**
 
-## Milestone I — Admin Privacy / Data-Deletion Desk: لوحة الخصوصية وحذف البيانات داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+## Milestone J — Automatic Data-Retention Window Execution: جدولة الحذف آليًا بعد انتهاء نافذة الاستبقاء (هذه الجلسة — مكتمل)
+
+### الهدف
+إغلاق آخر بند متبقٍّ في PHASE 17 صراحةً في `docs/DEVELOPMENT_ROADMAP.md` (الأولويات القادمة، البند 7): «Data deletion execution (anonymization) ✅ منجزة ومختبرة؛ **بقي جدولتها آليًا بعد انتهاء نافذة الاستبقاء**». كانت النافذة (`data_deletion_requests.retention_until`) تُحسب من Policy Engine وتُخزَّن وقت الطلب، وتُستخدم كبوابة لمسار `ANONYMIZED` اليدوي فقط — **لا شيء يتحرّك عند انتهائها**، فيبقى الطلب `DEACTIVATED` إلى الأبد حتى يتذكّر إنسان التاريخ. نُفِّذ مشغّل زمني حقيقي (بلا schema، بلا migrations، بلا قيم مثبّتة).
+
+### ما بُني
+- **`packages/server/src/modules/privacy/service.ts` → `advanceDueDeletionRetentions(db)`**: تمرير كل طلب انتهت نافذته مرحلة واحدة لكل تشغيل: `DEACTIVATED → RETENTION → ELIGIBLE`. **الموعد النهائي هو البوابة**، فالطلبات داخل نافذتها (بما فيها الجديدة) لا تُلمس. لا يُنفّذ `ANONYMIZED` إطلاقًا: مسح الـPII لا رجعة فيه ويبقى قرار مشغّل مُراجَعًا ومُدقَّقًا.
+- **أمان التزامن**: كل انتقال يحدّث بشرط المرحلة في `WHERE` (`id = ? AND stage = ?`) ⇒ عامل ثانٍ أو تحريك يدوي متزامن يؤثّر 0 صفوف (لا lost update، لا قفزة مرحلة). يُدقَّق الصف الذي انتقل فعلًا فقط، بفاعل نظامي `actorId: null` و`metadata.automated=true`.
+- **`POST /api/admin/privacy/deletions/retention-sweep`** (`ADMIN`/`SUPER_ADMIN`): تشغيل نفس المهمة عند الطلب، ليصبح السلوك الزمني قابلًا للملاحظة والاختبار من داخل المنتج لا في عمل خلفي فقط.
+- **`packages/server/src/lib/scheduler.ts`**: إضافة `runRetentionSweep()` إلى `tick()` (الافتراضي 60 دقيقة مع rollover/expiry). المهمة متقاربة idempotent، فتكرارها من نسخة أخرى no-op.
+- **الواجهة**: `packages/web/src/pages/AdminPrivacyPage.tsx` زر `admin-privacy-run-sweep` + `api.adminRunRetentionSweep()` + نوع `RetentionSweepResult` + مفاتيح `adminPrivacy.runSweep/sweepDone/sweepNone` في ar/en/fr/zh، مع إعادة تحميل القائمة بعد التشغيل وإظهار رسالة صريحة.
+
+### أخطاء حقيقية اكتُشفت وأُصلحت (السبب الجذري، لا إخفاء الخطأ)
+1. **عدم وجود محرّك زمني إطلاقًا**: `retention_until` كان مخزّنًا بلا أي قارئ سوى بوابة `ANONYMIZED` اليدوية؛ لا scheduler ولا مسار ولا واجهة تتحرّك عند انتهائه (تأكيد بـ `grep`: لا `advanceDue*` في المستودع). أُضيف الفحص + الـroute + الـscheduler.
+2. **عيب تصميمي كشفه الاختبار**: النسخة الأولى كانت تحرّك `DEACTIVATED→RETENTION` فور انتهاء النافذة و`RETENTION→ELIGIBLE` في نفس اللحظة ⇒ مرحلة `RETENTION` تدوم tickًا واحدًا بلا معنى. الاختبار (`is idempotent…`) فشل فعليًا وأظهر التعارض. صُحِّح التصميم إلى **انتقال واحد لكل تشغيل ببوابة الموعد النهائي** بحيث تظل النافذة مقياسًا حقيقيًا لمدة الاستبقاء.
+3. **`inArray` مفقود بعد التعديل**: كشفه `tsc` (`Cannot find name 'inArray'`) وأُصلح.
+
+### الاختبارات والتحقق
+- جديد: `packages/server/tests/privacy-retention-sweep.test.ts` — **7/7**: تمرير المستحقّ (`DEACTIVATED→RETENTION` و`RETENTION→ELIGIBLE`)، عدم لمس `RETENTION` بنافذة مستقبلية، **تقارب** (مرحلة لكل تشغيل ثم توقّف عند `ELIGIBLE`)، عدم التمرير مرتين في التشغيل الواحد، **عدم التجهيل التلقائي** وبقاء الـPII سليمًا + Audit نظامي واحد لكل طلب، الـroute للأدمن 200، وRBAC (غير أدمن ⇒ 401/403).
+- جديد في `e2e/admin-privacy.spec.ts` (من الواجهة): زر الفحص يمرّر طلبًا مستحقًّا ويُظهر النتيجة في الجدول (مع تحقّق خادمي)، والفحص **لا يجهّل** طلبًا أبدًا (3 تشغيلات ⇒ يتوقف عند `ELIGIBLE`)، و`retention-sweep` = **403** للتاجر. (يُجعل الطلب مستحقًّا بكتابة الموعد في الماضي عبر `pg` — لا يمكن السفر بالزمن من الواجهة — والتحقق النهائي من حالة الخادم الحقيقية، بلا mocks.)
+- **Server**: 48 ملفًا / **489/489** (482 + 7 جديد).
+- **Full E2E**: **127/127** (125 + 2 جديد).
+- **Typecheck** (server + web) و**Build** (server prod-bundle + web) = نظيف.
+
+### البيئة (بدون reset/drop)
+- لا reset/drop/push. لا migrations جديدة — العمود والجدول موجودان مسبقًا.
+- `wasit_dev`/`wasit_test` قائمتان من الجلسة السابقة؛ الفحص الخادمي يستخدم fixture يُنشأ داخل الاختبار حصرًا.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**.
+- **Marketing Video Agent (89e68d7)** بلا مساس.
+- `ANONYMIZED` يبقى قرارًا بشريًا (لا أتمتة لمسح الـPII).
+
+## Milestone I — Admin Privacy / Data-Deletion Desk: لوحة الخصوصية وحذف البيانات داخل لوحة الأدمن (مكتمل)
 
 ### الهدف
 سدّ فجوة "قدرة خلفية بلا واجهة" التالية بعد Milestone H. كل مسارات `/api/admin/privacy/*` (‏`GET /deletions`، ‏`PATCH /deletions/:id`) كانت منفّذة ومختبرة خادميًا (`security-privacy.test.ts`) لكن **لا صفحة أدمن واحدة تستدعيها**، ولا يوجد أي عميل API في الويب يقرأ قائمة طلبات الحذف أو يحرّك مراحلها. بُنيت لوحة `/admin/privacy` تعمل على الخادم الحقيقي فقط — بلا schema ولا migrations ولا قيم مثبّتة.

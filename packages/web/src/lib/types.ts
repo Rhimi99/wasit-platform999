@@ -1054,6 +1054,12 @@ export interface DeletionRetentionPolicy {
   countryCode?: string | null;
 }
 
+export interface RetentionSweepResult {
+  retained: number;
+  eligible: number;
+  requestIds: string[];
+}
+
 export interface DeletionRequestRow {
   requestId: string;
   userId: string;

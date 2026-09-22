@@ -1,4 +1,5 @@
 import { request } from '@playwright/test';
+import { Pool } from 'pg';
 import { test, expect, storageFor, DEMO_PASSWORD } from './helpers';
 
 /**
@@ -41,6 +42,26 @@ async function deletionRow(page: import('@playwright/test').Page, requestId: str
   return (body.data as Array<{
     requestId: string; stage: string; userEmail: string | null; retentionUntil: string | null;
   }>).find((r) => r.requestId === requestId);
+}
+
+/**
+ * Moves a request's retention deadline into the past. Time cannot be travelled
+ * through the UI, so the fixture is written directly and then the real sweep is
+ * driven from the browser; the assertion itself is against genuine server state.
+ */
+async function expireRetentionWindow(requestId: string): Promise<void> {
+  const pool = new Pool({
+    connectionString:
+      process.env.DATABASE_URL ?? 'postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev',
+  });
+  try {
+    await pool.query(
+      'UPDATE data_deletion_requests SET retention_until = $1 WHERE id = $2',
+      [new Date(Date.now() - 60_000), requestId],
+    );
+  } finally {
+    await pool.end();
+  }
 }
 
 test.describe('Admin privacy desk', () => {
@@ -150,6 +171,39 @@ test.describe('Admin privacy desk', () => {
     expect(actions).toContain('PRIVACY.LEGAL_HOLD_OVERRIDE');
     expect(actions).toContain('PRIVACY.DELETION_ANONYMIZED');
   });
+
+  test('the retention sweep button advances requests whose window has elapsed', async ({ page }) => {
+    const { requestId } = await createDeletionRequest('ui-sweep');
+    // The request is created DEACTIVATED with a future policy window; make it due.
+    await expireRetentionWindow(requestId);
+
+    await page.goto('/admin/privacy');
+    await page.getByTestId('admin-privacy-run-sweep').click();
+    await expect(page.getByText(/لا توجد طلبات مستحقة|No requests are due|تم تقديم الطلبات|Requests advanced/i).first()).toBeVisible();
+
+    // The due request must move, and the move must be real server state reflected
+    // in the table, not just a notice.
+    await expect.poll(async () => (await deletionRow(page, requestId))?.stage).toBe('RETENTION');
+    await expect(page.getByTestId(`admin-privacy-stage-${requestId}`)).toContainText('RETENTION');
+  });
+
+  test('the sweep never anonymizes a request on its own', async ({ page }) => {
+    const { requestId } = await createDeletionRequest('ui-sweep-guard');
+    await expireRetentionWindow(requestId);
+
+    await page.goto('/admin/privacy');
+    // Three runs: DEACTIVATED → RETENTION → ELIGIBLE → (stops).
+    for (let i = 0; i < 3; i += 1) {
+      await page.getByTestId('admin-privacy-run-sweep').click();
+      await expect(page.getByText(/لا توجد طلبات مستحقة|No requests are due|تم تقديم الطلبات|Requests advanced/i).first()).toBeVisible();
+      await expect(page.getByTestId('admin-privacy-run-sweep')).toBeEnabled();
+    }
+
+    const after = await deletionRow(page, requestId);
+    expect(after?.stage).toBe('ELIGIBLE');
+    // Automated runs must stop at ELIGIBLE; scrubbing PII stays an operator action.
+    expect(after?.stage).not.toBe('ANONYMIZED');
+  });
 });
 
 test.describe('Admin privacy desk — RBAC', () => {
@@ -162,5 +216,6 @@ test.describe('Admin privacy desk — RBAC', () => {
     expect((await page.request.patch('/api/admin/privacy/deletions/does-not-exist', {
       data: { stage: 'REVIEW' },
     })).status()).toBe(403);
+    expect((await page.request.post('/api/admin/privacy/deletions/retention-sweep')).status()).toBe(403);
   });
 });

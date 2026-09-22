@@ -40,7 +40,7 @@
 4. Analytics: CAC/LTV/Contribution Margin + اختبار KPI ✅ منجزة (`GET /api/admin/analytics/unit-economics` و`/cohorts` + `unit-economics.test.ts`).
 5. SEO (sitemap/robots/canonical/structured data).
 6. Email/SMS إنتاجي: ✅ البريد (SMTP port + قوالب + Audit) وSMS (HTTP port + تحقق الهاتف OTP + Audit) منجزان ومختبران؛ توسيع قوالب الإشعارات يبقى ضمن محرّك Messaging.
-7. Data deletion execution (anonymization) ✅ منجزة ومختبرة؛ بقي جدولتها آليًا بعد انتهاء نافذة الاستبقاء.
+7. Data deletion execution (anonymization) ✅ منجزة ومختبرة (Milestone I + J)؛ الجدولة الآلية بعد انتهاء نافذة الاستبقاء ✅ منجزة (Milestone J).
 8. Geo testing + اختبار توسّع بلد جديد.
 9. Observability/Tracing + Rate limiter distributed + Load testing.
 10. Staging + Production hardening (Docker/CI/health/monitoring).

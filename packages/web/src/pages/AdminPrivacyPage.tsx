@@ -83,6 +83,23 @@ export function AdminPrivacyPage() {
     await advance(row, 'ANONYMIZED', override);
   };
 
+  /**
+   * Requests whose retention deadline has elapsed are moved forward by a
+   * background job. This runs that same job on demand so the operator does not
+   * wait for the next tick, then reloads so the new stages are visible.
+   */
+  const runSweep = async () => {
+    setBusyId('__sweep__');
+    setNotice(null);
+    setError(null);
+    const res = await apiCall(() => api.adminRunRetentionSweep());
+    setBusyId(null);
+    if (res.error) { setError(res.error); return; }
+    const moved = (res.data?.retained ?? 0) + (res.data?.eligible ?? 0);
+    setNotice(moved > 0 ? `${t('adminPrivacy.sweepDone')}: ${moved}` : t('adminPrivacy.sweepNone'));
+    await load();
+  };
+
   const counts = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.stage] = (acc[r.stage] ?? 0) + 1;
     return acc;
@@ -94,15 +111,26 @@ export function AdminPrivacyPage() {
         title={t('adminPrivacy.title')}
         subtitle={t('adminPrivacy.subtitle')}
         action={(
-          <button
-            type="button"
-            data-testid="admin-privacy-refresh"
-            disabled={loading}
-            onClick={() => void load()}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-          >
-            {t('common.refresh')}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid="admin-privacy-run-sweep"
+              disabled={busyId === '__sweep__'}
+              onClick={() => void runSweep()}
+              className="rounded-md border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 hover:bg-teal-100 disabled:opacity-50"
+            >
+              {t('adminPrivacy.runSweep')}
+            </button>
+            <button
+              type="button"
+              data-testid="admin-privacy-refresh"
+              disabled={loading}
+              onClick={() => void load()}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {t('common.refresh')}
+            </button>
+          </div>
         )}
       />
 

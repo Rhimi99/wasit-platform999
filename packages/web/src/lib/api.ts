@@ -16,7 +16,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
-  DeletionRequestRow, DeletionStage,
+  DeletionRequestRow, DeletionStage, RetentionSweepResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -961,6 +961,11 @@ export const api = {
     return request<{ success: boolean }>(`/api/admin/privacy/deletions/${requestId}`, {
       method: 'PATCH',
       body: JSON.stringify({ stage, legalHoldOverride: opts.legalHoldOverride ?? false }),
+    });
+  },
+  async adminRunRetentionSweep() {
+    return request<RetentionSweepResult>('/api/admin/privacy/deletions/retention-sweep', {
+      method: 'POST',
     });
   },
 };

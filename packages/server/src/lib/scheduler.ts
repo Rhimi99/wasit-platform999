@@ -1,6 +1,7 @@
 import { db } from '../db/client';
 import { rolloverDueSubscriptions } from '../modules/subscriptions/service';
 import { expireLapsedSubscriptions } from '../modules/subscriptions/collection';
+import { advanceDueDeletionRetentions } from '../modules/privacy/service';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
@@ -12,11 +13,12 @@ export interface SchedulerHandle {
 /**
  * Minimal in-process scheduler for period-based jobs.
  *
- * Jobs today: subscription auto-renew rollover/expiry, rate-limit bucket purge,
- * and alert rule evaluation. It is deliberately not a general cron framework: a
- * further job should be added as a named entry here, or the work should move to
- * the deployment platform's scheduler hitting the authenticated admin route.
- * Rollover is idempotent, so a duplicate run from another instance is a no-op.
+ * Jobs today: subscription auto-renew rollover/expiry, privacy data-retention
+ * window sweep, rate-limit bucket purge, and alert rule evaluation. It is
+ * deliberately not a general cron framework: a further job should be added as a
+ * named entry here, or the work should move to the deployment platform's
+ * scheduler hitting the authenticated admin route. Rollover and the retention
+ * sweep are idempotent, so a duplicate run from another instance is a no-op.
  */
 export function startScheduler(options: {
   rolloverIntervalMinutes: number;
@@ -56,6 +58,20 @@ export function startScheduler(options: {
     }
   };
 
+  const runRetentionSweep = async (): Promise<void> => {
+    try {
+      const result = await advanceDueDeletionRetentions(db);
+      if (result.retained > 0 || result.eligible > 0) {
+        logger.info('privacy retention sweep', {
+          retained: result.retained,
+          eligible: result.eligible,
+        });
+      }
+    } catch (err) {
+      logger.error('privacy retention sweep failed', { error: (err as Error).message });
+    }
+  };
+
   const runRateLimitPurge = async (): Promise<void> => {
     try {
       const removed = await resolveRateLimitStore(db).purgeExpired();
@@ -78,6 +94,7 @@ export function startScheduler(options: {
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
+    await runRetentionSweep();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
       await runRateLimitPurge();

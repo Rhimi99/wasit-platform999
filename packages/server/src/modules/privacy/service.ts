@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lte } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
@@ -597,6 +597,80 @@ export async function advanceDeletionStage(
     },
   );
   return { stage };
+}
+
+/**
+ * System job: move deletion requests forward once their retention window has
+ * elapsed.
+ *
+ * A request is created in DEACTIVATED with a `retentionUntil` deadline resolved
+ * from the Policy Engine. Nothing acted on that deadline before, so a request
+ * could stay DEACTIVATED forever and only a human remembering the date would
+ * move it. This sweep advances every request whose window has elapsed by one
+ * stage per run:
+ *   DEACTIVATED → RETENTION → ELIGIBLE
+ *
+ * The deadline is the gate, so requests still inside their window (including
+ * freshly created ones) are never touched. The run is convergent rather than a
+ * no-op: repeat runs walk a due request forward one stage at a time and stop at
+ * ELIGIBLE. It deliberately does NOT anonymize — scrubbing PII is irreversible
+ * and stays a reviewed, audited operator decision.
+ *
+ * Safe to run concurrently: each transition updates with a stage guard in the
+ * WHERE clause, so a second worker (or a manual advance that raced it) affects
+ * zero rows. Only rows the job actually moved are audited.
+ */
+export async function advanceDueDeletionRetentions(db: DB): Promise<{
+  retained: number;
+  eligible: number;
+  requestIds: string[];
+}> {
+  const now = new Date();
+
+  const due = await db
+    .select({ id: dataDeletionRequests.id, stage: dataDeletionRequests.stage })
+    .from(dataDeletionRequests)
+    .where(
+      and(
+        inArray(dataDeletionRequests.stage, ['DEACTIVATED', 'RETENTION']),
+        isNotNull(dataDeletionRequests.retentionUntil),
+        lte(dataDeletionRequests.retentionUntil, now),
+      ),
+    );
+
+  let retained = 0;
+  let eligible = 0;
+  const requestIds: string[] = [];
+
+  for (const row of due) {
+    const targetStage: DeletionStage = row.stage === 'DEACTIVATED' ? 'RETENTION' : 'ELIGIBLE';
+    const updated = await db
+      .update(dataDeletionRequests)
+      .set({ stage: targetStage, updatedAt: new Date() })
+      // Guard on the stage we read: if a human already moved it, this is a no-op.
+      .where(and(eq(dataDeletionRequests.id, row.id), eq(dataDeletionRequests.stage, row.stage)))
+      .returning({ id: dataDeletionRequests.id, userId: dataDeletionRequests.userId });
+    if (updated.length === 0) continue;
+
+    if (targetStage === 'RETENTION') retained += 1;
+    else eligible += 1;
+    requestIds.push(row.id);
+
+    await writeAudit(
+      db,
+      { actorId: null },
+      {
+        action: 'PRIVACY.DELETION_STAGE',
+        entityType: 'USER',
+        entityId: updated[0].userId,
+        before: { stage: row.stage },
+        after: { requestId: row.id, stage: targetStage },
+        metadata: { automated: true, job: 'retention-sweep' },
+      },
+    );
+  }
+
+  return { retained, eligible, requestIds };
 }
 
 /** Admin: list deletion requests. */

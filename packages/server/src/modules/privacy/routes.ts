@@ -17,6 +17,7 @@ import {
   getDeletionRequest,
   listDeletionRequests,
   advanceDeletionStage,
+  advanceDueDeletionRetentions,
 } from './service.js';
 
 /**
@@ -130,6 +131,19 @@ adminPrivacyRoutes.get(
     const ctx = getContext(c);
     const q = getValidatedQuery(c) as z.infer<typeof listDeletionQuery>;
     return c.json({ success: true, data: await listDeletionRequests(ctx.db, q.stage) });
+  },
+);
+
+// POST /api/admin/privacy/deletions/retention-sweep — run the retention window
+// sweep on demand. The scheduler runs the same job hourly; this route exists so
+// an operator can act without waiting for the tick, and so the behaviour is
+// observable/testable through the product rather than only in background work.
+adminPrivacyRoutes.post(
+  '/deletions/retention-sweep',
+  async (c) => {
+    const ctx = getContext(c);
+    const result = await advanceDueDeletionRetentions(ctx.db);
+    return c.json({ success: true, data: result });
   },
 );
 
