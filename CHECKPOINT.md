@@ -5,6 +5,34 @@
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
 ---
 
+## ✅ حالة معتمدة — A3: REFUNDS FROM THE ADMIN UI (2026-09-22)
+
+**الهدف**: إغلاق أول فجوة داخلية حقيقية بعد E5 حسب ترتيب الـroadmap. الفجوة لم تكن في قدرة الخادم — الاسترداد منفَّذ ومُختبَر بالكامل على مستوى الـAPI — بل في **سطح المستخدم**: لم يكن هناك أي زر أو مسار في الواجهة يُنشئ استردادًا، فكان `api.createRefund` بلا مستدعٍ واحد، وصفحة `/admin/orders` للقراءة فقط. أي أن المشغّل (ADMIN/SUPER_ADMIN فقط) لا يستطيع تنفيذ الاسترداد من المنتج إطلاقًا.
+
+**دليل الفجوة قبل الإصلاح**:
+- `packages/web/src/lib/api.ts`: `createRefund` موجود، وصفر مستدعين في `packages/web/src/**/*.tsx`.
+- `AdminOrdersPage`: جدول بلا عمود حالة دفع وبلا أي إجراء.
+- `e2e/payments.spec.ts`: كان يثبت الاسترداد عبر `page.request` (HTTP خام) لا عبر الواجهة.
+
+**ما تم**:
+
+| البند | النتيجة |
+| --- | --- |
+| **`GET /api/admin/orders`** | ✅ يُسقط الآن `paymentStatus` + `refundStatus` + `currencyCode` (أعمدة موجودة أصلًا — **لا migration ولا تغيير schema**) حتى تعرف الواجهة أي طلب قابل للاسترداد |
+| **زر الاسترداد في `/admin/orders`** | ✅ يظهر فقط لـ`PAID`/`PARTIALLY_REFUNDED`؛ يفتح لوحة تعرض تاريخ الاستردادات ثم نموذجًا (المبلغ اختياري = كامل المتبقي، والسبب اختياري) |
+| **نتيجة مرئية للمستخدم** | ✅ إشعار نجاح + تحديث الصف إلى `REFUNDED`/`PARTIALLY_REFUNDED`، وسجل الاستردادات في اللوحة |
+| **إصلاح سبب حقيقي (UX)** | ✅ كان `message` العام `"Validation failed"` يُعرض بدل السبب الفعلي (`Refund exceeds remaining refundable amount 316.2000`) لأن **نوع الواجهة كان خاطئًا**: `fieldErrors?: Record<string,string[]>` بينما الشكل الفعلي على السلك `FieldError[]`، فلا يستطيع أي مستدعٍ قراءته. صُحّح النوع + أُضيف `apiErrorMessage()` (يفضّل رسائل الحقول) و`apiCall` يستخدمه ⇒ كل الواجهة تستفيد |
+| **RBAC دون تغيير** | ✅ الاسترداد يبقى خلف `refund:manage` على الخادم؛ العميل لا يمنح صلاحية |
+| **idempotency** | ✅ مفتاح جديد لكل فتح نموذج ⇒ ضغط مزدوج يعيد نفس الاسترداد بدل استردادين |
+| **Server test** | ✅ اختبار جديد: الإسقاط الإداري يحمل `PAID`/`NONE`/`TND` ثم `REFUNDED`/`COMPLETED` — **519/519** |
+| **Full E2E من الواجهة** | ✅ 3 اختبارات متصفح حقيقية (`e2e/admin-refunds.spec.ts`): استرداد كامل (زر + إشعار + صف + تحقق مستقل عبر API + قيد `REFUND`/`DEBIT` في الـLedger)، ورفض over-refund مع إظهار السبب وبقاء الطلب `PAID`، واسترداد جزئي يبقي الطلب قابلًا للاسترداد — **148/148** |
+| **Typecheck + build** | ✅ نظيف (`@wasit/server` + `@wasit/web` + build الويب) |
+
+**دون مساس**: Commission Policy 4% = 2%+2%، وMarketing Video Agent (commit `89e68d7`)، وG/H/I/J، وE2–E5.
+
+---
+
+
 ## ✅ حالة معتمدة — E4/E5: BACKUP AUTOMATION + MONITORING/ALERTING (2026-09-22)
 
 **الهدف**: إكمال آخر بند فعلي متبقٍّ في Deployment/Staging Hardening حسب ترتيب الـroadmap — تشغيل النسخ الاحتياطي تلقائيًا، وربطه بالمراقبة بحيث لا يموت الجدول صامتًا.

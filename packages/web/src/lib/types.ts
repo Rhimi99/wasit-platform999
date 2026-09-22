@@ -31,11 +31,17 @@ export interface MfaEnrollment {
   recoveryCodes: string[];
 }
 
+export interface FieldError {
+  field: string;
+  message: string;
+  code: string;
+}
+
 export interface ApiErrorShape {
   code: string;
   message: string;
   statusCode?: number;
-  fieldErrors?: Record<string, string[]>;
+  fieldErrors?: FieldError[];
   traceId?: string;
 }
 
@@ -267,7 +273,27 @@ export type OrderStatus =
   | 'SHIPPED'
   | 'DELIVERED'
   | 'COMPLETED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'REFUNDED'
+  | 'DISPUTED';
+
+export type OrderPaymentStatus =
+  | 'UNPAID'
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'PAID'
+  | 'FAILED'
+  | 'REFUNDED'
+  | 'PARTIALLY_REFUNDED';
+
+export type OrderRefundStatus =
+  | 'NONE'
+  | 'REQUESTED'
+  | 'PROCESSING'
+  | 'APPROVED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'REJECTED';
 
 export interface Order {
   id: string;
@@ -281,6 +307,8 @@ export interface Order {
   paymentFee: string;
   grandTotal: string;
   status: OrderStatus;
+  paymentStatus?: OrderPaymentStatus;
+  refundStatus?: OrderRefundStatus;
   createdAt: string;
   items?: OrderItem[];
   seller?: { id: string; name: string | null; type: SellerType };

@@ -323,6 +323,28 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
     expect(r.status).toBe(409);
   });
 
+  it('exposes the refund state needed by the admin orders UI projection', async () => {
+    const s = await setupPaidOrderBase();
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    await postWebhook({ eventId: `evt-o-${Date.now()}`, type: 'payment.succeeded', externalRef: intent.data.data.intent.externalRef as string });
+
+    // Before refunding: the admin order list must carry the fields the UI uses
+    // to decide whether a refund button is legitimate.
+    const before = await s.admin.req('/api/admin/orders');
+    expect(before.status).toBe(200);
+    const beforeRow = (before.data.data.items as Array<Record<string, unknown>>).find((o) => o.id === s.orderId)!;
+    expect(beforeRow.paymentStatus).toBe('PAID');
+    expect(beforeRow.refundStatus).toBe('NONE');
+    expect(beforeRow.currencyCode).toBe('TND');
+
+    await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'ui projection' } });
+
+    const after = await s.admin.req('/api/admin/orders');
+    const afterRow = (after.data.data.items as Array<Record<string, unknown>>).find((o) => o.id === s.orderId)!;
+    expect(afterRow.paymentStatus).toBe('REFUNDED');
+    expect(afterRow.refundStatus).toBe('COMPLETED');
+  });
+
   it('does not leak payment data to unrelated users (ownership enforced)', async () => {
     const s = await setupPaidOrderBase();
     const stranger = makeClient();

@@ -127,7 +127,12 @@ adminRoutes.get('/orders', async (c) => {
       commission: orders.commission,
       buyerCommission: orders.buyerCommission,
       grandTotal: orders.grandTotal,
+      currencyCode: orders.currencyCode,
       status: orders.status,
+      // Refund state is needed by the admin UI to decide whether an order can be
+      // refunded (only PAID / PARTIALLY_REFUNDED) and to show what already went back.
+      paymentStatus: orders.paymentStatus,
+      refundStatus: orders.refundStatus,
       createdAt: orders.createdAt,
     })
     .from(orders)

@@ -17,16 +17,16 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
-  DeletionRequestRow, DeletionStage, RetentionSweepResult,
+  DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
 } from './types';
 
 export class ApiClientError extends Error {
   code: string;
   statusCode?: number;
-  fieldErrors?: Record<string, string[]>;
+  fieldErrors?: FieldError[];
   traceId?: string;
 
-  constructor(message: string, code: string, statusCode?: number, fieldErrors?: Record<string, string[]>, traceId?: string) {
+  constructor(message: string, code: string, statusCode?: number, fieldErrors?: FieldError[], traceId?: string) {
     super(message);
     this.name = 'ApiClientError';
     this.code = code;
@@ -34,6 +34,18 @@ export class ApiClientError extends Error {
     this.fieldErrors = fieldErrors;
     this.traceId = traceId;
   }
+}
+
+/**
+ * Prefers the field-level reason over the generic envelope message: the server
+ * says "Refund exceeds remaining refundable amount 316.2000" in fieldErrors while
+ * `message` is only "Validation failed".
+ */
+export function apiErrorMessage(e: unknown): string {
+  if (e instanceof ApiClientError) {
+    return e.fieldErrors?.map((f) => f.message).join('; ') || e.message;
+  }
+  return e instanceof Error ? e.message : 'unknown error';
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -353,6 +365,11 @@ export const api = {
   },
   async adminOrders() {
     return request<{ items: Order[] }>('/api/admin/orders');
+  },
+  async orderRefunds(orderId: string) {
+    return request<{ id: string; amount: string; currencyCode: string; status: string; reason: string | null; createdAt: string }[]>(
+      `/api/payments/orders/${orderId}/refunds`,
+    );
   },
   async adminTransactions() {
     return request<{ items: Transaction[] }>('/api/admin/transactions');
@@ -1021,9 +1038,6 @@ export async function apiCall<T>(fn: () => Promise<T>): Promise<{ data: T | null
     const data = await fn();
     return { data, error: null };
   } catch (e) {
-    if (e instanceof ApiClientError) {
-      return { data: null, error: e.message };
-    }
-    return { data: null, error: e instanceof Error ? e.message : 'unknown error' };
+    return { data: null, error: apiErrorMessage(e) };
   }
 }

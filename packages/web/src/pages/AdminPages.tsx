@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
+import { api, apiCall, apiErrorMessage, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
@@ -342,6 +342,14 @@ export function AdminOrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [refunds, setRefunds] = useState<Array<{ id: string; amount: string; currencyCode: string; status: string; reason: string | null; createdAt: string }>>([]);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [refundError, setRefundError] = useState<string | null>(null);
 
   useEffect(() => {
     apiCall(() => api.adminOrders()).then((res) => {
@@ -349,28 +357,132 @@ export function AdminOrdersPage() {
       setError(res.error);
       setLoading(false);
     });
-  }, []);
+  }, [reloadKey]);
+
+  const refundable = (o: Order) => o.paymentStatus === 'PAID' || o.paymentStatus === 'PARTIALLY_REFUNDED';
+
+  async function openRefund(order: Order) {
+    setOpenId(order.id);
+    setAmount('');
+    setReason('');
+    setNotice(null);
+    setRefundError(null);
+    const res = await apiCall(() => api.orderRefunds(order.id));
+    setRefunds(res.data ?? []);
+  }
+
+  async function submitRefund(order: Order) {
+    setBusy(true);
+    setRefundError(null);
+    // A fresh key per open form makes a double-click idempotent server-side
+    // rather than issuing two refunds.
+    try {
+      const res = await api.createRefund(order.id, {
+        amount: amount.trim() || undefined,
+        reason: reason.trim() || undefined,
+        idempotencyKey: `admin-ui-${order.id}-${Date.now()}`,
+      });
+      setNotice(`${t('admin.refund.done')}: ${formatMoney(res.refund.amount, res.refund.currencyCode)}`);
+      setOpenId(null);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      // The service explains *why* (e.g. "Refund exceeds remaining refundable
+      // amount …") in fieldErrors; showing only "Validation failed" would hide
+      // the actionable reason from the operator.
+      setRefundError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const active = orders.find((o) => o.id === openId) ?? null;
 
   return (
     <AppLayout>
       <SectionHeader title={t('admin.orders')} />
+      {notice && <p className="mb-2 text-sm text-green-700" role="status" data-testid="admin-refund-notice">{notice}</p>}
       {loading ? <Spinner /> : error ? <ErrorState message={error} /> : orders.length === 0 ? <EmptyState title={t('common.noData')} /> : (
         <Card className="overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>#</th><th>{t('common.status')}</th><th>{t('order.sellerCommission')}</th><th>{t('order.buyerCommission')}</th><th>{t('common.total')}</th><th>{t('common.date')}</th></tr></thead>
+            <thead><tr><th>#</th><th>{t('common.status')}</th><th>{t('order.payment')}</th><th>{t('order.sellerCommission')}</th><th>{t('order.buyerCommission')}</th><th>{t('common.total')}</th><th>{t('common.date')}</th><th>{t('common.actions')}</th></tr></thead>
             <tbody>
               {orders.map((o) => (
-                <tr key={o.id}>
+                <tr key={o.id} data-testid={`admin-order-${o.id}`}>
                   <td>{o.orderNumber}</td>
                   <td>{o.status}</td>
+                  <td>{o.refundStatus && o.refundStatus !== 'NONE' ? `${o.paymentStatus} · ${o.refundStatus}` : (o.paymentStatus ?? '—')}</td>
                   <td>{formatMoney(o.commission, o.currencyCode)}</td>
                   <td>{formatMoney(o.buyerCommission ?? '0', o.currencyCode)}</td>
                   <td>{formatMoney(o.grandTotal, o.currencyCode)}</td>
                   <td>{formatDate(o.createdAt)}</td>
+                  <td>
+                    {refundable(o) && (
+                      <button
+                        type="button"
+                        data-testid={`admin-order-refund-${o.id}`}
+                        onClick={() => openRefund(o)}
+                        className="text-xs font-medium text-red-600 hover:underline"
+                      >
+                        {t('admin.refund.action')}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </Card>
+      )}
+
+      {active && (
+        <Card className="mt-4" testId="admin-refund-panel">
+          <h3 className="text-sm font-bold text-slate-900">{t('admin.refund.title')} — {active.orderNumber}</h3>
+          <p className="mt-1 text-xs text-slate-500">{t('admin.refund.hint')}</p>
+          {refunds.length > 0 && (
+            <ul className="mt-2 space-y-1" data-testid="admin-refund-history">
+              {refunds.map((r) => (
+                <li key={r.id} className="text-xs text-slate-600">
+                  {formatMoney(r.amount, r.currencyCode)} · {r.status}{r.reason ? ` — ${r.reason}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <label className="text-xs text-slate-600">
+              {t('admin.refund.amount')}
+              <input
+                type="text"
+                data-testid="admin-refund-amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder={t('admin.refund.amountPlaceholder')}
+                className="ms-2 rounded border border-slate-300 px-2 py-1 text-sm"
+              />
+            </label>
+            <label className="text-xs text-slate-600">
+              {t('admin.refund.reason')}
+              <input
+                type="text"
+                data-testid="admin-refund-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="ms-2 rounded border border-slate-300 px-2 py-1 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              data-testid="admin-refund-submit"
+              disabled={busy}
+              onClick={() => submitRefund(active)}
+              className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {busy ? '…' : t('admin.refund.submit')}
+            </button>
+            <button type="button" onClick={() => setOpenId(null)} className="text-xs text-slate-500 hover:underline">
+              {t('common.cancel')}
+            </button>
+          </div>
+          {refundError && <p className="mt-2 text-sm text-red-600" role="alert">{refundError}</p>}
         </Card>
       )}
     </AppLayout>
