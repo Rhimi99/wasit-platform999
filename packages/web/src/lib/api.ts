@@ -15,6 +15,7 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
+  ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -918,6 +919,30 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
     });
+  },
+
+  // ---- Admin observability (server enforces ADMIN_SYSTEM) ----
+  async adminObservabilityMetrics() {
+    return request<ObservabilityDashboard>('/api/admin/observability/metrics');
+  },
+  async adminObservabilityLogs(params: { level?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.level) qs.set('level', params.level);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<ObservabilityLogRecord[]>(`/api/admin/observability/logs${suffix}`);
+  },
+  async adminObservabilityAlerts(params: { status?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AlertEventRow[]; meta: { firing: ObservabilityFiringAlert[]; lastEvaluatedAt: string | null } }>(
+      `/api/admin/observability/alerts${suffix}`,
+    );
+  },
+  async adminEvaluateAlerts() {
+    return request<AlertEvaluationResult>('/api/admin/observability/alerts/evaluate', { method: 'POST' });
   },
 };
 

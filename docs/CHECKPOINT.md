@@ -1,8 +1,42 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-21**
+آخر تحديث: **2026-09-22**
 
-## Milestone G.1 — إغلاق تذبذب E2E: إصلاح سببي جذري (هذه الجلسة — مكتمل)
+## Milestone H — Admin Observability UI: لوحة المراقبة التشغيلية داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+
+### الهدف
+سدّ فجوة "قدرة خلفية بلا واجهة" التالية بعد Milestone G. كل مسارات `/api/admin/observability/*` (المؤشرات، اللوج المركزي، سجل التنبيهات، وتقييم التنبيهات الفوري) كانت منفّذة ومختبرة خادميًا (C2، AD-039، `observability.test.ts` 23 حالة) لكن **لا صفحة أدمن واحدة تستدعيها**. بُنيت لوحة `/admin/observability` بتبويبات تعمل على الخادم الحقيقي فقط — بلا schema ولا migrations ولا قيم مثبّتة.
+
+### ما بُني
+- **`packages/web/src/pages/AdminObservabilityPage.tsx`**: 4 تبويبات — نظرة عامة / المؤشرات / اللوج / التنبيهات:
+  - **نظرة عامة**: KPIs حية (`wasit_http_requests_total`, `wasit_http_errors_total`, عدد التنبيهات المشتعلة، `wasit_db_up`)، قناة التنبيه (`alertStatus`)، آخر تقييم، شارات التنبيهات المشتعلة، وجدول كمون p50/p95/p99 من الهيستوغرام.
+  - **المؤشرات**: جداول العدّادات والمقاييس اللحظية والهيستوغرامات من `metrics.snapshot()` مباشرة.
+  - **اللوج**: `recentLogs` مع تصفية حقيقية حسب المستوى (`?level=`) والتطبيق يعيد الجلب من الخادم.
+  - **التنبيهات**: `alertEvents` من قاعدة البيانات + زر **تقييم الآن** (`POST /alerts/evaluate`) الذي يُنتج انتقالات ويُدوَّن في Audit.
+- **طبقة API/الأنواع**: `adminObservabilityMetrics`, `adminObservabilityLogs`, `adminObservabilityAlerts`, `adminEvaluateAlerts` + أنواع `ObservabilityDashboard`, `ObservabilityMetricsSnapshot`, `ObservabilityLogRecord`, `AlertEventRow`, `AlertEvaluationResult`.
+- **الربط**: مسار `/admin/observability` في `App.tsx` (AdminOnly)، رابط في `ADMIN_NAV`، ترجمات كاملة ar/en/fr/zh (44 مفتاحًا × 4).
+
+### ملاحظة تشخيصية (فرق عن الاعتماد على HTTP 200)
+- أسماء المؤشرات الحقيقية هي `wasit_http_requests_total` / `wasit_http_errors_total` / `wasit_db_up`، وليست بأسماء مختصرة — قُرئت من `lib/observability/metrics.ts` لا من التخمين.
+- مؤشر `wasit_db_up` يُضبط فقط عند تقييم التنبيهات (‏`alerts.ts`)، لذا يعتمد عليه اختبار القائمة على `wasit_uptime_seconds` المضمون بدلًا منه.
+
+### الاختبارات والتحقق
+- جديد: `e2e/admin-observability.spec.ts` — **5/5**: فتح اللوحة من الشريط الجانبي ومطابقة KPI للمخزون الحيّ، تقييم التنبيهات من الواجهة + التحقق من أثر Audit خادميًا (`OBSERVABILITY.ALERTS_EVALUATED`)، تصفية اللوج حسب المستوى ومطابقتها لاستجابة الـAPI، شارات التنبيهات المشتعلة، وRBAC (تاجر ⇒ Forbidden + 403 على كل مسارات observability).
+- `/admin/observability` أُضيف إلى قائمة أسطح الأدمن في `e2e/functional-audit.spec.ts`.
+- **إصلاح خطأ كامن حقيقي** في `e2e/admin-subscriptions.spec.ts`: الاختبار الأول كان يفترض "بيانات اشتراكات مزروعة"، بينما `seed.ts`/`seed-demo.ts` **لا تُنشئ أي اشتراك** — فينجح فقط إذا سبقه تشغيل آخر أنشأ اشتراكًا (نجاح زائف/اعتماد على ترتيب). صار يُنشئ اشتراكًا حقيقيًا قبل فتح الصفحة (نفس مساعد الملف).
+- **Full E2E على قاعدة نظيفة (بعد TRUNCATE لجدول subscriptions)**: **118/118**.
+- **Server**: 47 ملفًا / **482/482**.
+- **Typecheck** (server + web) و**Build** (server prod-bundle + web) = نظيف.
+
+### البيئة (بدون reset/drop)
+- الحاوية أُعيد إنشاؤها فلم تكن Postgres مثبّتة/قائمة. أُعيد التركيب والتشغيل (`pg_ctlcluster 17 main start`)، وأُنشئ دور `wasit` وقاعدتا `wasit_dev`/`wasit_test` **من الصفر** (لم تكن موجودة)، ثم `db:migrate` + `seed` + `seed-demo`. **لا** DB reset/drop/push لأي بيانات قائمة.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**.
+- **Marketing Video Agent (89e68d7)** بلا مساس.
+- لا migrations جديدة (اللوحة تقرأ schema قائمًا فقط).
+
+## Milestone G.1 — إغلاق تذبذب E2E: إصلاح سببي جذري (الجلسة السابقة — مكتمل)
 
 ### الهدف
 اختفاء "تذبذب" اختبارات الطلب (`payments`/`marketplace`/`disputes`/`functional-audit`) الذي كان يظهر بشكل عشوائي في اختبار مختلف كل تشغيل. المطلوب سبب حقيقي لا إخفاء خطأ.

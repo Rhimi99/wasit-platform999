@@ -317,6 +317,7 @@ test.describe('ADMIN — every admin surface', () => {
     ['/admin/policies', /سياسات النزاعات|Dispute policies/i],
     ['/admin/subscriptions', /إدارة الاشتراكات|Subscription management/i],
     ['/admin/ai', /حوكمة الذكاء الاصطناعي|AI governance/i],
+    ['/admin/observability', /المراقبة التشغيلية|Observability/i],
   ];
 
   for (const [path, heading] of ADMIN_PAGES) {

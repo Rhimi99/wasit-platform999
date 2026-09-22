@@ -87,6 +87,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/policies', key: 'admin.policies', icon: '📜' },
   { to: '/admin/subscriptions', key: 'admin.subscriptions', icon: '🔁' },
   { to: '/admin/ai', key: 'admin.aiGovernance', icon: '🤖' },
+  { to: '/admin/observability', key: 'admin.observability', icon: '📈' },
   { to: '/admin/audit', key: 'admin.audit', icon: '🔎' },
 ];
 

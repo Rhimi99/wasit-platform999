@@ -973,3 +973,60 @@ export interface ServedAdRow {
   objective: string;
   advertiserType: string;
 }
+
+// ---- Admin observability (server enforces ADMIN_SYSTEM) ----
+
+export interface ObservabilityMetricSeries {
+  labels: Record<string, string>;
+  count: number;
+  sum: number;
+  quantiles: Record<string, number>;
+}
+
+export interface ObservabilityMetricsSnapshot {
+  counters: Record<string, Array<{ labels: Record<string, string>; value: number }>>;
+  gauges: Record<string, Array<{ labels: Record<string, string>; value: number }>>;
+  histograms: Record<string, ObservabilityMetricSeries[]>;
+}
+
+export interface ObservabilityFiringAlert {
+  rule: string;
+  firedAt: string | null;
+}
+
+export interface ObservabilityDashboard {
+  metrics: ObservabilityMetricsSnapshot;
+  alerts: {
+    firing: ObservabilityFiringAlert[];
+    lastEvaluatedAt: string | null;
+    notifier: { notifier: string; available: boolean };
+  };
+  db: 'configured' | 'missing';
+}
+
+export interface ObservabilityLogRecord {
+  time: string;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  msg: string;
+  traceId?: string;
+}
+
+export interface AlertEventRow {
+  id: string;
+  rule: string;
+  severity: string;
+  status: 'FIRING' | 'RESOLVED';
+  summary: string;
+  details: Record<string, unknown> | null;
+  notifiedChannel: string | null;
+  notifiedResult: string | null;
+  startedAt: string;
+  resolvedAt: string | null;
+  createdAt: string;
+}
+
+export interface AlertEvaluationResult {
+  evaluated: number;
+  fired: string[];
+  resolved: string[];
+}

@@ -41,6 +41,10 @@ test.describe('Admin subscriptions desk', () => {
   test.use({ storageState: storageFor('admin') });
 
   test('sidebar link opens the desk and renders live plans + subscriptions + invoices', async ({ page }) => {
+    // The seeder does not create subscriptions, and the desk loads its data on
+    // mount, so mint a real subscription before opening the page.
+    const { subscriptionId, invoiceId } = await createSubscribedCustomer('SMALL_MERCHANT');
+
     await page.goto('/admin');
     await page.locator('aside nav a[href="/admin/subscriptions"]').click();
     await expect(page).toHaveURL(/\/admin\/subscriptions/);
@@ -60,11 +64,11 @@ test.describe('Admin subscriptions desk', () => {
     const normalize = (s: string) => s.replace(/[\u202f\u00a0]/g, ' ');
     await expect.poll(async () => normalize(await card.innerText())).toContain(normalize(expected));
 
-    // Subscriptions + invoices tabs render rows (seeded demo data exists).
+    // Subscriptions + invoices tabs render the subscription created above.
     await page.getByTestId('admin-sub-tab-subscriptions').click();
-    await expect.poll(async () => page.locator('[data-testid^="admin-sub-"] tbody tr').count()).toBeGreaterThan(0);
+    await expect(page.getByTestId(`admin-sub-${subscriptionId}`)).toBeVisible();
     await page.getByTestId('admin-sub-tab-invoices').click();
-    await expect.poll(async () => page.locator('[data-testid^="admin-sub-invoice-"]').count()).toBeGreaterThan(0);
+    await expect(page.getByTestId(`admin-sub-invoice-${invoiceId}`)).toBeVisible();
   });
 
   test('toggling a plan activates/deactivates it server-side and back', async ({ page }) => {
