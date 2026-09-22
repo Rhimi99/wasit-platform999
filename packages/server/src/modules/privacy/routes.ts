@@ -44,6 +44,12 @@ const listDeletionQuery = z.object({
   stage: z.string().optional(),
 });
 
+// The deletion limiter runs before auth, so it keys on the caller's IP. A suite
+// that files several real deletion requests would trip the production default
+// (2/5min), so — like the auth limits — it is overridable for the E2E process
+// only. The production default is unchanged.
+const deletionRateMax = Number(process.env.RATE_LIMIT_DELETION_MAX ?? 2);
+
 // GET /api/privacy/me — current consent state + privacy preferences
 privacyRoutes.get('/me', requireAuth, async (c) => {
   const ctx = getContext(c);
@@ -87,7 +93,7 @@ privacyRoutes.post(
 // POST /api/privacy/deletion — request account deletion (deactivates immediately)
 privacyRoutes.post(
   '/deletion',
-  rateLimit({ windowSeconds: 300, max: 2, keyPrefix: 'privacy-deletion' }),
+  rateLimit({ windowSeconds: 300, max: deletionRateMax, keyPrefix: 'privacy-deletion' }),
   requireAuth,
   validateBody(deletionSchema),
   async (c) => {

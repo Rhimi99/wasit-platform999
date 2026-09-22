@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
@@ -605,17 +605,35 @@ export async function listDeletionRequests(db: DB, stage?: string) {
     ? [eq(dataDeletionRequests.stage, stage as DeletionStage)]
     : [];
   const rows = await db
-    .select()
+    .select({
+      requestId: dataDeletionRequests.id,
+      userId: dataDeletionRequests.userId,
+      stage: dataDeletionRequests.stage,
+      reason: dataDeletionRequests.reason,
+      requestedBy: dataDeletionRequests.requestedBy,
+      retentionUntil: dataDeletionRequests.retentionUntil,
+      retentionPolicy: dataDeletionRequests.retentionPolicy,
+      createdAt: dataDeletionRequests.createdAt,
+      email: users.email,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      isActive: users.isActive,
+    })
     .from(dataDeletionRequests)
+    .leftJoin(users, eq(dataDeletionRequests.userId, users.id))
     .where(conditions.length ? (conditions[0] as never) : undefined)
-    .orderBy(dataDeletionRequests.createdAt);
+    .orderBy(desc(dataDeletionRequests.createdAt));
   return rows.map((r) => ({
-    requestId: r.id,
+    requestId: r.requestId,
     userId: r.userId,
+    userEmail: r.email,
+    userName: [r.firstName, r.lastName].filter(Boolean).join(' ') || null,
+    accountActive: r.isActive,
     stage: r.stage,
     reason: r.reason,
     requestedBy: r.requestedBy,
     retentionUntil: r.retentionUntil ? String(r.retentionUntil) : null,
+    retentionPolicy: r.retentionPolicy,
     createdAt: String(r.createdAt),
   }));
 }

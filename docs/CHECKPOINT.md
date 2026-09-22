@@ -2,7 +2,44 @@
 
 آخر تحديث: **2026-09-22**
 
-## Milestone H — Admin Observability UI: لوحة المراقبة التشغيلية داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+## Milestone I — Admin Privacy / Data-Deletion Desk: لوحة الخصوصية وحذف البيانات داخل لوحة الأدمن (هذه الجلسة — مكتمل)
+
+### الهدف
+سدّ فجوة "قدرة خلفية بلا واجهة" التالية بعد Milestone H. كل مسارات `/api/admin/privacy/*` (‏`GET /deletions`، ‏`PATCH /deletions/:id`) كانت منفّذة ومختبرة خادميًا (`security-privacy.test.ts`) لكن **لا صفحة أدمن واحدة تستدعيها**، ولا يوجد أي عميل API في الويب يقرأ قائمة طلبات الحذف أو يحرّك مراحلها. بُنيت لوحة `/admin/privacy` تعمل على الخادم الحقيقي فقط — بلا schema ولا migrations ولا قيم مثبّتة.
+
+### ما بُني
+- **`packages/server/src/modules/privacy/service.ts`**: إثراء `listDeletionRequests(db, stage?)` ليُرجع بيانات العرض الحقيقية (‏`requestId`, `userId`, `userEmail`, `stage`, `reason`, `retentionUntil`, `accountActive`, `createdAt`) عبر join مع `users` وترتيب `desc(createdAt)` — بدلًا من الصفوف الخام وحدها.
+- **`packages/web/src/lib/types.ts`**: أنواع `DeletionStage`, `DeletionRequestRow`.
+- **`packages/web/src/lib/api.ts`**: `adminDeletionRequests({ stage })` و`adminAdvanceDeletion(requestId, stage, { legalHoldOverride })`.
+- **`packages/web/src/pages/AdminPrivacyPage.tsx`**: KPIs حية لكل مرحلة، تصفية بالمرحلة تُعيد الجلب من الخادم، جدول الطلبات مع أزرار تحريك المرحلة، وتأكيد قبل تجاوز الاستبقاء القانوني.
+- **الربط**: مسار `/admin/privacy` في `App.tsx` (AdminOnly)، رابط `admin.privacy` في `AdminSidebar`، ترجمات كاملة ar/en/fr/zh (24 مفتاحًا × 4).
+
+### أخطاء حقيقية اكتُشفت وأُصلحت (السبب الجذري، لا إخفاء الخطأ)
+1. **شكل استجابة الخادم**: `GET /api/admin/privacy/deletions` يُرجع `data` كـ**مصفوفة مباشرة**، لا `{ items: [...] }`. الواجهة كانت تقرأ `res.data?.items` ⇒ اللوحة تعرض "لا توجد طلبات حذف" دائمًا رغم وجود الصفوف في قاعدة البيانات (تأكيد بـ SQL: 5 صفوف `DEACTIVATED`). أُصلح العميل والأنواع لتقرأ المصفوفة مباشرة.
+2. **محدِّد معدّل الحذف يعمل قبل المصادقة**: `rateLimit({ windowSeconds: 300, max: 2, keyPrefix: 'privacy-deletion' })` يُمفتَح على IP قبل `requireAuth`، فسويت يرفع عدة طلبات حذف حقيقية يُصطدم بـ429 (نجاح زائف/فشل غير سببي). جُعل الحد قابلًا للتجاوز بالبيئة `RATE_LIMIT_DELETION_MAX` بنفس نمط `RATE_LIMIT_LOGIN_MAX`/`RATE_LIMIT_REGISTER_MAX` — **القيمة الافتراضية للإنتاج 2 كما هي**، ويُرفع فقط في `playwright.config.ts` لعملية E2E.
+
+### الاختبارات والتحقق
+- جديد: `e2e/admin-privacy.spec.ts` — **6/6**:
+  1. فتح اللوحة من الشريط الجانبي + ظهور الطلب الحقيقي ببريد الحساب الحقيقي + مطابقة KPI للمخزون الحيّ من الـAPI.
+  2. تحريك الطلب من الواجهة ⇒ التحقق من الاستمرارية خادميًا + أثر Audit (`PRIVACY.DELETION_STAGE`).
+  3. التصفية بالمرحلة ⇒ عدد الصفوف يطابق استجابة `?stage=REVIEW`.
+  4. الرفض ⇒ `accountActive=true` خادميًا **+ تسجيل دخول حقيقي ينجح** (إثبات أن الحساب صار قابلًا للاستخدام، لا مجرد قراءة علم).
+  5. التجهيل ⇒ `PRIVACY.LEGAL_HOLD_OVERRIDE` + `PRIVACY.DELETION_ANONYMIZED` في Audit، وبقاء صف الطلب بعد مسح الـPII.
+  6. RBAC: تاجر ⇒ صفحة Forbidden + **403** على `GET` و`PATCH`.
+- `/admin/privacy` أُضيف إلى قائمة أسطح الأدمن في `e2e/functional-audit.spec.ts`.
+- **Full E2E**: **125/125** (118 سابقًا + 7 جديد).
+- **Server**: 47 ملفًا / **482/482**.
+- **Typecheck** (server + web) و**Build** (server prod-bundle + web) = نظيف.
+
+### البيئة (بدون reset/drop)
+- الحاوية أُعيد إنشاؤها فلم تكن Postgres مثبّتة/قائمة، ولم تكن Playwright browsers مثبّتة. أُعيد التركيب والتشغيل (`pg_ctlcluster 17 main start`)، وأُنشئ دور `wasit` وقاعدتا `wasit_dev`/`wasit_test` **من الصفر** (لم تكن موجودة)، ثم `db:migrate` + `seed`، ثم `npx playwright install chromium`. **لا** DB reset/drop/push لأي بيانات قائمة.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**.
+- **Marketing Video Agent (89e68d7)** بلا مساس.
+- لا migrations جديدة (اللوحة تقرأ schema قائمًا فقط).
+
+## Milestone H — Admin Observability UI: لوحة المراقبة التشغيلية داخل لوحة الأدمن (مكتمل)
 
 ### الهدف
 سدّ فجوة "قدرة خلفية بلا واجهة" التالية بعد Milestone G. كل مسارات `/api/admin/observability/*` (المؤشرات، اللوج المركزي، سجل التنبيهات، وتقييم التنبيهات الفوري) كانت منفّذة ومختبرة خادميًا (C2، AD-039، `observability.test.ts` 23 حالة) لكن **لا صفحة أدمن واحدة تستدعيها**. بُنيت لوحة `/admin/observability` بتبويبات تعمل على الخادم الحقيقي فقط — بلا schema ولا migrations ولا قيم مثبّتة.

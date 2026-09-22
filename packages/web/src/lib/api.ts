@@ -16,6 +16,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
+  DeletionRequestRow, DeletionStage,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -943,6 +944,24 @@ export const api = {
   },
   async adminEvaluateAlerts() {
     return request<AlertEvaluationResult>('/api/admin/observability/alerts/evaluate', { method: 'POST' });
+  },
+
+  // ---- Admin privacy / data-deletion desk (server enforces ADMIN/SUPER_ADMIN) ----
+  async adminDeletionRequests(params: { stage?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.stage) qs.set('stage', params.stage);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<DeletionRequestRow[]>(`/api/admin/privacy/deletions${suffix}`);
+  },
+  async adminAdvanceDeletion(
+    requestId: string,
+    stage: DeletionStage,
+    opts: { legalHoldOverride?: boolean } = {},
+  ) {
+    return request<{ success: boolean }>(`/api/admin/privacy/deletions/${requestId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ stage, legalHoldOverride: opts.legalHoldOverride ?? false }),
+    });
   },
 };
 

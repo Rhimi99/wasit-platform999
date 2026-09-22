@@ -1030,3 +1030,40 @@ export interface AlertEvaluationResult {
   fired: string[];
   resolved: string[];
 }
+
+// ---- Admin privacy / data-deletion desk (server enforces ADMIN/SUPER_ADMIN) ----
+
+export type DeletionStage =
+  | 'REQUESTED'
+  | 'DEACTIVATED'
+  | 'RETENTION'
+  | 'REVIEW'
+  | 'ELIGIBLE'
+  | 'ANONYMIZED'
+  | 'DELETED'
+  | 'REJECTED';
+
+/** Retention rules captured on the request at creation time (policy snapshot). */
+export interface DeletionRetentionPolicy {
+  defaultRetentionDays: number;
+  legalHoldFinanciallyRequired: boolean;
+  preserves: string[];
+  policySource?: string;
+  policyId?: string | null;
+  policyVersion?: number;
+  countryCode?: string | null;
+}
+
+export interface DeletionRequestRow {
+  requestId: string;
+  userId: string;
+  userEmail: string | null;
+  userName: string | null;
+  accountActive: boolean | null;
+  stage: DeletionStage;
+  reason: string | null;
+  requestedBy: string;
+  retentionUntil: string | null;
+  retentionPolicy: DeletionRetentionPolicy | null;
+  createdAt: string;
+}

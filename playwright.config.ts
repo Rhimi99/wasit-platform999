@@ -40,6 +40,9 @@ export default defineConfig({
         // would 429 mid-suite. Raise it for the E2E process only.
         RATE_LIMIT_LOGIN_MAX: '500',
         RATE_LIMIT_REGISTER_MAX: '500',
+        // The privacy-deletion limiter keys on IP before auth (production default
+        // 2/5min); the privacy desk spec files several real deletion requests.
+        RATE_LIMIT_DELETION_MAX: '500',
         // Exercise the real payment kernel offline (no external acquirer calls).
         PAYMENT_PROVIDER: 'manual',
         PAYMENT_WEBHOOK_SECRET: 'e2e-webhook-secret-0123456789',
