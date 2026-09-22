@@ -5,7 +5,7 @@ import type {
   AdminStats, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
-  DailyKpiRow, DashboardReportRow, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
+  DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
   FavoriteRow, LibraryEntityType, LibraryListResponse, SavedItemRow, SearchHistoryRow,
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
@@ -577,6 +577,20 @@ export const api = {
   },
   async adminAnalyticsReports() {
     return request<{ items: DashboardReportRow[] }>('/api/admin/analytics/reports');
+  },
+  async adminAnalyticsUnitEconomics(params: { currency?: string; windowDays?: number; retentionMonths?: number; ordersPerMonth?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.currency) qs.set('currency', params.currency);
+    if (params.windowDays) qs.set('windowDays', String(params.windowDays));
+    if (params.retentionMonths !== undefined) qs.set('retentionMonths', String(params.retentionMonths));
+    if (params.ordersPerMonth !== undefined) qs.set('ordersPerMonth', String(params.ordersPerMonth));
+    return request<UnitEconomics>(`/api/admin/analytics/unit-economics?${qs.toString()}`);
+  },
+  async adminAnalyticsCohorts(params: { currency?: string; months?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.currency) qs.set('currency', params.currency);
+    if (params.months) qs.set('months', String(params.months));
+    return request<{ items: CohortRow[] }>(`/api/admin/analytics/cohorts?${qs.toString()}`);
   },
   async adminCreateAnalyticsReport(data: { reportCode: string; title: string; reportData?: Record<string, unknown> }) {
     return request<{ id: string }>('/api/admin/analytics/reports', { method: 'POST', body: JSON.stringify(data) });

@@ -4,7 +4,7 @@ import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { AdminStats, ConversionSnapshot, DailyKpiRow, LedgerEntry, Order, PlatformOverview, RetentionSnapshot, RevenueBreakdown, Transaction } from '@/lib/types';
+import type { AdminStats, CohortRow, ConversionSnapshot, DailyKpiRow, LedgerEntry, Order, PlatformOverview, RetentionSnapshot, RevenueBreakdown, Transaction, UnitEconomics } from '@/lib/types';
 
 const LEDGER_ENTRY_KEYS: Record<string, string> = {
   TRANSACTION_VALUE: 'ledger.entry.transactionValue',
@@ -83,6 +83,8 @@ export function AdminAnalyticsPage() {
   const [conversion, setConversion] = useState<ConversionSnapshot | null>(null);
   const [revenue, setRevenue] = useState<RevenueBreakdown | null>(null);
   const [kpis, setKpis] = useState<DailyKpiRow[]>([]);
+  const [unitEconomics, setUnitEconomics] = useState<UnitEconomics | null>(null);
+  const [cohorts, setCohorts] = useState<CohortRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rolling, setRolling] = useState(false);
@@ -97,13 +99,17 @@ export function AdminAnalyticsPage() {
       apiCall(() => api.adminAnalyticsConversion()),
       apiCall(() => api.adminAnalyticsRevenue()),
       apiCall(() => api.adminAnalyticsDailyKpis(14)),
-    ]).then(([ov, rt, cv, rv, kp]) => {
+      apiCall(() => api.adminAnalyticsUnitEconomics({ windowDays: 30 })),
+      apiCall(() => api.adminAnalyticsCohorts({ months: 6 })),
+    ]).then(([ov, rt, cv, rv, kp, ue, co]) => {
       setOverview(ov.data);
       setRetention(rt.data);
       setConversion(cv.data);
       setRevenue(rv.data);
       setKpis(kp.data?.items ?? []);
-      setError(ov.error ?? rt.error ?? cv.error ?? rv.error ?? kp.error);
+      setUnitEconomics(ue.data);
+      setCohorts(co.data?.items ?? []);
+      setError(ov.error ?? rt.error ?? cv.error ?? rv.error ?? kp.error ?? ue.error ?? co.error);
       setLoading(false);
     });
   }, [reloadKey]);
@@ -174,6 +180,89 @@ export function AdminAnalyticsPage() {
               )}
             </Card>
           </div>
+
+          {unitEconomics && (
+            <Card className="mt-6" testId="admin-unit-economics">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-700">{t('analytics.unitEconomics')}</h3>
+                  <p className="mt-0.5 text-xs text-slate-500">{t('analytics.unitEconomicsSubtitle')}</p>
+                </div>
+                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600" dir="ltr">
+                  {unitEconomics.currencyCode} · {t('analytics.windowDays')}: {unitEconomics.windowDays}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded border border-slate-100 p-3">
+                  <p className="text-xs text-slate-500">{t('analytics.cac')}</p>
+                  <p className="mt-1 text-xl font-bold text-slate-900" data-testid="ue-cac">{formatMoney(unitEconomics.cac)}</p>
+                  <p className="mt-0.5 text-xs text-slate-400">{t('analytics.newCustomers')}: {unitEconomics.newCustomers}</p>
+                </div>
+                <div className="rounded border border-slate-100 p-3">
+                  <p className="text-xs text-slate-500">{t('analytics.ltvRealized')}</p>
+                  <p className="mt-1 text-xl font-bold text-slate-900" data-testid="ue-ltv-realized">{formatMoney(unitEconomics.ltvRealized)}</p>
+                  <p className="mt-0.5 text-xs text-slate-400">{t('analytics.customersWithOrders')}: {unitEconomics.customersWithOrders}</p>
+                </div>
+                <div className="rounded border border-slate-100 p-3">
+                  <p className="text-xs text-slate-500">{t('analytics.ltvProjected')}</p>
+                  <p className="mt-1 text-xl font-bold text-slate-900" data-testid="ue-ltv-projected">{formatMoney(unitEconomics.ltvProjected)}</p>
+                  <p className="mt-0.5 text-xs text-amber-600">{t('analytics.projectedNotFact')}</p>
+                </div>
+                <div className="rounded border border-slate-100 p-3">
+                  <p className="text-xs text-slate-500">{t('analytics.ltvCacRatio')}</p>
+                  <p className="mt-1 text-xl font-bold text-slate-900" data-testid="ue-ltv-cac-ratio">{unitEconomics.ltvCacRatio ?? '—'}</p>
+                  <p className="mt-0.5 text-xs text-slate-400">{t('analytics.contributionMargin')}: {Number(unitEconomics.contributionMarginPct).toFixed(2)}%</p>
+                </div>
+              </div>
+              <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.grossMarginTotal')}</dt><dd className="font-semibold text-slate-800">{formatMoney(unitEconomics.grossMarginTotal)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.grossMarginPerOrder')}</dt><dd className="font-semibold text-slate-800">{formatMoney(unitEconomics.grossMarginPerOrder)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.marketingSpend')}</dt><dd className="font-semibold text-slate-800">{formatMoney(unitEconomics.marketingSpend)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.paidOrders')}</dt><dd className="font-semibold text-slate-800">{unitEconomics.paidOrders}</dd></div>
+              </dl>
+              <div className="mt-4 rounded bg-amber-50 p-3" data-testid="ue-assumptions">
+                <p className="text-xs font-medium text-amber-800">{t('analytics.assumptions')} — {t('analytics.assumptionsHint')}</p>
+                <p className="mt-1 text-xs text-amber-700" dir="ltr">
+                  {t('analytics.retentionMonths')}: {unitEconomics.assumptions.assumedRetentionMonths} · {t('analytics.ordersPerMonth')}: {unitEconomics.assumptions.assumedOrdersPerMonth}
+                </p>
+              </div>
+              {unitEconomics.basedOn.length > 0 && (
+                <details className="mt-3 text-xs text-slate-500">
+                  <summary className="cursor-pointer">{t('analytics.basedOn')}</summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {unitEconomics.basedOn.map((b) => <li key={b} dir="ltr">{b}</li>)}
+                  </ul>
+                </details>
+              )}
+            </Card>
+          )}
+
+          <Card className="mt-6" testId="admin-cohorts">
+            <h3 className="text-sm font-semibold text-slate-700">{t('analytics.cohorts')}</h3>
+            <p className="mt-0.5 text-xs text-slate-500">{t('analytics.cohortsSubtitle')}</p>
+            {cohorts.length === 0 ? <p className="mt-3 text-sm text-slate-400">{t('analytics.noCohorts')}</p> : (
+              <table className="table-base mt-3">
+                <thead>
+                  <tr>
+                    <th>{t('analytics.cohortMonth')}</th>
+                    <th>{t('analytics.cohortCustomers')}</th>
+                    <th>{t('analytics.cohortGmv')}</th>
+                    <th>{t('analytics.cohortMargin')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cohorts.map((c) => (
+                    <tr key={c.month}>
+                      <td dir="ltr">{c.month}</td>
+                      <td>{c.customers}</td>
+                      <td>{formatMoney(c.gmv)}</td>
+                      <td>{formatMoney(c.grossMargin)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
         </>
       )}
     </AppLayout>

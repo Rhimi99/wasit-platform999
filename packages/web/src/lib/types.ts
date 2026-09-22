@@ -442,6 +442,39 @@ export interface DashboardReportRow {
   createdAt: string;
 }
 
+// B9 unit economics — every field is an aggregate of real orders/marketing cost.
+export interface UnitEconomicsAssumptions {
+  assumedRetentionMonths: number;
+  assumedOrdersPerMonth: number;
+}
+
+export interface UnitEconomics {
+  currencyCode: string;
+  windowDays: number;
+  newCustomers: number;
+  marketingSpend: string;
+  cac: string | null;
+  customersWithOrders: number;
+  paidOrders: number;
+  grossMarginTotal: string;
+  grossMarginPerOrder: string;
+  arpu: string;
+  ltvRealized: string;
+  ltvProjected: string;
+  ltvCacRatio: string | null;
+  assumptions: UnitEconomicsAssumptions;
+  contributionMarginPct: string;
+  gmv: string;
+  basedOn: string[];
+}
+
+export interface CohortRow {
+  month: string;
+  customers: number;
+  gmv: string;
+  grossMargin: string;
+}
+
 export interface MyAnalyticsOverview {
   hasBusinessEntity: boolean;
   sellerName: string | null;

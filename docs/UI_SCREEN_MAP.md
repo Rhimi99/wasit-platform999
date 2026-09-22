@@ -57,6 +57,11 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `NotificationsBell` في `TopHeader` (كل أدوار اللوحة): جرس + عداد غير مقروء + قائمة منسدلة + "تحديد الكل كمقروء" + رابط مباشر للرسائل
 - Backend: `/api/messages` + `/api/notifications` (تفاصيل في `API_SPECIFICATION.md`)
 
+### اقتصاديات الوحدة (مكتملة — B9)
+
+- `/admin/analytics` — `AdminAnalyticsPage.tsx`: بطاقة «اقتصاديات الوحدة» (`admin-unit-economics`): CAC، LTV المحقق، LTV المتوقع (موسوم صراحةً بأنه ليس حقيقة)، نسبة LTV/CAC، هامش المساهمة، الافتراضات، والمصادر — من `GET /api/admin/analytics/unit-economics`. وبطاقة «أفواج الاكتساب» (`admin-cohorts`): جدول شهري (عملاء جدد/GMV/الهامش) من `GET /api/admin/analytics/cohorts`. صلاحية `ADMIN_ANALYTICS` + Audit `ANALYTICS.UNIT_ECONOMICS_READ`.
+- ترجمات كاملة ar/fr/en/zh.
+
 ### مكتبة العميل (مكتملة — B6)
 
 - `/dashboard/library` — `DashboardLibraryPage.tsx`: ثلاث تبويبات (المفضلة / المحفوظات / سجل البحث)، إزالة عنصر، مسح السجل، روابط مباشرة للكيان، شارة "لم يعد متاحًا" عند حذف الكيان
