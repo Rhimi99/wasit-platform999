@@ -274,29 +274,59 @@ export function AdminUsersPage() {
   const [users, setUsers] = useState<Array<{ id: string; email: string; isActive: boolean; emailVerified: boolean; createdAt: string }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
     apiCall(() => api.adminUsers()).then((res) => {
       setUsers(res.data?.items ?? []);
       setError(res.error);
       setLoading(false);
     });
-  }, []);
+  }, [reloadKey]);
+
+  const setStatus = async (id: string, isActive: boolean) => {
+    setBusyId(id);
+    setNotice(null);
+    const res = await apiCall(() => api.adminSetUserStatus(id, isActive));
+    if (res.error) {
+      setError(res.error);
+    } else {
+      setUsers((rows) => rows.map((u) => (u.id === id ? { ...u, isActive } : u)));
+      setNotice(isActive ? t('admin.users.activated') : t('admin.users.suspended'));
+      setReloadKey((k) => k + 1);
+    }
+    setBusyId(null);
+  };
 
   return (
     <AppLayout>
       <SectionHeader title={t('admin.users')} />
+      {notice && <p className="mb-2 text-sm text-green-700" role="status" data-testid="admin-users-notice">{notice}</p>}
       {loading ? <Spinner /> : error ? <ErrorState message={error} /> : users.length === 0 ? <EmptyState title={t('common.noData')} /> : (
         <Card className="overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>{t('field.email')}</th><th>{t('field.verified')}</th><th>{t('field.active')}</th><th>{t('common.date')}</th></tr></thead>
+            <thead><tr><th>{t('field.email')}</th><th>{t('field.verified')}</th><th>{t('field.active')}</th><th>{t('common.date')}</th><th>{t('common.actions')}</th></tr></thead>
             <tbody>
               {users.map((u) => (
                 <tr key={u.id}>
                   <td dir="ltr">{u.email}</td>
                   <td>{u.emailVerified ? <Badge color="green">✓</Badge> : <Badge>—</Badge>}</td>
-                  <td>{u.isActive ? <Badge color="green">{t('field.on')}</Badge> : <Badge color="red">{t('field.off')}</Badge>}</td>
+                  <td data-testid={`admin-user-status-${u.id}`}>{u.isActive ? <Badge color="green">{t('field.on')}</Badge> : <Badge color="red">{t('field.off')}</Badge>}</td>
                   <td>{formatDate(u.createdAt)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      data-testid={`admin-user-toggle-${u.id}`}
+                      disabled={busyId === u.id}
+                      onClick={() => setStatus(u.id, !u.isActive)}
+                      className={u.isActive ? 'text-xs font-medium text-red-600 hover:underline disabled:opacity-50' : 'text-xs font-medium text-green-700 hover:underline disabled:opacity-50'}
+                    >
+                      {busyId === u.id ? '…' : u.isActive ? t('admin.users.suspend') : t('admin.users.activate')}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

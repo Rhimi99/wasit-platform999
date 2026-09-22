@@ -760,3 +760,33 @@
 
 ### القرار التالي
 - **لا فجوة Critical داخلية متبقية موثّقة**. البنود الباقية بنية خارجية (E1/E4/E5) أو مواصفة مستقبلية غير مُقنَّنة (AI Copilot). أُرشَّح للمراجعة لاحقًا (ليست Critical): صفحات لوحة العرض الثابتة (`/dashboard/finance`, `/dashboard/reports`, `/dashboard/sales`, وقوائم `DashboardListPage`) — بعضها يعرض `—`/فراغ حيث تتقاطع مع بيانات الأدمن، لكنها شاشات مخطَّطة في `UI_SCREEN_MAP.md` بلا كيان/مصدر بيانات محدد بعد؛ تحتاج قرار نطاق قبل التنفيذ.
+
+---
+
+## ✅ ADMIN USER SUSPEND/REACTIVATE — إيقاف/تفعيل الحساب من الواجهة (2026-09-24)
+
+**الهدف**: الفجوة الداخلية الحقيقية التالية بعد B9. مسار الخادم `PATCH /api/admin/users/:id/status` (بصلاحية ADMIN/SUPER_ADMIN + Audit `ADMIN.USER_STATUS`) وعميل الواجهة `api.adminSetUserStatus` كانا **كاملين ومختبرين خلفيًّا**، لكن صفحة `/admin/users` كانت تعرض حالة التفعيل (`isActive`) كنصّ **للقراءة فقط** — فلا يملك المدير أي وسيلة لإيقاف حساب ضار أو إعادة تنشيطه من الواجهة (Backend موجود / UI غائب). هذه فجوة وظيفية أضيق وأكثر أمانًا من صفحات `/dashboard/sales|finance|reports` التي تحتاج قرار نطاق/مصدر بيانات (لا كيان بائع في `revenue_accounts`).
+
+### ما تغيّر (لا migration، لا تغيير خلفي)
+- **الواجهة — `packages/web/src/pages/AdminPages.tsx`** (`AdminUsersPage`): عمود «إجراءات» جديد بزر واحد يبدّل الحالة:
+  - حساب نشط → **إيقاف الحساب** (أحمر)؛ حساب معطّل → **إعادة التنشيط** (أخضر).
+  - `api.adminSetUserStatus(id, isActive)` ثم تحديث متفائل للصف + إعادة تحميل من الـAPI (مصدر الحقيقة)، مع `busyId` لحالة الانتظار ورسالة نجاح (`admin-users-notice`) و`ErrorState` عند الفشل.
+  - `data-testid` للصف (`admin-user-status-<id>`) والزر (`admin-user-toggle-<id>`) لدعم الاختبارات الحقيقية.
+- **i18n**: مفاتيح `admin.users.suspend/activate/suspended/activated` في **ar/fr/en/zh**.
+
+### الاختبار الحقيقي
+- **`e2e/admin-user-status.spec.ts` (جديد، 3/3)**: ينشئ حساب اختبار معزولًا لكل تشغيل (لا يمسّ مستخدمي الديمو)، ثم **من الواجهة**: يضغط «إيقاف الحساب» → يتحقق أن `GET /api/admin/users` يعيد `isActive=false`، وأن **الدخول يفشل 403 فعليًا** (`Account disabled`، معزولًا عن بوابة توثيق البريد بـ`allowUnverifiedEmail`)، ثم يضغط «إعادة التنشيط» → الدخول يعود 200؛ حالة ثانية تُثبت كتابة `ADMIN.USER_STATUS` في `GET /api/admin/audit-logs`؛ حالة ثالثة تُثبت أن جلسة العميل تُرفض **403**.
+- **حزمة الخادم**: 50 ملف / **517 اختبار ناجح**.
+- **حزمة E2E كاملة**: **142/142 ناجح** (كانت 139؛ +3) — لا كسر في أي مواصفة قائمة.
+- **typecheck** (server+web): 0 أخطاء. **build** الويب: PASS.
+- **Browser smoke حقيقي** (admin@wasit.tn): صفحة `/admin/users` تعرض عمود «إجراءات»؛ صفوف «معطّل» تُظهر «إعادة التنشيط» وصفوف «نشط» تُظهر «إيقاف الحساب» — الأزرار تفاعلية والحالة صحيحة.
+
+### الملفات
+- `packages/web/src/pages/AdminPages.tsx`، `packages/web/src/lib/i18n.ts`
+- `e2e/admin-user-status.spec.ts` (جديد)
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push` (لا تغيير خلفي إطلاقًا)؛ لا تغيير في سياسة العمولة 4% (2%+2%)؛ لا مساس بـMarketing Video `89e68d7` ولا B9 ولا Price Comparison/Order Lifecycle؛ لا Mock (اختبار ضد الخادم الحقيقي)؛ لا تعطيل أزرار؛ RBAC كما هو؛ RTL وar/fr/en/zh محفوظة.
+
+### القرار التالي
+- **لا فجوة Critical داخلية متبقية موثّقة.** الفجوات الداخلية المتبقية غير الحرجة تحتاج **قرار نطاق** قبل التنفيذ (لا تخمين): صفحات لوحة العرض الثابتة (`/dashboard/sales|finance|reports` وقوائم `DashboardListPage`) — `revenue_accounts` مستوى منصة بلا بُعد بائع، ويجب تحديد هل نضيف scoping جديد أم نعيد تعريف الشاشة، وهو تغيير في نموذج البيانات لا يصلح «فجوة صغيرة».

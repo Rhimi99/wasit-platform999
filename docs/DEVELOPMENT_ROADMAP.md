@@ -21,7 +21,7 @@
 | PHASE 12 | Advertising | ✅ campaigns/creatives/events + stats + RBAC + اختبارات + E2E |
 | PHASE 13 | AI Core + AI Agents | ✅ 21 route + 11 وكيلاً + cost-control/budgets + provider قابل للتبديل (OpenAI-compatible + Anthropic) + أسبقية طراز/مزوّد صحيحة + timeout و503 آمن بلا تسريب + اختبار تكامل حقيقي للأطراف (16 حالة) |
 | PHASE 14 | Subscriptions + Revenue | ✅ خطط/subscribe/change/cancel/فواتير + rollover موصول بـ`POST /api/subscriptions/admin/rollover` + scheduler in-process (idempotent عبر optimistic lock) + **تحصيل الفواتير عبر منفذ الدفع** + دورة PAST_DUE/EXPIRED؛ revenue report/scenario موجود |
-| PHASE 15 | Admin Dashboard | ✅ stats/entities + engines + AI + analytics + audit |
+| PHASE 15 | Admin Dashboard | ✅ stats/entities + engines + AI + analytics + audit + **إدارة المستخدمين من الواجهة** (إيقاف/إعادة تنشيط عبر `PATCH /api/admin/users/:id/status` + Audit — `e2e/admin-user-status.spec.ts`) |
 | PHASE 15 (إضافة) | Price Comparison Engine | ✅ وحدة `modules/comparison` على `GET /api/price-comparison` + صفحة عامة `/price-comparison` + ربط الداشبورد/Header/Sidebar + بيانات demo قابلة للمقارنة — 9 اختبار تكامل + 6 E2E (2026-09-22؛ فجوة B10) |
 | PHASE 16 | Analytics | ✅ overview/retention/conversion/revenue-breakdown/daily-kpis/reports + **CAC/LTV/Contribution Margin** (`unit-economics` + cohorts) + **واجهة إدارية في `/admin/analytics`** (بطاقة اقتصاديات الوحدة + جدول الأفواج، ar/fr/en/zh) — `unit-economics.test.ts` (10) + `e2e/admin-unit-economics.spec.ts` (3) |
 | PHASE 17 | Security + Privacy + Audit | ✅ security headers + argon2id + audit (24 module) + privacy consent/export/deletion مع **anonymization فعلي** + **Email وSMS إنتاجيان** (ports مزوّد-محايدة + تحقق الهاتف OTP) |
