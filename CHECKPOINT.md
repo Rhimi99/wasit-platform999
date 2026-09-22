@@ -29,6 +29,40 @@
 
 ---
 
+## ✅ حالة معتمدة — E1: LOCAL/CI STAGING STACK VERIFICATION (2026-09-22)
+
+**الهدف**: إغلاق الجزء القابل للإثبات داخل الريبو من `E1 — Staging environment` (أول بند غير مكتمل بعد F3)، دون ادّعاء أي بنية خارجية.
+
+**ما تم (كلّه داخل نطاق الريبو)**:
+
+| البند | النتيجة |
+| --- | --- |
+| **`scripts/staging-smoke.sh`** (جديد) | ✅ اختبار قابل للتكرار: يولّد `.env.staging.smoke` بأسرار عشوائية، يقلع مشروع compose منفصلًا (فوليومات مستقلة) فلا يلمس DB المطوّر، وينظّف containers/volumes/env عند الانتهاء **بما في ذلك عند الفشل** |
+| **تشغيل بـ`NODE_ENV=staging`** | ✅ عبر `.env.staging.example` مع خطوة `migrate → seed → serve` |
+| **build + up** | ✅ `db + api + web + backup`؛ يبني `dist-bundle` للتحقق من حارس الإقلاع |
+| **صحة الخدمات الثلاث** | ✅ `db`/`api`/`web` كلها `healthy` |
+| **التحقق عبر nginx (لا منفذ API)** | ✅ `/`=200، `/api/health/live`=200، `/api/health/ready`=`ready/connected`، `/api/health/channels`=`ok` وبلا حقول أسرار |
+| **تسجيل → تحقق → دخول** | ✅ register 201 → رمز تحقق حقيقي → verify 200 → login 200 + كوكي جلسة → `/api/auth/me` يعيد الحساب |
+| **قراءة السوق/منتج** | ✅ 10 تصنيفات؛ `GET /api/products`=200؛ إنشاء كيان تاجر → نشر منتج → قراءة عامة باسمه + ظهوره في البحث |
+| **حداثة قلب النسخ** | ✅ `/api/health/channels.backup` = configured، والعمر `0h <= 26h` |
+| **الفشل المُغلق (JWT)** | ✅ `NODE_ENV=staging` + `JWT_SECRET` التنموي المُلزَم ⇒ خروج بغير صفر ورسالة تذكر `JWT_SECRET`؛ وبسر صالح يمرّ الحارس |
+| **`scripts/staging-smoke.sh`** | ✅ **36/36 pass** |
+| **`.env.staging.example`** | ✅ أُضيفت `AI_PROVIDER`/`AI_MODEL`/`AI_DEFAULT_MODEL`/`AI_API_KEY`/`AI_REQUEST_TIMEOUT_MS` و`BACKUP_HEARTBEAT_FILE`/`BACKUP_MAX_AGE_HOURS`/`BACKUP_RETENTION_COUNT`/`BACKUP_INTERVAL_SECONDS`؛ وصُحّح تعليق التحذير لينسب حماية `JWT_SECRET` إليها بدقة (لا إلى `ALLOW_DEV_TOOLING`) |
+| **`docker-compose.yml` / nginx / Dockerfiles** | ✅ روجعت بلا تغيير — لا حاجة لتغيير architecture لإثبات E1 |
+| **`.gitignore`** | ✅ تجاهل `.env.staging.smoke` و`.env.staging.smoke.failed` |
+
+**إصلاح اختبار واحد أثناء التنفيذ**: استعلام `GET /api/products?q=` يبحث في الاسم/الوصف (لا `sku`)؛ كان الاختبار يفترض البحث بـSKU. صُحّح الاختبار ليبحث بالاسم — **لا تغيير في الكود الإنتاجي**.
+
+**تمييز صريح للإثبات**:
+- **E1 داخل نطاق الريبو = verified ✅** (`scripts/staging-smoke.sh` 36/36).
+- **Hosted staging = ❌ غير مكتمل**: يتطلب بنية خارجية — VM/مضيف، نطاق + DNS/TLS، أسرار منفصلة في secret store، ووجهة نسخ خارجية. لا يُدَّعى إغلاقه.
+
+**الاختبارات**: `scripts/staging-smoke.sh` 36/36؛ Server suite كاملة؛ Full E2E؛ `typecheck`؛ builds.
+
+**دون مساس**: Commission Policy 4% = 2%+2%، F3 (`18e0c72`)، Marketing Video Agent (`89e68d7`)، لا Security/Cyber agent، لا db reset/drop/push.
+
+---
+
 ## ✅ حالة معتمدة — F3: EXTERNAL AI PROVIDER VERIFICATION (2026-09-22)
 
 **الهدف**: إغلاق أول بند غير مكتمل فعليًا بعد E5 حسب ترتيب roadmap/PRODUCTION_GAP_LIST: `F3 — AI provider خارجي مُتحقق`. F4 (Marketing Video) مُثبَت أنه منفَّذ في `89e68d7` ولم يُمَس.

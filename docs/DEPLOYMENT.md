@@ -140,6 +140,25 @@ docker compose up -d --build
 
 لا تُنشر قاعدة `db` على المضيف في compose؛ فقط `api` يصل إليها. مفاتيح الدفع تُمرَّر عبر البيئة/Secrets فقط (الافتراضي `PAYMENT_PROVIDER=noop`).
 
+### 9.1 التحقق من Staging — Local/CI Staging Stack Verification
+
+`scripts/staging-smoke.sh` يثبت أن **إعدادات الـstaging في الريبو** تُقلع Stack حقيقيًا مطابقًا للإنتاج محليًا/في CI:
+
+```bash
+./scripts/staging-smoke.sh
+```
+
+ما يفعله:
+- يولّد `.env.staging.smoke` (git-ignored) من `.env.staging.example` بأسرار staging عشوائية، ويكتب على منفذ `STAGING_SMOKE_WEB_PORT` (افتراضي 18080) في مشروع compose منفصل (`wasit-staging-smoke-<pid>`) بفوليومات مستقلة — **لا يلمس قاعدة بيانات المطوّر**.
+- يبني ويقلع `db + api + web + backup`؛ خطوة إصدار الـapi تنفّذ `migrate → seed → serve`.
+- يتحقق عبر **nginx** (لا منفذ الـAPI مباشرة): `/`، `/api/health/live`، `/api/health/ready`، `/api/health/channels`؛ وحالة `healthy` للخدمات الثلاث.
+- ينفّذ تدفقًا حقيقيًا: تسجيل → تحقق بريد (عبر رمز حقيقي) → دخول (كوكي جلسة) → `GET /api/auth/me`، ثم إنشاء كيان تاجر → نشر منتج → قراءة المنتج من العرض العام والبحث.
+- يتحقق من حداثة قلب النسخ (`backup.ageHours` ضمن `BACKUP_MAX_AGE_HOURS`) ومن غياب حقول الأسرار في `/api/health/channels`.
+- **يثبت الفشل المُغلق (fail-closed)**: تشغيل الـAPI بـ`NODE_ENV=staging` وبـ`JWT_SECRET` التنموي المُلزَم يخرج بغير صفر ورسالة تذكر `JWT_SECRET`؛ وبسر صالح يمرّ حارس الإقلاع.
+- ينظّف containers/volumes/env والملفات المؤقتة عند الانتهاء، **بما في ذلك عند الفشل** (يحتفظ بنسخة `.env.staging.smoke.failed` للفحص عند الفشل فقط).
+
+> **ماذا لا يثبته:** هذا **ليس** إثباتًا لوجود **Staging مستضافة**. البيئة المستضافة تحتاج بنية خارجية: VM/مضيف، نطاق + DNS/TLS، أسرار منفصلة في secret store، ووجهة نسخ خارجية. كل ذلك خارج نطاق هذا الـrepo ويبقى بندًا بنيويًا خارجيًا (انظر `docs/PRODUCTION_GAP_LIST.md` — E1).
+
 ## 10. CI — GitHub Actions
 
 `.github/workflows/ci.yml` بثلاث وظائف، مع خدمة `postgres:16` حقيقية (بلا mocks):
