@@ -16,6 +16,12 @@ import { resolveOwnedSellerIds, listOwnedSellerEntities, type OwnedSellerEntity 
 
 export type SellerType = 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
 
+/** Normalizes optional localised names so a blank form field is stored as NULL, not ''. */
+function blankToNull(value: string | undefined | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export interface CreateProductInput {
   sellerId: string;
   sellerType: SellerType;
@@ -144,8 +150,8 @@ export async function createProduct(
     sellerType: input.sellerType,
     categoryId: input.categoryId,
     name: input.name,
-    nameAr: input.nameAr ?? null,
-    nameFr: input.nameFr ?? null,
+    nameAr: blankToNull(input.nameAr),
+    nameFr: blankToNull(input.nameFr),
     slug,
     description: input.description ?? null,
     brand: input.brand ?? null,

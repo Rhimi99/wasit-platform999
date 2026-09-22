@@ -259,6 +259,16 @@ export interface OrderItem {
   lineTotal: string;
 }
 
+export type OrderStatus =
+  | 'DRAFT'
+  | 'PENDING'
+  | 'CONFIRMED'
+  | 'PROCESSING'
+  | 'SHIPPED'
+  | 'DELIVERED'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
 export interface Order {
   id: string;
   orderNumber: string;
@@ -270,10 +280,11 @@ export interface Order {
   buyerCommission: string;
   paymentFee: string;
   grandTotal: string;
-  status: string;
+  status: OrderStatus;
   createdAt: string;
   items?: OrderItem[];
-  seller?: { id: string; name: string; type: SellerType };
+  seller?: { id: string; name: string | null; type: SellerType };
+  viewerRole?: 'SELLER' | 'BUYER' | 'NONE';
 }
 
 // ---- Inventory ----

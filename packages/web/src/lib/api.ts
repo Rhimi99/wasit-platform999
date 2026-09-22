@@ -6,7 +6,7 @@ import type {
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
-  MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, PaginationInfo,
+  MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
   FavoriteRow, LibraryEntityType, LibraryListResponse, SavedItemRow, SearchHistoryRow,
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
@@ -311,6 +311,12 @@ export const api = {
   },
   async getOrder(id: string) {
     return request<Order>(`/api/orders/${id}`);
+  },
+  async updateOrderStatus(id: string, status: OrderStatus) {
+    return request<{ success: boolean }>(`/api/orders/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
   },
 
   // ---- Inventory ----

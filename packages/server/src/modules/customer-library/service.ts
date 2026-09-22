@@ -41,7 +41,7 @@ async function resolveEntity(
         .from(products)
         .where(eq(products.id, entityId))
         .limit(1);
-      return p ? { title: p.nameAr ?? p.name, slug: p.slug, subtitle: p.brand } : null;
+      return p ? { title: p.nameAr?.trim() || p.name, slug: p.slug, subtitle: p.brand } : null;
     }
     case 'SUPPLIER': {
       const [s] = await db

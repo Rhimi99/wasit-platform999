@@ -297,7 +297,32 @@ export async function getOrder(db: DB, orderId: string, actorId: string) {
     ...it,
     productName: productMap.get(it.productId) ?? null,
   }));
-  return { ...order[0], items: enrichedItems };
+  // The UI needs the seller's display identity and the viewer's side (buyer vs
+  // seller) to render the right lifecycle actions without re-deriving entity
+  // ownership client-side.
+  const isBuyer = order[0].buyerId === actorId;
+  const isSeller = owned.includes(order[0].sellerId);
+  const sellerName = await resolveSellerDisplayName(db, order[0].sellerId);
+  return {
+    ...order[0],
+    items: enrichedItems,
+    seller: { id: order[0].sellerId, type: order[0].sellerType, name: sellerName },
+    viewerRole: isSeller ? 'SELLER' : isBuyer ? 'BUYER' : 'NONE',
+  };
+}
+
+/** Resolves a seller entity's public display name across the three seller tables. */
+async function resolveSellerDisplayName(db: DB, sellerId: string): Promise<string | null> {
+  const rows = await db.execute<{ name: string | null }>(sql`
+    select name from (
+      select company_name as name from suppliers where id = ${sellerId}
+      union all
+      select store_name as name from merchants where id = ${sellerId}
+      union all
+      select legal_name as name from companies where id = ${sellerId}
+    ) s limit 1
+  `) as unknown as { rows: { name: string | null }[] };
+  return rows.rows?.[0]?.name ?? null;
 }
 
 /** Returns the seller entity ids (supplier/merchant/company) owned by a user. */

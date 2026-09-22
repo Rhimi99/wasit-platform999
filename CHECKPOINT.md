@@ -694,3 +694,38 @@
 
 ### القرار التالي
 - **متابعة أولويات `docs/PRODUCTION_GAP_LIST.md`**: لا فجوة Critical متبقية؛ البنود الباقية بنية خارجية (E1/E4/E5) أو مواصفة مستقبلية (AI Copilot). لا Module جديد حتى أمر منفصل.
+
+---
+
+## ✅ ORDER LIFECYCLE — إتمام دورة حياة الطلب من الواجهة (2026-09-22)
+
+**الهدف**: سدّ الفجوة الوظيفية الداخلية التالية — كانت صفحة تفاصيل الطلب للبائع/المشتري تعرض الحالة كنص فقط بلا أي أزرار إجراء، فلا يمكن للبائع تقديم الطلب (PENDING→…→COMPLETED) ولا للمشتري الإلغاء، رغم وجود مسار الـAPI `PATCH /api/orders/:id/status` كاملًا في الخادم.
+
+### ما تغيّر
+- **الخادم — `packages/server/src/modules/orders/service.ts`**: `getOrder` يُثري الاستجابة بحقول يحتاجها الـUI:
+  - `seller: { id, type, name }` — اسم الكيان البائع من `suppliers`/`merchants`/`companies` (join محمي بـunion، بلا تسريب حقول).
+  - `viewerRole: 'SELLER' | 'BUYER' | 'NONE'` — يحسب ملكية المشاهد للطلب لتبني الواجهة أزرارها دون إعادة اشتقاق الملكية في العميل.
+- **الواجهة — `packages/web/src/pages/DashboardOrdersPage.tsx`**:
+  - بطاقة «الإجراءات» في تفاصيل الطلب: أزرار انتقالات الحالة حسب الدور (`allowedOrderActions` تعكس قواعد الخادم)، مع حالة انتظار، ورسائل نجاح/خطأ (`order-action-success` / `order-action-error`)، و`order-no-actions` عند انعدام أي انتقال.
+  - قائمة الطلبات: الحالة تُعرض مترجَمة (`order.status.*`) بدل رمز إنجليزي خام.
+- **الأنواع/الـAPI/i18n**: `OrderStatus` + `seller`/`viewerRole` في `types.ts`؛ `api.updateOrderStatus`؛ مفاتيح دورة الحياة وكل الحالات في `ar/en/fr/zh`.
+
+### إصلاح bug حقيقي مكتشف أثناء الاختبار (لا إخفاء للخطأ)
+- **الأصل**: نموذج إنشاء المنتج يرسل `nameAr: ''` عند ترك الحقل فارغًا، وكان الخادم يخزّنه `''` بدل `NULL` (`input.nameAr ?? null`). النتيجة: بطاقات «المفضلة/المحفوظ» في مكتبة العميل تعرض **رابطًا بلا نص** (لأن `p.nameAr ?? p.name` يعتبر `''` قيمة موجودة)، فلا يرى المستخدم اسم المنتج.
+- **الإصلاح**: `blankToNull` في `createProduct` (تخزين الفراغ كـ`NULL`)، مع تقوية `resolveEntity` في `customer-library` (`p.nameAr?.trim() || p.name`) للصفوف القديمة.
+- **تحقق فعلي**: إنشاء منتج بـ`nameAr:''` ⇒ صار `name_ar IS NULL` في القاعدة، وعاد العنوان للظهور في المكتبة.
+
+### الاختبار الحقيقي
+- **`e2e/order-lifecycle.spec.ts` (جديد، 2/2)**: من الواجهة الحقيقية — البائع يدفع طلبًا فعليًا PENDING→CONFIRMED→PROCESSING→SHIPPED→DELIVERED→COMPLETED بالضغط على الأزرار، والتحقق من الحالة **من الـAPI** لا من النص؛ ثم اختفاء الأزرار عند COMPLETED. والمشتري يلغي طلبًا معلّقًا من صفحته.
+  - المواصفة تُنشئ منتجها الخاص وتُؤرشفه بعد الاختبار حتى لا تلوّث سوق الديمو المشترك.
+- **حزمة الخادم**: 50 ملف / **517 اختبار ناجح**.
+- **حزمة E2E كاملة**: **136/136 ناجح** (شملت functional-audit لكل الواجهات: CUSTOMER/MERCHANT/ADMIN/AI/ADS/MARKETING VIDEO/SUBSCRIPTIONS/MESSAGING/NOTIFICATIONS/SEO/RBAC/DISPUTES/PAYMENTS/PRIVACY/OBSERVABILITY).
+- **typecheck** (server+web): 0 أخطاء. **build** الويب: PASS.
+
+### الملفات
+- `packages/server/src/modules/orders/service.ts`، `packages/server/src/modules/products/service.ts`، `packages/server/src/modules/customer-library/service.ts`
+- `packages/web/src/lib/{api,types,i18n}.ts`، `packages/web/src/pages/DashboardOrdersPage.tsx`
+- `e2e/order-lifecycle.spec.ts` (جديد)
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ لا تغيير في سياسة العمولة 4% (2%+2%)؛ لا مساس بـMarketing Video عند `89e68d7`؛ لا تعطيل أزرار لإخفاء أخطاء؛ لا Mock.
