@@ -590,8 +590,8 @@ export async function resetPassword(db: DB, token: string, newPassword: string):
   });
 }
 
-export async function listSessions(db: DB, userId: string) {
-  return db
+export async function listSessions(db: DB, userId: string, currentTokenHash?: string) {
+  const rows = await db
     .select({
       id: sessions.id,
       ipAddress: sessions.ipAddress,
@@ -599,15 +599,28 @@ export async function listSessions(db: DB, userId: string) {
       createdAt: sessions.createdAt,
       expiresAt: sessions.expiresAt,
       revokedAt: sessions.revokedAt,
+      tokenHash: sessions.tokenHash,
     })
     .from(sessions)
-    .where(eq(sessions.userId, userId))
+    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
     .orderBy(sql`created_at desc`);
+
+  return rows.map(({ tokenHash, ...s }) => ({
+    ...s,
+    isCurrent: currentTokenHash ? tokenHash === currentTokenHash : false,
+  }));
 }
 
-export async function revokeSession(db: DB, userId: string, sessionId: string): Promise<void> {
-  await db
+/**
+ * Revokes one of the caller's own sessions. Returns the revoked session's token
+ * hash so the route can tell whether the caller just revoked the session it is
+ * authenticated with (and clear its cookie); `null` means no such session.
+ */
+export async function revokeSession(db: DB, userId: string, sessionId: string): Promise<string | null> {
+  const rows = await db
     .update(sessions)
     .set({ revokedAt: new Date() })
-    .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)));
+    .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)))
+    .returning({ tokenHash: sessions.tokenHash });
+  return rows.length > 0 ? rows[0].tokenHash : null;
 }

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { setCookie, deleteCookie } from 'hono/cookie';
+import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { getContext } from '../../lib/request-context';
 import { validateBody, getValidatedBody } from '../../middleware/validate';
@@ -33,6 +33,7 @@ import {
 } from './service';
 import { ApiError } from '@wasit/shared';
 import { env, devToolingEnabled, cookieSecure } from '../../lib/env';
+import { hashToken } from '../../lib/security';
 
 const mfaEnrollSchema = z.object({});
 const mfaConfirmSchema = z.object({ code: z.string().length(6).regex(/^\d{6}$/) });
@@ -271,15 +272,25 @@ authRoutes.get('/me', requireAuth, async (c) => {
 
 authRoutes.get('/sessions', requireAuth, async (c) => {
   const ctx = getContext(c);
-  const sessions = await listSessions(ctx.db, ctx.user!.id);
+  const cookie = getCookie(c, SESSION_COOKIE);
+  const sessions = await listSessions(ctx.db, ctx.user!.id, cookie ? hashToken(cookie) : undefined);
   return c.json({ success: true, data: sessions });
 });
 
 authRoutes.post('/sessions/revoke', requireAuth, validateBody(revokeSessionSchema), async (c) => {
   const body = getValidatedBody<z.infer<typeof revokeSessionSchema>>(c);
   const ctx = getContext(c);
-  await revokeSession(ctx.db, ctx.user!.id, body.sessionId);
-  return c.json({ success: true });
+  const revokedHash = await revokeSession(ctx.db, ctx.user!.id, body.sessionId);
+  if (revokedHash === null) {
+    throw ApiError.notFound('Session not found');
+  }
+  // Revoking the session you are signed in with must also clear the cookie, so
+  // the caller is not left holding a token the middleware will reject.
+  const cookie = getCookie(c, SESSION_COOKIE);
+  if (cookie && hashToken(cookie) === revokedHash) {
+    deleteCookie(c, SESSION_COOKIE);
+  }
+  return c.json({ success: true, data: { revokedCurrent: Boolean(cookie && hashToken(cookie) === revokedHash) } });
 });
 
 // ---------------------------------------------------------------------------

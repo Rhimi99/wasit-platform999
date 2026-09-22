@@ -790,3 +790,37 @@
 
 ### القرار التالي
 - **لا فجوة Critical داخلية متبقية موثّقة.** الفجوات الداخلية المتبقية غير الحرجة تحتاج **قرار نطاق** قبل التنفيذ (لا تخمين): صفحات لوحة العرض الثابتة (`/dashboard/sales|finance|reports` وقوائم `DashboardListPage`) — `revenue_accounts` مستوى منصة بلا بُعد بائع، ويجب تحديد هل نضيف scoping جديد أم نعيد تعريف الشاشة، وهو تغيير في نموذج البيانات لا يصلح «فجوة صغيرة».
+
+---
+
+## ✅ SESSION REVOCATION — إنهاء الجلسات من الواجهة (2026-09-24)
+
+**الهدف**: فجوة داخلية حقيقية ثانية. `api.revokeSession` و`POST /api/auth/sessions/revoke` كانا موجودين منذ البداية لكن **لا شيء في الواجهة يستدعيهما**: `/dashboard/security` كانت تسرد الجلسات (IP/تاريخ/انتهاء/متصفح) في جدول **للقراءة فقط** — فمستخدم يلاحظ جهازًا مجهولًا لا يملك أي وسيلة لإنهاء جلسته. ذات نمط الفجوة: Backend كامل / UI غائب.
+
+### ما تغيّر
+- **الخادم — `modules/auth/service.ts`**:
+  - `listSessions(db, userId, currentTokenHash?)`: تُرجع الآن `isCurrent` (مقارنة هاش الكوكي بجلسة كل صف)، وتُخفي الجلسات **المُلغاة والمنتهية** (`revokedAt IS NULL AND expiresAt > now`) بدل سرد كل السجل التاريخي.
+  - `revokeSession`: تُرجع `tokenHash` للجلسة المُلغاة أو `null` إن لم تُوجد/لم تكن مملوكة.
+- **الخادم — `modules/auth/routes.ts`**:
+  - `GET /api/auth/sessions` يمرّر `hashToken(cookie)` للتمييز بدقة.
+  - `POST /api/auth/sessions/revoke`: **404** لجلسة غير موجودة أو غير مملوكة (بدل النجاح الصامت)، و**مسح كوكي الجلسة** إذا كان المستخدم يُلغي جلسته الحالية، وإرجاع `revokedCurrent`.
+- **الواجهة — `pages/DashboardSimplePages.tsx`** (`DashboardSecurityPage`): عمود «إجراءات» بزر `session-revoke-<id>` («إنهاء الجلسة» / «إنهاء الجلسة الحالية»)، وسم `(الجهاز الحالي)`، حالة انتظار، رسالة نجاح (`security-sessions-notice`)، و`ErrorState` عند الفشل.
+- **i18n**: `security.currentSession/revokeSession/logoutThisDevice/sessionRevoked` في ar/fr/en/zh.
+
+### الاختبار الحقيقي
+- **`e2e/security-sessions.spec.ts` (جديد، 2/2)**: ينشئ جلسة ثانية مستقلة (context منفصل) لنفس الحساب، ثم **من الواجهة** يضغط إنهاء الجلسة → يتحقق أن الجلسة الثانية تُرفض **401** بينما جلسة الواجهة تبقى **200**؛ وحالة ثانية تُثبت أن مستخدمًا لا يستطيع إلغاء جلسة حساب آخر (**404**) وأن جلسة الطرف الآخر تبقى سليمة.
+- **حزمة الخادم**: 50 ملف / **517 اختبار ناجح**.
+- **حزمة E2E كاملة**: **144/144 ناجح** (كانت 142؛ +2).
+- **typecheck**: 0 أخطاء. **build** الويب: PASS.
+- **Browser smoke حقيقي**: `/dashboard/security` يعرض عمود «إجراءات» ووسم «(الجهاز الحالي)» على جلسة المتصفح الحالية مع زر «إنهاء الجلسة الحالية»، وأزرار «إنهاء الجلسة» لباقي الجلسات — الصفحة تُخفي المُلغاة/المنتهية.
+
+**ملاحظة إصلاح regression**: تسمية الزر كانت «تسجيل الخروج من هذا الجهاز» فتسبّبت في strict-mode collision مع زر الشريط الجانبي في `e2e/mfa.spec.ts` (regex `/تسجيل الخروج|Sign out/`). أُعيدت التسمية إلى «إنهاء الجلسة الحالية» → 144/144 خضراء.
+
+### الملفات
+- `packages/server/src/modules/auth/service.ts`، `packages/server/src/modules/auth/routes.ts`
+- `packages/web/src/pages/DashboardSimplePages.tsx`، `packages/web/src/lib/api.ts`، `packages/web/src/lib/i18n.ts`
+- `e2e/security-sessions.spec.ts` (جديد)
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ لا تغيير في سياسة العمولة 4%؛ لا مساس بـMarketing Video `89e68d7` ولا B9/B10/B11؛ لا Mock؛ لا تعطيل أزرار؛ RBAC كما هو (لا يلغي المستخدم إلا جلساته)؛ ar/fr/en/zh وRTL محفوظة.
+

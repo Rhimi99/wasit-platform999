@@ -115,7 +115,7 @@ export const api = {
     return request<Array<{ id: string; createdAt: string; expiresAt: string; ipAddress: string | null; userAgent: string | null; isCurrent: boolean }>>('/api/auth/sessions');
   },
   async revokeSession(sessionId: string) {
-    return request('/api/auth/sessions/revoke', { method: 'POST', body: JSON.stringify({ sessionId }) });
+    return request<{ revokedCurrent: boolean }>('/api/auth/sessions/revoke', { method: 'POST', body: JSON.stringify({ sessionId }) });
   },
   async forgotPassword(email: string) {
     return request<{ devResetToken?: string }>('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });

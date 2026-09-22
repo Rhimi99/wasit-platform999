@@ -3,7 +3,7 @@ import { api, apiCall, ApiClientError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
-import { Badge, Card, EmptyState, SectionHeader, Spinner } from '@/components/ui';
+import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 
 export function DashboardProfilePage() {
   const { t } = useI18n();
@@ -28,15 +28,34 @@ export function DashboardProfilePage() {
 
 export function DashboardSecurityPage() {
   const { t } = useI18n();
-  const [sessions, setSessions] = useState<Array<{ id: string; createdAt: string; expiresAt: string; ipAddress: string | null; userAgent: string | null }>>([]);
+  const [sessions, setSessions] = useState<Array<{ id: string; createdAt: string; expiresAt: string; ipAddress: string | null; userAgent: string | null; isCurrent?: boolean }>>([]);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
     apiCall(() => api.sessions()).then((res) => {
       setSessions(res.data ?? []);
+      setError(res.error);
       setLoading(false);
     });
-  }, []);
+  }, [reloadKey]);
+
+  const revoke = async (id: string) => {
+    setBusyId(id);
+    setNotice(null);
+    const res = await apiCall(() => api.revokeSession(id));
+    if (res.error) {
+      setError(res.error);
+    } else {
+      setNotice(t('security.sessionRevoked'));
+      setReloadKey((k) => k + 1);
+    }
+    setBusyId(null);
+  };
 
   return (
     <AppLayout>
@@ -44,16 +63,29 @@ export function DashboardSecurityPage() {
       <MfaCard />
       <Card className="mt-4">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">{t('security.sessions')}</h3>
+        {notice && <p className="mb-2 text-sm text-green-700" role="status" data-testid="security-sessions-notice">{notice}</p>}
+        {error && <ErrorState message={error} />}
         {loading ? <Spinner /> : sessions.length === 0 ? <EmptyState title={t('common.noData')} /> : (
           <table className="table-base">
-            <thead><tr><th>{t('field.ip')}</th><th>{t('common.date')}</th><th>{t('field.expires')}</th><th>{t('field.userAgent')}</th></tr></thead>
+            <thead><tr><th>{t('field.ip')}</th><th>{t('common.date')}</th><th>{t('field.expires')}</th><th>{t('field.userAgent')}</th><th>{t('common.actions')}</th></tr></thead>
             <tbody>
               {sessions.map((s) => (
-                <tr key={s.id}>
-                  <td className="text-xs" dir="ltr">{s.ipAddress ?? '—'}</td>
+                <tr key={s.id} data-testid={`session-${s.id}`}>
+                  <td className="text-xs" dir="ltr">{s.ipAddress ?? '—'}{s.isCurrent && <span className="ml-2 text-xs text-green-700">({t('security.currentSession')})</span>}</td>
                   <td>{String(s.createdAt).slice(0, 10)}</td>
                   <td>{String(s.expiresAt).slice(0, 10)}</td>
                   <td className="max-w-xs truncate text-xs" dir="ltr">{s.userAgent ?? ''}</td>
+                  <td>
+                    <button
+                      type="button"
+                      data-testid={`session-revoke-${s.id}`}
+                      disabled={busyId === s.id}
+                      onClick={() => revoke(s.id)}
+                      className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      {busyId === s.id ? '…' : s.isCurrent ? t('security.logoutThisDevice') : t('security.revokeSession')}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

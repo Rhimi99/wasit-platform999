@@ -57,6 +57,11 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `NotificationsBell` في `TopHeader` (كل أدوار اللوحة): جرس + عداد غير مقروء + قائمة منسدلة + "تحديد الكل كمقروء" + رابط مباشر للرسائل
 - Backend: `/api/messages` + `/api/notifications` (تفاصيل في `API_SPECIFICATION.md`)
 
+### إدارة الجلسات (مكتملة — B12)
+
+- `/dashboard/security` — `DashboardSecurityPage.tsx`: جدول الجلسات + عمود «إجراءات» بزر **إنهاء الجلسة** (`session-revoke-<id>`) مربوط بـ`POST /api/auth/sessions/revoke`، وسم `(الجهاز الحالي)` من `isCurrent`، رسالة نجاح. القائمة تُخفي الجلسات المُلغاة/المنتهية.
+- ترجمات كاملة ar/fr/en/zh.
+
 ### إدارة المستخدمين (مكتملة — B11)
 
 - `/admin/users` — `AdminUsersPage.tsx`: جدول بحالة التفعيل + عمود «إجراءات» بزر **إيقاف الحساب / إعادة التنشيط** مربوط بـ`PATCH /api/admin/users/:id/status` (Audit `ADMIN.USER_STATUS`)، مع حالة انتظار ورسالة نجاح.
