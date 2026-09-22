@@ -145,22 +145,24 @@ adsRoutes.get('/campaigns/:id', async (c) => {
 adsRoutes.patch('/campaigns/:id', validateBody(updateCampaignSchema), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof updateCampaignSchema>>(c);
+  const roles = (ctx.user?.roles ?? []) as UserRole[];
   const result = await updateCampaign(ctx.db, c.req.param('id')!, ctx.user!.id, body, {
     actorId: ctx.user!.id,
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
-  });
+  }, roles);
   return c.json({ success: true, data: result });
 });
 
 adsRoutes.post('/campaigns/:id/creatives', validateBody(createCreativeSchema), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof createCreativeSchema>>(c);
+  const roles = (ctx.user?.roles ?? []) as UserRole[];
   const result = await addCreative(ctx.db, c.req.param('id')!, body, ctx.user!.id, {
     actorId: ctx.user!.id,
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
-  });
+  }, roles);
   return c.json({ success: true, data: result }, 201);
 });
 

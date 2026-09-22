@@ -225,11 +225,18 @@ export async function updateCampaign(
   userId: string,
   input: UpdateCampaignInput,
   ctx: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  actorRoles: UserRole[] = [],
 ) {
   const rows = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
   if (rows.length === 0) throw ApiError.notFound('Campaign not found');
   const campaign = rows[0];
-  await assertOwnAdvertiser(db, userId, campaign.advertiserId, campaign.advertiserType);
+  // Operators with CAMPAIGN_MANAGE (ADMIN/SUPER_ADMIN) moderate any campaign;
+  // read endpoints (getMyCampaign/getCampaignStats/listMyCampaigns) already grant
+  // that scope, so write must match it or moderation is impossible by construction.
+  const isAdmin = userHasAnyRole(actorRoles, PERMISSIONS.CAMPAIGN_MANAGE);
+  if (!isAdmin) {
+    await assertOwnAdvertiser(db, userId, campaign.advertiserId, campaign.advertiserType);
+  }
 
   const next: Record<string, unknown> = { updatedAt: new Date() };
 
@@ -314,11 +321,15 @@ export async function addCreative(
   input: Omit<CreateCreativeInput, 'campaignId'>,
   userId: string,
   ctx: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  actorRoles: UserRole[] = [],
 ) {
   const rows = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
   if (rows.length === 0) throw ApiError.notFound('Campaign not found');
   const campaign = rows[0];
-  await assertOwnAdvertiser(db, userId, campaign.advertiserId, campaign.advertiserType);
+  const isAdmin = userHasAnyRole(actorRoles, PERMISSIONS.CAMPAIGN_MANAGE);
+  if (!isAdmin) {
+    await assertOwnAdvertiser(db, userId, campaign.advertiserId, campaign.advertiserType);
+  }
 
   const id = newId();
   await db.insert(adCreatives).values({

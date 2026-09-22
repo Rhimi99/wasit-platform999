@@ -67,6 +67,12 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `/admin/products` — `AdminProductsPage.tsx`: جدول المنتجات + عمود «إجراءات» بزر **إيقاف** (`admin-product-suspend-<id>`) أو **إعادة تنشيط** (`admin-product-reactivate-<id>`) حسب الحالة، مربوط بـ`PATCH /api/products/:id/suspend` و`PATCH /api/products/:id/status`.
 - الصفوف موسومة `data-testid="admin-product-<id>"`؛ يستعمل مفتاح i18n الموجود `admin.users.activate`.
 
+### مكتب إعلانات الأدمن (مكتمل — B15)
+
+- `/admin/ads` — `AdminAdsPage.tsx` (محروس بـ`AdminOnly`، مدخل تنقّل «الإعلانات» في `AppSidebar`): KPIs (`admin-ads-kpi-campaigns/active/spent/ctr`) من `GET /api/admin/ads/summary`، جدول `admin-ads-table` لكل حملات المعلنين مع اسم المعلن وبريد المالك من `GET /api/admin/ads/campaigns`، وأزرار إشراف (`admin-ads-active|paused|completed-<id>`) مبنية من آلة الحالة الفعلية.
+- الخادم: `updateCampaign`/`addCreative` تُعفى من حرس الملكية من يملك `CAMPAIGN_MANAGE` — الكتابة تطابق نطاق مسارات القراءة؛ غيرهما يبقى 403.
+- ترجمات كاملة ar/fr/en/zh.
+
 ### آلة حالة الحملات الإعلانية + حرس إيقاف المنتج (مكتملة — B14)
 
 - `/dashboard/ads` — `DashboardAdsPage.tsx`: بطاقة الحملة (`ads-campaign-<id>`) تعرض الأزرار وفق آلة الحالة الحقيقية فقط: `DRAFT` → تفعيل (`ads-activate-<id>`) + إلغاء (`ads-cancel-<id>`)؛ `ACTIVE` → إيقاف مؤقت (`ads-pause-<id>`) + إنهاء (`ads-end-<id>`)؛ `PAUSED` → استئناف (`ads-resume-<id>`) + إلغاء + إنهاء؛ `COMPLETED`/`CANCELLED` بلا أي انتقال (كان زر الاستئناف يظهر خطأً فيُرفض بـ409).

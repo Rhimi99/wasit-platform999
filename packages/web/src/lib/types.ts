@@ -395,6 +395,23 @@ export interface AdminStats {
   gmv: number;
 }
 
+export interface AdminAdSummary {
+  campaigns: number;
+  activeCampaigns: number;
+  totalSpent: string;
+  totalBudget: string;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  ctr: number;
+  conversionRate: number;
+}
+
+export interface AdminCampaignRow extends CampaignSummary {
+  advertiserName: string | null;
+  ownerEmail: string | null;
+}
+
 // ---- Analytics Engine (Phase 16) ----
 
 export interface PlatformOverview {

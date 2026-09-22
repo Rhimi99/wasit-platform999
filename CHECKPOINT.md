@@ -920,3 +920,36 @@
 لا migration/`db reset/drop/push`؛ سياسة العمولة 4% (2%+2%) دون تغيير؛ لا مساس بـMarketing Video `89e68d7` ولا F4 ولا G/H/I/J ولا E2–E5؛ لا Mock؛ لا تعطيل أزرار لإخفاء الأخطاء (بل تصحيح المنطق)؛ RBAC كما هو (أُضيف حرس لا يُوسّع صلاحيات)؛ ar/fr/en/zh وRTL محفوظة.
 
 **ملاحظة تشغيل**: تشغيل Playwright أثناء وجود خوادم dev يدوية على المنفذين 3000/5173 يجعل `reuseExistingServer` يتبنّاها، فتسقط ~15 حالة (rate limits الإنتاجية + `BACKUP_HEARTBEAT_FILE` غائب) — ليست أخطاء منتج. أوقف الخوادم اليدوية قبل `npx playwright test`.
+
+---
+
+## ✅ ADMIN ADVERTISING DESK + إصلاح حرس الكتابة على الحملات (2026-09-20)
+
+**الهدف**: سدّ الفجوة الداخلية التالية بعد E5 — شاشة إعلانات الأدمن. كانت صلاحية `ADMIN_ADS` و`GET /api/admin/ads/summary` موجودتين ومُختبرتين على الخادم، ودالة العميل `adminAdsSummary()` موجودة، لكن **لا صفحة `/admin/ads` ولا مدخل تنقّل ولا أي مستهلك للواجهة** ⇒ المسار كان مكتملًا من الخادم ومقطوعًا من المستخدم.
+
+### 1) السبب الجذري الحقيقي الأهم: الأدمن كان محجوبًا عن تعديل حملات الآخرين
+كانت `getMyCampaign` و`getCampaignStats` و`listMyCampaigns` تمنح `CAMPAIGN_MANAGE` (ADMIN/SUPER_ADMIN) نطاقًا عبر كل المعلنين، بينما `updateCampaign` و`addCreative` تستدعيان `assertOwnAdvertiser` **دون فحص الدور**. أثبت الاختبار الحقيقي أن `PATCH /api/ads/campaigns/:id` يعيد **403** للأدمن على حملة تاجر. أي أن الإشراف الإداري كان **مستحيلًا بنيويًا**، وليس مجرد افتقاد واجهة.
+- **الإصلاح (`modules/ads/service.ts`)**: تمرير `actorRoles` إلى `updateCampaign`/`addCreative`؛ يُعفى من `assertOwnAdvertiser` من يملك `PERMISSIONS.CAMPAIGN_MANAGE`، تمامًا كما في مسارات القراءة. غير المالك غير الأدمن يبقى **403** (مُختبَر).
+
+### 2) عقد خادم جديد بلا migration
+`GET /api/admin/ads/campaigns` (ADMIN فقط) يعيد كل الحملات مع حلّ `advertiser_id` متعدد الأنواع (supplier/merchant/company) إلى **اسم المعلن وبريد المالك** عبر `union all` + `left join users` — دون أي تغيير مخطط.
+
+### 3) شاشة `/admin/ads`
+- `pages/AdminAdsPage.tsx`: KPIs من الصلاحية الحية، جدول عبر كل المعلنين، وأزرار إشراف تُبنى من **آلة الحالة الفعلية** (DRAFT→ACTIVE/CANCELLED، ACTIVE→PAUSED/COMPLETED، PAUSED→ACTIVE/COMPLETED/CANCELLED، COMPLETED/CANCELLED بلا انتقال) — لا زر يفشل دائمًا.
+- `App.tsx` مسار `/admin/ads` محروس بـ`AdminOnly`؛ مدخل تنقّل في `AppSidebar`؛ `adminAdsCampaigns()` في `lib/api.ts`؛ أنواع `AdminAdSummary`/`AdminCampaignRow`؛ مفاتيح i18n في ar/fr/en/zh.
+
+### الاختبار الحقيقي
+- **`packages/server/tests/phase15-ads-ai.test.ts` (+3)**: قائمة الأدمن عبر المعلنين مع اسم/بريد المالك و**403 لغير الأدمن**؛ أدمن يوقف ثم يستأنف حملة تاجر (200 + `isActive` يتبدّل)؛ معلن آخر يبقى **403**.
+- **`e2e/admin-ads.spec.ts` (جديد، 3 حالات)**: يفتح المكتب من الشريط الجانبي ويتحقق أن KPIs تساوي حمولة الخادم الحية؛ ينشئ حملة DRAFT بجلسة التاجر ثم **من الواجهة** يفعّل→يوقف→ينهي ويتحقق من `status`/`isActive` في الخادم؛ ويثبت **403** لغير الأدمن (بسياق Playwright معزول حتى لا يُسجَّل خروج الجلسة الإدارية المشتركة).
+- **`e2e/functional-audit.spec.ts`**: أُضيف `/admin/ads` إلى قائمة صفحات الأدمن.
+- **حزمة الخادم**: 51 ملف / **522 اختبار ناجح** (+4).
+- **حزمة E2E كاملة**: **152/152 ناجح** (كانت 148؛ +4 صافي).
+- **typecheck**: 0 أخطاء. **build**: PASS (server + web).
+
+### الملفات
+- `packages/server/src/modules/ads/service.ts`، `packages/server/src/modules/ads/routes.ts`، `packages/server/src/modules/admin/routes.ts`، `packages/server/tests/phase15-ads-ai.test.ts`
+- `packages/web/src/pages/AdminAdsPage.tsx` (جديد)، `packages/web/src/App.tsx`، `packages/web/src/components/layouts/AppSidebar.tsx`، `packages/web/src/lib/api.ts`، `packages/web/src/lib/types.ts`، `packages/web/src/lib/i18n.ts`
+- `e2e/admin-ads.spec.ts` (جديد)، `e2e/functional-audit.spec.ts`
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ سياسة العمولة 4% (2%+2%) دون تغيير؛ لا مساس بـMarketing Video `89e68d7`؛ لا Mock؛ لم تُعطّل أزرار لإخفاء أخطاء؛ RBAC لم يُوسَّع (أُضيف فحص دور يطابق مسارات القراءة القائمة)؛ ar/fr/en/zh وRTL محفوظة.

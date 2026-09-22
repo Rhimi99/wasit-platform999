@@ -157,4 +157,54 @@ describe('Phase 15 — AI Ads Recommendations + Admin Ads Summary', () => {
     const res = await client.req('/api/admin/ads/summary');
     expect(res.status).toBe(403);
   });
+
+  it('GET /api/admin/ads/campaigns lists cross-advertiser campaigns with owner info and is ADMIN-only', async () => {
+    const { campaignId } = await insertCampaign({ status: 'ACTIVE' });
+    const customer = makeClient();
+    await register(customer, `p15-ads-list-cust-${uniq('')}@wasit.tn`, 'CUSTOMER');
+    expect((await customer.req('/api/admin/ads/campaigns')).status).toBe(403);
+
+    const email = `p15-ads-list-admin-${uniq('')}@wasit.tn`;
+    await insertUser(email, 'ADMIN');
+    const admin = makeClient();
+    const login = await admin.req('/api/auth/login', { method: 'POST', body: { email, password: 'StrongPass123!', allowUnverifiedEmail: true } });
+    expect(login.status).toBe(200);
+    const res = await admin.req('/api/admin/ads/campaigns');
+    expect(res.status).toBe(200);
+    const row = (res.data.data.items as Array<Record<string, unknown>>).find((r) => r.id === campaignId);
+    expect(row).toBeTruthy();
+    expect(row!.advertiserType).toBe('SUPPLIER');
+    // The polymorphic advertiser_id must resolve to a real owner for the moderation desk.
+    expect(row!.advertiserName).toBeTruthy();
+    expect(row!.ownerEmail).toBeTruthy();
+  });
+
+  it('ADMIN can moderate another advertiser\'s campaign (pause/resume) — regression', async () => {
+    // Read endpoints already granted admins cross-advertiser scope; the write path did
+    // not, so every admin PATCH returned 403 and moderation was impossible from the UI.
+    const { campaignId } = await insertCampaign({ status: 'ACTIVE' });
+    const email = `p15-ads-mod-admin-${uniq('')}@wasit.tn`;
+    await insertUser(email, 'ADMIN');
+    const admin = makeClient();
+    const login = await admin.req('/api/auth/login', { method: 'POST', body: { email, password: 'StrongPass123!', allowUnverifiedEmail: true } });
+    expect(login.status).toBe(200);
+
+    const paused = await admin.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'PAUSED' } });
+    expect(paused.status).toBe(200);
+    expect(paused.data.data.status).toBe('PAUSED');
+    expect(paused.data.data.isActive).toBe(false);
+
+    const resumed = await admin.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'ACTIVE' } });
+    expect(resumed.status).toBe(200);
+    expect(resumed.data.data.status).toBe('ACTIVE');
+    expect(resumed.data.data.isActive).toBe(true);
+  });
+
+  it('a different non-admin advertiser still cannot moderate someone else\'s campaign (403)', async () => {
+    const { campaignId } = await insertCampaign({ status: 'ACTIVE' });
+    const other = makeClient();
+    await register(other, `p15-ads-other-${uniq('')}@wasit.tn`, 'MERCHANT');
+    const res = await other.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'PAUSED' } });
+    expect(res.status).toBe(403);
+  });
 });

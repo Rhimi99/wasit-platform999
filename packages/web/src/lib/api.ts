@@ -2,7 +2,7 @@
 // يعالج استجابة {success,data,error} الموحّدة من الـ Backend.
 
 import type {
-  AdminStats, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
+  AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
@@ -719,17 +719,10 @@ export const api = {
     }>('/api/ai/ads-recommendations', { method: 'POST' });
   },
   async adminAdsSummary() {
-    return request<{
-      campaigns: number;
-      activeCampaigns: number;
-      totalSpent: string;
-      totalBudget: string;
-      impressions: number;
-      clicks: number;
-      conversions: number;
-      ctr: number;
-      conversionRate: number;
-    }>('/api/admin/ads/summary');
+    return request<AdminAdSummary>('/api/admin/ads/summary');
+  },
+  async adminAdsCampaigns() {
+    return request<{ items: AdminCampaignRow[] }>('/api/admin/ads/campaigns');
   },
 
   // ---- AI Core ----

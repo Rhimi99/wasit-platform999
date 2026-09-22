@@ -5,6 +5,7 @@ import { getContext } from '../../lib/request-context.js';
 import { orders, transactions, transactionLedger } from '../../db/schema/commerce.js';
 import { products } from '../../db/schema/products.js';
 import { campaigns, adEvents } from '../../db/schema/ads.js';
+import { suppliers, merchants, companies } from '../../db/schema/trade.js';
 import { users } from '../../db/schema/auth.js';
 import { auditLogs } from '../../db/schema/audit.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -68,6 +69,64 @@ adminRoutes.get('/ads/summary', async (c) => {
       conversionRate: convRate,
     },
   });
+});
+
+// ----- Advertising campaigns (Admin) ---------------------------------------
+// Full cross-advertiser list for the moderation desk. advertiser_id is polymorphic
+// (supplier/merchant/company), so the owner name/email is resolved with a union join.
+adminRoutes.get('/ads/campaigns', async (c) => {
+  const ctx = getContext(c);
+  const rows = await ctx.db.execute<{
+    id: string;
+    advertiser_id: string;
+    advertiser_type: 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
+    title: string;
+    objective: string;
+    status: string;
+    budget: string;
+    spent: string;
+    currency_code: string;
+    starts_at: string;
+    ends_at: string | null;
+    is_active: boolean;
+    created_at: string;
+    advertiser_name: string | null;
+    owner_email: string | null;
+  }>(sql`
+    select c.id, c.advertiser_id, c.advertiser_type, c.title, c.objective, c.status,
+           c.budget, c.spent, c.currency_code, c.starts_at, c.ends_at, c.is_active, c.created_at,
+           a.name as advertiser_name, u.email as owner_email
+    from campaigns c
+    left join (
+      select id, user_id, company_name as name from suppliers
+      union all
+      select id, user_id, store_name as name from merchants
+      union all
+      select id, user_id, legal_name as name from companies
+    ) a on a.id = c.advertiser_id
+    left join users u on u.id = a.user_id
+    order by c.created_at desc
+    limit 500
+  `);
+  const result = rows as unknown as { rows: Record<string, unknown>[] };
+  const items = result.rows.map((r) => ({
+    id: r.id,
+    advertiserId: r.advertiser_id,
+    advertiserType: r.advertiser_type,
+    advertiserName: r.advertiser_name,
+    ownerEmail: r.owner_email,
+    title: r.title,
+    objective: r.objective,
+    status: r.status,
+    budget: String(r.budget),
+    spent: String(r.spent),
+    currencyCode: r.currency_code,
+    startsAt: r.starts_at,
+    endsAt: r.ends_at,
+    isActive: r.is_active,
+    createdAt: r.created_at,
+  }));
+  return c.json({ success: true, data: { items } });
 });
 
 // ----- Users ---------------------------------------------------------------

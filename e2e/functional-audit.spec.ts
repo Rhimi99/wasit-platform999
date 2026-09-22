@@ -345,6 +345,7 @@ test.describe('ADMIN — every admin surface', () => {
     ['/admin/risk', /المخاطر|Risk/i],
     ['/admin/disputes', /النزاعات|Disputes/i],
     ['/admin/policies', /سياسات النزاعات|Dispute policies/i],
+    ['/admin/ads', /إدارة الإعلانات|Advertising management/i],
     ['/admin/subscriptions', /إدارة الاشتراكات|Subscription management/i],
     ['/admin/ai', /حوكمة الذكاء الاصطناعي|AI governance/i],
     ['/admin/observability', /المراقبة التشغيلية|Observability/i],
