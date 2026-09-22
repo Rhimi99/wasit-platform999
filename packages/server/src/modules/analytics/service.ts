@@ -475,11 +475,29 @@ export async function createDashboardReport(
   return { id };
 }
 
-export async function listDashboardReports(db: DB, limit = 20): Promise<Array<{ id: string; reportCode: string; title: string; createdAt: string }>> {
+export interface DashboardReportRow {
+  id: string;
+  reportCode: string;
+  title: string;
+  reportData: Record<string, unknown> | null;
+  generatedById: string | null;
+  createdAt: string;
+}
+
+// The saved payload is part of the report: returning only metadata made a stored
+// report impossible to read back after creation.
+export async function listDashboardReports(db: DB, limit = 20): Promise<DashboardReportRow[]> {
   const rows = await db
     .select()
     .from(dashboardReports)
     .orderBy(desc(dashboardReports.createdAt))
     .limit(Math.min(limit, 100));
-  return rows.map((r) => ({ id: r.id, reportCode: r.reportCode, title: r.title, createdAt: r.createdAt.toISOString() }));
+  return rows.map((r) => ({
+    id: r.id,
+    reportCode: r.reportCode,
+    title: r.title,
+    reportData: (r.reportData ?? null) as Record<string, unknown> | null,
+    generatedById: r.generatedById,
+    createdAt: r.createdAt.toISOString(),
+  }));
 }

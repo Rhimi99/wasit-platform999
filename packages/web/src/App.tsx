@@ -33,6 +33,7 @@ import { AdminAiPage } from './pages/AdminAiPage';
 import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
+import { AdminReportsPage } from './pages/AdminReportsPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 
 export default function App() {
@@ -97,6 +98,7 @@ export default function App() {
       {/* Admin */}
       <Route path="/admin" element={<RequireAuth><AdminOnly><AdminDashboardPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/analytics" element={<RequireAuth><AdminOnly><AdminAnalyticsPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/reports" element={<RequireAuth><AdminOnly><AdminReportsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/users" element={<RequireAuth><AdminOnly><AdminUsersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/products" element={<RequireAuth><AdminOnly><AdminProductsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />

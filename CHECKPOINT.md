@@ -5,6 +5,34 @@
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
 ---
 
+## ✅ حالة معتمدة — B16: ADMIN REPORTS UI (2026-09-22)
+
+**الهدف**: إغلاق الفجوة الداخلية التالية بعد B15 حسب ترتيب الـroadmap. الفجوة لم تكن في قدرة الخادم — `GET/POST /api/admin/analytics/reports` منفَّذان ومُختبَران — بل في **سطح المستخدم**: لا صفحة `/admin/reports` ولا مدخل تنقّل ولا أي مستهلك لدالتي العميل `adminAnalyticsReports()`/`adminCreateAnalyticsReport()`، فالمشغّل لا يستطيع إنشاء تقرير من المنتج ولا رؤيته. وكشف التدقيق سببًا حقيقيًا إضافيًا: `listDashboardReports` كانت تُسقط `reportData` من الاستجابة ⇒ التقرير المحفوظ **صالح للكتابة فقط** ولا يمكن قراءة محتواه حتى عبر API.
+
+**دليل الفجوة قبل الإصلاح**:
+- `docs/UI_SCREEN_MAP.md` يسرد «Reports» ضمن شاشات الأدمن، و`docs/API_SPECIFICATION.md:269` يوثّق `GET/POST /api/admin/analytics/reports`.
+- `api.adminAnalyticsReports()` و`adminCreateAnalyticsReport()` ونوع `DashboardReportRow` موجودة، وصفر مستدعين في `packages/web/src/**/*.tsx`.
+- `ADMIN_NAV` فيه `/admin/analytics` فقط بلا `/admin/reports`.
+- `packages/server/src/modules/analytics/service.ts`: دالة القائمة تُعيد `{id,reportCode,title,createdAt}` فقط رغم وجود عمود `report_data`.
+
+**ما تم**:
+
+| البند | النتيجة |
+| --- | --- |
+| **إصلاح السبب الجذري (backend)** | ✅ `listDashboardReports` تُعيد `reportData` و`generatedById` إلى جانب البيانات الوصفية (بلا migration — `dashboard_reports.report_data` موجود من قبل) |
+| **صفحة `/admin/reports`** | ✅ `AdminReportsPage`: نموذج (code + title + JSON اختياري) مع رفض JSON غير صالح في الواجهة قبل الإرسال، جدول من الخادم، زر «عرض» يكشف المحتوى المخزّن، وزر «تحديث» |
+| **نتيجة مرئية للمستخدم** | ✅ إشعار «تم حفظ التقرير»، ظهور الصف الجديد فورًا، و«عرض» يبدّل إلى «إخفاء» ويعرض الـJSON المخزّن |
+| **تنقّل + RBAC** | ✅ `/admin/reports` في `App.tsx` خلف `AdminOnly`، ومدخل في `ADMIN_NAV`؛ الصلاحية الخادمية `admin:analytics` لم تتغيّر |
+| **i18n** | ✅ مفاتيح `admin.reports` + `adminReports.*` في ar/fr/en/zh |
+| **Server test** | ✅ `analytics.test.ts` يتحقق الآن أن `reportData` العائد يساوي المُرسَل (وليس البيانات الوصفية فقط) — **522/522** |
+| **Full E2E من الواجهة** | ✅ `e2e/admin-reports.spec.ts` (3 حالات): إنشاء تقرير من الواجهة ثم قراءة محتواه المخزّن بعد «عرض» مع تطابق حمولة الـAPI، رفض JSON غير صالح بلا إنشاء، 403 لغير الأدمن — **155/155** |
+| **Typecheck + build** | ✅ نظيف (`@wasit/server` + `@wasit/web` + build الويب) |
+| **Manual browser smoke** | ✅ دخول `admin@wasit.tn` → `/admin/reports` → إنشاء `manual-smoke-q3` → ظهر الصف والإشعار → «عرض» أظهر `{"period":"Q3","gmv":123456}` |
+
+**دون مساس**: Commission Policy 4% = 2%+2%، وMarketing Video Agent (commit `89e68d7`)، وPrice Comparison، وOrder Lifecycle، وUnit Economics UI، وG/H/I/J، وE2–E5.
+
+---
+
 ## ✅ حالة معتمدة — A3: REFUNDS FROM THE ADMIN UI (2026-09-22)
 
 **الهدف**: إغلاق أول فجوة داخلية حقيقية بعد E5 حسب ترتيب الـroadmap. الفجوة لم تكن في قدرة الخادم — الاسترداد منفَّذ ومُختبَر بالكامل على مستوى الـAPI — بل في **سطح المستخدم**: لم يكن هناك أي زر أو مسار في الواجهة يُنشئ استردادًا، فكان `api.createRefund` بلا مستدعٍ واحد، وصفحة `/admin/orders` للقراءة فقط. أي أن المشغّل (ADMIN/SUPER_ADMIN فقط) لا يستطيع تنفيذ الاسترداد من المنتج إطلاقًا.

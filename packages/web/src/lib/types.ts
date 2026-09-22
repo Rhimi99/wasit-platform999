@@ -484,6 +484,8 @@ export interface DashboardReportRow {
   id: string;
   reportCode: string;
   title: string;
+  reportData: Record<string, unknown> | null;
+  generatedById: string | null;
   createdAt: string;
 }
 

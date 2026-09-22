@@ -302,8 +302,11 @@ describe('Analytics Engine (Phase 16) — real DB-backed', () => {
 
     const list = await admin.req('/api/admin/analytics/reports');
     expect(list.status).toBe(200);
-    const items = list.data.data.items as Array<{ reportCode: string }>;
-    expect(items.some((r) => r.reportCode === 'weekly-gmv')).toBe(true);
+    const items = list.data.data.items as Array<{ reportCode: string; reportData: unknown }>;
+    const row = items.find((r) => r.reportCode === 'weekly-gmv');
+    expect(row).toBeDefined();
+    // The saved payload must be readable back, not write-only metadata.
+    expect(row!.reportData).toEqual({ period: 'W' });
   });
 
   it('restricts daily-kpis/rollup to admins (CUSTOMER denied)', async () => {

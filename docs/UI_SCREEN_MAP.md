@@ -89,6 +89,7 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 ### اقتصاديات الوحدة (مكتملة — B9)
 
 - `/admin/analytics` — `AdminAnalyticsPage.tsx`: بطاقة «اقتصاديات الوحدة» (`admin-unit-economics`): CAC، LTV المحقق، LTV المتوقع (موسوم صراحةً بأنه ليس حقيقة)، نسبة LTV/CAC، هامش المساهمة، الافتراضات، والمصادر — من `GET /api/admin/analytics/unit-economics`. وبطاقة «أفواج الاكتساب» (`admin-cohorts`): جدول شهري (عملاء جدد/GMV/الهامش) من `GET /api/admin/analytics/cohorts`. صلاحية `ADMIN_ANALYTICS` + Audit `ANALYTICS.UNIT_ECONOMICS_READ`.
+- `/admin/reports` — `AdminReportsPage.tsx` (محروس بـ`AdminOnly`، مدخل تنقّل «التقارير» في `AppSidebar`): نموذج إنشاء تقرير (`admin-reports-form`: `admin-report-code/title/data` + `admin-report-submit` يرفض JSON غير صالح في الواجهة) وجدول `admin-reports-table` لكل التقارير المحفوظة من `GET /api/admin/analytics/reports`، وزر `admin-report-view-<id>` يبدّل عرض المحتوى المخزّن في `admin-report-detail`. صلاحية `admin:analytics` على الخادم.
 - ترجمات كاملة ar/fr/en/zh.
 
 ### مكتبة العميل (مكتملة — B6)
