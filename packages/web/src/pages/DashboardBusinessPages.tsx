@@ -204,7 +204,7 @@ export function DashboardAdsPage() {
             ) : (
               <div className="grid gap-3">
                 {campaigns.map((cp) => (
-                  <Card key={cp.id} className={`cursor-pointer hover:border-wasit-300 ${selectedId === cp.id ? 'border-wasit-400 ring-1 ring-wasit-200' : ''}`}>
+                  <Card key={cp.id} testId={`ads-campaign-${cp.id}`} className={`cursor-pointer hover:border-wasit-300 ${selectedId === cp.id ? 'border-wasit-400 ring-1 ring-wasit-200' : ''}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2" onClick={() => setSelectedId(selectedId === cp.id ? null : cp.id)}>
                       <div>
                         <p className="text-sm font-semibold text-slate-800">{cp.title}</p>
@@ -226,11 +226,11 @@ export function DashboardAdsPage() {
                           ))}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <button className={btn('bg-wasit-600 text-white hover:bg-wasit-700')} disabled={cp.status === 'ACTIVE'} onClick={() => void updateStatus(cp.id, 'ACTIVE')}>{t('ads.activate')}</button>
-                          {cp.status === 'ACTIVE' && <button className={btn('bg-amber-500 text-white hover:bg-amber-600')} onClick={() => void updateStatus(cp.id, 'PAUSED')}>{t('ads.pause')}</button>}
-                          {cp.status !== 'DRAFT' && <button className={btn('bg-amber-500 text-white hover:bg-amber-600')} onClick={() => void updateStatus(cp.id, 'ACTIVE')}>{t('ads.resume')}</button>}
-                          {cp.status === 'DRAFT' && <button className={btn('bg-red-600 text-white hover:bg-red-700')} onClick={() => void updateStatus(cp.id, 'CANCELLED')}>{t('ads.cancel')}</button>}
-                          {cp.status === 'ACTIVE' && <button className={btn('bg-red-600 text-white hover:bg-red-700')} onClick={() => void updateStatus(cp.id, 'COMPLETED')}>{t('ads.end')}</button>}
+                          {cp.status === 'DRAFT' && <button data-testid={`ads-activate-${cp.id}`} className={btn('bg-wasit-600 text-white hover:bg-wasit-700')} onClick={() => void updateStatus(cp.id, 'ACTIVE')}>{t('ads.activate')}</button>}
+                          {cp.status === 'ACTIVE' && <button data-testid={`ads-pause-${cp.id}`} className={btn('bg-amber-500 text-white hover:bg-amber-600')} onClick={() => void updateStatus(cp.id, 'PAUSED')}>{t('ads.pause')}</button>}
+                          {cp.status === 'PAUSED' && <button data-testid={`ads-resume-${cp.id}`} className={btn('bg-wasit-600 text-white hover:bg-wasit-700')} onClick={() => void updateStatus(cp.id, 'ACTIVE')}>{t('ads.resume')}</button>}
+                          {(cp.status === 'DRAFT' || cp.status === 'PAUSED') && <button data-testid={`ads-cancel-${cp.id}`} className={btn('bg-red-600 text-white hover:bg-red-700')} onClick={() => void updateStatus(cp.id, 'CANCELLED')}>{t('ads.cancel')}</button>}
+                          {(cp.status === 'ACTIVE' || cp.status === 'PAUSED') && <button data-testid={`ads-end-${cp.id}`} className={btn('bg-red-600 text-white hover:bg-red-700')} onClick={() => void updateStatus(cp.id, 'COMPLETED')}>{t('ads.end')}</button>}
                         </div>
                         <AddCreativeCampaign campaignId={cp.id} advertiser={advertisers.find((a) => a.id === cp.advertiserId)} onAdded={() => void loadStats(cp.id)} t={t} />
                       </div>

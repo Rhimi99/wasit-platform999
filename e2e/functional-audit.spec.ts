@@ -147,6 +147,36 @@ test.describe('MERCHANT — full seller surface', () => {
     await expect(page.locator('table.table-base tbody tr', { hasText: name }).first().getByText('ACTIVE')).toBeVisible();
   });
 
+  test('a suspended product shows a notice instead of a publish control', async ({ page, playwright }) => {
+    // Suspend a real product of this merchant through the admin API, then prove
+    // the seller page reflects enforcement rather than offering a control the
+    // server would reject. Suspension is an admin action, so it runs on a
+    // separate admin-authenticated request context (the browser keeps the
+    // merchant session).
+    const mine = await page.request.get('/api/products/mine?pageSize=100');
+    const items = (await mine.json()).data.items as Array<{ id: string; status: string }>;
+    const target = items.find((p) => p.status !== 'SUSPENDED');
+    expect(target).toBeTruthy();
+
+    const adminCtx = await playwright.request.newContext({
+      baseURL: process.env.E2E_API_URL ?? 'http://localhost:3000',
+      storageState: storageFor('admin'),
+    });
+    try {
+      const adminRes = await adminCtx.patch(`/api/products/${target!.id}/suspend`);
+      expect(adminRes.ok()).toBeTruthy();
+
+      await page.goto('/dashboard/products');
+      await expect(page.getByTestId(`product-suspended-${target!.id}`)).toBeVisible();
+      const row = page.locator('table.table-base tbody tr').filter({ has: page.getByTestId(`product-suspended-${target!.id}`) });
+      await expect(row.getByRole('button')).toHaveCount(0);
+    } finally {
+      // Restore the fixture so later specs start from a known state.
+      await adminCtx.patch(`/api/products/${target!.id}/status`, { data: { status: target!.status } });
+      await adminCtx.dispose();
+    }
+  });
+
   test('inventory page lists stock and can adjust it', async ({ page }) => {
     await page.goto('/dashboard/inventory');
     await expect(page.locator('table.table-base tbody tr').first()).toBeVisible();

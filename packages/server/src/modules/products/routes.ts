@@ -118,6 +118,12 @@ productsRoutes.patch('/:id/status', requireAuth, validateBody(statusSchema), asy
   if (!isAdmin) {
     // Only the owning seller may change status
     await assertSellerOwnership(user.id, product.sellerId, product.sellerType);
+    // A seller may activate/unpublish their own listing, but must not be able to
+    // lift an administrative suspension — otherwise an admin's enforcement
+    // action is reversible by the party it applies to.
+    if (product.status === 'SUSPENDED' && body.status !== 'SUSPENDED') {
+      throw ApiError.forbidden('A suspended product can only be reactivated by an administrator');
+    }
   }
   await updateProductStatus(ctx.db, product.id, body.status, { actorId: user.id });
   return c.json({ success: true });

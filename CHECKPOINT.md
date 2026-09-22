@@ -852,3 +852,43 @@
 ### القيود المُحترمة
 لا migration/`db reset/drop/push`؛ لا تغيير في سياسة العمولة 4%؛ لا مساس بـMarketing Video `89e68d7` ولا B9/B10/B11/B12؛ لا Mock؛ لا تعطيل أزرار؛ RBAC كما هو؛ ar/fr/en/zh وRTL محفوظة.
 
+
+
+---
+
+## ✅ ADS CAMPAIGN STATE MACHINE — إصلاح أزرار الحملات + حرس إيقاف المنتج (2026-09-25)
+
+**الهدف**: متابعة نمط «الإجراء أحادي الاتجاه» في الواجهة. عند فحص صفحة الإعلانات وُجد خطآن حقيقيان:
+
+### 1) أزرار الحملة لا تحترم آلة الحالة (root cause)
+كان الزر الأول يعتمد `disabled={cp.status === 'ACTIVE'}` بدل إظهاره بشرط `DRAFT` فقط، وزر **«استئناف»** كان يظهر لأي حالة غير `DRAFT` (`cp.status !== 'DRAFT'`). الخادم يمنع `ACTIVE` من `COMPLETED`/`CANCELLED` بـ**409**، فكانت الواجهة تعرض زرًا يفشل دائمًا.
+- **الإصلاح (`pages/DashboardBusinessPages.tsx`)**: إظهار الأزرار حسب آلة الحالة الفعلية:
+  - `DRAFT` → تفعيل + إلغاء
+  - `ACTIVE` → إيقاف مؤقت + إنهاء
+  - `PAUSED` → استئناف + إلغاء + إنهاء
+  - `COMPLETED`/`CANCELLED` → بلا أزرار انتقال.
+- إضافة `testId` لبطاقة الحملة (`ads-campaign-<id>`) وأزرارها (`ads-activate/pause/resume/cancel/end-<id>`) للتحقق الحقيقي من الواجهة.
+
+### 2) البائع كان قادرًا على رفع إيقاف الأدمن عن منتجه (ثغرة صلاحيات)
+`PATCH /api/products/:id/status` كان يسمح لأي بائع مالك بالانتقال من `SUSPENDED` إلى `ACTIVE`، أي أن إجراء الإنفاذ الإداري **قابل للعكس من الطرف الذي فُرض عليه**. كما أن واجهة البائع `DashboardProductsPage` كانت تعرض زرّ **«نشر»** على صفوف `SUSPENDED` فيفشل بعد الإصلاح.
+- **الخادم (`modules/products/routes.ts`)**: لغير الأدمن، منع تغيير الحالة إذا كان المنتج `SUSPENDED` → **403** («لا يُعاد تنشيط منتج موقوف إلا من قِبل مسؤول»). البائع يبقى قادرًا على تبديل `ACTIVE↔INACTIVE` لمنتجه غير الموقوف.
+- **الواجهة (`pages/DashboardProductsPage.tsx`)**: صف `SUSPENDED` يعرض إشعارًا (`product-suspended-<id>`) بدل زر النشر؛ `testId` على زر الحالة.
+- **i18n**: `product.suspendedNotice` في ar/fr/en/zh.
+
+### الاختبار الحقيقي
+- **`packages/server/tests/product-suspension.test.ts` (جديد)**: بائع يبدّل منتجه INACTIVE↔ACTIVE (200) → أدمن يوقف (200) → البائع يحاول ACTIVE ⇒ **403** والحالة تبقى `SUSPENDED` في DB → الأدمن يعيد التنشيط ⇒ 200 و`ACTIVE`.
+- **`e2e/functional-audit.spec.ts`**: حالة جديدة تسجّل الدخول كتاجر، توقف أحد منتجاته فعليًا عبر جلسة أدمن منفصلة، ثم من الواجهة تؤكد ظهور إشعار الإيقاف و**غياب أي زر** في الصف (لا زر يكذب على المستخدم).
+- **`e2e/ads.spec.ts`**: توسّع ليجتاز آلة الحالة كاملة من الواجهة: DRAFT→ACTIVE→PAUSED→ACTIVE→COMPLETED، والتأكد أن زر الاستئناف **لا يظهر** بعد الإنهاء.
+- **حزمة الخادم**: 51 ملف / **518 اختبار ناجح** (+1).
+- **حزمة E2E كاملة**: **145/145 ناجح** (كانت 144؛ +1 صافي).
+- **typecheck**: 0 أخطاء. **build**: PASS.
+
+### الملفات
+- `packages/server/src/modules/products/routes.ts`، `packages/server/tests/product-suspension.test.ts` (جديد)
+- `packages/web/src/pages/DashboardBusinessPages.tsx`، `packages/web/src/pages/DashboardProductsPage.tsx`، `packages/web/src/lib/i18n.ts`
+- `e2e/ads.spec.ts`، `e2e/functional-audit.spec.ts`
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ سياسة العمولة 4% (2%+2%) دون تغيير؛ لا مساس بـMarketing Video `89e68d7` ولا F4 ولا G/H/I/J ولا E2–E5؛ لا Mock؛ لا تعطيل أزرار لإخفاء الأخطاء (بل تصحيح المنطق)؛ RBAC كما هو (أُضيف حرس لا يُوسّع صلاحيات)؛ ar/fr/en/zh وRTL محفوظة.
+
+**ملاحظة تشغيل**: تشغيل Playwright أثناء وجود خوادم dev يدوية على المنفذين 3000/5173 يجعل `reuseExistingServer` يتبنّاها، فتسقط ~15 حالة (rate limits الإنتاجية + `BACKUP_HEARTBEAT_FILE` غائب) — ليست أخطاء منتج. أوقف الخوادم اليدوية قبل `npx playwright test`.

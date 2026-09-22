@@ -25,7 +25,26 @@ test.describe('Supplier creates a campaign', () => {
     // The campaign is persisted: the campaigns API returns it.
     const res = await page.request.get('/api/ads/campaigns');
     const body = await res.json();
-    expect(body.data.items.some((c: { title: string }) => c.title === title)).toBe(true);
+    const created = body.data.items.find((c: { title: string }) => c.title === title) as { id: string } | undefined;
+    expect(created).toBeTruthy();
+
+    // Walk the real status machine from the UI and confirm each transition is
+    // accepted by the server and reflected on the card. A CANCELLED campaign is
+    // terminal, so the Resume control must not be offered once cancelled.
+    const card = page.getByTestId(`ads-campaign-${created!.id}`);
+    await card.click();
+    await page.getByTestId(`ads-activate-${created!.id}`).click();
+    await expect(card).toContainText('ACTIVE');
+
+    await page.getByTestId(`ads-pause-${created!.id}`).click();
+    await expect(card).toContainText('PAUSED');
+
+    await page.getByTestId(`ads-resume-${created!.id}`).click();
+    await expect(card).toContainText('ACTIVE');
+
+    await page.getByTestId(`ads-end-${created!.id}`).click();
+    await expect(card).toContainText('COMPLETED');
+    await expect(page.getByTestId(`ads-resume-${created!.id}`)).toHaveCount(0);
   });
 });
 

@@ -50,14 +50,19 @@ export function DashboardProductsPage() {
                   <td><Badge color={p.status === 'ACTIVE' ? 'green' : 'slate'}>{p.status}</Badge></td>
                   <td className="text-xs">{String(p.createdAt ?? '').slice(0, 10)}</td>
                   <td>
-                    <button
-                      type="button"
-                      disabled={busyId === p.id}
-                      onClick={() => void setStatus(p.id, p.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')}
-                      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:border-wasit-400 hover:text-wasit-700 disabled:opacity-50"
-                    >
-                      {p.status === 'ACTIVE' ? t('form.unpublish') : t('form.publish')}
-                    </button>
+                    {p.status === 'SUSPENDED' ? (
+                      <span className="text-xs text-amber-700" data-testid={`product-suspended-${p.id}`}>{t('product.suspendedNotice')}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid={`product-status-${p.id}`}
+                        disabled={busyId === p.id}
+                        onClick={() => void setStatus(p.id, p.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')}
+                        className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:border-wasit-400 hover:text-wasit-700 disabled:opacity-50"
+                      >
+                        {p.status === 'ACTIVE' ? t('form.unpublish') : t('form.publish')}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

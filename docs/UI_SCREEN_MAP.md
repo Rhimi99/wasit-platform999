@@ -67,6 +67,13 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `/admin/products` — `AdminProductsPage.tsx`: جدول المنتجات + عمود «إجراءات» بزر **إيقاف** (`admin-product-suspend-<id>`) أو **إعادة تنشيط** (`admin-product-reactivate-<id>`) حسب الحالة، مربوط بـ`PATCH /api/products/:id/suspend` و`PATCH /api/products/:id/status`.
 - الصفوف موسومة `data-testid="admin-product-<id>"`؛ يستعمل مفتاح i18n الموجود `admin.users.activate`.
 
+### آلة حالة الحملات الإعلانية + حرس إيقاف المنتج (مكتملة — B14)
+
+- `/dashboard/ads` — `DashboardAdsPage.tsx`: بطاقة الحملة (`ads-campaign-<id>`) تعرض الأزرار وفق آلة الحالة الحقيقية فقط: `DRAFT` → تفعيل (`ads-activate-<id>`) + إلغاء (`ads-cancel-<id>`)؛ `ACTIVE` → إيقاف مؤقت (`ads-pause-<id>`) + إنهاء (`ads-end-<id>`)؛ `PAUSED` → استئناف (`ads-resume-<id>`) + إلغاء + إنهاء؛ `COMPLETED`/`CANCELLED` بلا أي انتقال (كان زر الاستئناف يظهر خطأً فيُرفض بـ409).
+- `/dashboard/products` — `DashboardProductsPage.tsx`: صف المنتج الموقوف إداريًا يعرض إشعارًا (`product-suspended-<id>`, مفتاح `product.suspendedNotice` في ar/fr/en/zh) **بدل** زر النشر؛ زر الحالة `product-status-<id>` لباقي الحالات.
+- الخادم: `PATCH /api/products/:id/status` يرفض (403) محاولة أي غير أدمن رفع `SUSPENDED` — إجراء الإنفاذ الإداري غير قابل للعكس من الطرف المعني.
+- ترجمات كاملة ar/fr/en/zh.
+
 
 ### إدارة المستخدمين (مكتملة — B11)
 
