@@ -824,3 +824,31 @@
 ### القيود المُحترمة
 لا migration/`db reset/drop/push`؛ لا تغيير في سياسة العمولة 4%؛ لا مساس بـMarketing Video `89e68d7` ولا B9/B10/B11؛ لا Mock؛ لا تعطيل أزرار؛ RBAC كما هو (لا يلغي المستخدم إلا جلساته)؛ ar/fr/en/zh وRTL محفوظة.
 
+
+---
+
+## ✅ ADMIN PRODUCT REACTIVATE — إعادة تنشيط منتج (2026-09-24)
+
+**الهدف**: فجوة داخلية ثالثة من نمط «إجراء أحادي الاتجاه في الواجهة». `/admin/products` كانت تعرض زر **إيقاف** فقط للمنتجات غير الموقوفة (`p.status !== 'SUSPENDED'`): لحظة إيقاف منتج يختفي الزر، فلا توجد أي وسيلة لإعادته إلى ACTIVE من الواجهة — مع أن `PATCH /api/products/:id/status` يدعم `ACTIVE` أصلًا. النتيجة: منتج موقوف بالخطأ = غير قابل للتشغيل حتى من الأدمن.
+
+### ما تغيّر
+- **`pages/AdminPages.tsx`** (`AdminProductsPage`): `suspend(id)` → `setStatus(id, status)`؛ المُوقوف يحصل على زر **«إعادة التنشيط»** (`admin-product-reactivate-<id>`) يستدعي `api.adminSetProductStatus(id,'ACTIVE')`، وغير المُوقوف على زر **«إيقاف»** (`admin-product-suspend-<id>`). الصف موسوم `data-testid="admin-product-<id>"` وعمود الإجراءات بعنوان `common.actions`.
+- **`lib/api.ts`**: `adminSetProductStatus(id, status)` جديدة على `PATCH /api/products/:id/status` (المسار الموجود الداعم لـACTIVE) بجانب `adminSuspendProduct`.
+- **i18n**: إعادة استعمال مفتاح موجود `admin.users.activate` («إعادة التنشيط»/Reactivate/...)، فلا مفاتيح جديدة.
+
+### الاختبار الحقيقي
+- **`e2e/functional-audit.spec.ts`**: حالة «admin product table … suspend one» توسّعت لتُثبت الدورة كاملة على **نفس الصف** (مُحدَّد بالـtestid): ACTIVE → إيقاف → SUSPENDED ظاهرة → إعادة تنشيط → ACTIVE ظاهرة. (كانت تُثبت الإيقاف فقط.)
+- **حزمة E2E كاملة**: **144/144 ناجح**. **typecheck**: 0. **build** الويب: PASS.
+- **Browser smoke حقيقي**: `/admin/products` (سجل أدمن) يعرض عمود «إجراءات» بزرّي الإيقاف/إعادة التنشيط حسب حالة كل صف.
+
+### إصلاح هشاشة اختبار (root cause حقيقي)
+- `admin-ai.spec.ts` «requests tab reflects a real AI invocation» كان يقارن **طول القائمة** (`limit=200`) قبل/بعد، وهي مشبعة بسبب تكرار التشغيل — فلا يمكن أن تزيد. أُعيد كتابته ليؤكد ظهور **معرّف الطلب الجديد** (`admin-ai-request-<id>`) في الصف الأول، وهو تحقق حقيقي ولا يعتمد على نافذة 200.
+- كما أن `e2e/global-setup.ts` كان يفشل عند استنفاد محدّد `forgot-password` (5/5دقائق) بعد تشغيلات متكررة؛ أُعيد تشغيل الخادم تحت إدارة Playwright بمُحدّدات E2E المرفوعة (`RATE_LIMIT_*_MAX=500`) وهذا سلوك بيئة اختبار لا خطأ منتج.
+
+### الملفات
+- `packages/web/src/pages/AdminPages.tsx`، `packages/web/src/lib/api.ts`
+- `e2e/functional-audit.spec.ts`، `e2e/admin-ai.spec.ts`
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ لا تغيير في سياسة العمولة 4%؛ لا مساس بـMarketing Video `89e68d7` ولا B9/B10/B11/B12؛ لا Mock؛ لا تعطيل أزرار؛ RBAC كما هو؛ ar/fr/en/zh وRTL محفوظة.
+

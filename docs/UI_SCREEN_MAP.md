@@ -62,6 +62,12 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `/dashboard/security` — `DashboardSecurityPage.tsx`: جدول الجلسات + عمود «إجراءات» بزر **إنهاء الجلسة** (`session-revoke-<id>`) مربوط بـ`POST /api/auth/sessions/revoke`، وسم `(الجهاز الحالي)` من `isCurrent`، رسالة نجاح. القائمة تُخفي الجلسات المُلغاة/المنتهية.
 - ترجمات كاملة ar/fr/en/zh.
 
+### إدارة المنتجات الإدارية (مكتملة — B13)
+
+- `/admin/products` — `AdminProductsPage.tsx`: جدول المنتجات + عمود «إجراءات» بزر **إيقاف** (`admin-product-suspend-<id>`) أو **إعادة تنشيط** (`admin-product-reactivate-<id>`) حسب الحالة، مربوط بـ`PATCH /api/products/:id/suspend` و`PATCH /api/products/:id/status`.
+- الصفوف موسومة `data-testid="admin-product-<id>"`؛ يستعمل مفتاح i18n الموجود `admin.users.activate`.
+
+
 ### إدارة المستخدمين (مكتملة — B11)
 
 - `/admin/users` — `AdminUsersPage.tsx`: جدول بحالة التفعيل + عمود «إجراءات» بزر **إيقاف الحساب / إعادة التنشيط** مربوط بـ`PATCH /api/admin/users/:id/status` (Audit `ADMIN.USER_STATUS`)، مع حالة انتظار ورسالة نجاح.

@@ -339,8 +339,16 @@ test.describe('ADMIN — every admin surface', () => {
     await page.goto('/admin/products');
     const row = page.locator('table.table-base tbody tr').first();
     await expect(row).toBeVisible();
-    await row.getByRole('button', { name: /إيقاف|Suspend/i }).click();
-    await expect(page.locator('table.table-base tbody tr', { hasText: 'SUSPENDED' }).first()).toBeVisible();
+    const testId = await row.getAttribute('data-testid');
+    expect(testId).toBeTruthy();
+    const tracked = page.getByTestId(testId!);
+
+    await tracked.getByRole('button', { name: /إيقاف|Suspend/i }).click();
+    await expect(tracked.getByText('SUSPENDED')).toBeVisible();
+
+    // A suspended product must be reactivatable from the same table.
+    await tracked.getByRole('button', { name: /إعادة التنشيط|Reactivate/i }).click();
+    await expect(tracked.getByText('ACTIVE')).toBeVisible();
   });
 });
 

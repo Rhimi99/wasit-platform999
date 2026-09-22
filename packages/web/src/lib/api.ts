@@ -369,6 +369,9 @@ export const api = {
   async adminSuspendProduct(id: string) {
     return request<{ success: boolean }>(`/api/products/${id}/suspend`, { method: 'PATCH' });
   },
+  async adminSetProductStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED' | 'SUSPENDED') {
+    return request<{ success: boolean }>(`/api/products/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+  },
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
   },

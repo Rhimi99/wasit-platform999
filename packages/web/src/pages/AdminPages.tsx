@@ -472,9 +472,11 @@ export function AdminProductsPage() {
   };
   useEffect(() => { void load(); }, []);
 
-  async function suspend(id: string) {
+  async function setStatus(id: string, status: 'ACTIVE' | 'SUSPENDED') {
     setBusyId(id);
-    const res = await apiCall(() => api.adminSuspendProduct(id));
+    const res = status === 'SUSPENDED'
+      ? await apiCall(() => api.adminSuspendProduct(id))
+      : await apiCall(() => api.adminSetProductStatus(id, 'ACTIVE'));
     if (res.error) setError(res.error);
     setBusyId(null);
     await load();
@@ -486,21 +488,32 @@ export function AdminProductsPage() {
       {loading ? <Spinner /> : error ? <ErrorState message={error} /> : products.length === 0 ? <EmptyState title={t('common.noData')} /> : (
         <Card className="overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>{t('nav.products')}</th><th>SKU</th><th>{t('field.seller')}</th><th>{t('common.price')}</th><th>{t('common.status')}</th><th /></tr></thead>
+            <thead><tr><th>{t('nav.products')}</th><th>SKU</th><th>{t('field.seller')}</th><th>{t('common.price')}</th><th>{t('common.status')}</th><th>{t('common.actions')}</th></tr></thead>
             <tbody>
               {products.map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id} data-testid={`admin-product-${p.id}`}>
                   <td>{p.name}</td>
                   <td className="text-xs">{p.sku}</td>
                   <td className="text-xs" dir="ltr">{p.sellerId}</td>
                   <td>{formatMoney(p.basePrice)}</td>
                   <td><Badge color={p.status === 'ACTIVE' ? 'green' : p.status === 'SUSPENDED' ? 'red' : 'slate'}>{p.status}</Badge></td>
                   <td>
-                    {p.status !== 'SUSPENDED' && (
+                    {p.status === 'SUSPENDED' ? (
                       <button
                         type="button"
+                        data-testid={`admin-product-reactivate-${p.id}`}
                         disabled={busyId === p.id}
-                        onClick={() => void suspend(p.id)}
+                        onClick={() => void setStatus(p.id, 'ACTIVE')}
+                        className="rounded border border-slate-300 px-2 py-1 text-xs text-green-700 hover:border-green-400 disabled:opacity-50"
+                      >
+                        {t('admin.users.activate')}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid={`admin-product-suspend-${p.id}`}
+                        disabled={busyId === p.id}
+                        onClick={() => void setStatus(p.id, 'SUSPENDED')}
                         className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
                       >
                         {t('admin.suspend')}

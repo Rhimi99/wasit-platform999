@@ -89,21 +89,23 @@ test.describe('Admin AI governance desk', () => {
   });
 
   test('requests tab reflects a real AI invocation', async ({ page }) => {
-    const before = (await (await page.request.get('/api/admin/ai/requests?limit=200')).json()).data.items.length;
-
     const run = await page.request.post('/api/ai/run', {
       data: { requestType: 'MARKET_ANALYSIS', user: 'admin-ai-e2e probe' },
     });
     expect(run.ok()).toBeTruthy();
+    const requestId = ((await run.json()).data as { requestId: string }).requestId;
+    expect(requestId).toBeTruthy();
 
     await page.goto('/admin/ai');
     await page.getByTestId('admin-ai-tab-requests').click();
     await expect(page.getByTestId('admin-ai-requests')).toBeVisible();
 
-    const rows = page.locator('[data-testid^="admin-ai-request-"]');
-    await expect.poll(async () => rows.count()).toBeGreaterThan(0);
-    const after = (await (await page.request.get('/api/admin/ai/requests?limit=200')).json()).data.items.length;
-    expect(after).toBeGreaterThan(before);
+    // The desk lists the most recent invocations first, so the request just
+    // issued must appear as a row — asserting on the id avoids depending on
+    // list length, which saturates at the endpoint's 200-row window.
+    await expect(page.getByTestId(`admin-ai-request-${requestId}`)).toBeVisible();
+    const first = page.locator('[data-testid^="admin-ai-request-"]').first();
+    await expect(first).toHaveAttribute('data-testid', `admin-ai-request-${requestId}`);
   });
 });
 
