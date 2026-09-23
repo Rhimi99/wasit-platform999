@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createApp } from '../src/app.js';
 import { db } from '../src/db/client.js';
 import { adEvents } from '../src/db/schema/ads.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, desc } from 'drizzle-orm';
 
 const app = createApp();
 
@@ -266,5 +266,120 @@ describe('Advertising Engine', () => {
     });
     // ACTIVE → DRAFT is not allowed.
     expect(invalid.status).toBe(409);
+  });
+
+  it('serves a campaign only for the placements it targets', async () => {
+    const { client, supplierId } = await setupSupplier();
+    const created = await createCampaign(client, supplierId, {
+      adUnits: { placements: ['MARKETPLACE'] },
+    });
+    const campaignId = created.data.data.id as string;
+    await client.req(`/api/ads/campaigns/${campaignId}/creatives`, {
+      method: 'POST',
+      body: { type: 'BANNER', title: 'Placement Creative' },
+    });
+    await client.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'ACTIVE' } });
+
+    const targeted = await app.request('/api/ads/served?placement=MARKETPLACE');
+    const targetedBody = (await targeted.json()) as { data: { items: Array<{ campaignId: string }> } };
+    expect(targetedBody.data.items.some((i) => i.campaignId === campaignId)).toBe(true);
+
+    const elsewhere = await app.request('/api/ads/served?placement=PRODUCT_DETAILS');
+    const elsewhereBody = (await elsewhere.json()) as { data: { items: Array<{ campaignId: string }> } };
+    expect(elsewhereBody.data.items.some((i) => i.campaignId === campaignId)).toBe(false);
+  });
+
+  it('serves an untargeted campaign for every placement', async () => {
+    const { client, supplierId } = await setupSupplier();
+    const created = await createCampaign(client, supplierId);
+    const campaignId = created.data.data.id as string;
+    await client.req(`/api/ads/campaigns/${campaignId}/creatives`, {
+      method: 'POST',
+      body: { type: 'BANNER', title: 'Untargeted Creative' },
+    });
+    await client.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'ACTIVE' } });
+
+    for (const placement of ['MARKETPLACE', 'PRODUCT_DETAILS', 'SEARCH']) {
+      const res = await app.request(`/api/ads/served?placement=${placement}`);
+      const body = (await res.json()) as { data: { items: Array<{ campaignId: string }> } };
+      expect(body.data.items.some((i) => i.campaignId === campaignId)).toBe(true);
+    }
+  });
+
+  it('records anonymous impressions and clicks but rejects anonymous conversions', async () => {
+    const { client, supplierId } = await setupSupplier();
+    const created = await createCampaign(client, supplierId);
+    const campaignId = created.data.data.id as string;
+    await client.req(`/api/ads/campaigns/${campaignId}/creatives`, {
+      method: 'POST',
+      body: { type: 'BANNER', title: 'Telemetry Creative' },
+    });
+    await client.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'ACTIVE' } });
+
+    const anon = makeClient();
+    const impression = await anon.req('/api/ads/events', {
+      method: 'POST',
+      body: { campaignId, eventType: 'IMPRESSION', sessionId: 'sess-1' },
+    });
+    expect(impression.status).toBe(201);
+
+    const click = await anon.req('/api/ads/events', {
+      method: 'POST',
+      body: { campaignId, eventType: 'CLICK', sessionId: 'sess-1' },
+    });
+    expect(click.status).toBe(201);
+
+    const conversion = await anon.req('/api/ads/events', {
+      method: 'POST',
+      body: { campaignId, eventType: 'CONVERSION', sessionId: 'sess-1', metadata: { cost: '1.0000' } },
+    });
+    expect(conversion.status).toBe(401);
+
+    // The authenticated advertiser can record a conversion for its own campaign.
+    const authedConversion = await client.req('/api/ads/events', {
+      method: 'POST',
+      body: { campaignId, eventType: 'CONVERSION', metadata: { cost: '1.0000' } },
+    });
+    expect(authedConversion.status).toBe(201);
+
+    const stats = await client.req(`/api/ads/campaigns/${campaignId}/stats`);
+    expect(stats.data.data.impressions).toBe(1);
+    expect(stats.data.data.clicks).toBe(1);
+    expect(stats.data.data.conversions).toBe(1);
+
+    // An authenticated actor is attributed to the stored event.
+    const authedImpression = await client.req('/api/ads/events', {
+      method: 'POST',
+      body: { campaignId, eventType: 'IMPRESSION' },
+    });
+    expect(authedImpression.status).toBe(201);
+  });
+
+  it('persists only a hashed ip address on recorded events', async () => {
+    const { client, supplierId } = await setupSupplier();
+    const created = await createCampaign(client, supplierId);
+    const campaignId = created.data.data.id as string;
+    await client.req(`/api/ads/campaigns/${campaignId}/creatives`, {
+      method: 'POST',
+      body: { type: 'BANNER', title: 'Ip Creative' },
+    });
+    await client.req(`/api/ads/campaigns/${campaignId}`, { method: 'PATCH', body: { status: 'ACTIVE' } });
+
+    const anon = makeClient();
+    const res = await anon.req('/api/ads/events', {
+      method: 'POST',
+      body: { campaignId, eventType: 'IMPRESSION' },
+    });
+    expect(res.status).toBe(201);
+
+    const rows = await db
+      .select({ ipHash: adEvents.ipHash, userId: adEvents.userId })
+      .from(adEvents)
+      .where(eq(adEvents.campaignId, campaignId))
+      .orderBy(desc(adEvents.createdAt))
+      .limit(1);
+    // Either no address was derivable, or it was stored hashed (never raw).
+    expect(rows[0].userId).toBeNull();
+    if (rows[0].ipHash) expect(rows[0].ipHash).toMatch(/^[a-f0-9]{64}$/);
   });
 });

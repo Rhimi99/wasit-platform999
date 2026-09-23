@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n-context';
 import { SearchBar } from '@/components/SearchBar';
 import { ProductCard } from '@/components/ProductCard';
 import { Badge, Card, ErrorState, Spinner } from '@/components/ui';
+import { AdSlot } from '@/components/AdSlot';
 import type { SearchResultGroup } from '@/lib/types';
 import { SeoHead } from '@/components/SeoHead';
 import { PublicLayout } from '@/components/layouts/PublicLayout';
@@ -149,6 +150,8 @@ export function SearchPage() {
         ) : groups.map((g) => renderGroup(g, t))}
 
         {!q && <p className="text-slate-400">{t('nav.search')}</p>}
+
+        <AdSlot placement="SEARCH" className="mt-10" />
       </div>
     </PublicLayout>
   );

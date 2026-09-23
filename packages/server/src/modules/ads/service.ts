@@ -10,6 +10,7 @@ import {
 import { suppliers, merchants, companies } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
+import { hashToken } from '../../lib/security.js';
 
 export type CampaignStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
 export type CampaignObjective =
@@ -389,9 +390,11 @@ export async function recordAdEvent(
     campaignId: input.campaignId,
     creativeId: input.creativeId ?? null,
     eventType: input.eventType,
-    userId: input.userId ?? null,
+    // Attribution: an explicit userId wins, otherwise the session user is used.
+    userId: input.userId ?? ctx.actorId ?? null,
     sessionId: input.sessionId ?? null,
-    ipHash: input.ipHash ?? null,
+    // Only the hash is persisted, never the raw address.
+    ipHash: input.ipHash ?? (ctx.ipAddress ? hashToken(ctx.ipAddress) : null),
     metadata: input.metadata ?? null,
   });
 
@@ -464,6 +467,20 @@ export async function getCampaignStats(db: DB, campaignId: string, userId: strin
   };
 }
 
+/**
+ * A campaign is eligible for a placement when its `adUnits.placements` array
+ * names that placement. Campaigns with no declared placements stay unconstrained
+ * so campaigns created before placements existed keep serving.
+ */
+export function campaignTargetsPlacement(
+  adUnits: unknown,
+  placement: string,
+): boolean {
+  const raw = (adUnits as Record<string, unknown> | null)?.placements;
+  if (!Array.isArray(raw) || raw.length === 0) return true;
+  return raw.some((p) => typeof p === 'string' && p.toUpperCase() === placement.toUpperCase());
+}
+
 /** Serves active creatives for a given placement (public, authenticated by user identity). */
 export async function servePlacement(
   db: DB,
@@ -477,16 +494,21 @@ export async function servePlacement(
     .orderBy(desc(campaigns.createdAt))
     .limit(20);
   const active = campaignRows.filter(
-    (c) => c.startsAt <= now && (!c.endsAt || c.endsAt >= now),
+    (c) =>
+      c.startsAt <= now &&
+      (!c.endsAt || c.endsAt >= now) &&
+      (!opts.placement || campaignTargetsPlacement(c.adUnits, opts.placement)),
   );
 
   const served = [];
   for (const campaign of active) {
+    // One slot per campaign, and never the same creative twice across campaigns.
     const creatives = await db
       .select()
       .from(adCreatives)
       .where(and(eq(adCreatives.campaignId, campaign.id), eq(adCreatives.isActive, true)))
-      .limit(3);
+      .orderBy(desc(adCreatives.createdAt))
+      .limit(1);
     if (creatives.length === 0) continue;
     const creative = creatives[0];
     served.push({

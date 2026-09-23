@@ -1,8 +1,38 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-22**
+آخر تحديث: **2026-09-23**
 
-## Milestone J — Automatic Data-Retention Window Execution: جدولة الحذف آليًا بعد انتهاء نافذة الاستبقاء (هذه الجلسة — مكتمل)
+## Milestone K — Ad Placement Targeting + Ad Telemetry Attribution (B18 — مكتمل)
+
+### الفجوة الحقيقية
+محرّك الإعلانات كان **يعرض نفس الحملات في كل المواضع**: `servePlacement()` كانت تُرشّح بـ`status=ACTIVE` و`isActive` والنافذة الزمنية فقط، ولا تقرأ `adUnits` إطلاقًا، فلا يوجد أي مفهوم لـ«موضع» (MARKETPLACE / PRODUCT_DETAILS / SEARCH). كما أن `recordAdEvent` كانت تُسقط `userId` و`ipHash` (تكتب `null` دائمًا)، فحدث الظهور/النقر بلا إسناد — أي أن CTR وبيانات الإسناد كانت صفرًا بنيويًا. وأخيرًا كانت الواجهة **لا تعرض أي إعلان**: لا مكوّن يستدعي `api.servedAds()`، فالـAPI كان بلا مستهلك.
+
+### ما بُني
+- **`campaignTargetsPlacement(adUnits, placement)`** في `modules/ads/service.ts`: الحملة مؤهّلة للموضع إذا كان `adUnits.placements` يسمّيه. **الحملات بلا مواضع تبقى غير مقيَّدة** فتُخدم في كل المواضع — توافق رجعي للحملات المنشأة قبل وجود المواضع (لا كسر بيانات).
+- **`servePlacement`** تُرشّح الآن بالموضع عبر `!opts.placement || campaignTargetsPlacement(...)`، وتُعيد **إبداعًا واحدًا لكل حملة** (`orderBy(createdAt desc).limit(1)` بدل `limit(3)`) فلا يتكرّر نفس المُعلن في أكثر من خانة.
+- **`GET /api/ads/served?placement=…`** يقبل الموضع؛ و**`POST /api/ads/events`** صار `optionalAuth`: الظهور والنقر قياس صفحات عامة (مجهول)، أما **CONVERSION فتشترط جلسة** (401) لأنها تستهلك الميزانية وتحرّك المال.
+- **الإسناد**: `recordAdEvent` تستخدم `input.userId ?? ctx.actorId`، و`ipHash` يُحسب من `ctx.ipAddress` عبر `hashToken` — **يُخزَّن الهاش فقط، لا العنوان الخام**.
+- **`AdSlot.tsx`** (جديد): مكوّن يجلب الإعلانات لموضع ويعرضها كبطاقات «إعلان مميّز»، ويسجّل **IMPRESSION** مرة واحدة لكل إبداع (حماية بـ`Set` عبر `useRef`) بـ`sessionId` مجهول للزيارة مخزّن في `sessionStorage`.
+- **إصلاح فقدان النقر**: النقر يفتح `target="_blank"` فيُلغي `fetch` الجاري فيضيع الـCLICK. أُبدل بـ`navigator.sendBeacon` (يُصفّ الطلب في المتصفح ويبقى بعد الـunload) مع الإبقاء على `fetch` كـfallback.
+- **الربط في الواجهة**: `<AdSlot>` في `MarketplacePage` (`MARKETPLACE`) و`ProductDetailsPage` (`PRODUCT_DETAILS`) و`SearchPage` (`SEARCH`).
+- **نموذج الحملة**: `AD_PLACEMENTS` + صناديق اختيار المواضع في `DashboardBusinessPages`، و`api.createCampaign` يقبل `adUnits`. مفاتيح i18n جديدة (`ads.sponsored`, `ads.sponsoredBadge`, `ads.form.placements`, `ads.form.placementsHint`).
+
+### التحقق (Functional Audit حقيقي من الواجهة، لا HTTP 200 فقط)
+- **من الواجهة عبر المتصفح**: إنشاء حملة بموضع `MARKETPLACE` → القاعدة تُظهر `ad_units={"placements":["MARKETPLACE"]}` و`status=ACTIVE`؛ وحملة `PRODUCT_DETAILS` تُخزَّن بحالة `DRAFT`.
+- **`e2e/ads.spec.ts` (+2 حالات، 4/4)**: (1) حملة بلا مواضع تُخدم في `MARKETPLACE`، ثم إعادة استهدافها إلى `SEARCH` ⇒ تُخدم في `SEARCH` **ولا** تُخدم في `MARKETPLACE` (تغيير فعلي في الخدمة، مُثبَت بـ`expect.poll` بعد إضافة إبداع من الواجهة). (2) منتقي المواضع يُخزِّن `PRODUCT_DETAILS` ويُقرأ من تفاصيل الحملة.
+- **الخادم**: `ads.test.ts` **15/15**؛ الحزمة الكاملة **528/528** (51 ملفًا).
+- **Full E2E**: **160/160** (كان 158 قبل الإضافتين).
+- **Typecheck** (server + web) و**Build** (server prod-bundle + web) = نظيف.
+
+### البيئة (بدون reset/drop)
+- لا reset/drop/push ولا migrations جديدة (`ad_units` و`campaigns` موجودان).
+- فشلان في `payments.spec.ts` ظهرا أول الأمر وعُزلا كـ**سابقين للتغيير**: أُثبت بإخفاء التغييرات (`git stash`) أن الفشل نفسه يقع على الشجرة النظيفة. السبب بيئي: خادم dev مُعاد استخدامه بلا حدود E2E المرتفعة (`RATE_LIMIT_LOGIN_MAX`) ⇒ 429. عند تشغيل Playwright بخوادمه الخاصة (بعد إيقاف خوادم التطوير) ⇒ **160/160**.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**.
+- **Marketing Video Agent (89e68d7)** بلا مساس.
+
+## Milestone J — Automatic Data-Retention Window Execution: جدولة الحذف آليًا بعد انتهاء نافذة الاستبقاء (مكتمل)
 
 ### الهدف
 إغلاق آخر بند متبقٍّ في PHASE 17 صراحةً في `docs/DEVELOPMENT_ROADMAP.md` (الأولويات القادمة، البند 7): «Data deletion execution (anonymization) ✅ منجزة ومختبرة؛ **بقي جدولتها آليًا بعد انتهاء نافذة الاستبقاء**». كانت النافذة (`data_deletion_requests.retention_until`) تُحسب من Policy Engine وتُخزَّن وقت الطلب، وتُستخدم كبوابة لمسار `ANONYMIZED` اليدوي فقط — **لا شيء يتحرّك عند انتهائها**، فيبقى الطلب `DEACTIVATED` إلى الأبد حتى يتذكّر إنسان التاريخ. نُفِّذ مشغّل زمني حقيقي (بلا schema، بلا migrations، بلا قيم مثبّتة).

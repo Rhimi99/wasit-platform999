@@ -679,6 +679,7 @@ export const api = {
     currencyCode?: string;
     startsAt: string;
     endsAt?: string | null;
+    adUnits?: Record<string, unknown> | null;
   }) {
     return request<CampaignDetail>(`/api/ads/campaigns`, { method: 'POST', body: JSON.stringify(data) });
   },
@@ -694,8 +695,16 @@ export const api = {
   async campaignStats(id: string) {
     return request<CampaignStats>(`/api/ads/campaigns/${id}/stats`);
   },
-  async servedAds() {
-    return request<{ items: ServedAdRow[] }>('/api/ads/served');
+  async servedAds(params: { placement?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.placement) qs.set('placement', params.placement);
+    return request<{ items: ServedAdRow[] }>(`/api/ads/served?${qs.toString()}`);
+  },
+  async recordAdEvent(data: { campaignId: string; creativeId?: string | null; eventType: 'IMPRESSION' | 'CLICK' | 'CONVERSION'; sessionId?: string | null; metadata?: Record<string, unknown> | null }) {
+    return request<{ id: string; eventType: string; campaignId: string }>('/api/ads/events', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
   async myAdvertisers() {
     return request<{ items: Array<{ id: string; type: 'MERCHANT' | 'SUPPLIER' | 'COMPANY'; name: string }> }>('/api/ads/my-advertisers');

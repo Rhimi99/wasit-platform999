@@ -6,6 +6,8 @@ import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/c
 import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import type { CampaignStats, CampaignSummary, MyAnalyticsOverview, SubscriptionPlan, MySubscription, SubscriptionInvoice, BillingCycle } from '@/lib/types';
 
+const AD_PLACEMENTS = ['MARKETPLACE', 'PRODUCT_DETAILS', 'SEARCH'] as const;
+
 export function DashboardAdsPage() {
   const { t } = useI18n();
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
@@ -15,7 +17,7 @@ export function DashboardAdsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ title: '', objective: 'PRODUCT_ADS', budget: '100', advertiserId: '', advertiserType: 'SUPPLIER', endsAt: '' });
+  const [form, setForm] = useState({ title: '', objective: 'PRODUCT_ADS', budget: '100', advertiserId: '', advertiserType: 'SUPPLIER', endsAt: '', placements: [] as string[] });
   const [notice, setNotice] = useState<string | null>(null);
   const [recs, setRecs] = useState<{
     totalCampaigns: number;
@@ -84,6 +86,7 @@ export function DashboardAdsPage() {
         currencyCode: 'TND',
         startsAt: new Date().toISOString(),
         endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : null,
+        adUnits: form.placements.length > 0 ? { placements: form.placements } : null,
       }),
     );
     setCreating(false);
@@ -91,7 +94,7 @@ export function DashboardAdsPage() {
     setNotice(t('ads.createdNotice'));
     await loadCampaigns();
     if (res.data) setSelectedId(res.data.id);
-    setForm((f) => ({ ...f, title: '', budget: '100' }));
+    setForm((f) => ({ ...f, title: '', budget: '100', placements: [] }));
   };
 
   const updateStatus = async (id: string, status: string) => {
@@ -194,6 +197,28 @@ export function DashboardAdsPage() {
                 {creating ? t('common.processing') : t('ads.create')}
               </button>
             </form>
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <p className="text-xs font-medium text-slate-600">{t('ads.form.placements')}</p>
+              <p className="mt-0.5 text-[11px] text-slate-400">{t('ads.form.placementsHint')}</p>
+              <div className="mt-2 flex flex-wrap gap-3">
+                {AD_PLACEMENTS.map((p) => (
+                  <label key={p} className="inline-flex items-center gap-2 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      data-testid={`ads-placement-${p}`}
+                      checked={form.placements.includes(p)}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          placements: e.target.checked ? [...f.placements, p] : f.placements.filter((x) => x !== p),
+                        }))
+                      }
+                    />
+                    {p}
+                  </label>
+                ))}
+              </div>
+            </div>
           </Card>
 
           {/* Campaigns list */}
@@ -290,14 +315,14 @@ function AddCreativeCampaign({ campaignId, advertiser, onAdded, t }: {
   const inputCls = 'w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-wasit-500 focus:outline-none';
   return (
     <form onSubmit={handleAdd} className="grid gap-2 sm:grid-cols-4">
-      <select className={inputCls} value={type} onChange={(e) => setType(e.target.value)}>
+      <select data-testid={`ads-creative-type-${campaignId}`} className={inputCls} value={type} onChange={(e) => setType(e.target.value)}>
         <option value="BANNER">BANNER</option>
         <option value="TEXT">TEXT</option>
         <option value="VIDEO">VIDEO</option>
       </select>
-      <input className={inputCls} placeholder={t('ads.form.creativeTitle')} value={title} onChange={(e) => setTitle(e.target.value)} />
-      <input className={inputCls} placeholder={t('ads.form.targetUrl')} value={targetUrl} onChange={(e) => setTargetUrl(e.target.value)} />
-      <button type="submit" disabled={busy || !title.trim()} className="rounded-md bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+      <input data-testid={`ads-creative-title-${campaignId}`} className={inputCls} placeholder={t('ads.form.creativeTitle')} value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input data-testid={`ads-creative-url-${campaignId}`} className={inputCls} placeholder={t('ads.form.targetUrl')} value={targetUrl} onChange={(e) => setTargetUrl(e.target.value)} />
+      <button data-testid={`ads-creative-submit-${campaignId}`} type="submit" disabled={busy || !title.trim()} className="rounded-md bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50">
         {busy ? t('common.processing') : t('ads.addCreative')}
       </button>
     </form>

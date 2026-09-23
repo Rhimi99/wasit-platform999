@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api, apiCall } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { ProductCard } from '@/components/ProductCard';
+import { AdSlot } from '@/components/AdSlot';
 import { EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import { SeoHead } from '@/components/SeoHead';
 import type { Category, ProductSummary } from '@/lib/types';
@@ -102,6 +103,8 @@ export function MarketplacePage() {
             {products.map((p) => <ProductCard key={p.id} product={p} />)}
           </div>
         )}
+
+        <AdSlot placement="MARKETPLACE" className="mt-10" />
       </div>
     </PublicLayout>
   );

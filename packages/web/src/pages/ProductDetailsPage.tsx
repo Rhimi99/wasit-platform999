@@ -4,6 +4,7 @@ import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { Badge, Card, ErrorState, SectionHeader, Spinner } from '@/components/ui';
+import { AdSlot } from '@/components/AdSlot';
 import { SeoHead } from '@/components/SeoHead';
 import type { JsonLd, ProductDetail } from '@/lib/types';
 import { PublicLayout } from '@/components/layouts/PublicLayout';
@@ -211,6 +212,8 @@ export function ProductDetailsPage() {
 
         <p className="mt-8 text-xs text-slate-400">{product.barcode ? `Barcode: ${product.barcode}` : ''}</p>
         <p className="text-xs text-slate-400">Created: {formatDate(product.createdAt)}</p>
+
+        <AdSlot placement="PRODUCT_DETAILS" className="mt-10" />
       </div>
     </PublicLayout>
   );

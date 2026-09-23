@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { PERMISSIONS, type UserRole } from '@wasit/shared';
+import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
-import { requireAuth, requirePermission } from '../../middleware/auth.js';
+import { optionalAuth, requireAuth, requirePermission } from '../../middleware/auth.js';
 import {
   addCreative,
   createCampaign,
@@ -89,7 +89,7 @@ adsRoutes.use('/campaigns/*', requireAuth, requirePermission(
   PERMISSIONS.CAMPAIGN_CREATE,
   PERMISSIONS.CAMPAIGN_MANAGE,
 ));
-adsRoutes.use('/events', requireAuth);
+adsRoutes.use('/events', optionalAuth);
 
 // Serve endpoint is public (no auth) — it only returns active creatives for placements.
 adsRoutes.get('/served', (c) => {
@@ -176,6 +176,11 @@ adsRoutes.get('/campaigns/:id/stats', async (c) => {
 adsRoutes.post('/events', validateBody(createEventSchema), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof createEventSchema>>(c);
+  // Impressions and clicks are anonymous, viewable-page telemetry. A conversion
+  // moves money (it consumes budget), so it must come from an authenticated actor.
+  if (body.eventType === 'CONVERSION' && !ctx.user) {
+    throw ApiError.unauthorized('Authentication required to record a conversion');
+  }
   const result = await recordAdEvent(ctx.db, body, {
     actorId: ctx.user?.id ?? null,
     ipAddress: ctx.ipAddress,
