@@ -20,8 +20,10 @@ test.describe('Admin country policies', () => {
   test('the page lists the global policy and any country gaps', async ({ page }) => {
     await page.goto('/admin/policies');
     await expect(page.getByRole('heading', { name: /سياسات|policies/i }).first()).toBeVisible();
-    // The global default row is always present once seeded.
-    await expect(page.getByText(/Global|عالمي/i).first()).toBeVisible();
+    // The global default row is always present once seeded. Scope to the policy
+    // table: an unscoped text match hits the hidden `<option>` in the scope
+    // selector first, which can never become visible.
+    await expect(page.locator('table tbody tr').filter({ hasText: /Global|عالمي/i }).first()).toBeVisible();
   });
 
   test('an admin can activate and deactivate a candidate market', async ({ page }) => {

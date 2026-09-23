@@ -353,6 +353,14 @@ test.describe('MARKETING VIDEO — full studio flow', () => {
     const productOptions = page.locator('#v-product option');
     await expect.poll(async () => productOptions.count()).toBeGreaterThan(1);
     const count = await productOptions.count();
+
+    // Invariant, not just a happy pick: the dropdown must never offer a row the
+    // API refuses. A listing that is not ACTIVE always fails with
+    // PRODUCT_NOT_ACTIVE(422), so surfacing it would hand the user a dead option.
+    for (let i = 1; i < count; i++) {
+      const label = (await productOptions.nth(i).textContent()) ?? '';
+      expect(label, `studio option "${label}" must be an ACTIVE product`).toContain('ACTIVE');
+    }
     let activeValue: string | null = null;
     for (let i = 1; i < count; i++) {
       const label = (await productOptions.nth(i).textContent()) ?? '';
@@ -592,7 +600,34 @@ test.describe('ADMIN — every admin surface', () => {
     await expect(page.locator('table tbody tr').filter({ hasText: userId }).first()).toBeVisible();
   });
 
-  test('risk desk reassesses a user and the refreshed score is rendered', async ({ page }) => {
+  test('risk desk reassesses a user and the refreshed score is rendered', async ({ page, browser }) => {
+    // Risk profiles are only written by a real risk signal, so the desk is
+    // legitimately empty on a fresh database. Seed one through the product's own
+    // path: the anti-fee-evasion detector fires on an off-platform phone number
+    // in a message, which is exactly how a profile appears in production.
+    const merchantCtx = await browser.newContext({ storageState: storageFor('merchant') });
+    const merchantId = ((await (await merchantCtx.request.get('/api/auth/me')).json()).data as { id: string }).id;
+    await merchantCtx.close();
+
+    const customerCtx = await browser.newContext({ storageState: storageFor('customer') });
+    try {
+      const sent = await customerCtx.request.post('/api/messages', {
+        data: {
+          participantUserId: merchantId,
+          subject: `E2E risk seed ${Date.now()}`,
+          body: 'Call me on +216 99 123 456',
+        },
+      });
+      expect(sent.ok()).toBeTruthy();
+    } finally {
+      await customerCtx.close();
+    }
+
+    // The signal lands synchronously, so the profile is listable right away.
+    await expect
+      .poll(async () => ((await (await page.request.get('/api/admin/risk/profiles')).json()).data as { items: unknown[] }).items.length)
+      .toBeGreaterThan(0);
+
     await page.goto('/admin/risk');
     const row = page.locator('table tbody tr').filter({ has: page.getByRole('button', { name: /إعادة تقييم|Reassess/i }) }).first();
     await expect(row).toBeVisible();

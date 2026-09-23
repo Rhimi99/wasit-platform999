@@ -31,7 +31,10 @@ export function DashboardVideoStudioPage() {
       apiCall(() => api.listMyProducts({ pageSize: 100 })),
       apiCall(() => api.listMyMedia({ kind: 'MARKETING_VIDEO', limit: 50 })),
     ]);
-    if (p.data) setProducts(p.data.items);
+    // The API refuses renders for anything but ACTIVE products, and the pipeline
+    // only ever publishes ACTIVE listings — offering an archived/suspended row
+    // here would hand the user an option that always fails with 422.
+    if (p.data) setProducts(p.data.items.filter((item) => item.status === 'ACTIVE'));
     if (m.data) setLibrary(m.data.items.filter((a) => a.status !== 'DELETED'));
     setError(p.error && m.error ? p.error : null);
     setLoading(false);
