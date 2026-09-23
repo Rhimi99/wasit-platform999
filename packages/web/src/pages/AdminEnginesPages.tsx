@@ -342,6 +342,7 @@ export function AdminDisputesPage() {
                   <tr
                     key={d.id}
                     onClick={() => selectDetail(d.id)}
+                    data-testid={`admin-dispute-${d.id}`}
                     className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50"
                   >
                     <td className="px-4 py-2 font-mono text-xs" dir="ltr">{d.disputeNumber}</td>
@@ -383,22 +384,22 @@ export function AdminDisputesPage() {
               <Card>
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">{t('disputes.admin.statusUpdate')}</h4>
                 <div className="flex flex-wrap gap-2">
-                  <select className="input" value={statusValue} onChange={(e) => setStatusValue(e.target.value)}>
+                  <select className="input" value={statusValue} onChange={(e) => setStatusValue(e.target.value)} data-testid="admin-dispute-status-select">
                     {['OPEN', 'UNDER_REVIEW', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED', 'DECIDED', 'CLOSED'].map((s) => <option key={s} value={s}>{t(`disputes.status.${s}`)}</option>)}
                   </select>
-                  <input className="input flex-1" value={statusNote} onChange={(e) => setStatusNote(e.target.value)} placeholder="Note" />
-                  <button className="btn-secondary" onClick={() => updateStatus(detail.id)}>✓</button>
+                  <input className="input flex-1" value={statusNote} onChange={(e) => setStatusNote(e.target.value)} placeholder="Note" data-testid="admin-dispute-status-note" />
+                  <button className="btn-secondary" onClick={() => updateStatus(detail.id)} data-testid="admin-dispute-status-submit">✓</button>
                 </div>
               </Card>
 
               <Card>
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">{t('disputes.admin.decide')}</h4>
                 <div className="flex flex-wrap gap-2">
-                  <select className="input" value={decisionValue} onChange={(e) => setDecisionValue(e.target.value)}>
+                  <select className="input" value={decisionValue} onChange={(e) => setDecisionValue(e.target.value)} data-testid="admin-dispute-decision-select">
                     {['IN_FAVOR_OF_BUYER', 'IN_FAVOR_OF_SELLER', 'SPLIT', 'REJECTED'].map((d) => <option key={d} value={d}>{t(`disputes.decision.${d}`)}</option>)}
                   </select>
-                  <input className="input flex-1" value={decisionNote} onChange={(e) => setDecisionNote(e.target.value)} placeholder="Note" />
-                  <button className="btn-primary" onClick={() => decide(detail.id)}>{t('disputes.admin.decide')}</button>
+                  <input className="input flex-1" value={decisionNote} onChange={(e) => setDecisionNote(e.target.value)} placeholder="Note" data-testid="admin-dispute-decision-note" />
+                  <button className="btn-primary" onClick={() => decide(detail.id)} data-testid="admin-dispute-decide-submit">{t('disputes.admin.decide')}</button>
                 </div>
               </Card>
 

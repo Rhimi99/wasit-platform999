@@ -130,3 +130,58 @@ test.describe('Dispute appeal lifecycle', () => {
     await supplier.close();
   });
 });
+
+test.describe('Dispute lifecycle driven from the admin UI', () => {
+  test.use({ storageState: storageFor('customer') });
+
+  test('staff advances status and decides a dispute from /admin/disputes; the buyer sees it', async ({ page, browser }) => {
+    // Gap this guards: the /admin/disputes controls existed but were never
+    // clicked by any test — every earlier decision went through a raw API call.
+    // A frontend handler wired to the wrong route, or a stale detail pane, would
+    // have shipped unproven. Here the staff actions are done only through the UI.
+    const orderId = await placeOrderViaUi(page);
+    const created = await page.request.post('/api/disputes', {
+      data: {
+        orderId,
+        reasonCode: 'NOT_AS_DESCRIBED',
+        description: 'E2E: UI-driven admin lifecycle — goods do not match the listing.',
+      },
+    });
+    expect(created.ok()).toBeTruthy();
+    const disputeId = (await created.json()).data.id as string;
+    const disputeNumber = ((await (await page.request.get(`/api/disputes/${disputeId}`)).json()).data.disputeNumber) as string;
+
+    const admin = await browser.newContext({ storageState: storageFor('admin') });
+    const adminPage = await admin.newPage();
+    try {
+      await adminPage.goto('/admin/disputes');
+      await adminPage.getByTestId(`admin-dispute-${disputeId}`).click();
+
+      // Advance the status through the real control.
+      await adminPage.getByTestId('admin-dispute-status-select').selectOption('UNDER_REVIEW');
+      await adminPage.getByTestId('admin-dispute-status-note').fill('E2E: reviewing from the UI.');
+      await adminPage.getByTestId('admin-dispute-status-submit').click();
+      await expect(adminPage.getByTestId(`admin-dispute-${disputeId}`).getByText(/قيد المراجعة|Under review/i)).toBeVisible();
+
+      // Decide in favour of the buyer through the real control.
+      await adminPage.getByTestId('admin-dispute-decision-select').selectOption('IN_FAVOR_OF_BUYER');
+      await adminPage.getByTestId('admin-dispute-decision-note').fill('E2E: buyer protected.');
+      await adminPage.getByTestId('admin-dispute-decide-submit').click();
+
+      // The persisted state must be what the DB now holds, not just local state.
+      await expect.poll(async () => {
+        const res = await admin.request.get(`/api/admin/disputes/${disputeId}`);
+        const d = (await res.json()).data as { status: string; decision: string; decisionNote: string | null };
+        return `${d.status}/${d.decision}/${d.decisionNote ?? ''}`;
+      }).toContain('DECIDED/IN_FAVOR_OF_BUYER/E2E: buyer protected.');
+
+      // The buyer opening their own dispute sees the staff decision mirrored.
+      await page.goto('/dashboard/disputes');
+      await page.getByRole('button', { name: new RegExp(disputeNumber) }).click();
+      await expect(page.getByText(/لصالح المشتري|In favor of the buyer/i).first()).toBeVisible();
+      await expect(page.getByText('E2E: buyer protected.').first()).toBeVisible();
+    } finally {
+      await admin.close();
+    }
+  });
+});

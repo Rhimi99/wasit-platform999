@@ -552,7 +552,7 @@ export function AdminLedgerPage() {
             <thead><tr><th>{t('common.date')}</th><th>{t('field.type')}</th><th>{t('field.direction')}</th><th>{t('field.amount')}</th><th>{t('common.status')}</th></tr></thead>
             <tbody>
               {entries.map((e) => (
-                <tr key={e.id}>
+                <tr key={e.id} data-testid={`admin-ledger-${e.entryType}-${e.direction}`}>
                   <td>{formatDate(e.createdAt)}</td>
                   <td>{t(ledgerEntryTypeKey(e.entryType))}</td>
                   <td>{e.direction === 'CREDIT' ? <Badge color="green">{t('ledger.credit')}</Badge> : <Badge color="red">{t('ledger.debit')}</Badge>}</td>

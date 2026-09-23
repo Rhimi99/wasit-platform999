@@ -2,6 +2,32 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone M2 — Admin Dispute Lifecycle + Ledger Reflection Proven From the UI (اختبار وظيفي)
+
+### الفجوة في التغطية (قدرة موجودة لكن غير مُثبَتة من الواجهة)
+تحقّقنا أولًا من ثلاث فجوات مرشّحة بالدليل قبل أي تغيير:
+
+1. **Dispute lifecycle — فجوة حقيقية.** أزرار `/admin/disputes` (تحديث الحالة، البتّ، الإسناد، مراجعة الاستئناف) كانت موجودة ومربوطة بمعالِجات سليمة، لكن **لا اختبار واحد كان ينقرها**: كل قرار في `e2e/disputes.spec.ts` كان يُنفَّذ عبر `admin.request.post('/api/admin/disputes/:id/decide')` مباشرة. أي أن مسار الواجهة (handler → API → service → DB → انعكاس على صفحة العميل) لم يكن مُثبَتًا إطلاقًا، ولو كان الـhandler مربوطًا بمسار خاطئ أو لو بقي تفاصيل النزاع قديمًا لشُحن بلا كشف.
+2. **Admin Ledger posting — ليست فجوة قدرة.** لا يوجد مسار كتابة إداري للـledger، عن قصد: `transaction_ledger` يُلحق فقط من `orders/service.ts` (قيدا العمولة + قيمة الصفقة عند إنشاء الطلب) و`payments/service.ts` (التسوية/الاسترداد). اختراع «post entry» إداري سيكون ميزة جديدة يمسّ النموذج المالي المجمّد. الفجوة الحقيقية الوحيدة هي أن **صفحة `/admin/ledger` لم يُثبَت قط من الواجهة أنها تعرض الصفوف الحقيقية المكتوبة في القاعدة**.
+3. **Commission Policy edits — ليست فجوة قدرة.** لا مسار إداري ولا واجهة لتعديل `commission_policies` (الكتابة فقط في `seed.ts`، والقراءة فقط في `lib/commission.ts`). بناؤها خارج النطاق ويهدّد سياسة 4% = 2% بائع + 2% مشتري المجمّدة. سُجّلت كخارج نطاق، بلا اختراع قدرة.
+
+### ما بُني
+- **`data-testid` فقط، بلا تغيير منطق**: صف النزاع `admin-dispute-<id>`؛ عناصر التحكم `admin-dispute-status-select`/`admin-dispute-status-note`/`admin-dispute-status-submit`، `admin-dispute-decision-select`/`admin-dispute-decision-note`/`admin-dispute-decide-submit`؛ وصفوف الـledger `admin-ledger-<entryType>-<direction>`.
+- لا تغيير على أي معالِج أو مسار أو خدمة. الوظائف التي كانت تعمل لم تُمسّ.
+
+### التحقق (Functional Audit حقيقي من الواجهة)
+- **`e2e/disputes.spec.ts` (+1 حالة)**: من واجهة الأدمن حصرًا — فتح النزاع من الصف بالـtestid، تقديم الحالة إلى `UNDER_REVIEW` عبر القائمة والنقر، ثم البتّ `IN_FAVOR_OF_BUYER` من الزر؛ ثم `expect.poll` على `GET /api/admin/disputes/:id` يثبت أن **القاعدة** تحمل `DECIDED/IN_FAVOR_OF_BUYER/<note>` (حالة ثابتة لا حالة واجهة)؛ ثم فتح العميل نزاعه من `/dashboard/disputes` ورؤية القرار وملاحظته معروضين.
+- **`e2e/functional-audit.spec.ts` (+1 حالة)**: إنشاء طلب حقيقي من الواجهة ⇒ قراءة `GET /api/admin/ledger` ⇒ فتح `/admin/ledger` والتأكد أن عدد صفوف `COMMISSION/DEBIT` المعروضة **يساوي** ما يعيده الـAPI (انعكاس حقيقي لا fixture).
+- **Full E2E**: **165/165** (كانت 163). **الخادم**: **531/531** (51 ملفًا). **Typecheck** (server + web) و**Build** (server + web) = نظيف.
+- الفحص أثبت أن الفجوتين **تغطية لا وظيفة**: الحالتان الجديدتان تمرّان دون أي إصلاح منطقي.
+
+### البيئة
+- لا migrations ولا schema جديد، ولا reset/drop/push.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**. لا مسار تعديل عمولة إداري (قرار مقصود موثَّق).
+- **Marketing Video Agent (89e68d7)** وB18/B19/B20/M1 بلا مساس.
+
 ## Milestone M — Merchant Product Editing (B20 — مكتمل)
 
 ### الفجوة الحقيقية (قدرة جوهرية غائبة)

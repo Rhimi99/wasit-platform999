@@ -473,6 +473,37 @@ test.describe('ADMIN — every admin surface', () => {
       await userCtx.close();
     }
   });
+
+  test('the ledger page reflects the real DB entries a placed order writes', async ({ page, browser }) => {
+    // Ledger entries are appended only by the order and payment services (there
+    // is deliberately no admin "post entry" endpoint). The gap was that the
+    // /admin/ledger table was never proven to render those real rows: a broken
+    // mapper or an empty-state bug would have shipped unproven. So we create a
+    // real order, then assert the staff page shows the COMMISSION rows the DB
+    // now holds — UI reflecting persisted state, not a cached fixture.
+    const customer = await browser.newContext({
+      baseURL: process.env.E2E_WEB_URL ?? 'http://localhost:5173',
+      storageState: storageFor('customer'),
+    });
+    const customerPage = await customer.newPage();
+    try {
+      await placeOrderViaUi(customerPage);
+    } finally {
+      await customer.close();
+    }
+
+    const apiRows = (await (await page.request.get('/api/admin/ledger')).json()).data.items as Array<{
+      entryType: string; direction: string;
+    }>;
+    const apiCommission = apiRows.filter((e) => e.entryType === 'COMMISSION' && e.direction === 'DEBIT');
+    expect(apiCommission.length).toBeGreaterThan(0);
+
+    await page.goto('/admin/ledger');
+    // The page must render exactly as many commission rows as the API returns.
+    await expect(page.getByTestId('admin-ledger-COMMISSION-DEBIT').first()).toBeVisible();
+    const uiCount = await page.locator('[data-testid="admin-ledger-COMMISSION-DEBIT"]').count();
+    expect(uiCount).toBe(apiCommission.length);
+  });
 });
 
 test.describe('ADS — create and manage a campaign from the UI', () => {
