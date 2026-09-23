@@ -2,6 +2,32 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone L — Agent Task Results Visible to the Requester (B19 — مكتمل)
+
+### الفجوة الحقيقية (حلقة مقطوعة: الخادم يحسب، الواجهة لا تُظهر)
+وكلاء الذكاء الذين `requiresHumanApproval=true` (sales/ads/b2b/risk/dispute/development) يُنشئون مهمة بحالة `awaiting_approval`، ثم يعتمدها مشرف عبر `POST /api/ai/tasks/:id/approve` فيُنفَّذ الوكيل ويُخزَّن `result` في `ai_agent_tasks`. المشكلة أن **صفحة التاجر `/dashboard/ai` لم تكن تقرأ المهام إطلاقًا**: `loadAll()` كانت تجلب `aiStatus/aiMyBudget/aiModels/aiAgents/aiActivity` فقط، و`aiActivity` يعرض **استدعاءات LLM الخام** (`ai_requests`) لا المهام. فبعد الاعتماد يظهر للتاجر «لا يوجد نشاط بعد» رغم أن النتيجة موجودة في القاعدة — أي أن `api.aiMyTasks()` كان **بلا مستهلك في الواجهة** (أحد الـ16 طريقة API بلا قارئ التي رصدها تدقيق ما بعد B18). أثبت الفحص وقت التشغيل أن `GET /api/ai/tasks` يعيد المهمة `approved` مع `result` كامل، والواجهة تعرض لا شيء.
+
+### ما بُني
+- **قسم «مهام الوكلاء»** في `DashboardBusinessPages.tsx` (`DashboardAIPage`): `loadAll()` تجلب `api.aiMyTasks()` ضمن نفس `Promise.all`، وتُعرض المهام بحالة ملوّنة (approved/معتمد أخضر، awaiting_approval كهرماني، rejected/failed أحمر) مع الزمن والنتيجة.
+- **عرض النتيجة**: `parseResultData()` يفكّ `result` سواء وصل كائنًا أو نصًا JSON (صفوف أقدم)، ويُعرض داخل `<pre data-testid="ai-task-result">` بعينه — لا placeholder.
+- **صف بمعرّف ثابت** `data-testid="ai-task-<id>"` للاختبار الوظيفي؛ وتحديث القائمة تلقائيًا بعد `runAgent` عبر `loadAll()` القائمة.
+- **التوطين**: مفاتيح `ai.tasks.*` و`ai.task.status.*` في **ar/en/fr/zh** الأربعة (بما فيها `awaiting_approval`/`queued`/`running`) — لا نصوص مضمّنة.
+
+### التحقق (Functional Audit حقيقي من الواجهة)
+- **من المتصفح**: التاجر ينفّذ Sales Agent من الزر ⇒ تظهر صف «قيد الموافقة»؛ المشرف يعتمد ⇒ بعد إعادة التحميل يظهر الصف «معتمد» مع `result` (KPIs حقيقية: `commission: 646.0000` = 4% من `16150`، ما يؤكد بقاء سياسة العمولة سليمة).
+- **`e2e/admin-ai.spec.ts` (+1 حالة)**: يختبر الحلقة كاملة من واجهة التاجر: تنفيذ الوكيل من الزر ⇒ ظهور صف الانتظار ⇒ اعتماد بجلسة admin مستقلة (`playwright.request` بلا إفساد جلسة التاجر) ⇒ إعادة التحميل ⇒ ظهور الحالة «معتمد» و`ai-task-result` مرئي، ثم مطابقة الحمولة المعروضة بـ`GET /api/ai/tasks/:id`.
+- **الخادم**: الحزمة الكاملة **528/528** (51 ملفًا).
+- **Full E2E**: **161/161** ناجحة (كانت 160 قبل الحالة الجديدة) — شُغّلت بخوادم Playwright الخاصة (بحدود معدّل E2E المرتفعة) بعد إيقاف خوادم التطوير اليدوية.
+- **Typecheck** (server + web) و**Build** (server + web) = نظيف.
+
+### البيئة
+- لا migrations ولا schema جديد، ولا reset/drop/push. أُعيد تشغيل PostgreSQL 17 محليًا (الكتلة كانت مفقودة) ثم `db:migrate` + `db:seed` + `db:seed:demo` من مسارات المشروع نفسها.
+- الـ18 فشلًا التي ظهرت أول الأمر في الحزمة الكاملة (auth/payments/admin-*) كانت **بيئية لا وظيفية**: السبب أن Playwright كان **يعيد استخدام خادمي التطوير اليدويين** (`reuseExistingServer`) وهما بلا حدود المعدّل المرتفعة التي يضبطها `playwright.config.ts`، فيقع 429 أثناء السويت. عند إيقافهما وتشغيل السويت بخوادم Playwright ⇒ **161/161**.
+
+### خارج النطاق / غير مُتغيّر
+- العمولة كما هي **4% = 2% بائع + 2% مشتري**.
+- **Marketing Video Agent (89e68d7)** بلا مساس. B18 غير مُعاد فتحه.
+
 ## Milestone K — Ad Placement Targeting + Ad Telemetry Attribution (B18 — مكتمل)
 
 ### الفجوة الحقيقية

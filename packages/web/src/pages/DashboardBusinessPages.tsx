@@ -410,6 +410,19 @@ export function DashboardAnalyticsPage() {
   );
 }
 
+/** Agent task results may arrive as a JSON string (legacy rows) or an object. */
+function parseResultData(result: unknown): unknown {
+  if (!result) return null;
+  if (typeof result === 'string') {
+    try {
+      return JSON.parse(result);
+    } catch {
+      return result;
+    }
+  }
+  return result;
+}
+
 export function DashboardAIPage() {
   const { t } = useI18n();
   const [loading, setLoading] = useState(true);
@@ -420,6 +433,7 @@ export function DashboardAIPage() {
   const [agents, setAgents] = useState<Array<{ key: string; name: string; description: string; requiresHumanApproval: boolean }>>([]);
   const [activity, setActivity] = useState<Array<{ id: string; requestType: string; model: string; tokensInput: number; tokensOutput: number; cost: string; createdAt: string }>>([]);
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
+  const [agentTasks, setAgentTasks] = useState<Array<{ id: string; agentKey: string; status: string; result?: unknown; error?: { message?: string } | null; createdAt: string }>>([]);
   const [runTool, setRunTool] = useState<string | null>(null);
   const [runInput, setRunInput] = useState('');
   const [runResult, setRunResult] = useState<{ content?: string; data?: Record<string, unknown>; model?: string; cost?: string } | null>(null);
@@ -437,12 +451,13 @@ export function DashboardAIPage() {
   const loadAll = async () => {
     setLoading(true);
     setError(null);
-    const [st, bd, md, ag, ac] = await Promise.all([
+    const [st, bd, md, ag, ac, tk] = await Promise.all([
       apiCall(() => api.aiStatus()),
       apiCall(() => api.aiMyBudget()),
       apiCall(() => api.aiModels()),
       apiCall(() => api.aiAgents()),
       apiCall(() => api.aiActivity()),
+      apiCall(() => api.aiMyTasks()),
     ]);
     if (st.error && bd.error && md.error && ag.error && ac.error) {
       setError(st.error);
@@ -452,6 +467,7 @@ export function DashboardAIPage() {
     if (md.data) setModels(md.data.items);
     if (ag.data) setAgents(ag.data.agents);
     if (ac.data) setActivity(ac.data.items);
+    if (tk.data) setAgentTasks(tk.data.items);
     setLoading(false);
   };
 
@@ -672,6 +688,46 @@ export function DashboardAIPage() {
         </div>
         {Object.entries(agentStatus).filter(([_, v]) => v === t('ai.agent.succeeded')).length > 0 && (
           <p className="mt-2 text-xs text-slate-400">{t('ai.agents.completed')}</p>
+        )}
+      </div>
+
+      {/* Agent task history — approved tasks become visible here once an approver acts. */}
+      <div className="mb-4">
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">{t('ai.tasks.title')}</h3>
+        <p className="mb-2 text-xs text-slate-400">{t('ai.tasks.hint')}</p>
+        {agentTasks.length === 0 ? (
+          <EmptyState title={t('ai.tasks.empty')} />
+        ) : (
+          <div className="space-y-2">
+            {agentTasks.map((task) => {
+              const parsed = parseResultData(task.result);
+              return (
+                <Card key={task.id} testId={`ai-task-${task.id}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-slate-800">{task.agentKey}</p>
+                    <Badge
+                      color={
+                        task.status === 'approved' || task.status === 'succeeded'
+                          ? 'green'
+                          : task.status === 'rejected' || task.status === 'failed'
+                            ? 'red'
+                            : 'amber'
+                      }
+                    >
+                      {t(`ai.task.status.${task.status}`)}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">{formatDate(task.createdAt)}</p>
+                  {parsed && (
+                    <pre data-testid="ai-task-result" className="mt-2 overflow-x-auto rounded-md bg-slate-50 p-2 text-xs text-slate-700">
+                      {JSON.stringify(parsed, null, 2)}
+                    </pre>
+                  )}
+                  {task.error?.message && <p className="mt-2 text-xs text-red-600">{task.error.message}</p>}
+                </Card>
+              );
+            })}
+          </div>
         )}
       </div>
 

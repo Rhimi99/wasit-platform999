@@ -222,3 +222,52 @@ test.describe('Admin AI governance desk — RBAC', () => {
     expect((await page.request.get('/api/admin/ai/budgets')).status()).toBe(403);
   });
 });
+
+/**
+ * B19 — the requesting user must be able to see the result of an agent task they
+ * ran once an approver acts on it. Before the fix the merchant AI page rendered
+ * only `/api/ai/activity` (raw LLM invocations), so an approved gated task stayed
+ * invisible: the backend held the result but the UI never surfaced it.
+ */
+test.describe('Agent task results reach the requesting user', () => {
+  test.use({ storageState: storageFor('merchant') });
+
+  test('an approved gated task appears with its result on the merchant AI page', async ({ page, playwright }) => {
+    await page.goto('/dashboard/ai');
+
+    // Run the gated Sales Agent from the merchant UI.
+    const salesCard = page
+      .locator('div')
+      .filter({ has: page.getByText('Sales Agent', { exact: true }) })
+      .filter({ has: page.getByRole('button', { name: /تنفيذ|Run/ }) })
+      .last();
+    await salesCard.getByRole('button', { name: /تنفيذ|Run/ }).click();
+
+    // The merchant sees the row while it is still awaiting approval.
+    const pendingRow = page.locator('[data-testid^="ai-task-"]').filter({ hasText: /قيد الموافقة|Awaiting approval/i }).first();
+    await expect(pendingRow).toBeVisible({ timeout: 15_000 });
+    const taskId = (await pendingRow.getAttribute('data-testid'))!.replace('ai-task-', '');
+
+    // An independent admin session approves the task through the real route.
+    const adminApi = await playwright.request.newContext({
+      baseURL: process.env.E2E_API_URL ?? 'http://localhost:3000',
+      storageState: storageFor('admin'),
+    });
+    const approved = await adminApi.post(`/api/ai/tasks/${taskId}/approve`, { data: { decision: 'APPROVE' } });
+    expect(approved.ok()).toBeTruthy();
+    expect((await approved.json()).data.status).toBe('approved');
+    await adminApi.dispose();
+
+    // Reload: the approved task and its computed result must now be visible.
+    await page.reload();
+    const approvedRow = page.getByTestId(`ai-task-${taskId}`);
+    await expect(approvedRow).toBeVisible();
+    await expect(approvedRow).toContainText(/معتمد|Approved/i);
+    await expect(approvedRow.getByTestId('ai-task-result')).toBeVisible();
+
+    // Prove the rendered result matches the real backend payload.
+    const task = (await (await page.request.get(`/api/ai/tasks/${taskId}`)).json()).data;
+    expect(task.status).toBe('approved');
+    expect(task.result).toBeTruthy();
+  });
+});
