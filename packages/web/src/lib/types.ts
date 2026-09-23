@@ -1213,3 +1213,59 @@ export interface DeletionRequestRow {
   retentionPolicy: DeletionRetentionPolicy | null;
   createdAt: string;
 }
+
+/** Role-scoped directory surfaces (merchant/supplier/company dashboards). */
+export type DirectoryEntityType = 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
+
+export interface OwnedEntity {
+  id: string;
+  type: DirectoryEntityType;
+  name: string;
+  verified: boolean;
+}
+
+export interface BuyerRelation {
+  userId: string;
+  name: string;
+  email: string | null;
+  buyerType: string;
+  orderCount: number;
+  firstOrderAt: string;
+  lastOrderAt: string;
+}
+
+export interface PartnerRelation {
+  sellerId: string;
+  sellerType: string;
+  name: string;
+  orderCount: number;
+  firstOrderAt: string;
+  lastOrderAt: string;
+}
+
+export interface DirectorySupplierRow {
+  id: string;
+  companyName: string;
+  verified: boolean;
+  countryId: string | null;
+  cityId: string | null;
+  logoUrl: string | null;
+  description: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+}
+
+export interface DirectoryMerchantRow {
+  id: string;
+  storeName: string;
+  verified: boolean;
+  countryId: string | null;
+  cityId: string | null;
+  logoUrl: string | null;
+  description: string | null;
+}
+
+export interface DirectoryListResponse<T> {
+  items: T[];
+  pagination: PaginationInfo;
+}

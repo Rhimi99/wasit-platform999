@@ -14,6 +14,7 @@ import { merchantRoutes } from './modules/merchants/routes.js';
 import { companyRoutes } from './modules/companies/routes.js';
 import { searchRoutes } from './modules/search/routes.js';
 import { comparisonRoutes } from './modules/comparison/routes.js';
+import { directoryRoutes } from './modules/directory/routes.js';
 import { categoriesRoutes } from './modules/categories/routes.js';
 import { inventoryRoutes } from './modules/inventory/routes.js';
 import { messagingRoutes } from './modules/messaging/routes.js';
@@ -83,6 +84,7 @@ export function createApp(): Hono {
   app.route('/api/companies', companyRoutes);
   app.route('/api/search', searchRoutes);
   app.route('/api/price-comparison', comparisonRoutes);
+  app.route('/api/directory', directoryRoutes);
   app.route('/api/library', customerLibraryRoutes);
   app.route('/api/categories', categoriesRoutes);
   app.route('/api/inventory', inventoryRoutes);

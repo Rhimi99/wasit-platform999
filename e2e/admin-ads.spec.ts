@@ -50,6 +50,11 @@ test.describe('Admin advertising desk', () => {
   test.use({ storageState: storageFor('admin') });
 
   test('sidebar opens the desk and KPIs match the live admin summary', async ({ page }) => {
+    // The suite may start on an empty campaigns table, so seed one real campaign
+    // through the merchant's own session before asserting the desk renders it.
+    const seededTitle = `E2E Admin Ads Seed ${Date.now()}`;
+    const seededId = await createMerchantCampaign(seededTitle);
+
     await page.goto('/admin');
     await page.locator('aside nav a[href="/admin/ads"]').click();
     await expect(page).toHaveURL(/\/admin\/ads/);
@@ -65,7 +70,7 @@ test.describe('Admin advertising desk', () => {
 
     // The table lists the real cross-advertiser campaigns with owner context.
     await expect(page.getByTestId('admin-ads-table')).toBeVisible();
-    await expect(page.locator('[data-testid^="admin-ads-campaign-"]').first()).toBeVisible();
+    await expect(page.getByTestId(`admin-ads-campaign-${seededId}`)).toContainText(seededTitle);
   });
 
   test('an admin pauses and ends another advertiser\'s campaign from the UI', async ({ page }) => {

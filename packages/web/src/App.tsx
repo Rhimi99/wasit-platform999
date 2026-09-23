@@ -22,7 +22,7 @@ import { DashboardMessagesPage } from './pages/DashboardMessagesPage';
 import { DashboardTrustPage, DashboardVerificationPage, DashboardDisputesPage } from './pages/DashboardEnginesPages';
 import { DashboardAdsPage, DashboardAnalyticsPage, DashboardAIPage, DashboardSubscriptionsPage } from './pages/DashboardBusinessPages';
 import { DashboardInventoryPage, DashboardComparisonPage, DashboardSalesPage } from './pages/DashboardInventoryPages';
-import { DashboardListPage, DashboardFinancePage, DashboardReportsPage } from './pages/DashboardListPages';
+import { DashboardListPage, DashboardFinancePage, DashboardReportsPage, DashboardCustomersPage, DashboardBuyersPage, DashboardSuppliersPage, DashboardMerchantsListPage, DashboardMySuppliersPage, DashboardMyMerchantsPage } from './pages/DashboardListPages';
 import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
 import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
@@ -80,10 +80,12 @@ export default function App() {
       <Route path="/dashboard/sales" element={<RequireAuth><DashboardSalesPage /></RequireAuth>} />
       <Route path="/dashboard/finance" element={<RequireAuth><DashboardFinancePage /></RequireAuth>} />
       <Route path="/dashboard/reports" element={<RequireAuth><DashboardReportsPage /></RequireAuth>} />
-      <Route path="/dashboard/suppliers" element={<RequireAuth><DashboardListPage kind="suppliers" /></RequireAuth>} />
-      <Route path="/dashboard/customers" element={<RequireAuth><DashboardListPage kind="customers" /></RequireAuth>} />
-      <Route path="/dashboard/buyers" element={<RequireAuth><DashboardListPage kind="buyers" /></RequireAuth>} />
-      <Route path="/dashboard/merchants-list" element={<RequireAuth><DashboardListPage kind="merchants" /></RequireAuth>} />
+      <Route path="/dashboard/suppliers" element={<RequireAuth><DashboardSuppliersPage /></RequireAuth>} />
+      <Route path="/dashboard/customers" element={<RequireAuth><DashboardCustomersPage /></RequireAuth>} />
+      <Route path="/dashboard/buyers" element={<RequireAuth><DashboardBuyersPage /></RequireAuth>} />
+      <Route path="/dashboard/my-suppliers" element={<RequireAuth><DashboardMySuppliersPage /></RequireAuth>} />
+      <Route path="/dashboard/my-merchants" element={<RequireAuth><DashboardMyMerchantsPage /></RequireAuth>} />
+      <Route path="/dashboard/merchants-list" element={<RequireAuth><DashboardMerchantsListPage /></RequireAuth>} />
       <Route path="/dashboard/branches" element={<RequireAuth><DashboardListPage kind="branches" /></RequireAuth>} />
       <Route path="/dashboard/employees" element={<RequireAuth><DashboardListPage kind="employees" /></RequireAuth>} />
       <Route path="/dashboard/trust" element={<RequireAuth><DashboardTrustPage /></RequireAuth>} />

@@ -85,6 +85,118 @@ async function assignRoleDirect(userId: string, roleName: 'ADMIN' | 'SUPER_ADMIN
   await db.insert(userRoles).values({ id: randomUUID(), userId, roleId: role[0].id });
 }
 
+async function seedDirectoryRelationships(ctx: {
+  customerUserId: string;
+  supplierUserId: string;
+  merchantUserId: string;
+  companyUserId: string;
+  supplierId: string;
+  merchantId: string;
+  companyId: string;
+}): Promise<void> {
+  // Products created inside this helper are marked so the seeder stays idempotent
+  // and re-runnable: a second run reuses the same rows instead of duplicating them.
+  const DIRECTORY_SKU_PREFIX = 'DIR-REL-';
+
+  async function ensureRelationshipProduct(opts: {
+    skuSuffix: number;
+    sellerId: string;
+    sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+    name: string;
+    price: string;
+    actorId: string;
+  }): Promise<string> {
+    const sku = `${DIRECTORY_SKU_PREFIX}${opts.skuSuffix}`;
+    const existing = await db.select({ id: products.id }).from(products).where(eq(products.sku, sku)).limit(1);
+    if (existing.length > 0) return existing[0].id;
+    const created = await createProduct(db, {
+      sellerId: opts.sellerId,
+      sellerType: opts.sellerType,
+      categoryId: FOOD_CAT || TEXTILE_CAT || ELECTRONICS_CAT,
+      name: opts.name,
+      sku,
+      currencyCode: 'TND',
+      basePrice: opts.price,
+      moq: 1,
+      purchaseIntent: 'B2B',
+      initialQuantity: 500,
+      lowStockThreshold: 20,
+    }, { ipAddress: '127.0.0.1', actorId: opts.actorId });
+    return created.id;
+  }
+
+  async function ensureRelationshipOrder(opts: {
+    buyerId: string;
+    buyerType: 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
+    productId: string;
+    notes: string;
+  }): Promise<void> {
+    const existing = await db.select({ id: orders.id }).from(orders).where(eq(orders.notes, opts.notes)).limit(1);
+    if (existing.length > 0) return;
+    await createOrder(db, {
+      buyerId: opts.buyerId,
+      buyerType: opts.buyerType,
+      items: [{ productId: opts.productId, quantity: 1 }],
+      currencyCode: 'TND',
+      notes: opts.notes,
+    }, { actorId: opts.buyerId, ipAddress: '127.0.0.1' });
+  }
+
+  // Merchant sells → Customer buys, and Company (as buyer) buys.
+  const merchantProduct = await ensureRelationshipProduct({
+    skuSuffix: 1, sellerId: ctx.merchantId, sellerType: 'MERCHANT',
+    name: 'Demo relationship product — Merchant', price: '75.0000', actorId: ctx.merchantUserId,
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.customerUserId, buyerType: 'CUSTOMER', productId: merchantProduct,
+    notes: 'DEMO-DIR merchant->customer',
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.companyUserId, buyerType: 'COMPANY', productId: merchantProduct,
+    notes: 'DEMO-DIR merchant->company',
+  });
+
+  // Supplier sells → Customer buys, Merchant (as buyer) buys, and Company buys.
+  const supplierProduct = await ensureRelationshipProduct({
+    skuSuffix: 2, sellerId: ctx.supplierId, sellerType: 'SUPPLIER',
+    name: 'Demo relationship product — Supplier', price: '120.0000', actorId: ctx.supplierUserId,
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.customerUserId, buyerType: 'CUSTOMER', productId: supplierProduct,
+    notes: 'DEMO-DIR supplier->customer',
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.merchantUserId, buyerType: 'MERCHANT', productId: supplierProduct,
+    notes: 'DEMO-DIR supplier->merchant',
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.companyUserId, buyerType: 'COMPANY', productId: supplierProduct,
+    notes: 'DEMO-DIR supplier->company',
+  });
+
+  // Supplier (as buyer) buys from the Merchant → also gives Merchant a real buyer.
+  await ensureRelationshipOrder({
+    buyerId: ctx.supplierUserId, buyerType: 'MERCHANT', productId: merchantProduct,
+    notes: 'DEMO-DIR merchant->supplier-org',
+  });
+
+  // Company sells → Customer and Merchant buy → Company→Buyers surface.
+  const companyProduct = await ensureRelationshipProduct({
+    skuSuffix: 3, sellerId: ctx.companyId, sellerType: 'COMPANY',
+    name: 'Demo relationship product — Company', price: '210.0000', actorId: ctx.companyUserId,
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.customerUserId, buyerType: 'CUSTOMER', productId: companyProduct,
+    notes: 'DEMO-DIR company->customer',
+  });
+  await ensureRelationshipOrder({
+    buyerId: ctx.merchantUserId, buyerType: 'MERCHANT', productId: companyProduct,
+    notes: 'DEMO-DIR company->merchant',
+  });
+
+  console.log('Directory relationships seeded ✓');
+}
+
 async function main(): Promise<void> {
   console.log('Demo Seeder — seeding dev/test environment...');
   await loadRefs();
@@ -354,6 +466,20 @@ async function main(): Promise<void> {
     );
     console.log('Demo conversation created ✓');
   }
+
+  // علاقات دليل الأطراف — طلبات حقيقية عبر createOrder نفسه (بدل بيانات وهمية)
+  // كي تظهر كل واجهات الدليل الست بمحتوى فعلي:
+  //   Merchant→Customers, Merchant→Suppliers(my), Supplier→Buyers,
+  //   Supplier→Merchants(my), Company→Suppliers(my), Company→Buyers.
+  await seedDirectoryRelationships({
+    customerUserId: customer.userId,
+    supplierUserId: supplierUser.userId,
+    merchantUserId: merchantUser.userId,
+    companyUserId: companyUser.userId,
+    supplierId,
+    merchantId,
+    companyId,
+  });
 
   console.log('Demo Seed complete.');
   console.log('Test users (password: ' + pw + '):');

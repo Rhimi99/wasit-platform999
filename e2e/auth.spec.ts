@@ -63,7 +63,9 @@ async function restorePassword(page: Page, email: string): Promise<void> {
   await page.locator('form input[type="email"]').fill(email);
   await page.locator('form button[type="submit"]').click();
   const tokenEl = page.locator('code[dir="ltr"]');
-  if (!(await tokenEl.isVisible().catch(() => false))) return;
+  // The dev token must be shown; if it is not, the fixture would silently stay on
+  // the temporary password and break every later spec that signs in as this user.
+  await expect(tokenEl).toBeVisible();
   const token = (await tokenEl.innerText()).trim();
   await page.goto(`/reset-password?token=${encodeURIComponent(token)}`);
   await page.locator('form input[type="password"]').fill(DEMO_PASSWORD);

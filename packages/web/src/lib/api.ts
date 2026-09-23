@@ -18,6 +18,7 @@ import type {
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
+  OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -1034,7 +1035,33 @@ export const api = {
       method: 'POST',
     });
   },
+
+  // ---- Role-scoped directories (real order/entity data) ----
+  async myEntities() {
+    return request<{ items: OwnedEntity[] }>('/api/directory/my-entities');
+  },
+  async directoryBuyers(params: { q?: string; page?: number; pageSize?: number; buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY' } = {}) {
+    return request<DirectoryListResponse<BuyerRelation>>(`/api/directory/buyers?${directoryQuery(params)}`);
+  },
+  async mySellerPartners(kind: 'suppliers' | 'merchants', params: { q?: string; page?: number; pageSize?: number; buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY' } = {}) {
+    return request<DirectoryListResponse<PartnerRelation>>(`/api/directory/my/${kind}?${directoryQuery(params)}`);
+  },
+  async directorySuppliers(params: { q?: string; page?: number; pageSize?: number } = {}) {
+    return request<DirectoryListResponse<DirectorySupplierRow>>(`/api/directory/suppliers?${directoryQuery(params)}`);
+  },
+  async directoryMerchants(params: { q?: string; page?: number; pageSize?: number } = {}) {
+    return request<DirectoryListResponse<DirectoryMerchantRow>>(`/api/directory/merchants?${directoryQuery(params)}`);
+  },
 };
+
+function directoryQuery(params: { q?: string; page?: number; pageSize?: number; buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY' }): string {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.page) qs.set('page', String(params.page));
+  if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+  if (params.buyerType) qs.set('buyerType', params.buyerType);
+  return qs.toString();
+}
 
 export function formatMoney(value: string | number | undefined | null, currencyCode = 'TND'): string {
   if (value === undefined || value === null || value === '') return '—';

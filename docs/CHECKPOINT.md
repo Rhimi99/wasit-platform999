@@ -2,6 +2,51 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone M8 — Role-scoped Customer/Partner Directories (6 أسطح) + إصلاح أعطال الواجهة الحقيقية
+
+### الأسطح الستة المطلوبة وكيف تُبنى من بيانات حقيقية
+دليل الأطراف يُشتق من **جدول الطلبات الفعلي** (`orders`) وأسماء الكيانات/المستخدمين، بلا صفوف وهمية:
+
+| السطح | الدور | المصدر الحقيقي | Endpoint |
+| --- | --- | --- | --- |
+| Merchant → Customers | MERCHANT | مشترو `CUSTOMER` ممن لديهم طلبات على كيانات التاجر | `GET /api/directory/buyers?buyerType=CUSTOMER` |
+| Merchant → Suppliers | MERCHANT | الموردون الذين اشترى منهم التاجر فعليًا | `GET /api/directory/my/suppliers` |
+| Supplier → Buyers | SUPPLIER | كل الأطراف التي اشترت من كيانات المورد | `GET /api/directory/buyers` |
+| Supplier → Merchants | SUPPLIER | مشترو `MERCHANT` من كيانات المورد | `GET /api/directory/buyers?buyerType=MERCHANT` |
+| Company → Suppliers | COMPANY | الموردون الذين اشترت منهم الشركة | `GET /api/directory/my/suppliers` |
+| Company → Buyers | COMPANY | الأطراف التي اشترت من كيانات الشركة | `GET /api/directory/buyers` |
+
+### الفجوات الجذرية التي أصلحها هذا الميلستون (وُجدت من الواجهة، لا من HTTP 200)
+
+**1) سطح «Supplier → Merchants» كان مربوطًا بقائمة تجار عامة، وليس بمشترين حقيقيين.**
+كان `DashboardMerchantsListPage` يستدعي `GET /api/directory/merchants` (دليل تجار المنصة العام) — أي أنه لا يعرض أي علاقة شراء واقعية مع كيانات المورد. أُعيد ربطه إلى جدول المشترين المُرشَّح بـ`buyerType=MERCHANT`، وهو نفس مصدر الطلبات الحقيقي المستخدم في باقي الأسطح.
+- **الإصلاح**: `DashboardMerchantsListPage` ⇒ `BuyerTable buyerType="MERCHANT"` + مفاتيح i18n جديدة `directory.merchantBuyers*` في ar/fr/en/zh (استُبدلت `directory.merchants*` العامة).
+
+**2) `buyerType` كان مفقودًا من مصدر البيانات التجريبي ⇒ كل الأسطح المُرشَّحة فارغة.**
+أُضيف `seedDirectoryRelationships(ctx)` إلى `seed-demo.ts`، ويُنشئ علاقات حقيقية عبر `createProduct` + `createOrder` (وليس INSERT يدويًا): تاجر←عميل، مورد←عميل/تاجر/شركة، شركة←عميل/تاجر. المُعرِّف `DIR-REL-*` يجعل الإعادة idempotent (يُعيد استخدام الصف القائم بدل التكرار).
+
+**3) limiter الـ`forgot-password` لم يكن قابلًا للضبط من البيئة (عطل E2E حقيقي).**
+بينما `login`/`register`/`deletion` كلها تقرأ `RATE_LIMIT_*_MAX`، كان المُحدِّد مثبّتًا `max: 5/300s`. النتيجة: مع تشغيلات E2E المتكرّرة يُستنفَد الحدّ، فيفشل `restorePassword` في مواصفة استعادة كلمة المرور **بصمت** ويبقى حساب `companya@wasit.tn` على كلمة المرور المؤقتة — فتنهار لاحقًا كل مواصفة تُسجّل الدخول به (401). هذا سبب مركّب حقيقي، لا مجرد تقلّب اختبار.
+- **الإصلاح**: `forgotRateMax = Number(process.env.RATE_LIMIT_FORGOT_MAX ?? 5)` وتمريره إلى `rateLimit`؛ وإضافة `RATE_LIMIT_FORGOT_MAX: '500'` في `playwright.config.ts` (بيئة E2E فقط، والافتراضي الإنتاجي 5 كما هو).
+- **إصلاح مانع للصمت**: `restorePassword` صار يتوقّع ظهور رمز الاستعادة (`await expect(tokenEl).toBeVisible()`) بدل `return` صامت — فأي فشل استعادة يصبح **فشلًا صريحًا** لا تلويثًا صامتًا للـfixture.
+
+**4) اختبار `admin-ads` الأول كان يفترض وجود حملات من تشغيلات سابقة.**
+على قاعدة نظيفة يكون الجدول فارغًا فعليًا، فيفشل `admin-ads-table`. صار الاختبار **يُنشئ حملة حقيقية أولًا** بجلسة التاجر ثم يتحقق من ظهور صفّها بالعنوان في مكتب الأدمن — إثبات ذاتي بلا اعتماد على حالة محيطة.
+
+### الإثبات (UI → API → DB → UI)
+- **`e2e/directory.spec.ts` (جديد، 7 حالات)**: تفتح كل سطح من الواجهة وتتحقق من صفوف حقيقية، وتُطابق العدد المعروض مع `pagination.total` الحيّ، وتُثبت الفلترة بالبحث، و`buyerType=MERCHANT` لا يُعيد إلا تجارًا، وعميل بلا كيانات يرى حالة فراغ صريحة (عزل نطاق). الجلسات تُبنى عبر `POST /api/auth/login` الحقيقي لكل اختبار بدل حالة تخزين مشتركة (لأن مواصفة الاستعادة تُبطل جلسات الحساب فعليًا).
+- **HARNESS**: أُصلح `restorePassword` و`global-setup` ليكونا حاسمين.
+- **النتائج**: **Full E2E 188/188** — **Server 546/546** (52 ملفًا) — **Typecheck** (server+web) و**Build** (server+web) نظيفان.
+- **يُثبت الإصلاح**: تشغيل الحزمة كاملة بعد إصلاح الحدّ ⇒ **188/188 ناجح** (صفر سقوط في `directory` و`admin-ads`)، وحسابات الديمو تبقى على `Passw0rd!2026` بعده. (قبل الإصلاح كانت النتائج 185/188 ثم 186/188 مع سقوط متكرّر في `directory`.)
+
+### الملفات
+- `packages/server/src/modules/directory/{service,routes}.ts` (جديد)، `packages/server/src/app.ts`، `packages/server/src/modules/auth/routes.ts`، `packages/server/src/scripts/seed-demo.ts`، `packages/server/tests/directory.test.ts` (جديد)
+- `packages/web/src/pages/DashboardListPages.tsx`، `App.tsx`، `AppSidebar.tsx`، `lib/api.ts`، `lib/types.ts`، `lib/i18n.ts`
+- `e2e/directory.spec.ts` (جديد)، `e2e/auth.spec.ts`، `e2e/admin-ads.spec.ts`، `playwright.config.ts`
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ لا تغيير في `buyerType` enum ولا مخطط قاعدة البيانات؛ العمولة **4% = 2%+2%** دون مساس؛ Marketing Video Agent (89e68d7) دون مساس؛ لا Mock؛ لا تعطيل أزرار لإخفاء أخطاء؛ RBAC ونطاق الملكية من نفس مصدر الطلبات الحقيقي؛ ar/fr/en/zh وRTL محفوظة.
+
 ## Milestone M7 — AI Budget (Target, Period) Identity Fixed From the UI
 
 ### الفجوة

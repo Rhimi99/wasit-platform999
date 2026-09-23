@@ -25,6 +25,28 @@ function baseNav(roleKey: string): NavItem[] {
 
   switch (roleKey) {
     case 'MERCHANT':
+      return [
+        { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
+        { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
+        { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
+        { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
+        { to: '/dashboard/comparison', key: 'dashboard.priceComparison', icon: '⚖️' },
+        { to: '/dashboard/orders', key: 'dashboard.orders', icon: '🧾' },
+        { to: '/dashboard/analytics', key: 'dashboard.analytics', icon: '📈' },
+        { to: '/dashboard/ads', key: 'dashboard.ads', icon: '📣', feature: 'ads.manage' },
+        { to: '/dashboard/ai', key: 'dashboard.ai', icon: '🤖', feature: 'ai.use' },
+        { to: '/dashboard/video-studio', key: 'studio.title', icon: '🎬', feature: 'media.use' },
+        { to: '/dashboard/customers', key: 'dashboard.customers', icon: '👥' },
+        { to: '/dashboard/my-suppliers', key: 'directory.mySuppliersTitle', icon: '🛒' },
+        { to: '/dashboard/suppliers', key: 'dashboard.suppliers', icon: '🏭' },
+        { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
+        { to: '/dashboard/trust', key: 'dashboard.trust', icon: '🛡️' },
+        { to: '/dashboard/verification', key: 'dashboard.verification', icon: '✅' },
+        { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
+        { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
+        { to: '/dashboard/security', key: 'dashboard.security', icon: '🔐' },
+        { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
+      ];
     case 'COMPANY':
       return [
         { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
@@ -37,8 +59,9 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/ads', key: 'dashboard.ads', icon: '📣', feature: 'ads.manage' },
         { to: '/dashboard/ai', key: 'dashboard.ai', icon: '🤖', feature: 'ai.use' },
         { to: '/dashboard/video-studio', key: 'studio.title', icon: '🎬', feature: 'media.use' },
+        { to: '/dashboard/my-suppliers', key: 'directory.mySuppliersTitle', icon: '🛒' },
+        { to: '/dashboard/buyers', key: 'dashboard.buyers', icon: '🤝' },
         { to: '/dashboard/suppliers', key: 'dashboard.suppliers', icon: '🏭' },
-        { to: '/dashboard/customers', key: 'dashboard.customers', icon: '👥' },
         { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
         { to: '/dashboard/trust', key: 'dashboard.trust', icon: '🛡️' },
         { to: '/dashboard/verification', key: 'dashboard.verification', icon: '✅' },
@@ -61,6 +84,7 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/ai', key: 'dashboard.ai', icon: '🤖', feature: 'ai.use' },
         { to: '/dashboard/video-studio', key: 'studio.title', icon: '🎬', feature: 'media.use' },
         { to: '/dashboard/buyers', key: 'dashboard.buyers', icon: '🤝' },
+        { to: '/dashboard/my-merchants', key: 'directory.myMerchantsTitle', icon: '🛒' },
         { to: '/dashboard/merchants-list', key: 'dashboard.merchants', icon: '🏪' },
         { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
         { to: '/dashboard/trust', key: 'dashboard.trust', icon: '🛡️' },

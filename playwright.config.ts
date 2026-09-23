@@ -44,6 +44,11 @@ export default defineConfig({
         // The privacy-deletion limiter keys on IP before auth (production default
         // 2/5min); the privacy desk spec files several real deletion requests.
         RATE_LIMIT_DELETION_MAX: '500',
+        // The password-recovery spec and global-setup repair both call
+        // POST /forgot-password; the production default (5/5min) is exhausted
+        // across repeated local runs, which would leave a demo account on a
+        // temporary password. Raise it for the E2E process only.
+        RATE_LIMIT_FORGOT_MAX: '500',
         // Exercise the real payment kernel offline (no external acquirer calls).
         PAYMENT_PROVIDER: 'manual',
         PAYMENT_WEBHOOK_SECRET: 'e2e-webhook-secret-0123456789',

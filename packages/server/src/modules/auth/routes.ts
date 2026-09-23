@@ -70,6 +70,7 @@ const phoneVerifySchema = z.object({ code: z.string().length(6).regex(/^\d{6}$/)
 
 const registerRateMax = Number(process.env.RATE_LIMIT_REGISTER_MAX ?? 10);
 const loginRateMax = Number(process.env.RATE_LIMIT_LOGIN_MAX ?? 15);
+const forgotRateMax = Number(process.env.RATE_LIMIT_FORGOT_MAX ?? 5);
 
 export const authRoutes = new Hono();
 
@@ -237,7 +238,7 @@ authRoutes.post(
 
 authRoutes.post(
   '/forgot-password',
-  rateLimit({ windowSeconds: 300, max: 5, keyPrefix: 'auth-forgot' }),
+  rateLimit({ windowSeconds: 300, max: forgotRateMax, keyPrefix: 'auth-forgot' }),
   validateBody(forgotSchema),
   async (c) => {
     const body = getValidatedBody<z.infer<typeof forgotSchema>>(c);
