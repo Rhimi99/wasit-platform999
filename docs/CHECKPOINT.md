@@ -2,6 +2,36 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone M5 — Merchant Inventory Archived-Row actions + E2E listing drift
+
+### الفجوة (اكتُشفت أثناء تحقق M4)
+`/dashboard/inventory` تُدرِج المنتجات المؤرشفة (ARCHIVED) ضمن الجدول (مقصود: التاريخ يبقى مرئيًا)، لكنها كانت تعرض لها أزرار **إضافة/خصم/إعدادات** المخزون. الخادم يرفضها عن قصد بـ**409** (`adjustMyStock`: «Product is archived — stock cannot be modified»)، فكان المستخدم يرى أزرارًا تفشل دائمًا. ظهر ذلك كفشل `e2e/rbac.spec.ts` الذي كان ينقر الصف الأول (صار صفًا مؤرشفًا).
+
+### السبب الجذري
+الواجهة لا تقرأ `productStatus` العائد فعلًا من `listMyInventory`؛ ومنطق الزر لا يميّز ARCHIVED.
+
+### الإصلاح
+- بلا أي تغيير في الخادم أو قواعد العمل: `DashboardInventoryPages` تُخفي أزرار تعديل المخزون للصفوف المؤرشفة وتُظهر إشعار `inventory-archived-<id>` («منتج مؤرشف — لا يمكن تعديل مخزونه»)، وزر «الحركات» يبقى متاحًا للقراءة. مفتاح `inventory.archivedNotice` في ar/en (fr/zh عبر fallback).
+- `e2e/helpers.ts`: `placeOrderViaUi` صار يتنقّل بين صفحات السوق (حتى 12) بدل الاعتماد على الصفحة الأولى. السبب: كل تشغيل لـ`functional-audit` يُنشئ منتجًا ACTIVE بمخزون صفر؛ والقائمة مرتّبة newest-first، فكانت تتكدّس في الصفحة الأولى (12 عنصرًا) فتفشل حالات الشراء عبر الواجهة على قاعدة معاد استخدامها.
+- `e2e/rbac.spec.ts`: الحالة تستهدف صفًا قابلًا للتعديل فعليًا بدل الصف الأول.
+
+### التحقق
+- **Full E2E**: **167/167** (6.1m). **الخادم**: **531/531** (51 ملفًا). **Typecheck** و**Build** (server + web) نظيفان.
+- ملاحظة: `business-numbers.test.ts` «does not collide…» اختبار احتمالي قد يفشل عشوائيًا (~4% عند 500k سحب من 36^8)؛ ليس من هذا التغيير، ويثبت 3/3 عند الإعادة.
+- لا migrations ولا reset/drop/push. العمولة **4% = 2%+2%** والـMarketing Video Agent بلا مساس.
+
+## Milestone M4 — Admin Expire-Lapsed Subscriptions Proven From the UI
+
+### الفجوة
+`admin-sub-expire` في `/admin/subscriptions` (تبويب dunning) موجود وموصول بـ`POST /api/subscriptions/admin/expire-lapsed` → `expireLapsedSubscriptions()`، لكن **لا اختبار نقر الزر ولا استدعى المسار إطلاقًا**: كانت الخدمة مغطّاة بوحدة `subscriptions-collection.test.ts` فقط، فمسار handler→route→service→DB→انعكاس على الواجهة غير مُثبَت. (اكتُشفت بمسح آلي لكل عناصر `data-testid` التفاعلية في `pages/*.tsx` مقابل مراجع `e2e/*.spec.ts`.)
+
+### ما بُني
+- `e2e/admin-subscriptions.spec.ts` (+1 حالة): مشترك حقيقي عبر API، ثم `expireSubscriptionInDb()` تقادم اشتراكًا حقيقيًا بنفس نمط تقادم نافذة retention في `admin-privacy.spec.ts` (الزمن لا يُسافَر إليه من الواجهة)، ثم فتح `/admin/subscriptions` (يظهر ACTIVE) ⇒ dunning ⇒ `admin-sub-expire` ⇒ `expect.poll` يثبت `EXPIRED` في القاعدة ⇒ صف الكشف يظهر EXPIRED.
+
+### التحقق
+- **Full E2E**: **167/167** (كانت 166). **الخادم**: **531/531**. **Typecheck** و**Build** (server + web) نظيفان.
+- لا migrations ولا reset/drop/push. العمولة **4% = 2%+2%** والـMarketing Video Agent بلا مساس.
+
 ## Milestone M3 — Merchant Order Lifecycle (Pass) + Admin Appeal Review Proven From the UI
 
 ### الفجوتان المرشّحتان بعد M2

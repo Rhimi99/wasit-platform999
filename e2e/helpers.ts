@@ -36,19 +36,30 @@ export { expect };
 /**
  * Places a real order through the UI and returns its id (from the orders API).
  *
- * Walks the marketplace listing until a product accepts the order. The demo
+ * Walks the marketplace listings until a product accepts the order. The demo
  * seeder is idempotent and deliberately preserves depleted stock, while the
  * backend correctly refuses out-of-stock / below-MOQ lines — so a helper that
  * always picked the first listing would flake across repeated suite runs.
+ *
+ * Listings are newest-first, and specs such as functional-audit create ACTIVE
+ * products with no stock on every run. On a database reused across runs those
+ * crowd page 1, so the helper pages through the marketplace (as a browsing user
+ * would) before giving up, instead of depending on page 1 staying orderable.
  */
 export async function placeOrderViaUi(page: Page): Promise<string> {
-  await page.goto('/marketplace');
-  const links = page.locator('a[href^="/products/"]');
-  await links.first().waitFor();
-
   const hrefs: string[] = [];
-  const count = await links.count();
-  for (let i = 0; i < count; i++) hrefs.push((await links.nth(i).getAttribute('href'))!);
+  for (let pageNo = 1; pageNo <= 12; pageNo++) {
+    await page.goto(`/marketplace?page=${pageNo}`);
+    const links = page.locator('a[href^="/products/"]');
+    await links.first().waitFor({ timeout: 10_000 }).catch(() => {});
+    const count = await links.count();
+    if (count === 0) break;
+    for (let i = 0; i < count; i++) {
+      const href = await links.nth(i).getAttribute('href');
+      if (href && !hrefs.includes(href)) hrefs.push(href);
+    }
+  }
+  if (hrefs.length === 0) throw new Error('Marketplace listed no products at all.');
 
   const diag: string[] = [];
 

@@ -52,7 +52,11 @@ test.describe('Merchant inventory', () => {
 
   test('merchant can add stock and the movement is reflected server-side', async ({ page }) => {
     await page.goto('/dashboard/inventory');
-    const row = page.locator('table.table-base tbody tr').first();
+    // Archived products stay visible for history but expose no stock actions
+    // (the backend refuses them with 409), so target a row that can be edited.
+    const row = page.locator('table.table-base tbody tr')
+      .filter({ has: page.getByRole('button', { name: /إضافة مخزون|Add stock/i }) })
+      .first();
     await expect(row).toBeVisible();
     const before = Number(await row.locator('td').nth(3).innerText());
 
@@ -61,7 +65,7 @@ test.describe('Merchant inventory', () => {
     await page.getByRole('dialog').getByRole('button', { name: /حفظ|Save/i }).click();
     await expect(page.getByText(/تمت إضافة الكمية|تم تحديث المخزون|Inventory updated|quantity added/i).first()).toBeVisible();
 
-    const after = Number(await page.locator('table.table-base tbody tr').first().locator('td').nth(3).innerText());
+    const after = Number(await row.locator('td').nth(3).innerText());
     expect(after).toBe(before + 2);
   });
 });

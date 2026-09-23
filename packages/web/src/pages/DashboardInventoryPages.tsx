@@ -161,18 +161,26 @@ export function DashboardInventoryPage() {
                     <button className="text-sm font-medium text-wasit-700 hover:underline" type="button" onClick={() => openMovements(it)}>
                       {t('inventory.history')}
                     </button>
-                    <span className="mx-1 text-slate-300">|</span>
-                    <button className="text-sm font-medium text-wasit-700 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'add' })}>
-                      {t('inventory.addStock')}
-                    </button>
-                    <span className="mx-1 text-slate-300">|</span>
-                    <button className="text-sm font-medium text-red-600 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'remove' })}>
-                      {t('inventory.removeStock')}
-                    </button>
-                    <span className="mx-1 text-slate-300">|</span>
-                    <button className="text-sm font-medium text-slate-600 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'set' })}>
-                      {t('inventory.settings')}
-                    </button>
+                    {it.productStatus === 'ARCHIVED' ? (
+                      <span className="ms-2 text-xs text-slate-400" data-testid={`inventory-archived-${it.id}`}>
+                        {t('inventory.archivedNotice')}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="mx-1 text-slate-300">|</span>
+                        <button className="text-sm font-medium text-wasit-700 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'add' })}>
+                          {t('inventory.addStock')}
+                        </button>
+                        <span className="mx-1 text-slate-300">|</span>
+                        <button className="text-sm font-medium text-red-600 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'remove' })}>
+                          {t('inventory.removeStock')}
+                        </button>
+                        <span className="mx-1 text-slate-300">|</span>
+                        <button className="text-sm font-medium text-slate-600 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'set' })}>
+                          {t('inventory.settings')}
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

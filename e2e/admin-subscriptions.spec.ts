@@ -1,4 +1,5 @@
 import { request } from '@playwright/test';
+import { Pool } from 'pg';
 import { test, expect, storageFor, DEMO_PASSWORD } from './helpers';
 
 /**
@@ -35,6 +36,27 @@ async function createSubscribedCustomer(planCode: string): Promise<{ email: stri
   const invoiceId = (invoicesBody.data.items as Array<{ id: string }>)[0].id;
   await ctx.dispose();
   return { email, subscriptionId, invoiceId };
+}
+
+/**
+ * Ages a real subscription past its end with autoRenew off, so the lapsed-sweep
+ * legitimately picks it up. Time cannot be travelled through the UI; the fixture
+ * is written directly and the real sweep is then driven from the browser, exactly
+ * as the privacy desk ages a retention window.
+ */
+async function expireSubscriptionInDb(subscriptionId: string): Promise<void> {
+  const pool = new Pool({
+    connectionString:
+      process.env.DATABASE_URL ?? 'postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev',
+  });
+  try {
+    await pool.query(
+      "UPDATE subscriptions SET auto_renew = false, ends_at = $1, updated_at = now() WHERE id = $2",
+      [new Date(Date.now() - 60_000), subscriptionId],
+    );
+  } finally {
+    await pool.end();
+  }
 }
 
 test.describe('Admin subscriptions desk', () => {
@@ -136,6 +158,35 @@ test.describe('Admin subscriptions desk', () => {
 
     await page.getByTestId('admin-sub-rollover').click();
     await expect(page.getByText(/تم تشغيل التجديد|Renewal rollover finished/i).first()).toBeVisible();
+  });
+
+  test('expiring lapsed subscriptions from the UI moves them to EXPIRED and the desk reflects it', async ({ page }) => {
+    // Gap this guards: `admin-sub-expire` existed and was wired to
+    // POST /api/subscriptions/admin/expire-lapsed, but no test ever clicked it —
+    // the service had unit coverage yet the UI path (handler -> route -> service
+    // -> DB -> reflection) was unproven. Time cannot be travelled through the
+    // UI, so a real subscription is aged past its end exactly as the privacy
+    // desk ages a retention window, then the sweep is driven from the browser.
+    const { subscriptionId } = await createSubscribedCustomer('SMALL_MERCHANT');
+    await expireSubscriptionInDb(subscriptionId);
+
+    await page.goto('/admin/subscriptions');
+    await expect(page.getByTestId(`admin-sub-${subscriptionId}`)).toContainText('ACTIVE');
+
+    await page.getByTestId('admin-sub-tab-dunning').click();
+    await page.getByTestId('admin-sub-expire').click();
+    await expect(page.getByText(/تم إنهاء الاشتراكات المنتهية|Lapsed subscriptions expired/i).first()).toBeVisible();
+
+    // The DB must hold the sweep's effect, not just a transient toast.
+    await expect.poll(async () => {
+      const subs = (await (await page.request.get('/api/subscriptions/admin/subscriptions')).json()).data
+        .items as Array<{ id: string; status: string }>;
+      return subs.find((s) => s.id === subscriptionId)?.status;
+    }).toBe('EXPIRED');
+
+    // And the desk row the admin sees mirrors it.
+    await page.getByTestId('admin-sub-tab-subscriptions').click();
+    await expect(page.getByTestId(`admin-sub-${subscriptionId}`)).toContainText('EXPIRED');
   });
 });
 
