@@ -89,15 +89,16 @@ adminAiRoutes.post('/budgets', validateBody(budgetSchema), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof budgetSchema>>(c);
 
-  // Upsert: find an existing active budget for the same target+period.
+  // Upsert: a budget is unique per (target, period). Matching on the target
+  // alone would silently collapse a DAILY and a MONTHLY budget onto one row,
+  // while enforcement (resolveLimit) resolves them by period independently.
+  const targetMatch = body.userId
+    ? eq(aiBudgets.userId, body.userId)
+    : eq(aiBudgets.roleTarget ?? '___', body.roleTarget ?? '___');
   const existing = await ctx.db
     .select({ id: aiBudgets.id })
     .from(aiBudgets)
-    .where(
-      body.userId
-        ? eq(aiBudgets.userId, body.userId)
-        : eq(aiBudgets.roleTarget ?? '___', body.roleTarget ?? '___'),
-    )
+    .where(and(targetMatch, eq(aiBudgets.period, body.period)))
     .limit(1);
 
   const values = {

@@ -2,6 +2,38 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone M7 — AI Budget (Target, Period) Identity Fixed From the UI
+
+### الفجوة
+`POST /api/admin/ai/budgets` كان يبحث عن الصف القائم بـ**الهدف فقط** (`userId` أو `roleTarget`) ويتجاهل `period`:
+
+```ts
+.where(body.userId ? eq(aiBudgets.userId, body.userId) : eq(aiBudgets.roleTarget ?? '___', body.roleTarget ?? '___'))
+```
+
+بينما **محرّك التنفيذ** (`resolveLimit` في `lib/ai/cost-control.ts`) يقرأ الميزانيات بـ`eq(aiBudgets.period, period)` — أي أن الميزانيات اليومية والشهرية مُفترض أن **تتعايش** لنفس الهدف. النتيجة: حفظ ميزانية `DAILY` لهدفٍ ما ثم حفظ ميزانية `MONTHLY` لنفس الهدف كان **يستبدل الصف الأول نفسه**، فيضيع سقف الدَّورة الأولى بصمت. عُثر عليها بالتحقق من الواجهة: حفظ `SUPPLIER/DAILY(maxRequests=111)` ثم `SUPPLIER/MONTHLY(222)` أنتج **صفًا واحدًا** `MONTHLY/222` فقط.
+
+### السبب الجذري
+هوية الصف في الـupsert (`target` وحده) لا تطابق هوية التنفيذ (`target` + `period`). لا يوجد unique index على `ai_budgets` يفرض أحدهما، فمرّ الخطأ بصمت.
+
+### الإصلاح (كود إنتاج، جراحي)
+- `packages/server/src/modules/admin/ai-routes.ts`: مطابقة الصف القائم صارت `and(targetMatch, eq(aiBudgets.period, body.period))` (استُخدم `and` المستورد أصلًا) — فتتعايش DAILY وMONTHLY، ويبقى الحفظ لنفس `(target, period)` **تحديثًا في المكان** (بلا تكرار).
+
+### الإثبات (UI → API → DB/response → UI)
+`e2e/admin-ai.spec.ts` — حالة جديدة **«DAILY and MONTHLY budgets for the same target coexist»**:
+- حفظ `ROLE/ADMIN/DAILY(maxRequests=5001)` ثم `ROLE/ADMIN/MONTHLY(5002)` **من نموذج الواجهة**.
+- `GET /api/admin/ai/budgets` يُعيد **صفّين** بقيمتيهما الصحيحتين.
+- الواجهة تعرض الصفّين معًا (`admin-ai-budget-<id>` يحوي `DAILY`/`5001` و`MONTHLY`/`5002`).
+- إعادة حفظ `DAILY` بقيمة جديدة ⇒ تحديث في المكان: العدد يبقى **2** و`DAILY` تصبح `5003` و`MONTHLY` تبقى `5002`.
+
+### فحوص أخرى (لا فجوة، إثبات)
+- `/dashboard/trust` زر **إعادة احتساب الدرجة** (صفر e2e سابقًا): من الواجهة ⇒ `POST /api/trust/me/recompute` **200**، الدرجة تُعرض `65`، وسجل `/api/trust/me/history` **0 → 1**، والصف يظهر في الجدول — handler→route→service→DB→UI سليم (لا تغيير).
+- `/dashboard/messages`: فتح محادثة غير مقروءة من الواجهة ⇒ `unreadCount` **1 → 0** عبر `GET /api/messages` (بلا تغيير).
+
+### التحقق
+- **Full E2E: 181/181** (6.3m) — **server 534/534** (51 ملفًا) — **Typecheck** (server+web) و**Build** (server+web) نظيفان.
+- لا migrations ولا DB reset/drop/push. العمولة **4% = 2%+2%**، وMarketing Video Agent (89e68d7) وسياسة المدة 35–120ث بلا مساس.
+
 ## Milestone M6 — Admin Desk Controls Proven From the UI
 
 ### الفجوة

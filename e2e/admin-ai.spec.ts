@@ -244,6 +244,60 @@ test.describe('Admin AI governance desk', () => {
     await expect(page.getByTestId(`admin-ai-budget-${budgetId}`)).toContainText('77');
   });
 
+  test('DAILY and MONTHLY budgets for the same target coexist', async ({ page }) => {
+    // A budget is scoped by (target, period): cost-control resolves the DAILY
+    // and MONTHLY windows independently. Saving them from the desk must not
+    // collapse both onto one row.
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-budgets').click();
+
+    await page.getByTestId('admin-ai-budget-kind').selectOption('ROLE');
+    await page.getByTestId('admin-ai-budget-role').selectOption('ADMIN');
+
+    await page.getByTestId('admin-ai-budget-period').selectOption('DAILY');
+    await page.getByTestId('admin-ai-budget-maxreq').fill('5001');
+    await page.getByTestId('admin-ai-budget-submit').click();
+    await expect(page.getByText(/Budget saved|تم حفظ الميزانية/).first()).toBeVisible();
+
+    await page.getByTestId('admin-ai-budget-period').selectOption('MONTHLY');
+    await page.getByTestId('admin-ai-budget-maxreq').fill('5002');
+    await page.getByTestId('admin-ai-budget-submit').click();
+    await expect(page.getByText(/Budget saved|تم حفظ الميزانية/).first()).toBeVisible();
+
+    const budgets = (await (await page.request.get('/api/admin/ai/budgets')).json()).data.items as Array<
+      { id: string; roleTarget: string | null; period: string; maxRequests: number | null }
+    >;
+    const daily = budgets.find((b) => b.roleTarget === 'ADMIN' && b.period === 'DAILY');
+    const monthly = budgets.find((b) => b.roleTarget === 'ADMIN' && b.period === 'MONTHLY');
+    expect(daily?.maxRequests).toBe(5001);
+    expect(monthly?.maxRequests).toBe(5002);
+
+    // Both rows and both periods are rendered back in the desk.
+    await expect(page.getByTestId(`admin-ai-budget-${daily!.id}`)).toContainText('DAILY');
+    await expect(page.getByTestId(`admin-ai-budget-${daily!.id}`)).toContainText('5001');
+    await expect(page.getByTestId(`admin-ai-budget-${monthly!.id}`)).toContainText('MONTHLY');
+    await expect(page.getByTestId(`admin-ai-budget-${monthly!.id}`)).toContainText('5002');
+
+    // Re-saving the same target+period updates in place instead of duplicating.
+    await page.getByTestId('admin-ai-budget-period').selectOption('DAILY');
+    await page.getByTestId('admin-ai-budget-maxreq').fill('5003');
+    await page.getByTestId('admin-ai-budget-submit').click();
+    await expect(page.getByText(/Budget saved|تم حفظ الميزانية/).first()).toBeVisible();
+
+    const after = (await (await page.request.get('/api/admin/ai/budgets')).json()).data.items as Array<
+      { roleTarget: string | null; period: string; maxRequests: number | null }
+    >;
+    const adminRows = after.filter((b) => b.roleTarget === 'ADMIN');
+    expect(adminRows.length).toBe(2);
+    expect(adminRows.find((b) => b.period === 'DAILY')?.maxRequests).toBe(5003);
+    expect(adminRows.find((b) => b.period === 'MONTHLY')?.maxRequests).toBe(5002);
+
+    // Restore a generous DAILY cap so other admin AI calls are unaffected.
+    await page.request.post('/api/admin/ai/budgets', {
+      data: { roleTarget: 'ADMIN', period: 'DAILY', maxRequests: 100000, currencyCode: 'USD', isActive: true },
+    });
+  });
+
   test('requests tab reflects a real AI invocation', async ({ page }) => {
     const run = await page.request.post('/api/ai/run', {
       data: { requestType: 'MARKET_ANALYSIS', user: 'admin-ai-e2e probe' },
