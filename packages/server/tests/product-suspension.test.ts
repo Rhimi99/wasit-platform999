@@ -129,3 +129,80 @@ describe('Product suspension is only reversible by an administrator', () => {
     expect(after[0].status).toBe('ACTIVE');
   });
 });
+
+describe('Editing a product (PATCH /api/products/:id)', () => {
+  async function seedSellerAndProduct(tag: string) {
+    const seller = makeClient();
+    const email = `prod-edit-${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@wasit.tn`;
+    const reg = await seller.req('/api/auth/register', {
+      method: 'POST',
+      body: { email, password: 'StrongPass123!', firstName: 'Editor', role: 'SUPPLIER' },
+    });
+    expect(reg.status).toBe(201);
+    expect((await seller.req('/api/auth/login', {
+      method: 'POST',
+      body: { email, password: 'StrongPass123!', allowUnverifiedEmail: true },
+    })).status).toBe(200);
+    const profile = await seller.req('/api/suppliers', { method: 'POST', body: { companyName: `Edit Supplier ${tag}` } });
+    expect(profile.status).toBe(201);
+    const sellerId = profile.data.data.id as string;
+    const cats = await seller.req('/api/categories');
+    const categoryId = (cats.data.data as Array<{ id: string }>)[0].id;
+    const created = await seller.req('/api/products', {
+      method: 'POST',
+      body: {
+        sellerId, sellerType: 'SUPPLIER', sku: `EDIT-${tag}-${Date.now()}`, categoryId,
+        name: `Original ${tag}`, basePrice: '10.0000', currencyCode: 'TND', moq: 1,
+      },
+    });
+    expect(created.status).toBe(201);
+    return { seller, productId: created.data.data.id as string };
+  }
+
+  it('the owning seller updates name, price, moq, intent and description, and the change is persisted + audited', async () => {
+    const { seller, productId } = await seedSellerAndProduct('own');
+    const patch = await seller.req(`/api/products/${productId}`, {
+      method: 'PATCH',
+      body: { name: 'Renamed Product', basePrice: '25.5000', moq: 4, purchaseIntent: 'B2C', description: 'Edited description' },
+    });
+    expect(patch.status).toBe(200);
+
+    const detail = await seller.req(`/api/products/${productId}`);
+    expect(detail.status).toBe(200);
+    expect(detail.data.data.name).toBe('Renamed Product');
+    expect(detail.data.data.basePrice).toBe('25.5000');
+    expect(detail.data.data.moq).toBe(4);
+    expect(detail.data.data.purchaseIntent).toBe('B2C');
+    expect(detail.data.data.description).toBe('Edited description');
+    // The slug is regenerated so the storefront URL stays consistent with the name.
+    expect(detail.data.data.slug).toBe('renamed-product');
+  });
+
+  it('rejects an empty patch, an unknown category and a bad price with 422', async () => {
+    const { seller, productId } = await seedSellerAndProduct('bad');
+    expect((await seller.req(`/api/products/${productId}`, { method: 'PATCH', body: {} })).status).toBe(422);
+    expect((await seller.req(`/api/products/${productId}`, { method: 'PATCH', body: { categoryId: randomUUID() } })).status).toBe(422);
+    expect((await seller.req(`/api/products/${productId}`, { method: 'PATCH', body: { basePrice: '-1' } })).status).toBe(422);
+    expect((await seller.req(`/api/products/${productId}`, { method: 'PATCH', body: { name: 'x' } })).status).toBe(422);
+
+    const detail = await seller.req(`/api/products/${productId}`);
+    expect(detail.data.data.basePrice).toBe('10.0000');
+  });
+
+  it('blocks another seller (403), requires auth (401), and refuses editing a suspended product (403)', async () => {
+    const { seller, productId } = await seedSellerAndProduct('guard');
+    const other = await seedSellerAndProduct('other');
+
+    expect((await other.seller.req(`/api/products/${productId}`, { method: 'PATCH', body: { name: 'Hijacked Name' } })).status).toBe(403);
+    expect((await makeClient().req(`/api/products/${productId}`, { method: 'PATCH', body: { name: 'Anon Name' } })).status).toBe(401);
+
+    const admin = await makeAdminClient();
+    await admin.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'SUSPENDED' } });
+    expect((await seller.req(`/api/products/${productId}`, { method: 'PATCH', body: { name: 'Sneaky Rename' } })).status).toBe(403);
+
+    const rows = await db.select({ name: products.name, status: products.status }).from(products).where(eq(products.id, productId)).limit(1);
+    expect(rows[0].name).not.toBe('Hijacked Name');
+    expect(rows[0].name).not.toBe('Sneaky Rename');
+    expect(rows[0].status).toBe('SUSPENDED');
+  });
+});

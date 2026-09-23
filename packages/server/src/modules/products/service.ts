@@ -366,3 +366,89 @@ export async function updateProductStatus(
     after: { status },
   });
 }
+
+export interface UpdateProductInput {
+  categoryId?: string;
+  name?: string;
+  nameAr?: string | null;
+  nameFr?: string | null;
+  description?: string | null;
+  brand?: string | null;
+  barcode?: string | null;
+  countryId?: string | null;
+  basePrice?: string;
+  moq?: number;
+  unit?: string;
+  purchaseIntent?: 'B2B' | 'B2C';
+}
+
+/**
+ * Edits the descriptive/commercial fields of an existing product. Seller, SKU,
+ * currency and stock are intentionally not editable here: changing them would
+ * silently re-key an order history or move stock between owners, so stock stays
+ * in the inventory module and identity stays fixed.
+ */
+export async function updateProduct(
+  db: DB,
+  productId: string,
+  input: UpdateProductInput,
+  ctx: { actorId: string; ipAddress?: string | null },
+): Promise<void> {
+  const existing = await db.select().from(products).where(eq(products.id, productId)).limit(1);
+  if (existing.length === 0) throw ApiError.notFound('Product not found');
+  const before = existing[0];
+
+  const patch: Record<string, unknown> = {};
+  if (input.categoryId !== undefined) {
+    const cat = await db.select().from(categories).where(eq(categories.id, input.categoryId)).limit(1);
+    if (cat.length === 0) {
+      throw ApiError.validation([{ field: 'categoryId', message: 'Unknown category', code: 'VALIDATION_FAILED' }]);
+    }
+    patch.categoryId = input.categoryId;
+  }
+  if (input.name !== undefined) {
+    if (input.name.trim().length < 2) {
+      throw ApiError.validation([{ field: 'name', message: 'Name is too short', code: 'VALIDATION_FAILED' }]);
+    }
+    patch.name = input.name;
+    patch.slug = slugify(input.name);
+  }
+  if (input.nameAr !== undefined) patch.nameAr = blankToNull(input.nameAr);
+  if (input.nameFr !== undefined) patch.nameFr = blankToNull(input.nameFr);
+  if (input.description !== undefined) patch.description = blankToNull(input.description);
+  if (input.brand !== undefined) patch.brand = blankToNull(input.brand);
+  if (input.barcode !== undefined) patch.barcode = blankToNull(input.barcode);
+  if (input.countryId !== undefined) patch.countryId = blankToNull(input.countryId);
+  if (input.basePrice !== undefined) {
+    assertNonNegative(input.basePrice, 'basePrice');
+    patch.basePrice = toDecimal(input.basePrice).toFixed(4);
+  }
+  if (input.moq !== undefined) patch.moq = input.moq;
+  if (input.unit !== undefined) patch.unit = input.unit;
+  if (input.purchaseIntent !== undefined) patch.purchaseIntent = input.purchaseIntent;
+
+  if (Object.keys(patch).length === 0) return;
+
+  patch.updatedAt = new Date();
+  await db.update(products).set(patch).where(eq(products.id, productId));
+
+  await writeAudit(db, { actorId: ctx.actorId, ipAddress: ctx.ipAddress }, {
+    action: 'PRODUCT.UPDATE',
+    entityType: 'PRODUCT',
+    entityId: productId,
+    before: {
+      name: before.name,
+      categoryId: before.categoryId,
+      basePrice: before.basePrice,
+      moq: before.moq,
+      purchaseIntent: before.purchaseIntent,
+    },
+    after: {
+      name: patch.name ?? before.name,
+      categoryId: patch.categoryId ?? before.categoryId,
+      basePrice: patch.basePrice ?? before.basePrice,
+      moq: patch.moq ?? before.moq,
+      purchaseIntent: patch.purchaseIntent ?? before.purchaseIntent,
+    },
+  });
+}

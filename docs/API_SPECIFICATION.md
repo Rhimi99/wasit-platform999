@@ -68,8 +68,8 @@
 - `GET /mine` — منتجات الكيانات التي يملكها المستخدم الحالي (Auth) — كل الحالات
 - `GET /:id` — تفاصيل + images/variants/category
 - `POST /` — إنشاء (sellerId, sellerType, sku, categoryId, name, basePrice, currencyCode, moq, quantity)
-- `PATCH /:id` — تحديث (مقيد بالمالك)
-- (حذف/إلغاء نشر قيد الإكمال)
+- `PATCH /:id` — تعديل الحقول الوصفية/التجارية (name/nameAr/nameFr/description/brand/barcode/categoryId/basePrice/moq/unit/purchaseIntent). **مالك الكيان فقط** (403 لغيره، 401 لغير مصادق)، ويمنع 403 تعديل منتج موقوف إداريًا. الهوية (seller/SKU/currency) والمخزون غير قابلة للتعديل هنا؛ حقول فارغة تُخزَّن NULL، وتُعاد تسمية `slug`. Audit `PRODUCT.UPDATE`. جسم فارغ/فئة مجهولة/سعر سالب ⇒ 422. `PATCH /:id/status` لنشر/إلغاء النشر.
+- (حذف المنتج الناعم/الأرشفة قيد الإكمال)
 
 ## الموردون (`/api/suppliers`)
 

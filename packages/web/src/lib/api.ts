@@ -232,6 +232,21 @@ export const api = {
     return request<{ id: string }>('/api/products', { method: 'POST', body: JSON.stringify(data) });
   },
 
+  async updateProduct(id: string, data: {
+    categoryId?: string;
+    name?: string;
+    nameAr?: string | null;
+    description?: string | null;
+    brand?: string | null;
+    barcode?: string | null;
+    basePrice?: string;
+    moq?: number;
+    unit?: string;
+    purchaseIntent?: 'B2B' | 'B2C';
+  }) {
+    return request<{ success: boolean }>(`/api/products/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  },
+
   // ---- Categories ----
   async listCategories() {
     return request<Category[]>('/api/categories');

@@ -133,6 +133,36 @@ test.describe('MERCHANT — full seller surface', () => {
     await expect(page.getByText(name).first()).toBeVisible();
   });
 
+  test('edits a product from the list and the change is persisted', async ({ page }) => {
+    const name = `Edited ${UNIQUE}`;
+
+    await page.goto('/dashboard/products');
+    const row = page.locator('table.table-base tbody tr').first();
+    await expect(row).toBeVisible();
+    const productId = (await row.locator('[data-testid^="product-edit-"]').getAttribute('data-testid'))!.replace('product-edit-', '');
+
+    await page.getByTestId(`product-edit-${productId}`).click();
+    const form = page.getByTestId('product-edit-form');
+    await expect(form).toBeVisible();
+    // The form is prefilled from the real product, not blank.
+    await expect(page.locator('#ep-name')).not.toHaveValue('');
+
+    await page.locator('#ep-name').fill(name);
+    await page.locator('#ep-price').fill('33.25');
+    await form.getByRole('button', { name: /حفظ|Save/i }).click();
+
+    // The modal closes and the new values render in the list.
+    await expect(form).not.toBeVisible();
+    const editedRow = page.locator('table.table-base tbody tr', { hasText: name }).first();
+    await expect(editedRow).toBeVisible();
+    // The row renders the persisted price (locale formats the decimal separator).
+    await expect(editedRow).toContainText(/33[.,]25/);
+
+    // And the storefront detail page shows the persisted edit, not just the table.
+    await page.goto(`/products/${productId}`);
+    await expect(page.getByText(name).first()).toBeVisible();
+  });
+
   test('can unpublish and republish a product from the list', async ({ page }) => {
     await page.goto('/dashboard/products');
     const row = page.locator('table.table-base tbody tr').first();

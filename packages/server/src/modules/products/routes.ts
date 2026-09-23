@@ -4,7 +4,7 @@ import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody, validateQuery, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
-import { createProduct, getProduct, listMyProducts, listMySellerEntities, listProducts, updateProductStatus } from './service.js';
+import { createProduct, getProduct, listMyProducts, listMySellerEntities, listProducts, updateProduct, updateProductStatus } from './service.js';
 import { db } from '../../db/client.js';
 import { assertSellerOwnership as assertSellerOwnershipDb } from '../../lib/seller-ownership.js';
 
@@ -48,6 +48,21 @@ const listProductsSchema = z.object({
 });
 
 const statusSchema = z.object({ status: z.enum(['ACTIVE', 'INACTIVE', 'ARCHIVED', 'SUSPENDED']) });
+
+const updateProductSchema = z.object({
+  categoryId: z.string().min(1).optional(),
+  name: z.string().min(2).max(250).optional(),
+  nameAr: z.string().max(250).nullable().optional(),
+  nameFr: z.string().max(250).nullable().optional(),
+  description: z.string().max(5000).nullable().optional(),
+  brand: z.string().max(150).nullable().optional(),
+  barcode: z.string().max(100).nullable().optional(),
+  countryId: z.string().max(36).nullable().optional(),
+  basePrice: z.string().regex(/^\d+(\.\d{1,4})?$/).optional(),
+  moq: z.number().int().min(1).optional(),
+  unit: z.string().max(30).optional(),
+  purchaseIntent: z.enum(['B2B', 'B2C']).optional(),
+}).refine((v) => Object.keys(v).length > 0, { message: 'No fields to update' });
 
 const SELLER_TYPES = ['MERCHANT', 'SUPPLIER', 'COMPANY'] as const;
 
@@ -126,6 +141,25 @@ productsRoutes.patch('/:id/status', requireAuth, validateBody(statusSchema), asy
     }
   }
   await updateProductStatus(ctx.db, product.id, body.status, { actorId: user.id });
+  return c.json({ success: true });
+});
+
+productsRoutes.patch('/:id', requireAuth, validateBody(updateProductSchema), async (c) => {
+  const body = getValidatedBody<z.infer<typeof updateProductSchema>>(c);
+  const ctx = getContext(c);
+  const user = ctx.user!;
+  const product = await getProduct(ctx.db, c.req.param('id')!);
+
+  const isAdmin = user.roles.some((r) => ['ADMIN', 'SUPER_ADMIN', 'SUPPORT'].includes(r));
+  if (!isAdmin) {
+    await assertSellerOwnership(user.id, product.sellerId, product.sellerType);
+    // An administrative suspension is not lifted by editing content.
+    if (product.status === 'SUSPENDED') {
+      throw ApiError.forbidden('A suspended product can only be edited by an administrator');
+    }
+  }
+
+  await updateProduct(ctx.db, product.id, body, { actorId: user.id, ipAddress: ctx.ipAddress });
   return c.json({ success: true });
 });
 

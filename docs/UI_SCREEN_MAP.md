@@ -76,7 +76,7 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 ### آلة حالة الحملات الإعلانية + حرس إيقاف المنتج (مكتملة — B14)
 
 - `/dashboard/ads` — `DashboardAdsPage.tsx`: بطاقة الحملة (`ads-campaign-<id>`) تعرض الأزرار وفق آلة الحالة الحقيقية فقط: `DRAFT` → تفعيل (`ads-activate-<id>`) + إلغاء (`ads-cancel-<id>`)؛ `ACTIVE` → إيقاف مؤقت (`ads-pause-<id>`) + إنهاء (`ads-end-<id>`)؛ `PAUSED` → استئناف (`ads-resume-<id>`) + إلغاء + إنهاء؛ `COMPLETED`/`CANCELLED` بلا أي انتقال (كان زر الاستئناف يظهر خطأً فيُرفض بـ409).
-- `/dashboard/products` — `DashboardProductsPage.tsx`: صف المنتج الموقوف إداريًا يعرض إشعارًا (`product-suspended-<id>`, مفتاح `product.suspendedNotice` في ar/fr/en/zh) **بدل** زر النشر؛ زر الحالة `product-status-<id>` لباقي الحالات.
+- `/dashboard/products` — `DashboardProductsPage.tsx`: صف المنتج الموقوف إداريًا يعرض إشعارًا (`product-suspended-<id>`, مفتاح `product.suspendedNotice` في ar/fr/en/zh) **بدل** زر النشر؛ زر الحالة `product-status-<id>` لباقي الحالات. **زر «تعديل» (`product-edit-<id>`)** يفتح `EditProductModal` (`product-edit-form`: name/nameAr/category/price/moq/unit/intent/description) مُعبّأ من `GET /api/products/:id` ويحفظ عبر `PATCH /api/products/:id` ثم يُعيد تحميل القائمة ويرى المستخدم القيم الجديدة؛ الزر مخفي للمنتج الموقوف إداريًا.
 - الخادم: `PATCH /api/products/:id/status` يرفض (403) محاولة أي غير أدمن رفع `SUSPENDED` — إجراء الإنفاذ الإداري غير قابل للعكس من الطرف المعني.
 - ترجمات كاملة ar/fr/en/zh.
 
