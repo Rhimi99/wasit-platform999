@@ -185,3 +185,67 @@ test.describe('Dispute lifecycle driven from the admin UI', () => {
     }
   });
 });
+
+test.describe('Dispute appeal lifecycle driven from the UI', () => {
+  test.use({ storageState: storageFor('customer') });
+
+  test('a party appeals from the dashboard and a second reviewer accepts it from /admin/disputes', async ({ page, browser }) => {
+    // Gap this guards: the appeal form (`appeal-submit`) and the review controls
+    // (`appeal-accept` / `appeal-reject`) existed but no test ever clicked them.
+    // The only prior appeal coverage posted to the API directly and asserted the
+    // recusal 403 — so the positive review path (handler → route → service → DB
+    // → reflection on both surfaces) was shipping unproven.
+    //
+    // The deciding admin is recused from reviewing its own decision's appeal, so
+    // a distinct permitted reviewer (admin2, seeded for exactly this) does the
+    // review. That recusal is an in-spec rule, not something to work around.
+    const disputeId = await createDecidedDispute(page, browser);
+    const disputeNumber = ((await (await page.request.get(`/api/disputes/${disputeId}`)).json()).data.disputeNumber) as string;
+
+    // The buyer files the appeal through the real form.
+    await page.goto('/dashboard/disputes');
+    await page.getByRole('button', { name: new RegExp(disputeNumber) }).click();
+    const reason = 'E2E: new evidence submitted after the original review was not considered.';
+    await page.getByTestId('appeal-reason').fill(reason);
+    await page.getByTestId('appeal-submit').click();
+    await expect(page.getByTestId('appeal-list')).toContainText(reason);
+    await expect(page.getByTestId('appeal-list')).toContainText(/قيد المراجعة|Pending/i);
+
+    const listed = (await (await page.request.get(`/api/disputes/${disputeId}/appeals`)).json()).data.items as { id: string; status: string }[];
+    expect(listed.some((a) => a.status === 'PENDING')).toBe(true);
+    const appealId = listed[0]!.id;
+
+    // A second permitted reviewer accepts it from the admin surface.
+    const reviewer = await browser.newContext({ storageState: storageFor('admin2') });
+    const reviewerPage = await reviewer.newPage();
+    try {
+      await reviewerPage.goto('/admin/disputes');
+      await reviewerPage.getByTestId(`admin-dispute-${disputeId}`).click();
+      await expect(reviewerPage.getByTestId('admin-appeal-list')).toContainText(/قيد المراجعة|Pending/i);
+      await reviewerPage.getByTestId('admin-appeal-note').fill('E2E: appeal upheld.');
+      await reviewerPage.getByTestId('appeal-accept').click();
+
+      // The persisted state must be what the DB holds: appeal ACCEPTED and the
+      // dispute reopened (the accepted-appeal rule).
+      await expect.poll(async () => {
+        const res = await reviewer.request.get(`/api/admin/disputes/${disputeId}/appeals`);
+        const items = (await res.json()).data.items as { id: string; status: string; decisionNote: string | null }[];
+        const a = items.find((x) => x.id === appealId);
+        return a ? `${a.status}/${a.decisionNote ?? ''}` : 'missing';
+      }).toBe('ACCEPTED/E2E: appeal upheld.');
+
+      await expect.poll(async () => {
+        const res = await reviewer.request.get(`/api/admin/disputes/${disputeId}`);
+        return ((await res.json()).data as { status: string }).status;
+      }).toBe('UNDER_REVIEW');
+    } finally {
+      await reviewer.close();
+    }
+
+    // The buyer sees the accepted appeal and the reopened dispute in their own UI.
+    await page.reload();
+    await page.getByRole('button', { name: new RegExp(disputeNumber) }).click();
+    await expect(page.getByTestId('appeal-list')).toContainText(/مقبول|Accepted/i);
+    await expect(page.getByTestId('appeal-list')).toContainText('E2E: appeal upheld.');
+  });
+});

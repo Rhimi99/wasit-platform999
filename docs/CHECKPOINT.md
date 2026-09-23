@@ -2,6 +2,25 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone M3 — Merchant Order Lifecycle (Pass) + Admin Appeal Review Proven From the UI
+
+### الفجوتان المرشّحتان بعد M2
+1. **Merchant order status / order lifecycle — Pass (تغطية قائمة).** فُحص المسار كاملًا: `DashboardOrderDetailPage` يبني الأزرار من `allowedOrderActions()` (تسلسل البائع PENDING→CONFIRMED→PROCESSING→SHIPPED→DELIVERED→COMPLETED + إلغاء، وإلغاء المشتري قبل التأكيد) ويستدعي `api.updateOrderStatus` → `PATCH /api/orders/:id/status` → `updateOrderStatus()`. التغطية موجودة فعلًا من الواجهة في `e2e/order-lifecycle.spec.ts` (حالتان تنقران `order-action-<next>` عبر التسلسل كاملًا ثم تثبّتان `COMPLETED`/`CANCELLED` من الـAPI، وتتحقّقان من ظهور `order-no-actions`). لا فجوة — لم يُمسّ شيء.
+2. **مراجعة الاستئناف الإداري (Appeal Review) — فجوة تغطية حقيقية.** نموذج الاستئناف للمستخدم (`appeal-submit`) وزرّا المراجعة الإدارية (`appeal-accept`/`appeal-reject`) موجودة ومربوطة، لكن **لا اختبار نقر أيًّا منها**: `e2e/disputes.spec.ts` كان يرفع الاستئناف عبر `page.request.post('/api/disputes/:id/appeals')` ويؤكّد فقط **رفض التنحّي 403** ثم يفحص نصّ القائمة. المسار الموجب (handler → route → service → DB → انعكاس على الواجهتين) لم يُثبَت إطلاقًا.
+
+### العائق البنيوي (قاعدة داخل الـspec، لا يُلتفّ عليها)
+قاعدة التنحّي (A4): `decidedBy === actorId` ⇒ صاحب القرار الأصلي **لا يستطيع** مراجعة استئناف قراره. في بيئة الديمو كان `admin@wasit.tn` (SUPER_ADMIN) هو من يبتّ كل النزاعات، ولا يوجد مسار منتجي يمنح دور Staff آخر — لذا كان المسار الموجب غير قابل للإثبات. الحل: بذرة مستخدم Staff ثانٍ في مُبذّر الديمو (بنفس نمط `admin@wasit.tn` القائم) — **بيانات اختبار/تطوير لا ميزة منتج**.
+
+### ما بُني
+- `seed-demo.ts`: مستخدم `admin2@wasit.tn` بدور ADMIN (idempotent عبر `ensureDevUser` + `assignRoleDirect`).
+- `e2e/global-setup.ts` + `e2e/helpers.ts`: جلسة `admin2` في fixtures الأدوار.
+- `AdminEnginesPages.tsx`: `data-testid="admin-appeal-note"` فقط (بلا تغيير منطق).
+- `e2e/disputes.spec.ts` (+1 حالة): دورة استئناف كاملة **من الواجهة**: المشتري يفتح نزاعه ويرفع الاستئناف عبر `appeal-submit` ⇒ يظهر PENDING؛ المراجع الثاني يفتح `/admin/disputes` ويقبل عبر `admin-appeal-note` + `appeal-accept` ⇒ `expect.poll` يثبت القاعدة (`ACCEPTED/E2E: appeal upheld.` + النزاع عاد `UNDER_REVIEW`) ⇒ المشتري يرى «مقبول» + ملاحظة القرار.
+
+### التحقق
+- **Full E2E**: **166/166** (كانت 165). **الخادم**: **531/531**. **Typecheck** و**Build** (server + web) نظيفان.
+- لا migrations ولا reset/drop/push. العمولة **4% = 2%+2%** والـMarketing Video Agent بلا مساس.
+
 ## Milestone M2 — Admin Dispute Lifecycle + Ledger Reflection Proven From the UI (اختبار وظيفي)
 
 ### الفجوة في التغطية (قدرة موجودة لكن غير مُثبَتة من الواجهة)

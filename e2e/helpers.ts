@@ -9,6 +9,7 @@ export const DEMO_USERS = {
   merchant: 'merchanta@wasit.tn',
   company: 'companya@wasit.tn',
   admin: 'admin@wasit.tn',
+  admin2: 'admin2@wasit.tn',
 } as const;
 
 export type DemoRole = keyof typeof DEMO_USERS;

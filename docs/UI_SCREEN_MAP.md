@@ -42,12 +42,12 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 
 - `/dashboard/verification` — `DashboardVerificationPage.tsx`: حالة التحقق الحالية + المستويات الأربعة القابلة للتقديم + نموذج تقديم طلب (level/documentType/ref) + قائمة الطلبات الأخيرة (live مع `/api/verification`)
 - `/dashboard/trust` — `DashboardTrustPage.tsx`: بطاقة الدرجة (score 0-100 + level LOW/MEDIUM/HIGH + summary قابل للتفسير عبر عوامل موثقة) + زر "إعادة احتساب الدرجة" + جدول السجل (live مع `/api/trust`)
-- `/dashboard/disputes` — `DashboardDisputesPage.tsx`: قائمة نزاعاتي + فتح نزاع على طلب + تفاصيل (أحداث/رسائل/أدلة) (live مع `/api/disputes`)
+- `/dashboard/disputes` — `DashboardDisputesPage.tsx`: قائمة نزاعاتي + فتح نزاع على طلب + تفاصيل (أحداث/رسائل/أدلة) + **رفع استئناف** بعد البتّ (`appeal-reason`/`appeal-submit`) على نزاع مُبتّ، مع عرض حالة/قرار الاستئناف (live مع `/api/disputes`)
 - Admin (staff roles ADMIN/SUPER_ADMIN/SUPPORT/RISK/DISPUTE عبر `StaffOnly`):
   - `/admin/verification` — `AdminVerificationPage.tsx`: قائمة الطلبات + مراجعة (APPROVED/REJECTED + ملاحظات)
   - `/admin/trust` — `AdminTrustPage.tsx`: كل الدرجات + إعادة احتساب
   - `/admin/risk` — `AdminRiskPage.tsx`: ملفات المخاطر + الأحداث + إعادة التقييم
-  - `/admin/disputes` — `AdminDisputesPage.tsx`: كل النزاعات + إسناد + تغيير حالة + قرار
+  - `/admin/disputes` — `AdminDisputesPage.tsx`: كل النزاعات + إسناد + تغيير حالة + قرار + **مراجعة الاستئناف** (`admin-appeal-list` + `admin-appeal-note` + `appeal-accept`/`appeal-reject`)؛ القبول يعيد فتح النزاع. ملاحظة: المدير صاحب القرار الأصلي متنحٍّ (recusal) من مراجعة استئناف قراره — يلزم مراجع آخر (يُوفَّر `admin2@wasit.tn` للاختبار)
 - `StaffOnly` guard في `App.tsx` + روابط الشريط الجانبي في `AppSidebar.tsx`
 - ترجمات كاملة ar/en (fr/zh عبر fallback)
 

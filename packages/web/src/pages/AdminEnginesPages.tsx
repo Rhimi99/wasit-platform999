@@ -419,7 +419,7 @@ export function AdminDisputesPage() {
                         {a.decisionNote && <p className="mt-1 text-xs text-slate-500">{t('disputes.appeal.decisionNote')}: {a.decisionNote}</p>}
                         {a.status === 'PENDING' && (
                           <div className="mt-2 flex flex-wrap gap-2">
-                            <input className="input flex-1" value={appealNote} onChange={(e) => setAppealNote(e.target.value)} placeholder={t('disputes.admin.appealNote')} />
+                            <input className="input flex-1" value={appealNote} onChange={(e) => setAppealNote(e.target.value)} placeholder={t('disputes.admin.appealNote')} data-testid="admin-appeal-note" />
                             <button className="btn-primary" onClick={() => reviewAppeal(a.id, 'ACCEPTED', detail.id)} data-testid="appeal-accept">{t('disputes.admin.accept')}</button>
                             <button className="btn-secondary" onClick={() => reviewAppeal(a.id, 'REJECTED', detail.id)} data-testid="appeal-reject">{t('disputes.admin.reject')}</button>
                           </div>

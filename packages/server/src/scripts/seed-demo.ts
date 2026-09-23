@@ -100,6 +100,13 @@ async function main(): Promise<void> {
   await assignRoleDirect(adminUser.userId, 'SUPER_ADMIN');
   await assignRoleDirect(adminUser.userId, 'ADMIN');
 
+  // A second permitted reviewer. The appeal policy recuses the admin who decided
+  // a dispute from reviewing the appeal of that decision, so proving the positive
+  // review path (from the UI) requires a distinct staff actor. There is no
+  // product endpoint that grants a staff role, so this fixture is seeded here.
+  const reviewerUser = await ensureDevUser('admin2@wasit.tn', pw, 'ADMIN');
+  await assignRoleDirect(reviewerUser.userId, 'ADMIN');
+
   console.log('Users ready:', [customer, supplierUser, merchantUser, companyUser].map((u) => u.email).join(', '));
 
   // إنشاء الكيانات التجارية إن لم تكن موجودة
@@ -351,6 +358,7 @@ async function main(): Promise<void> {
   console.log('Demo Seed complete.');
   console.log('Test users (password: ' + pw + '):');
   console.log('  admin@wasit.tn     (SUPER_ADMIN)');
+  console.log('  admin2@wasit.tn    (ADMIN — second reviewer, for appeal recusal tests)');
   console.log('  customer1@wasit.tn (CUSTOMER)');
   console.log('  supplierA@wasit.tn (SUPPLIER)');
   console.log('  merchantA@wasit.tn (MERCHANT)');

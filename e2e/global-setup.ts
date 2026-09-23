@@ -12,6 +12,7 @@ const ROLES = {
   merchant: 'merchanta@wasit.tn',
   company: 'companya@wasit.tn',
   admin: 'admin@wasit.tn',
+  admin2: 'admin2@wasit.tn',
 } as const;
 
 /**
