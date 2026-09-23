@@ -1,8 +1,31 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-23 — **SETTLEMENT INTEGRITY (RC-1/3/4/5) DONE — 554/554 server tests**
-> **الفرع**: `feat/messaging-notifications`
-> **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
+> **التاريخ**: 2026-09-23 — **PUBLIC DEMO FUNCTIONAL AUDIT — جاهز للعرض العام (مع تحصين سطح الطاقم)**
+> **الفرع**: `master`
+> **HEAD**: `eafda4f` (iPay audit)
+---
+
+## ✅ حالة معتمدة — PUBLIC DEMO / PRIVATE BETA: تدقيق وظيفي حقيقي + تحصين سطح الإدارة (2026-09-23)
+
+**الهدف**: تجهيز المنصة كعرض عام (هاتف + أجهزة خارجية) على رابط HTTPS عام، بلا أي مساس بالإنتاج أو قاعدة بيانات الإنتاج، وبلا reset/drop/push، وبلا مزوّد دفع حقيقي، مع الحفاظ على عمولة **4% = 2%+2%** وMarketing Video Agent (89e68d7). القاعدة المُطبَّقة: لا يُقبل HTTP 200 ولا رندر الصفحة — كل وظيفة نُفِّذت فعليًا من الواجهة أو عبر نداء حقيقي يغيّر/يقرأ حالة حقيقية في PostgreSQL.
+
+**البيئة المعزولة**: قاعدة `wasit_demo` (دور `wasit_demo`) منفصلة تمامًا؛ `wasit_dev` بلا مساس. API بـ`NODE_ENV=staging` على 3000، وWeb (بناء production) على 12000، والرابط العام `https://work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev` يعمل 200 و`/api/health/ready` متصل بقاعدة البيانات. المدفوعات `PAYMENT_PROVIDER=manual` (مكتب offline)، والذكاء `local-heuristic`. `.env.demo` مُستثنى من Git وبأسرار عشوائية.
+
+**فجوة حقيقية أُصلحت (تحصين لا تجميل)**: كلمة مرور العرض المنشورة `Passw0rd!2026` كانت تفتح **حسابات الطاقم** `admin@wasit.tn`/`admin2@wasit.tn` ⇒ أي زائر يصل لسطح الإدارة. لم ألمس الكود ولا RBAC؛ بدلًا من ذلك:
+1. **تدوير كلمات مرور الطاقم** إلى قيم عشوائية محفوظة محليًا فقط (`/tmp/demo_admin_pw.txt` بصلاحية 0600). كلمة العرض المنشورة صارت **مرفوضة 401** للإدارة، بينما customer/merchant/supplier/company تعمل كما هي.
+2. **بانر DEMO** (`packages/web/src/components/DemoBanner.tsx`) يُعرض فقط عند `VITE_DEMO_MODE=true` ⇒ بناء الإنتاج بلا تأثّر. يوضّح أن البيانات تجريبية والمدفوعات غير حقيقية.
+3. مسارات الإدارة كانت مُقيّدة أصلًا بـ`AdminOnly`/`StaffOnly` — تم التحقق.
+
+**الإثبات (أرقام فعلية من الرابط العام)**:
+- **Smoke أساسي 21/21**: الصفحة العامة، الفئات (13 فئة)، المنتجات (13)، تفاصيل منتج، بحث `q=Demo`=3، دخول customer/merchant/supplier/company، الطلبات، الإشعارات، الرسائل، المخزون، ورفض دخول admin.
+- **Smoke موسّع 13/13**: تسجيل→تأكيد بريد→دخول **201/200**؛ إنشاء طلب **201** مع `grandTotal 214.20` (شامل 2% مشتري)؛ Payment intent على مكتب manual **201**؛ **توليد فيديو تسويقي حقيقي 201 بحالة `READY`** (45s) ثم قائمة/حذف **200**.
+- **Browser UI فعلي**: الصفحة الرئيسية + البانر، تسجيل دخول تاجر→`/dashboard` (طلبات ومنتجات حقيقية)، `/marketplace` (منتجات وفئات وفرز)، `/products/:id` (SKU/MOQ/كمية/اطلب)، `/dashboard/video-studio` (اختيار منتج/لغة/جمهور/نمط/مدة + توليد).
+- **Admin APIs بالاعتماد المُدوَّر**: stats (`users 9, products 13, orders 13, GMV`), users/products/orders/transactions/ledger/audit-logs, verification/trust/risk, disputes, ads/AI/subscriptions, observability (metrics/logs/alerts), privacy/deletions — كلها **200**.
+
+**ملاحظة تشغيلية مهمة**: تشغيل `npm test` أثناء تصدير `.env.demo` في نفس الـshell يُسرّب `WEB_BASE_URL`/أعلام metrics إلى vitest فيُنتج فشلًا **زائفًا** (SEO/sitemap/robots و/metrics). بعد تنظيف البيئة: **Server 554/554 (52 ملفًا)**، **Typecheck (server+web)** و**Build (server+web)** نظيفة.
+
+**التقرير الكامل**: `docs/PUBLIC_DEMO_FUNCTIONAL_AUDIT.md` (جدول Feature | Tested from UI | Result | Root cause | Fix | Test status). لا migrations، لا reset/drop/push، لا مزوّد دفع، والعمولة **4%=2%+2%** وAgent (89e68d7) بلا مساس.
+
 ---
 
 ## ✅ حالة معتمدة — SETTLEMENT INTEGRITY: إصلاح RC-1 / RC-3 / RC-4 / RC-5 من الواجهة (2026-09-23)

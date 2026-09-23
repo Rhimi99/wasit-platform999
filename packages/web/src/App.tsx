@@ -35,10 +35,16 @@ import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
+import { DemoBanner } from './components/DemoBanner';
+
+/** Enabled only on the public demo build; production builds leave it unset. */
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      {DEMO_MODE && <DemoBanner />}
+      <Routes>
       {/* Public */}
       <Route path="/" element={<HomePage />} />
       <Route path="/marketplace" element={<MarketplacePage />} />
@@ -119,6 +125,7 @@ export default function App() {
       <Route path="/admin/ads" element={<RequireAuth><AdminOnly><AdminAdsPage /></AdminOnly></RequireAuth>} />
 
       <Route path="*" element={<NotFoundPage />} />
-    </Routes>
+      </Routes>
+    </>
   );
 }
