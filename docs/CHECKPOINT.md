@@ -35,14 +35,16 @@
 
 ### الإثبات (UI → API → DB → UI)
 - **`e2e/directory.spec.ts` (جديد، 7 حالات)**: تفتح كل سطح من الواجهة وتتحقق من صفوف حقيقية، وتُطابق العدد المعروض مع `pagination.total` الحيّ، وتُثبت الفلترة بالبحث، و`buyerType=MERCHANT` لا يُعيد إلا تجارًا، وعميل بلا كيانات يرى حالة فراغ صريحة (عزل نطاق). الجلسات تُبنى عبر `POST /api/auth/login` الحقيقي لكل اختبار بدل حالة تخزين مشتركة (لأن مواصفة الاستعادة تُبطل جلسات الحساب فعليًا).
+- **`/admin/trust` و`/admin/risk` (حالتان جديدتان)**: كانتا مُغطّاتين بفحص «العنوان يظهر» فقط — وهو بالضبط ما لا يكفي. أُضيف اختباران يشغّلان العمليات الحقيقية: الزبون يُنشئ لقطة ثقة من صفحته (`POST /api/trust/me/recompute`) ثم الأدمن يُعيد الاحتساب من الصف ويُتحقق أن اللقطة استُمرّت في `GET /api/admin/trust`؛ وفي المخاطر يُنفَّذ «إعادة تقييم» من الصف ويُتحقق من `lastEvaluatedAt` في `GET /api/admin/risk/profiles`.
+  - ملاحظة مهمة: جدول الثقة **فارغ بطبيعته** على قاعدة نظيفة (اللقطات تُكتب فقط عند إعادة احتساب المستخدم لنفسه)، لذلك الاختبار يُنشئ اللقطة أولًا بدل افتراض وجودها — وهذا سلوك صحيح لا فجوة.
 - **HARNESS**: أُصلح `restorePassword` و`global-setup` ليكونا حاسمين.
-- **النتائج**: **Full E2E 188/188** — **Server 546/546** (52 ملفًا) — **Typecheck** (server+web) و**Build** (server+web) نظيفان.
-- **يُثبت الإصلاح**: تشغيل الحزمة كاملة بعد إصلاح الحدّ ⇒ **188/188 ناجح** (صفر سقوط في `directory` و`admin-ads`)، وحسابات الديمو تبقى على `Passw0rd!2026` بعده. (قبل الإصلاح كانت النتائج 185/188 ثم 186/188 مع سقوط متكرّر في `directory`.)
+- **النتائج**: **Full E2E 190/190** — **Server 546/546** (52 ملفًا) — **Typecheck** (server+web) و**Build** (server+web) نظيفان.
+- **يُثبت الإصلاح**: تشغيل الحزمة كاملة بعد إصلاح الحدّ ⇒ **190/190 ناجح** (صفر سقوط في `directory` و`admin-ads`)، وحسابات الديمو تبقى على `Passw0rd!2026` بعده. (قبل الإصلاح كانت النتائج 185/188 ثم 186/188 مع سقوط متكرّر في `directory`.)
 
 ### الملفات
 - `packages/server/src/modules/directory/{service,routes}.ts` (جديد)، `packages/server/src/app.ts`، `packages/server/src/modules/auth/routes.ts`، `packages/server/src/scripts/seed-demo.ts`، `packages/server/tests/directory.test.ts` (جديد)
 - `packages/web/src/pages/DashboardListPages.tsx`، `App.tsx`، `AppSidebar.tsx`، `lib/api.ts`، `lib/types.ts`، `lib/i18n.ts`
-- `e2e/directory.spec.ts` (جديد)، `e2e/auth.spec.ts`، `e2e/admin-ads.spec.ts`، `playwright.config.ts`
+- `e2e/directory.spec.ts` (جديد)، `e2e/functional-audit.spec.ts` (اختبارا trust/risk)، `e2e/auth.spec.ts`، `e2e/admin-ads.spec.ts`، `playwright.config.ts`
 
 ### القيود المُحترمة
 لا migration/`db reset/drop/push`؛ لا تغيير في `buyerType` enum ولا مخطط قاعدة البيانات؛ العمولة **4% = 2%+2%** دون مساس؛ Marketing Video Agent (89e68d7) دون مساس؛ لا Mock؛ لا تعطيل أزرار لإخفاء أخطاء؛ RBAC ونطاق الملكية من نفس مصدر الطلبات الحقيقي؛ ar/fr/en/zh وRTL محفوظة.

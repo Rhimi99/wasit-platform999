@@ -547,6 +547,74 @@ test.describe('ADMIN — every admin surface', () => {
     await expect(tracked.getByText('ACTIVE')).toBeVisible();
   });
 
+  test('trust desk recomputes a user score and persists it server-side', async ({ page, browser }) => {
+    // Trust snapshots are only written when a user recomputes from their own
+    // page, so the customer must create one first — otherwise the admin table is
+    // legitimately empty and there is no row to recompute.
+    const customer = await browser.newContext({
+      baseURL: process.env.E2E_WEB_URL ?? 'http://localhost:5173',
+      storageState: storageFor('customer'),
+    });
+    const customerPage = await customer.newPage();
+    try {
+      await customerPage.goto('/dashboard/trust');
+      await customerPage.getByRole('button', { name: /إعادة احتساب الدرجة|Recompute score/i }).click();
+      await expect.poll(async () => {
+        const res = await customerPage.request.get('/api/trust/me');
+        return (await res.json()).data?.latest?.score ?? null;
+      }).not.toBeNull();
+    } finally {
+      await customer.close();
+    }
+
+    await page.goto('/admin/trust');
+    const row = page
+      .locator('table tbody tr')
+      .filter({ has: page.getByRole('button', { name: /إعادة احتساب الدرجة|Recompute score/i }) })
+      .first();
+    await expect(row).toBeVisible();
+    const userId = (await row.locator('div[dir="ltr"]').innerText()).trim();
+    expect(userId).toBeTruthy();
+
+    const [recompute] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/admin/trust/') && r.request().method() === 'POST'),
+      row.getByRole('button', { name: /إعادة احتساب الدرجة|Recompute score/i }).click(),
+    ]);
+    expect(recompute.ok()).toBeTruthy();
+
+    // The recompute must persist a snapshot the admin list can read back.
+    const rows = ((await (await page.request.get('/api/admin/trust')).json()).data as {
+      items: Array<{ userId: string; score: number; effectiveAt: string }>;
+    }).items;
+    const persisted = rows.find((r) => r.userId === userId);
+    expect(persisted, 'a trust snapshot must exist for the recomputed user').toBeTruthy();
+    expect(persisted!.effectiveAt).toBeTruthy();
+    await expect(page.locator('table tbody tr').filter({ hasText: userId }).first()).toBeVisible();
+  });
+
+  test('risk desk reassesses a user and the refreshed score is rendered', async ({ page }) => {
+    await page.goto('/admin/risk');
+    const row = page.locator('table tbody tr').filter({ has: page.getByRole('button', { name: /إعادة تقييم|Reassess/i }) }).first();
+    await expect(row).toBeVisible();
+    const userId = (await row.locator('div[dir="ltr"]').innerText()).trim();
+    expect(userId).toBeTruthy();
+
+    const [reassess] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/admin/risk/') && r.request().method() === 'POST'),
+      row.getByRole('button', { name: /إعادة تقييم|Reassess/i }).click(),
+    ]);
+    expect(reassess.ok()).toBeTruthy();
+
+    // Reassessment persists a profile with an evaluation timestamp.
+    const profiles = ((await (await page.request.get('/api/admin/risk/profiles')).json()).data as {
+      items: Array<{ userId: string; currentScore: number; lastEvaluatedAt: string | null }>;
+    }).items;
+    const profile = profiles.find((p) => p.userId === userId);
+    expect(profile, 'a risk profile must exist for the reassessed user').toBeTruthy();
+    expect(profile!.lastEvaluatedAt).toBeTruthy();
+    await expect(page.locator('table tbody tr').filter({ hasText: userId }).first()).toBeVisible();
+  });
+
   test('a verification request filed by the user is decided by the admin and reflected back', async ({ page, browser }) => {
     // Regression guard: the verification round trip. Before the review buttons
     // had no test ids and the flow was never exercised from the UI, so a user
