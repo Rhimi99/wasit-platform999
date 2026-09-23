@@ -57,7 +57,7 @@ export function AdminVerificationPage() {
                 <tr><td colSpan={6} className="px-4 py-6"><EmptyState title={t('verification.noRequests')} /></td></tr>
               )}
               {items.map((r) => (
-                <tr key={r.id} className="border-b border-slate-100 last:border-0">
+                <tr key={r.id} className="border-b border-slate-100 last:border-0" data-testid={`admin-verification-${r.id}`}>
                   <td className="px-4 py-2">
                     <div className="text-slate-700">{r.email ?? r.userId}</div>
                     <div className="text-xs text-slate-400" dir="ltr">{r.userId}</div>
@@ -80,8 +80,8 @@ export function AdminVerificationPage() {
                   <td className="px-4 py-2">
                     {['SUBMITTED', 'PENDING', 'IN_REVIEW'].includes(r.status) ? (
                       <div className="flex gap-1">
-                        <button className="btn-primary px-2 py-1 text-xs" onClick={() => review(r.id, 'APPROVED')}>{t('admin.approve')}</button>
-                        <button className="btn-secondary px-2 py-1 text-xs" onClick={() => review(r.id, 'REJECTED')}>{t('admin.reject')}</button>
+                        <button className="btn-primary px-2 py-1 text-xs" data-testid={`admin-verification-approve-${r.id}`} onClick={() => review(r.id, 'APPROVED')}>{t('admin.approve')}</button>
+                        <button className="btn-secondary px-2 py-1 text-xs" data-testid={`admin-verification-reject-${r.id}`} onClick={() => review(r.id, 'REJECTED')}>{t('admin.reject')}</button>
                       </div>
                     ) : (
                       <span className="text-xs text-slate-400">—</span>

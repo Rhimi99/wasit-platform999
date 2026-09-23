@@ -222,6 +222,7 @@ export function DashboardVerificationPage() {
                 {feedback && <p className="text-xs text-wasit-700">{feedback}</p>}
                 <button
                   className="btn-primary"
+                  data-testid="verification-submit"
                   onClick={submit}
                   disabled={submitting || status?.activeRequest != null}
                 >

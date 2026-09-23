@@ -67,6 +67,12 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - `/admin/products` — `AdminProductsPage.tsx`: جدول المنتجات + عمود «إجراءات» بزر **إيقاف** (`admin-product-suspend-<id>`) أو **إعادة تنشيط** (`admin-product-reactivate-<id>`) حسب الحالة، مربوط بـ`PATCH /api/products/:id/suspend` و`PATCH /api/products/:id/status`.
 - الصفوف موسومة `data-testid="admin-product-<id>"`؛ يستعمل مفتاح i18n الموجود `admin.users.activate`.
 
+### دوائر التحقق الثقة المخاطر (تحقق من الواجهة — M1)
+
+- `/dashboard/verification` — `DashboardVerificationPage.tsx`: badges للمستويات + نموذج «طلب جديد» بزر `verification-submit` مربوط بـ`POST /api/verification/requests`؛ بعد الإرسال تظهر رسالة `verification.submitted` ويُعاد تحميل الحالة.
+- `/admin/verification` — `AdminVerificationPage.tsx`: كل صف `admin-verification-<id>` بزرّي `admin-verification-approve-<id>` / `admin-verification-reject-<id>` مربوطين بـ`POST /api/admin/verification/requests/:id/review`؛ القرار يظهر فورًا في الحالة وبعدها في صفحة المستخدم.
+- `/admin/trust` و`/admin/risk` — جداول حيّة من `GET /api/admin/trust` و`/api/admin/risk/profiles|events` مع إعادة الحساب.
+
 ### مكتب إعلانات الأدمن (مكتمل — B15)
 
 - `/admin/ads` — `AdminAdsPage.tsx` (محروس بـ`AdminOnly`، مدخل تنقّل «الإعلانات» في `AppSidebar`): KPIs (`admin-ads-kpi-campaigns/active/spent/ctr`) من `GET /api/admin/ads/summary`، جدول `admin-ads-table` لكل حملات المعلنين مع اسم المعلن وبريد المالك من `GET /api/admin/ads/campaigns`، وأزرار إشراف (`admin-ads-active|paused|completed-<id>`) مبنية من آلة الحالة الفعلية.

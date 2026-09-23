@@ -411,6 +411,68 @@ test.describe('ADMIN — every admin surface', () => {
     await tracked.getByRole('button', { name: /إعادة التنشيط|Reactivate/i }).click();
     await expect(tracked.getByText('ACTIVE')).toBeVisible();
   });
+
+  test('a verification request filed by the user is decided by the admin and reflected back', async ({ page, browser }) => {
+    // Regression guard: the verification round trip. Before the review buttons
+    // had no test ids and the flow was never exercised from the UI, so a user
+    // could file a request but staff had no proven path to decide it and the
+    // requester had no proof the decision came back to them.
+    //
+    // A fresh account is registered so the request is new on every run; reusing
+    // the demo merchant would leave an already-decided row behind and the test
+    // would silently assert on stale state.
+    const baseURL = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
+    const email = `audit-verify-${UNIQUE}@wasit.tn`;
+    const password = 'Passw0rd!2026';
+
+    const userCtx = await browser.newContext({ baseURL });
+    const userPage = await userCtx.newPage();
+    try {
+      await userPage.goto('/register');
+      await userPage.locator('form input[type="email"]').fill(email);
+      await userPage.locator('form input[type="password"]').fill(password);
+      await userPage.locator('form button[type="submit"]').click();
+      await expect(userPage.getByText(/تم إنشاء الحساب|Account created/i)).toBeVisible();
+
+      // Complete the real email-verification token path (dev helper, disabled in
+      // production) so the account can sign in without the unverified override.
+      const linkRes = await userPage.request.post('/api/auth/dev/verification-link', { data: { email } });
+      expect(linkRes.ok()).toBeTruthy();
+      const token = (await linkRes.json()).data.token as string;
+      const verifyRes = await userPage.request.post('/api/auth/verify-email', { data: { token } });
+      expect(verifyRes.ok()).toBeTruthy();
+
+      await userPage.goto('/login');
+      await userPage.locator('form input[type="email"]').fill(email);
+      await userPage.locator('form input[type="password"]').fill(password);
+      await userPage.locator('form button[type="submit"]').click();
+      await expect(userPage).toHaveURL(/\/dashboard/);
+
+      // File the request from the user's own verification page.
+      await userPage.goto('/dashboard/verification');
+      await userPage.locator('select.input').first().selectOption('VERIFIED');
+      await userPage.getByTestId('verification-submit').click();
+      await expect(userPage.getByText(/تم إرسال طلب التحقق|Verification request submitted/i).first()).toBeVisible();
+
+      const mine = await userPage.request.get('/api/verification/requests?pageSize=50');
+      const requestId = ((await mine.json()).data.items as Array<{ id: string }>)[0]?.id ?? null;
+      expect(requestId).toBeTruthy();
+
+      // Staff decides it from the real desk row.
+      await page.goto('/admin/verification');
+      const row = page.getByTestId(`admin-verification-${requestId}`);
+      await expect(row).toBeVisible();
+      await page.getByTestId(`admin-verification-approve-${requestId}`).click();
+      await expect(row.getByText(/تمت الموافقة|Approved/i)).toBeVisible();
+
+      // The decision reaches the requester's own page.
+      await userPage.goto('/dashboard/verification');
+      await expect(userPage.getByText(/تمت الموافقة|Approved/i).first()).toBeVisible();
+      await expect(userPage.getByText(/المستوى الحالي|Current level/i).first()).toBeVisible();
+    } finally {
+      await userCtx.close();
+    }
+  });
 });
 
 test.describe('ADS — create and manage a campaign from the UI', () => {
