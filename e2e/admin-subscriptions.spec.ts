@@ -116,6 +116,22 @@ test.describe('Admin subscriptions desk', () => {
     await expect(page.getByText(/تم تحديث حالة الخطة|Plan status updated/i).first()).toBeVisible();
   });
 
+  test('refresh re-reads subscriptions created behind the page', async ({ page }) => {
+    // The desk snapshots once on mount; a subscription minted after that
+    // snapshot must only appear once Refresh re-issues the reads.
+    await page.goto('/admin/subscriptions');
+    // Wait for the initial load to settle (Refresh is disabled while loading),
+    // otherwise the mount fetch could race the insert below.
+    await expect(page.getByTestId('admin-sub-refresh')).toBeEnabled();
+
+    const { subscriptionId } = await createSubscribedCustomer('SMALL_MERCHANT');
+    const row = page.getByTestId(`admin-sub-${subscriptionId}`);
+    expect(await row.count()).toBe(0);
+
+    await page.getByTestId('admin-sub-refresh').click();
+    await expect(row).toBeVisible();
+  });
+
   test('a real customer subscription and its invoice appear in the desk', async ({ page }) => {
     const { email, subscriptionId, invoiceId } = await createSubscribedCustomer('SMALL_MERCHANT');
 

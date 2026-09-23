@@ -41,6 +41,32 @@ test.describe('Admin reports desk', () => {
     await expect(detail).toContainText('"e2e"');
   });
 
+  test('refresh re-reads reports created behind the page', async ({ page }) => {
+    // Open the desk first, so its snapshot predates the new report.
+    await page.goto('/admin/reports');
+    await expect(page.getByTestId('admin-reports-form')).toBeVisible();
+    const rows = page.locator('table.table-base tbody tr');
+    await expect.poll(async () => rows.count()).toBeGreaterThan(0);
+    const before = await rows.count();
+
+    // Create a report as a *different* admin session while the page is open.
+    const code = `e2e-refresh-${Date.now()}`;
+    const adminCtx = await page.context().browser()!.newContext({ storageState: storageFor('admin2') });
+    const ap = await adminCtx.newPage();
+    try {
+      const res = await ap.request.post('/api/admin/analytics/reports', {
+        data: { reportCode: code, title: 'Behind Page', reportData: { source: 'refresh' } },
+      });
+      expect(res.ok()).toBeTruthy();
+    } finally {
+      await adminCtx.close();
+    }
+
+    await page.getByTestId('admin-reports-refresh').click();
+    await expect.poll(async () => rows.count()).toBeGreaterThan(before);
+    await expect(page.locator('tr', { hasText: code })).toBeVisible();
+  });
+
   test('invalid JSON is rejected in the UI without creating a report', async ({ page }) => {
     const code = `e2e-bad-${Date.now()}`;
 

@@ -70,6 +70,33 @@ test.describe('Admin AI governance desk', () => {
     expect(after.status).toBe('rejected');
   });
 
+  test('refresh re-reads the requests table changed behind the page', async ({ page }) => {
+    // Mutate the server after the page has already loaded its snapshot: another
+    // actor issues a real AI request after this table has rendered.
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-requests').click();
+    await expect(page.getByTestId('admin-ai-requests')).toBeVisible();
+    const rows = page.locator('[data-testid^="admin-ai-request-"]');
+    await expect.poll(async () => rows.count()).toBeGreaterThanOrEqual(0);
+    const firstBefore = await rows.first().getAttribute('data-testid');
+
+    const customerCtx = await page.context().browser()!.newContext({ storageState: storageFor('customer') });
+    const cp = await customerCtx.newPage();
+    try {
+      expect((await cp.request.post('/api/ai/smart-search', { data: { q: 'refresh audit' } })).ok()).toBeTruthy();
+    } finally {
+      await customerCtx.close();
+    }
+
+    await page.getByTestId('admin-ai-refresh').click();
+
+    // The refresh must surface the newly created request at the top: the newest
+    // rendered row has to match the newest row the API reports.
+    const apiNewest = (await (await page.request.get('/api/admin/ai/requests?limit=1')).json()).data.items[0] as { id: string };
+    await expect.poll(async () => rows.first().getAttribute('data-testid')).toBe(`admin-ai-request-${apiNewest.id}`);
+    expect(await rows.first().getAttribute('data-testid')).not.toBe(firstBefore);
+  });
+
   test('creates a model from the desk and reads it back from the server', async ({ page }) => {
     // Fixed key: the model catalogue has no delete route by design, so re-runs
     // must upsert the same row rather than accumulate fixtures.
@@ -134,6 +161,33 @@ test.describe('Admin AI governance desk', () => {
     const matches = rows.filter((m) => m.key === key);
     expect(matches.length).toBe(1);
     expect(matches[0].displayName).toBe('After Edit');
+  });
+
+  test('cancelling an edit discards the typed changes without touching the server', async ({ page }) => {
+    // A pure client-side reset, but it must still be proven: Cancel has to clear
+    // the edited buffer AND leave the persisted model untouched.
+    const key = 'e2e-model-cancel';
+    await page.request.post('/api/admin/ai/models', {
+      data: { key, displayName: 'Original Name', provider: 'local', isActive: true },
+    });
+
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-models').click();
+    await expect(page.getByTestId(`admin-ai-model-${key}`)).toBeVisible();
+
+    await page.getByTestId(`admin-ai-model-edit-${key}`).click();
+    await page.getByTestId('admin-ai-model-name').fill('Discarded Edit');
+    await page.getByTestId('admin-ai-model-cancel').click();
+
+    // The form resets (create mode: empty key, Cancel itself disappears).
+    await expect(page.getByTestId('admin-ai-model-key')).toHaveValue('');
+    await expect(page.getByTestId('admin-ai-model-cancel')).toHaveCount(0);
+
+    // The server still holds the original name — Cancel issued no write.
+    const rows = (await (await page.request.get('/api/admin/ai/models')).json()).data.items as Array<
+      { key: string; displayName: string }
+    >;
+    expect(rows.find((m) => m.key === key)?.displayName).toBe('Original Name');
   });
 
   test('creates a budget from the desk and toggles it from the row', async ({ page }) => {

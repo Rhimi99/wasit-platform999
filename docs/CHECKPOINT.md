@@ -2,6 +2,34 @@
 
 آخر تحديث: **2026-09-23**
 
+## Milestone M6 — Admin Desk Controls Proven From the UI
+
+### الفجوة
+آخر عناصر التحكّم المتبقّية من المسح الآلي لكل `data-testid` تفاعلي مقابل مراجع `e2e/*.spec.ts`:
+- أزرار `admin-ai-refresh` / `admin-obs-refresh` / `admin-reports-refresh` / `admin-privacy-refresh` / `admin-sub-refresh` كلها موصولة بـ`load()` الذي يعمل عند mount، لكن **لا اختبار نقرها بعد تغيير حقيقي من طرف آخر** — فلا إثبات أنها تُعيد القراءة فعلًا (كان `admin-ads-refresh` الوحيد المُثبَت، M5).
+- `comparison-category-select` و`admin-ai-model-cancel` بلا إثبات وظيفي.
+
+### الإصلاح
+لا تغيير في كود الإنتاج — كل الأزرار صحيحة؛ الفجوة كانت في الإثبات. أُضيفت حالات E2E حقيقية (UI → API → DB/response → UI) لكل عنصر:
+
+| العنصر | الإثبات |
+| --- | --- |
+| `admin-ai-refresh` | طلب AI حقيقي من جلسة مشترٍ بعد الرندر ⇒ النقر يُقدّم الصف الجديد ويطابق أحدث صف من `/api/admin/ai/requests?limit=1` |
+| `admin-obs-refresh` | 5 طلبات HTTP من طرف آخر ⇒ `admin-obs-kpi-requests` يزيد (الصفحة لا تُpoll) |
+| `admin-reports-refresh` | تقرير يُنشأ من جلسة `admin2` بعد فتح الصفحة ⇒ النقر يزيد الصفوف ويُظهر الكود |
+| `admin-privacy-refresh` | طلب حذف حقيقي بعد فتح الصفحة ⇒ النقر يزيد الطابور ويُظهر `admin-privacy-row-<id>` |
+| `admin-sub-refresh` | اشتراك حقيقي بعد استقرار التحميل الأولي ⇒ الصف غير موجود قبل النقر وموجود بعده |
+| `admin-ai-model-cancel` | تعديل ثم Cancel ⇒ النموذج يُصفَّر **والخادم يحتفظ بالاسم الأصلي** (لا كتابة) |
+| `comparison-category-select` | اختيار تصنيفين: URL + `comparison-count` يطابقان `pagination.total`، والتصنيف الفارغ يُظهر empty state |
+
+**قاعدة مدة الفيديو**: مؤكَّدة **4–60 ثانية** (لا 35–120)؛ اختبار جديد يرفض 3/61/120 بـ**422** ويثبت `min=4`/`max=60`.
+
+**إصلاح عرض ثانوي**: `e2e/marketplace.spec.ts` (MOQ) يتنقّل بين صفحات السوق حتى 12 بدل الصفحة الأولى — نفس انجراف القائمة الموثَّق في M5.
+
+### التحقق
+- **Full E2E**: **179/179** (7.2m). **الخادم**: **531/531** (51 ملفًا). **Typecheck** و**Build** (server + web) نظيفان.
+- لا migrations ولا reset/drop/push. العمولة **4% = 2%+2%** والـMarketing Video Agent بلا مساس.
+
 ## Milestone M5 — Merchant Inventory Archived-Row actions + E2E listing drift
 
 ### الفجوة (اكتُشفت أثناء تحقق M4)

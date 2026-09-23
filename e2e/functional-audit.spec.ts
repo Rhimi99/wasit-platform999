@@ -83,6 +83,47 @@ test.describe('CUSTOMER — auth, discovery, purchase', () => {
       const res = await page.request.get('/api/messages');
       expect(res.ok()).toBeTruthy();
     });
+
+    test('a customer sends a message from the UI and the recipient receives it', async ({ page, browser }) => {
+      // The recipient's real user id comes from their own session, exactly as the
+      // compose form expects it (no hardcoded ids, no fixtures).
+      const merchantCtx = await browser.newContext({ storageState: storageFor('merchant') });
+      const merchantPage = await merchantCtx.newPage();
+      let merchantId: string;
+      try {
+        merchantId = ((await (await merchantPage.request.get('/api/auth/me')).json()).data as { id: string }).id;
+      } finally {
+        await merchantCtx.close();
+      }
+
+      await page.goto('/dashboard/messages');
+      await page.getByRole('button', { name: /جديدة|New/i }).first().click();
+      const modal = page.locator('div.fixed.inset-0');
+      await expect(modal).toBeVisible();
+      const body = `E2E message ${Date.now()}`;
+      await modal.locator('input[dir="ltr"]').fill(merchantId);
+      await modal.locator('input:not([dir="ltr"])').first().fill('E2E subject');
+      await modal.locator('textarea').fill(body);
+      await modal.getByRole('button', { name: /ابدأ|Start|Send|Démarrer/i }).first().click();
+
+      // The thread opens for the sender with the message it just sent.
+      await expect(page.getByText(body).first()).toBeVisible();
+
+      // The recipient really received it — read through their own session.
+      const merchantCtx2 = await browser.newContext({ storageState: storageFor('merchant') });
+      const merchantPage2 = await merchantCtx2.newPage();
+      try {
+        const threads = ((await (await merchantPage2.request.get('/api/messages')).json()).data as { items: Array<{ id: string }> }).items;
+        let found = false;
+        for (const th of threads) {
+          const detail = ((await (await merchantPage2.request.get(`/api/messages/${th.id}`)).json()).data as { messages: Array<{ body: string }> });
+          if (detail.messages.some((m) => m.body === body)) { found = true; break; }
+        }
+        expect(found, 'the recipient must see the message in their inbox').toBe(true);
+      } finally {
+        await merchantCtx2.close();
+      }
+    });
   });
 });
 
@@ -325,7 +366,9 @@ test.describe('MARKETING VIDEO — full studio flow', () => {
     await page.locator('#v-language').selectOption('ar');
     await page.locator('#v-audience').selectOption('B2B');
     await page.locator('#v-style').selectOption('MODERN');
-    await page.locator('#v-duration').fill('10');
+    // A non-default duration proves the value really travels UI → API → provider →
+    // DB → UI, rather than being ignored and defaulted server-side.
+    await page.locator('#v-duration').fill('37');
 
     const videosBefore = await page.locator('video').count();
     await page.getByRole('button', { name: /توليد|Generate/i }).click();
@@ -337,6 +380,24 @@ test.describe('MARKETING VIDEO — full studio flow', () => {
     const video = page.locator('video').first();
     await expect(video).toBeVisible();
     await expect(video).toHaveAttribute('src', /\/api\/media\/assets\/.+\/content/);
+
+    // The asset the API returns keeps the requested duration and was rendered by
+    // the pinned structural generator — not the fail-loudly Noop provider.
+    const media = ((await (await page.request.get('/api/media/assets?kind=MARKETING_VIDEO&limit=1')).json()).data as {
+      items: Array<{ id: string; durationSeconds: number | null; status: string; provider: string }>;
+    }).items;
+    const latest = media.find((a) => a.status === 'READY');
+    expect(latest, 'a READY marketing video must exist').toBeTruthy();
+    expect(latest!.durationSeconds).toBe(37);
+    expect(latest!.provider).not.toBe('noop');
+    expect(latest!.provider).toMatch(/structural/i);
+
+    // AI cost-control: the render is booked against the user's budget as a
+    // MARKETING_VIDEO request, so video generation cannot escape the budget gate.
+    const activity = ((await (await page.request.get('/api/ai/activity')).json()).data as {
+      items: Array<{ id: string; requestType: string; model: string }>;
+    }).items;
+    expect(activity.some((r) => r.requestType === 'MARKETING_VIDEO' && /video:/i.test(r.model))).toBe(true);
 
     // Preview URL must be reachable (not a dead link).
     const src = (await video.getAttribute('src'))!;
@@ -355,6 +416,26 @@ test.describe('MARKETING VIDEO — full studio flow', () => {
     await page.getByRole('button', { name: /حذف|Delete/i }).first().click();
     await expect(page.getByText(/تم حذف|حُذف|Asset deleted|deleted/i).first()).toBeVisible();
     await expect.poll(async () => page.locator('video').count()).toBeLessThan(before);
+  });
+
+  test('rejects a duration outside the pinned 4–60s window without rendering', async ({ page }) => {
+    // The pinned Marketing Video Agent (89e68d7) defines a 4–60s window; a
+    // "35–120s" rule was explicitly reverted as an unrequested behaviour change.
+    // The UI input enforces 4..60 and the API schema rejects anything outside it.
+    await page.goto('/dashboard/video-studio');
+    const duration = page.locator('#v-duration');
+    await expect(duration).toHaveAttribute('min', '4');
+    await expect(duration).toHaveAttribute('max', '60');
+
+    await expect.poll(async () => page.locator('#v-product option').count()).toBeGreaterThan(1);
+    const productId = (await page.locator('#v-product option').nth(1).getAttribute('value'))!;
+
+    for (const bad of [3, 61, 120]) {
+      const res = await page.request.post('/api/media/marketing-videos', {
+        data: { productId, language: 'ar', audience: 'B2B', style: 'MODERN', durationSeconds: bad },
+      });
+      expect(res.status(), `duration ${bad} must be refused`).toBe(422);
+    }
   });
 });
 

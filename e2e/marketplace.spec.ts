@@ -82,16 +82,23 @@ test.describe('Auth-gated commerce (customer session)', () => {
     await page.goto('/marketplace');
     const links = page.locator('a[href^="/products/"]');
     await links.first().waitFor();
-    const count = await links.count();
 
+    // Listing pages are newest-first and shared across specs, so a MOQ>1 product
+    // is not guaranteed on page 1; scan pages until one is found (same drift the
+    // order helper handles).
     let moqProduct = '';
-    for (let i = 0; i < count; i++) {
-      const href = (await links.nth(i).getAttribute('href'))!;
-      const res = await page.request.get(`/api/products/${href.split('/').pop()}`);
-      const body = await res.json();
-      if (body?.data?.moq && body.data.moq > 1) {
-        moqProduct = href;
-        break;
+    for (let pageNo = 1; pageNo <= 12 && !moqProduct; pageNo++) {
+      if (pageNo > 1) await page.goto(`/marketplace?page=${pageNo}`);
+      await links.first().waitFor();
+      const count = await links.count();
+      for (let i = 0; i < count; i++) {
+        const href = (await links.nth(i).getAttribute('href'))!;
+        const res = await page.request.get(`/api/products/${href.split('/').pop()}`);
+        const body = await res.json();
+        if (body?.data?.moq && body.data.moq > 1) {
+          moqProduct = href;
+          break;
+        }
       }
     }
     expect(moqProduct).not.toBe('');

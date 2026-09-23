@@ -47,6 +47,27 @@ test.describe('Admin observability desk', () => {
     await expect(page.locator('[data-testid^="admin-obs-log-"]').first()).toBeVisible();
   });
 
+  test('refresh re-reads the metrics/logs snapshot changed behind the page', async ({ page }) => {
+    await page.goto('/admin/observability');
+    const kpi = page.getByTestId('admin-obs-kpi-requests');
+    await expect(kpi).toBeVisible();
+    const before = Number((await kpi.innerText()).replace(/\D/g, ''));
+
+    // Traffic happens behind the open page; the monotonic request counter grows.
+    const customerCtx = await page.context().browser()!.newContext({ storageState: storageFor('customer') });
+    const cp = await customerCtx.newPage();
+    try {
+      for (let i = 0; i < 5; i++) await cp.request.get('/api/products?pageSize=1');
+    } finally {
+      await customerCtx.close();
+    }
+
+    await page.getByTestId('admin-obs-refresh').click();
+    // The counter can only grow if the button actually re-issued the metrics
+    // read; the page loads its snapshot once on mount and never polls.
+    await expect.poll(async () => Number((await kpi.innerText()).replace(/\D/g, ''))).toBeGreaterThan(before);
+  });
+
   test('evaluating alerts from the UI is audited and lands in the history table', async ({ page }) => {
     await page.goto('/admin/observability');
     await page.getByTestId('admin-obs-tab-alerts').click();

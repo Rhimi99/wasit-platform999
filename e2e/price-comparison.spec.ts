@@ -67,6 +67,33 @@ test.describe('Price comparison (public)', () => {
     await expect(page).toHaveURL(/query=dates/);
     await expect(page.getByTestId('comparison-group').first()).toBeVisible();
   });
+
+  test('the category selector narrows the result set through the API', async ({ page }) => {
+    // Category ids come from the same public catalogue the dropdown is built from.
+    const categories = (await (await page.request.get('/api/categories')).json()).data as Array<{ id: string; name: string }>;
+    const food = categories.find((c) => c.name === 'Food & Agriculture');
+    const electronics = categories.find((c) => c.name === 'Electronics');
+    expect(food?.id).toBeTruthy();
+    expect(electronics?.id).toBeTruthy();
+
+    await page.goto('/price-comparison');
+    await page.getByTestId('comparison-category-select').selectOption(food!.id);
+
+    // Choosing a category is a real filter: it lands in the URL and reloads data.
+    await expect(page).toHaveURL(new RegExp(`categoryId=${food!.id}`));
+    const foodApi = (await (await page.request.get(`/api/price-comparison?categoryId=${food!.id}&pageSize=20`)).json()).data;
+    expect(foodApi.pagination.total).toBeGreaterThan(0);
+    await expect(page.getByTestId('comparison-count')).toContainText(String(foodApi.pagination.total));
+    await expect(page.getByTestId('comparison-group').first()).toBeVisible();
+
+    // A category with no comparable offers must actually empty the set, not keep the previous rows.
+    await page.getByTestId('comparison-category-select').selectOption(electronics!.id);
+    await expect(page).toHaveURL(new RegExp(`categoryId=${electronics!.id}`));
+    const elecApi = (await (await page.request.get(`/api/price-comparison?categoryId=${electronics!.id}&pageSize=20`)).json()).data;
+    expect(elecApi.pagination.total).toBe(0);
+    await expect(page.getByTestId('comparison-group')).toHaveCount(0);
+    await expect(page.getByText(/لا توجد عروض قابلة للمقارنة|No comparable offers/i)).toBeVisible();
+  });
 });
 
 test.describe('Price comparison (dashboard)', () => {

@@ -108,6 +108,32 @@ test.describe('Admin advertising desk', () => {
     expect(ended.status).toBe('COMPLETED');
   });
 
+  test('refresh re-reads campaign state changed by another actor behind the page', async ({ page }) => {
+    await page.goto('/admin/ads');
+    await expect(page.getByTestId('admin-ads-table')).toBeVisible();
+
+    // A campaign created only after the page rendered its snapshot.
+    const title = `E2E Admin Ads Refresh ${Date.now()}`;
+    const campaignId = await createMerchantCampaign(title);
+    // The late campaign is not on screen yet — the list is a snapshot.
+    await expect(page.getByTestId(`admin-ads-campaign-${campaignId}`)).toHaveCount(0);
+
+    // A different actor activates it directly against the backend.
+    const ctx = await request.newContext({ baseURL: process.env.E2E_API_URL ?? 'http://localhost:3000' });
+    const login = await ctx.post('/api/auth/login', { data: { email: 'merchanta@wasit.tn', password: 'Passw0rd!2026' } });
+    expect(login.ok()).toBeTruthy();
+    const activated = await ctx.patch(`/api/ads/campaigns/${campaignId}`, { data: { status: 'ACTIVE' } });
+    expect(activated.ok()).toBeTruthy();
+    await ctx.dispose();
+
+    // Refresh is a real reload: the new campaign and its server status appear.
+    await page.getByTestId('admin-ads-refresh').click();
+    const row = page.getByTestId(`admin-ads-campaign-${campaignId}`);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText(title);
+    await expect(row).toContainText('ACTIVE');
+  });
+
   test('a non-admin cannot reach the ads APIs', async () => {
     // Isolated context: the merchant session must not touch (or log out) the
     // shared admin storage state that the other tests in this file rely on.

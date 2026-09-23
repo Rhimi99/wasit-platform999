@@ -103,6 +103,22 @@ test.describe('Admin privacy desk', () => {
     expect(actions).toContain('PRIVACY.DELETION_STAGE');
   });
 
+  test('refresh re-reads deletion requests filed behind the page', async ({ page }) => {
+    // Open the desk with an existing queue, then file a NEW request from another
+    // actor while the page is live.
+    await createDeletionRequest('ui-refresh-seed');
+    await page.goto('/admin/privacy');
+    const rows = page.locator('[data-testid^="admin-privacy-row-"]');
+    await expect.poll(async () => rows.count()).toBeGreaterThan(0);
+    const before = await rows.count();
+
+    const { requestId } = await createDeletionRequest('ui-refresh');
+
+    await page.getByTestId('admin-privacy-refresh').click();
+    await expect.poll(async () => rows.count()).toBeGreaterThan(before);
+    await expect(page.getByTestId(`admin-privacy-row-${requestId}`)).toBeVisible();
+  });
+
   test('the stage filter narrows the queue to that stage only', async ({ page }) => {
     const { requestId } = await createDeletionRequest('ui-filter');
     await page.goto('/admin/privacy');
