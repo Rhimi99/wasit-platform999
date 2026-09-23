@@ -47,24 +47,37 @@ test.describe('Admin reports desk', () => {
     await expect(page.getByTestId('admin-reports-form')).toBeVisible();
     const rows = page.locator('table.table-base tbody tr');
     await expect.poll(async () => rows.count()).toBeGreaterThan(0);
-    const before = await rows.count();
 
     // Create a report as a *different* admin session while the page is open.
     const code = `e2e-refresh-${Date.now()}`;
     const adminCtx = await page.context().browser()!.newContext({ storageState: storageFor('admin2') });
     const ap = await adminCtx.newPage();
+    let createdId: string;
     try {
       const res = await ap.request.post('/api/admin/analytics/reports', {
         data: { reportCode: code, title: 'Behind Page', reportData: { source: 'refresh' } },
       });
       expect(res.ok()).toBeTruthy();
+      createdId = (await res.json()).data.id as string;
     } finally {
       await adminCtx.close();
     }
 
+    // The row is not there before the refresh: the page holds a stale snapshot.
+    await expect(page.locator('tr', { hasText: code })).toHaveCount(0);
+
     await page.getByTestId('admin-reports-refresh').click();
-    await expect.poll(async () => rows.count()).toBeGreaterThan(before);
-    await expect(page.locator('tr', { hasText: code })).toBeVisible();
+
+    // The report created behind the page now appears. The list is capped at the
+    // 20 newest reports, so asserting on row count would plateau on a reused
+    // database; the newest rendered row must instead match the newest row the
+    // API reports — the same UI → API → UI proof the refresh exists for.
+    const row = page.locator('tr', { hasText: code });
+    await expect(row).toBeVisible();
+    await expect(page.getByTestId(`admin-report-row-${createdId}`)).toBeVisible();
+    const apiNewest = ((await (await page.request.get('/api/admin/analytics/reports')).json()).data.items as { id: string }[])[0];
+    expect(apiNewest.id).toBe(createdId);
+    await expect(rows.first()).toHaveAttribute('data-testid', `admin-report-row-${createdId}`);
   });
 
   test('invalid JSON is rejected in the UI without creating a report', async ({ page }) => {
