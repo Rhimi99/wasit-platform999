@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { coreMiddleware } from './middleware/core.js';
+import { resolveCorsOrigin } from './lib/env.js';
 import { securityHeaders } from './middleware/security-headers.js';
 import { observabilityMiddleware } from './middleware/observability.js';
 import { errorBody, errorHandlerMiddleware } from './middleware/errors.js';
@@ -56,7 +57,10 @@ export function createApp(): Hono {
   app.use(
     '*',
     cors({
-      origin: (origin) => origin ?? '*',
+      // Unset CORS_ORIGIN keeps the permissive dev/test behavior; a deployed
+      // environment configures the allow-list so a foreign origin cannot read
+      // credentialed responses.
+      origin: (origin) => resolveCorsOrigin(origin),
       credentials: true,
     }),
   );

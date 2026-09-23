@@ -1,8 +1,43 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-23 — **PUBLIC DEMO FUNCTIONAL AUDIT — جاهز للعرض العام (مع تحصين سطح الطاقم)**
+> **التاريخ**: 2026-09-23 — **PUBLIC DEMO SECURITY AUDIT — جاهز للمشاركة مع مستخدمين حقيقيين**
 > **الفرع**: `master`
-> **HEAD**: `eafda4f` (iPay audit)
+> **HEAD**: `c41cf06` + تدقيق أمني للعرض العام (هذا الـcommit)
+---
+
+## ✅ حالة معتمدة — PUBLIC DEMO / PRIVATE BETA: تدقيق أمني عملي + إصلاح فجوتين حقيقيتين (2026-09-23)
+
+**الهدف**: تجهيز العرض العام للمشاركة مع أشخاص حقيقيين بأمان، بلا أي مساس بالإنتاج أو `wasit_dev` أو RBAC أو Commission Policy (4% = 2% مشتري + 2% بائع) أو Payment Kernel أو iPay أو Marketing Video Agent (89e68d7)، وبلا Migration أو reset/drop/push.
+
+**فجوتان حقيقيتان أُصلحتا (بأقل تغيير ممكن)**:
+
+1. **الرابط العام كان يخدم Vite *dev server***: `/src/main.tsx` كان يُرجع كود TSX حقيقيًا، والـSPA كان يُقدَّم بلا `X-Content-Type-Options` ولا `X-Frame-Options` ولا `Referrer-Policy`. الآن يُقدَّم **بناء الإنتاج** عبر `vite preview` (لا مصدر، لا sourcemaps) مع نفس رؤوس أمان nginx الإنتاجية، عبر كتلة `preview` في `packages/web/vite.config.ts`. الإنتاج نفسه يستخدم nginx ولم يتغيّر.
+2. **CORS مُصدَّق كان يعكس أي origin**: `CORS_ORIGIN` لم يكن مقروءًا في أي مكان، والـAPI كان يُرجع `Access-Control-Allow-Origin` لأي `Origin` مع `credentials: true`. الآن `CORS_ORIGIN` مفتاح env حقيقي و`resolveCorsOrigin()` يعكس فقط الـorigins المسموح بها (+ `APP_URL` للمنصة)؛ وعند تركه فارغًا يبقى سلوك dev/test السابق. مغطّى بـ`packages/server/tests/cors.test.ts`.
+
+**نتيجة التدقيق الأمني: 33/33 PASS** (`scripts/demo-security-smoke.sh`, `DEMO_URL=...`) + تحقّق متصفّح فعلي:
+
+| الضابط | النتيجة |
+| --- | --- |
+| الحسابات الأربعة بكلمة المرور المنشورة | تعمل بالضبط: `customer1`/`merchantA`/`supplierA`/`companyA` بأدوار CUSTOMER/MERCHANT/SUPPLIER/COMPANY |
+| حسابات staff بكلمة المرور المنشورة | `admin`, `admin2` → **401** (مُدوَّرة، محفوظة خارج Git، صلاحية 0600) |
+| Admin/Staff API من عميل Demo | **403** على 15 مسارًا |
+| Admin/Staff API من merchant/supplier/company | **403** |
+| Admin/Staff API بدون مصادقة | **401** |
+| مسار `/admin` من متصفّح merchant | يعرض "Forbidden: Admin area" |
+| كوكي الجلسة على HTTPS | `HttpOnly; Secure; SameSite=Lax` |
+| `DATABASE_URL` للـAPI العامل | `wasit_demo` فقط؛ `wasit_dev`/`wasit_test` موجودة وغير ملموسة |
+| `PAYMENT_PROVIDER` | `manual` — لا اتصال بـiPay/Audasoft/Flouci/ClicToPay |
+| `AI_PROVIDER` | `local-heuristic` — لا مفاتيح إنتاجية |
+| أسرار في bundle العام | لا شيء؛ ولا sourcemaps |
+| بانر DEMO | ظاهر في الواجهة وفي الـbundle |
+| `.env.demo` | مُستثنى من Git وغير متعقَّب |
+
+**ملاحظة**: الـedge proxy في بيئة التشغيل يجيب على `OPTIONS` preflight بنفسه بدون `Access-Control-Allow-Origin`. هذا خارج المستودع ولا يؤثّر على العرض لأن الـSPA والـAPI على نفس الـorigin (بروكسي `/api` كما في nginx الإنتاجي).
+
+**التحقق النهائي**: Server **558/558 (53 ملفًا)**، Typecheck (server+web) نظيف، Build (server+web) نظيف، Functional smoke **21/21**، Extended smoke **13/13**، Security smoke **33/33**.
+
+**التقرير الكامل**: `docs/PUBLIC_DEMO_FUNCTIONAL_AUDIT.md` §5 (Security posture) و§6 (non-blockers).
+
 ---
 
 ## ✅ حالة معتمدة — PUBLIC DEMO / PRIVATE BETA: تدقيق وظيفي حقيقي + تحصين سطح الإدارة (2026-09-23)

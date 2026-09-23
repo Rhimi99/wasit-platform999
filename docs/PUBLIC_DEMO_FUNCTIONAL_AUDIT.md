@@ -91,12 +91,12 @@ duration `30s` below the real 35s floor), corrected and re-run green.
 
 ## 4. Verification commands
 
-- Server suite: **554/554 pass** (52 files) in a clean environment.
+- Server suite: **558/558 pass** (53 files) in a clean environment.
 - Typecheck (server + web): clean.
 - Build (server + web): clean.
 - Functional smoke (public URL): **21/21 pass**.
 - Extended functional smoke (register + order + payment + video): **13/13 pass**.
-- Browser UI: home, login, dashboard, marketplace, product detail, video studio.
+- Demo security smoke: **33/33 pass**.
 
 > Note: running the suite while `.env.demo` is exported leaks `WEB_BASE_URL` /
 > metrics flags into vitest and produces false failures. Reset the shell before
@@ -104,8 +104,59 @@ duration `30s` below the real 35s floor), corrected and re-run green.
 
 ---
 
-## 5. Remaining advisory items (not blockers)
+## 5. Security posture (public demo)
+
+Audited with `scripts`-style real HTTP against the public URL. Two real gaps were
+found and fixed; the rest already held.
+
+**Fixed**
+
+1. **The public URL served the Vite *dev* server.** `/src/main.tsx` returned real
+   TSX source, and the SPA was served with no `X-Content-Type-Options`,
+   `X-Frame-Options` or `Referrer-Policy`. The demo now serves the built SPA via
+   `vite preview` (no source, no sourcemaps) with the same headers as production
+   nginx, wired through a `preview` block in `packages/web/vite.config.ts`.
+2. **Credentialed CORS reflected any origin.** `CORS_ORIGIN` was read nowhere and
+   the API echoed `Access-Control-Allow-Origin` for any `Origin` with
+   `credentials: true`. `CORS_ORIGIN` is now a real env key and
+   `resolveCorsOrigin()` only echoes allow-listed origins (plus the platform's own
+   `APP_URL`); unset keeps the previous permissive dev/test behavior. Covered by
+   `packages/server/tests/cors.test.ts`.
+
+**Verified as already correct**
+
+| Control | Result |
+| --- | --- |
+| Demo accounts reachable with the published password | exactly `customer1`/`merchantA`/`supplierA`/`companyA`, roles CUSTOMER/MERCHANT/SUPPLIER/COMPANY |
+| Staff accounts with the published password | `admin`, `admin2` → **401** (rotated, stored outside Git, mode 0600) |
+| Admin/Staff API from a demo customer | **403** on 15 endpoints (stats, users, orders, transactions, ledger, audit-logs, verification, trust, risk, disputes, ads, ai, observability, privacy, policies) |
+| Admin/Staff API from merchant/supplier/company | **403** |
+| Admin/Staff API anonymously | **401** |
+| `/admin` SPA route as a merchant | renders "Forbidden: Admin area" |
+| Session cookie over HTTPS | `HttpOnly; Secure; SameSite=Lax`, `Max-Age` 30d |
+| API security headers | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` |
+| `DATABASE_URL` of the running API | `wasit_demo` only; `wasit_dev`/`wasit_test` present but untouched |
+| `PAYMENT_PROVIDER` | `manual` — intent stays offline, no iPay/Audasoft/Flouci/ClicToPay reference |
+| `AI_PROVIDER` | `local-heuristic` — no provider key present |
+| Secrets in the public JS bundle | none (`JWT_SECRET`, `DATABASE_URL`, `postgresql://`, `PAYMENT_WEBHOOK_SECRET`, provider names, `wasit_dev`, `AKIA`, `sk-…` all absent) |
+| Sourcemaps shipped | none |
+| Demo banner in the public bundle | present (`VITE_DEMO_MODE`) |
+| `.env.demo` | git-ignored, not tracked |
+| Cross-origin credentialed request | no `Access-Control-Allow-Origin` → browser blocks it |
+
+> The runtime edge proxy answers `OPTIONS` preflights itself with its own
+> `Access-Control-Allow-Methods` and omits the origin header. This is outside the
+> repository, and it does not affect the demo because the SPA and API are
+> same-origin (the SPA is served with an `/api` proxy, as in production nginx).
+
+---
+
+## 6. Remaining advisory items (not blockers)
 
 - Demo DB holds generated test orders/assets from the smoke runs; intentional.
-- Email is log-only (`no SMTP configured`) — expected for demo; registration still
-  completes through the dev verification tooling.
+- Email/SMS are log-only (`MAIL_TRANSPORT=log`, `SMS_TRANSPORT=log`) — expected
+  for a demo with no provider credentials.
+- `ALLOW_DEV_TOOLING=true` lets anyone reach the dev verification/reset helpers.
+  Acceptable for a demo whose data is fictional and disposable; if the audience
+  widens, set it to `false` and the flows fall back to real mail/SMS.
+- Staff credentials live in `/tmp/demo_admin_pw.txt` on the demo host only.

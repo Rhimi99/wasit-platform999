@@ -13,6 +13,13 @@ const envSchema = z.object({
   PASSWORD_RESET_TTL_HOURS: z.coerce.number().default(1),
   APP_URL: z.string().default('http://localhost:5173'),
   API_URL: z.string().default('http://localhost:3000'),
+  /**
+   * Comma-separated allow-list of browser origins for credentialed CORS. Empty
+   * keeps the permissive reflect-any-origin behavior used by local development
+   * and tests; a deployed environment sets it so a foreign origin cannot read
+   * authenticated responses.
+   */
+  CORS_ORIGIN: z.string().default(''),
   AI_PROVIDER: z.string().default('none'),
   // Optional deployment-wide model override. It is only consulted when a caller
   // does not name a model; a capability route or explicit request model always
@@ -225,3 +232,21 @@ if ((env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') && env.JWT_SEC
 export const cookieSecure =
   env.NODE_ENV === 'production' ||
   (env.NODE_ENV === 'staging' && env.APP_URL.startsWith('https://'));
+
+/**
+ * Resolves the CORS origin option. When `CORS_ORIGIN` is unset the platform
+ * keeps reflecting whatever origin sends the request (the existing dev/test
+ * behavior); when it is configured, only listed origins — plus the app's own
+ * origin — are echoed back, so a foreign site cannot read credentialed
+ * responses from a deployed environment.
+ */
+export function resolveCorsOrigin(origin: string | undefined): string | null {
+  const allowed = env.CORS_ORIGIN.split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  if (allowed.length === 0) return origin ?? '*';
+  if (!origin) return null;
+  const normalized = origin.replace(/\/$/, '');
+  const selfOrigin = env.APP_URL.replace(/\/$/, '');
+  return allowed.includes(normalized) || normalized === selfOrigin ? origin : null;
+}
