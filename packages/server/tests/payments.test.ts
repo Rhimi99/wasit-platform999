@@ -12,6 +12,7 @@ import {
   payments,
   refunds,
   transactionLedger,
+  transactions,
 } from '../src/db/schema/index.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { computeWebhookSignature } from '../src/lib/payments/providers.js';
@@ -358,5 +359,144 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
     const read = await stranger.req(`/api/payments/orders/${s.orderId}`);
     // Permission gate (payment:read) fires for a CUSTOMER before ownership.
     expect([403, 401]).toContain(read.status);
+  });
+});
+
+describe('RC-1 — transactions.status reflects the real payment state', () => {
+  it('creates the transaction PENDING (not PAID) and promotes it only on payment success', async () => {
+    const s = await setupPaidOrderBase();
+
+    // Before any payment: the order is UNPAID and so is its transaction.
+    const beforeOrder = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    expect(beforeOrder[0].paymentStatus).toBe('UNPAID');
+    const beforeTx = await db.select().from(transactions).where(eq(transactions.id, s.transactionId)).limit(1);
+    expect(beforeTx[0].status).toBe('PENDING');
+
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    const externalRef = intent.data.data.intent.externalRef as string;
+    await postWebhook({ eventId: `evt-rc1-${Date.now()}`, type: 'payment.succeeded', externalRef });
+
+    // After a confirmed payment the transaction is PAID, matching the order.
+    const afterTx = await db.select().from(transactions).where(eq(transactions.id, s.transactionId)).limit(1);
+    expect(afterTx[0].status).toBe('PAID');
+    const afterOrder = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    expect(afterOrder[0].paymentStatus).toBe('PAID');
+  });
+
+  it('marks the transaction FAILED (not PAID) when the provider reports failure', async () => {
+    const s = await setupPaidOrderBase();
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    await postWebhook({ eventId: `evt-rc1f-${Date.now()}`, type: 'payment.failed', externalRef: intent.data.data.intent.externalRef as string });
+
+    const tx = await db.select().from(transactions).where(eq(transactions.id, s.transactionId)).limit(1);
+    expect(tx[0].status).toBe('FAILED');
+  });
+});
+
+describe('RC-4 — webhook idempotency key is claimed only by a terminal event', () => {
+  it('lets pending → succeeded with the same eventId reach the terminal side-effect', async () => {
+    const s = await setupPaidOrderBase();
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    const externalRef = intent.data.data.intent.externalRef as string;
+    const eventId = `evt-rc4-${Date.now()}`;
+
+    // A non-actionable event first (the provider's "pending" notification).
+    const pendingEvent = await postWebhook({ eventId, type: 'payment.pending', externalRef });
+    expect(pendingEvent.status).toBe(200);
+    expect(pendingEvent.data.data.applied).toBe(false);
+    expect(pendingEvent.data.data.eventType).toBe('UNKNOWN');
+
+    // The terminal event reuses the same id and MUST still be applied.
+    const succeeded = await postWebhook({ eventId, type: 'payment.succeeded', externalRef, amount: s.grandTotal, currencyCode: 'TND' });
+    expect(succeeded.status).toBe(200);
+    expect(succeeded.data.data.applied).toBe(true);
+    expect(succeeded.data.data.duplicate).toBe(false);
+
+    const orderRow = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    expect(orderRow[0].paymentStatus).toBe('PAID');
+  });
+
+  it('keeps terminal replays idempotent and records the terminal event exactly once', async () => {
+    const s = await setupPaidOrderBase();
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    const externalRef = intent.data.data.intent.externalRef as string;
+    const eventId = `evt-rc4r-${Date.now()}`;
+    const payload = { eventId, type: 'payment.succeeded', externalRef, amount: s.grandTotal, currencyCode: 'TND' };
+
+    const first = await postWebhook(payload);
+    expect(first.data.data.applied).toBe(true);
+    const replay = await postWebhook(payload);
+    expect(replay.data.data.duplicate).toBe(true);
+    expect(replay.data.data.applied).toBe(false);
+
+    const events = await db.select().from(paymentWebhookEvents);
+    expect(events.filter((e) => e.eventId === eventId).length).toBe(1);
+  });
+
+  it('never consumes the eventId for a terminal event without a reference', async () => {
+    const eventId = `evt-rc4noref-${Date.now()}`;
+    const r = await postWebhook({ eventId, type: 'payment.succeeded' });
+    expect(r.status).toBe(200);
+    expect(r.data.data.applied).toBe(false);
+
+    const events = await db.select().from(paymentWebhookEvents);
+    expect(events.filter((e) => e.eventId === eventId).length).toBe(0);
+  });
+});
+
+describe('RC-5 — refunds reverse COMMISSION and PAYMENT_FEE proportionally', () => {
+  /** Net magnitude (DEBIT − CREDIT) for an entry type on one transaction. */
+  async function netByType(transactionId: string, entryType: string): Promise<number> {
+    const rows = await db.select().from(transactionLedger).where(eq(transactionLedger.transactionId, transactionId));
+    return rows
+      .filter((r) => r.entryType === entryType)
+      .reduce((acc, r) => acc + (r.direction === 'DEBIT' ? 1 : -1) * Number(r.amount), 0);
+  }
+
+  it('fully reverses commission and payment fee on a full refund', async () => {
+    const s = await setupPaidOrderBase();
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    await postWebhook({ eventId: `evt-rc5f-${Date.now()}`, type: 'payment.succeeded', externalRef: intent.data.data.intent.externalRef as string });
+
+    const commissionBefore = await netByType(s.transactionId, 'COMMISSION');
+    const feeBefore = await netByType(s.transactionId, 'PAYMENT_FEE');
+    expect(commissionBefore).toBeGreaterThan(0);
+    expect(feeBefore).toBeGreaterThan(0);
+
+    const refund = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'full reversal' } });
+    expect(refund.status).toBe(201);
+    expect(refund.data.data.refund.status).toBe('COMPLETED');
+
+    // Full refund: WASIT's commission and fee net to exactly zero.
+    expect(await netByType(s.transactionId, 'COMMISSION')).toBeCloseTo(0, 4);
+    expect(await netByType(s.transactionId, 'PAYMENT_FEE')).toBeCloseTo(0, 4);
+  });
+
+  it('reverses only the refunded share on a partial refund and never over-reverses', async () => {
+    const s = await setupPaidOrderBase();
+    const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, { method: 'POST', body: {} });
+    await postWebhook({ eventId: `evt-rc5p-${Date.now()}`, type: 'payment.succeeded', externalRef: intent.data.data.intent.externalRef as string });
+
+    const orderRow = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    const paid = Number(orderRow[0].grandTotal);
+    const commissionBefore = await netByType(s.transactionId, 'COMMISSION');
+
+    const half = (paid / 2).toFixed(4);
+    const r1 = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { amount: half, reason: 'half' } });
+    expect(r1.status).toBe(201);
+
+    const afterHalf = await netByType(s.transactionId, 'COMMISSION');
+    // Roughly half the commission is reversed (4 dp rounding is the only drift).
+    expect(afterHalf).toBeCloseTo(commissionBefore / 2, 3);
+
+    // Second half completes the reversal; the total must not exceed the original.
+    const r2 = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'rest' } });
+    expect(r2.status).toBe(201);
+    expect(await netByType(s.transactionId, 'COMMISSION')).toBeCloseTo(0, 4);
+
+    // Idempotent retry of the last refund writes no further reversal.
+    const retry = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'rest' } });
+    expect([409, 422]).toContain(retry.status);
+    expect(await netByType(s.transactionId, 'COMMISSION')).toBeCloseTo(0, 4);
   });
 });

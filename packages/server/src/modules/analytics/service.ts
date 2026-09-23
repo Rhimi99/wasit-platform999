@@ -3,7 +3,7 @@ import type { DB } from '../../db/client';
 import { auditLogs } from '../../db/schema/audit';
 import { users, sessions } from '../../db/schema/auth';
 import { analyticsEvents, dailyKpis, dashboardReports } from '../../db/schema/analytics';
-import { orders, transactions, transactionLedger } from '../../db/schema/commerce';
+import { orders, transactions } from '../../db/schema/commerce';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { products } from '../../db/schema/products';
 import { inventoryItems } from '../../db/schema/commerce_extras';
@@ -11,6 +11,8 @@ import { subscriptions } from '../../db/schema/subscriptions';
 import { campaigns } from '../../db/schema/ads';
 import { aiRequests } from '../../db/schema/ai';
 import { newId } from '../../lib/ids';
+import { roundMoney } from '../../lib/money';
+import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { resolveOwnedSellerIds } from '../../lib/seller-ownership';
 
 const DECIMAL_TO_NUM = (v: unknown, fallback = 0): number => {
@@ -204,34 +206,27 @@ export interface RevenueBreakdown {
 }
 
 /** Aggregates ledger amounts by entry type, respecting CREDIT/DEBIT direction. */
-async function ledgerTotal(db: DB, entryType: string): Promise<number> {
-  const rows = await db
-    .select({
-      credit: sql<string>`coalesce(sum(case when direction='CREDIT' then amount else 0 end),0)::text`,
-      debit: sql<string>`coalesce(sum(case when direction='DEBIT' then amount else 0 end),0)::text`,
-    })
-    .from(transactionLedger)
-    .where(eq(transactionLedger.entryType, entryType as never));
-  const credit = DECIMAL_TO_NUM(rows[0]?.credit);
-  const debit = DECIMAL_TO_NUM(rows[0]?.debit);
-  return credit - debit;
-}
-
 export async function getRevenueBreakdown(db: DB): Promise<RevenueBreakdown> {
-  const [txValRow, commission, paymentFees, refunds, settlement] = await Promise.all([
+  const [txValRow, flows] = await Promise.all([
     db.select({ v: sql<string>`coalesce(sum(total_value),0)::text` }).from(transactions),
-    ledgerTotal(db, 'COMMISSION'),
-    ledgerTotal(db, 'PAYMENT_FEE'),
-    ledgerTotal(db, 'REFUND'),
-    ledgerTotal(db, 'SETTLEMENT'),
+    ledgerFlowTotals(db, 'TND'),
   ]);
+  // Same accounting truth as /api/revenue/report: COMMISSION is WASIT revenue;
+  // PAYMENT_FEE is collected for the payment provider (ledger beneficiary
+  // `payment-provider`) and REFUNDS return buyer money, so both reduce net
+  // revenue - all as positive magnitudes from the shared ledger sign convention.
+  const commission = flows.commission;
+  const paymentFees = flows.paymentFees;
+  const refunds = flows.refunds;
+  const settlement = flows.settlement;
+  const netRevenue = roundMoney(commission.minus(paymentFees).minus(refunds));
   return {
     transactionValue: DECIMAL_TO_NUM(txValRow?.[0]?.v),
-    commission: Math.abs(commission),
-    paymentFees: Math.abs(paymentFees),
-    refunds: Math.abs(refunds),
-    settlement: Math.abs(settlement),
-    netRevenue: Math.abs(commission) + Math.abs(paymentFees) - Math.abs(refunds),
+    commission: commission.toNumber(),
+    paymentFees: paymentFees.toNumber(),
+    refunds: refunds.toNumber(),
+    settlement: settlement.toNumber(),
+    netRevenue: netRevenue.toNumber(),
     currencyCode: 'TND',
   };
 }

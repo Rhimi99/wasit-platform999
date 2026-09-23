@@ -239,6 +239,21 @@ export async function handlePaymentWebhook(
       status.status === 'SUCCEEDED' ? 'PAYMENT_SUCCEEDED' : status.status === 'FAILED' ? 'PAYMENT_FAILED' : 'UNKNOWN';
   }
 
+  // Only a terminal, actionable event may claim the (provider, eventId) key.
+  // A non-actionable event (UNKNOWN / unrecognized) is acknowledged but never
+  // recorded, so a later terminal event carrying the same id — the common
+  // `pending` → `succeeded` provider sequence — is still applied instead of
+  // being silently swallowed as a "duplicate". Terminal replays stay idempotent
+  // because the key is claimed exactly once, on the terminal event.
+  const isTerminal =
+    effectiveType === 'PAYMENT_SUCCEEDED' ||
+    effectiveType === 'PAYMENT_FAILED' ||
+    effectiveType === 'REFUND_SUCCEEDED';
+
+  if (!isTerminal || !effectiveRef) {
+    return { duplicate: false, applied: false, eventType: effectiveType };
+  }
+
   const inserted = await db
     .insert(paymentWebhookEvents)
     .values({
@@ -296,6 +311,78 @@ async function intentTarget(db: DB, externalRef: string): Promise<'ORDER' | 'SUB
     .limit(1);
   if (rows.length === 0) throw ApiError.notFound('Payment intent');
   return rows[0].orderId ? 'ORDER' : 'SUBSCRIPTION';
+}
+
+/**
+ * Reverses WASIT's COMMISSION and PAYMENT_FEE ledger entries proportionally to
+ * the refunded share of the order.
+ *
+ * Idempotent by construction: the target reversal for each original entry is a
+ * pure function of the *cumulative* refunded amount, and we only write the
+ * delta still missing. Replaying a refund therefore writes nothing new, and a
+ * full refund reverses exactly the original amount — never more.
+ */
+async function reverseCommissionAndFee(
+  db: DB,
+  input: {
+    transactionId: string;
+    currencyCode: string;
+    refundId: string;
+    /** Total refunded so far, including this refund. */
+    cumulativeRefunded: ReturnType<typeof toDecimal>;
+    paidAmount: ReturnType<typeof toDecimal>;
+    providerId: string;
+  },
+) {
+  if (input.paidAmount.lte(0) || input.cumulativeRefunded.lte(0)) return;
+
+  const original = await db
+    .select()
+    .from(transactionLedger)
+    .where(
+      and(
+        eq(transactionLedger.transactionId, input.transactionId),
+        sql`${transactionLedger.entryType} in ('COMMISSION','PAYMENT_FEE')`,
+        eq(transactionLedger.direction, 'DEBIT'),
+      ),
+    );
+
+  const ratio = input.cumulativeRefunded.dividedBy(input.paidAmount);
+  const rows: (typeof transactionLedger.$inferInsert)[] = [];
+
+  for (const entry of original) {
+    const target = roundMoney(toDecimal(entry.amount).mul(ratio));
+    const reversed = await db
+      .select({ v: sql<string>`coalesce(sum(${transactionLedger.amount}),0)::text` })
+      .from(transactionLedger)
+      .where(
+        and(
+          eq(transactionLedger.transactionId, input.transactionId),
+          eq(transactionLedger.entryType, entry.entryType),
+          eq(transactionLedger.direction, 'CREDIT'),
+          sql`${transactionLedger.metadata}->>'reversalOf' = ${entry.id}`,
+        ),
+      );
+    const already = toDecimal(reversed[0]?.v ?? 0);
+    const delta = target.minus(already);
+    if (delta.lte(0)) continue;
+
+    rows.push({
+      id: newId(),
+      transactionId: input.transactionId,
+      entryType: entry.entryType,
+      direction: 'CREDIT',
+      amount: delta.toFixed(4),
+      currencyCode: input.currencyCode,
+      payerId: entry.beneficiaryId,
+      beneficiaryId: entry.payerId,
+      paymentProvider: input.providerId,
+      status: 'SETTLED',
+      metadata: { reversalOf: entry.id, refundId: input.refundId } as never,
+    } as never);
+  }
+
+  if (rows.length > 0) await db.insert(transactionLedger).values(rows);
 }
 
 async function applyPaymentSucceeded(db: DB, providerId: string, externalRef: string, ipAddress: string | null) {
@@ -501,6 +588,16 @@ export async function createRefund(
     } as never);
 
     const newRefundedTotal = alreadyRefunded.add(requested);
+
+    await reverseCommissionAndFee(db, {
+      transactionId: payment[0].transactionId,
+      currencyCode: order.currencyCode,
+      refundId,
+      cumulativeRefunded: newRefundedTotal,
+      paidAmount,
+      providerId: provider.id,
+    });
+
     const fullyRefunded = newRefundedTotal.gte(paidAmount);
     await db
       .update(orders)
@@ -511,6 +608,12 @@ export async function createRefund(
         updatedAt: new Date(),
       })
       .where(eq(orders.id, order.id));
+
+    // Keep the transaction's own payment state consistent with the order.
+    await db
+      .update(transactions)
+      .set({ status: fullyRefunded ? ('REFUNDED' as never) : ('PARTIALLY_REFUNDED' as never), updatedAt: new Date() })
+      .where(eq(transactions.id, payment[0].transactionId));
 
     await writeAudit(db, { actorId: input.actorId, ipAddress: input.ipAddress ?? null }, {
       action: 'REFUND.COMPLETED',

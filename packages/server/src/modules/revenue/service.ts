@@ -1,11 +1,12 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Decimal } from 'decimal.js';
 import type { DB } from '../../db/client';
-import { transactionLedger, transactions } from '../../db/schema/commerce';
+import { transactions } from '../../db/schema/commerce';
 import { invoices } from '../../db/schema/subscriptions';
 import { aiUsage } from '../../db/schema/ai';
 import { revenueAccounts, scenarioReports } from '../../db/schema/revenue';
 import { roundMoney, toDecimal } from '../../lib/money';
+import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { newId } from '../../lib/ids';
 import type { RevenueProfitabilityReport, ScenarioInput, ScenarioResult } from './types';
 
@@ -31,9 +32,6 @@ import type { RevenueProfitabilityReport, ScenarioInput, ScenarioResult } from '
 // until then the queries would target tables absent from the database.
 // ---------------------------------------------------------------------------
 
-const LEDGER_ENTRY_TYPES = ['TRANSACTION_VALUE', 'COMMISSION', 'PAYMENT_FEE', 'REFUND', 'SETTLEMENT'] as const;
-type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
-
 const NUM_TO_DEC = (v: string | number | Decimal): string => roundMoney(v).toFixed(4);
 
 /** GMV for one currency, from transactions.total_value. */
@@ -43,24 +41,6 @@ async function gmvTotal(db: DB, currencyCode: string): Promise<string> {
     .from(transactions)
     .where(eq(transactions.currencyCode, currencyCode));
   return NUM_TO_DEC(rows[0]?.v ?? 0);
-}
-
-/** Real ledger total for one entryType and one currency (CREDIT − DEBIT). */
-async function ledgerTotal(db: DB, entryType: LedgerEntryType, currencyCode: string): Promise<string> {
-  const rows = await db
-    .select({
-      credit: sql<string>`coalesce(sum(case when direction='CREDIT' then amount else 0 end),0)::text`,
-      debit: sql<string>`coalesce(sum(case when direction='DEBIT' then amount else 0 end),0)::text`,
-    })
-    .from(transactionLedger)
-    .where(
-      and(
-        eq(transactionLedger.entryType, entryType),
-        eq(transactionLedger.currencyCode, currencyCode),
-      ),
-    );
-  const net = toDecimal(rows[0]?.credit ?? 0).minus(toDecimal(rows[0]?.debit ?? 0));
-  return NUM_TO_DEC(net);
 }
 
 /** Sum of paid invoices for one currency (subscription revenue). */
@@ -105,10 +85,8 @@ async function operationalTotals(db: DB, currencyCode: string): Promise<{ revenu
 }
 
 export async function getRevenueProfitability(db: DB, currencyCode = 'TND'): Promise<RevenueProfitabilityReport> {
-  const [commission, paymentFees, refundsTotal, aiModelCosts, operational] = await Promise.all([
-    ledgerTotal(db, 'COMMISSION', currencyCode),
-    ledgerTotal(db, 'PAYMENT_FEE', currencyCode),
-    ledgerTotal(db, 'REFUND', currencyCode),
+  const [flows, aiModelCosts, operational] = await Promise.all([
+    ledgerFlowTotals(db, currencyCode),
     aiModelCostTotal(db, currencyCode),
     operationalTotals(db, currencyCode),
   ]);
@@ -117,14 +95,17 @@ export async function getRevenueProfitability(db: DB, currencyCode = 'TND'): Pro
   // No advertising ledger entry type exists today, so this is provably 0.
   const advertisingRevenue = '0.0000';
 
-  const commissionD = toDecimal(commission);
+  // Amounts already come back as positive magnitudes under the shared ledger
+  // sign convention (lib/ledger-flows), so no per-field sign patching is needed
+  // here — that patching is what made this endpoint disagree with the admin
+  // revenue breakdown.
+  const commissionD = flows.commission;
+  const paymentFeesD = flows.paymentFees;
+  const refundsD = flows.refunds;
   const subscriptionD = toDecimal(subscriptionRev);
   const advertisingD = toDecimal(advertisingRevenue);
   const otherRevenueD = toDecimal(operational.revenue);
-
-  const paymentFeesD = toDecimal(paymentFees).isNegative() ? toDecimal(0) : toDecimal(paymentFees);
-  const refundsD = toDecimal(refundsTotal).isNegative() ? toDecimal(0) : toDecimal(refundsTotal);
-  const aiCostsD = toDecimal(aiModelCosts).isNegative() ? toDecimal(0) : toDecimal(aiModelCosts);
+  const aiCostsD = toDecimal(aiModelCosts);
   const operationalD = toDecimal(operational.cost);
   const otherCostsD = toDecimal(0); // no other real cost source; we don't invent.
 

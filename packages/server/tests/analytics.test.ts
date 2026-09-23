@@ -226,6 +226,72 @@ describe('Analytics Engine (Phase 16) — real DB-backed', () => {
     expect(rd.currencyCode).toBe('TND');
   });
 
+  it('RC-3: revenue report and admin revenue breakdown agree on the same accounting truth', async () => {
+    const admin = makeClient();
+    await insertAndLoginAdmin(admin);
+
+    // A super-admin is required by /api/revenue/report (REVENUE_READ).
+    const superId = randomUUID();
+    const superEmail = `an-super-${Date.now()}-${Math.floor(Math.random() * 1e6)}@wasit.tn`;
+    await db.insert(users).values({
+      id: superId,
+      email: superEmail,
+      passwordHash: await argon2.hash('AdminPass123!'),
+      firstName: 'Super',
+      isActive: true,
+      emailVerified: true,
+    });
+    const superRole = await db.select().from(roles).where(eq(roles.name, 'SUPER_ADMIN')).limit(1);
+    await db.insert(userRoles).values({ id: randomUUID(), userId: superId, roleId: superRole[0].id });
+    const superClient = makeClient();
+    await superClient.req('/api/auth/login', {
+      method: 'POST',
+      body: { email: superEmail, password: 'AdminPass123!', allowUnverifiedEmail: true },
+    });
+
+    const breakdown = await admin.req('/api/admin/analytics/revenue-breakdown');
+    const report = await superClient.req('/api/revenue/report?currency=TND');
+    expect(breakdown.status).toBe(200);
+    expect(report.status).toBe(200);
+
+    const b = breakdown.data.data as { commission: number; paymentFees: number; refunds: number; netRevenue: number };
+    const r = report.data.data as {
+      commission: string;
+      paymentFees: string;
+      refunds: string;
+      subscriptionRevenue: string;
+      otherRevenue: string;
+      aiModelCosts: string;
+      operationalExpenses: string;
+      otherCosts: string;
+      netRevenue: string;
+    };
+
+    // Same magnitude, same sign — not one positive and one negative.
+    expect(b.commission).toBeCloseTo(Number(r.commission), 4);
+    expect(b.paymentFees).toBeCloseTo(Number(r.paymentFees), 4);
+    expect(b.refunds).toBeCloseTo(Number(r.refunds), 4);
+    expect(b.commission).toBeGreaterThanOrEqual(0);
+    expect(b.refunds).toBeGreaterThanOrEqual(0);
+
+    // The breakdown reconciles internally: commission minus the provider fee and
+    // refunds, all read as positive magnitudes.
+    expect(b.netRevenue).toBeCloseTo(Number((b.commission - b.paymentFees - b.refunds).toFixed(4)), 4);
+
+    // And the two surfaces are the same accounting truth: the full report's net
+    // is exactly the breakdown's net plus its own documented non-ledger lines
+    // (subscriptions/other revenue up, AI/operational costs down). If the two
+    // disagreed on sign or on the fee/refund treatment, this identity breaks.
+    const expectedReportNet =
+      b.netRevenue +
+      Number(r.subscriptionRevenue) +
+      Number(r.otherRevenue) -
+      Number(r.aiModelCosts) -
+      Number(r.operationalExpenses) -
+      Number(r.otherCosts);
+    expect(Number(r.netRevenue)).toBeCloseTo(Number(expectedReportNet.toFixed(4)), 4);
+  });
+
   it('exposes platform overview, retention and conversion to ADMIN', async () => {
     const admin = makeClient();
     await insertAndLoginAdmin(admin);

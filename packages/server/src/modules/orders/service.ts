@@ -175,7 +175,12 @@ export async function createOrder(
     commission: commissionAmount,
     buyerCommission: buyerCommissionAmount,
     paymentFee,
-    status: 'PAID',
+    // A transaction is created before any money moves: the buyer has not paid
+    // yet. It is promoted to PAID/FAILED only when the provider confirms the
+    // payment (see applyPaymentSucceeded / applyPaymentFailed). Inserting PAID
+    // here would make risk signals, admin transactions and analytics report a
+    // payment that never happened.
+    status: 'PENDING',
   });
 
   // Two commission shares (seller and buyer) keep payer/beneficiary explicit and

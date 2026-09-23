@@ -1,8 +1,28 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-19 — **PHASE 18 — UNIT TESTS DONE — 195/195 tests**
+> **التاريخ**: 2026-09-23 — **SETTLEMENT INTEGRITY (RC-1/3/4/5) DONE — 554/554 server tests**
 > **الفرع**: `feat/messaging-notifications`
 > **HEAD**: `5ee9dbd` (Unit tests) — `9d89318` (docs) — `59ada52` (Inventory low-stock) — `75cd6bb` (docs)
+---
+
+## ✅ حالة معتمدة — SETTLEMENT INTEGRITY: إصلاح RC-1 / RC-3 / RC-4 / RC-5 من الواجهة (2026-09-23)
+
+**الهدف**: تنفيذ **فقط** الإصلاحات الداخلية المُثبَتة في تقرير `docs/PAYMENT_SETTLEMENT_AUDIT.md` المعتمد — بلا Bank Settlement/Payout/Treasury، بلا تكامل مزوّد جديد، بلا `settlement_accounts`، وبلا مساس بنموذج العمولة **4% = 2% بائع + 2% مشتري** ولا سياسة العمولة ولا DB reset/drop/push. القاعدة المُطبَّقة: لا يُقبل HTTP 200 ولا رندر الصفحة — الإثبات **UI → API → DB/response → UI**.
+
+**الإصلاحات (كود الإنتاج)**:
+- **RC-1** `modules/orders/service.ts`: كان صف الـtransaction يُدرَج بـ`status: 'PAID'` **قبل** تحرّك أي مال، فيرى admin/risk/analytics دفعة لم تحدث. صار `PENDING` ويُرقّى إلى `PAID`/`FAILED` فقط عند تأكيد المزوّد (`applyPaymentSucceeded`/`applyPaymentFailed`).
+- **RC-4** `modules/payments/service.ts`: كان مفتاح idempotency `(provider, eventId)` يُحتجَز لأي حدث — بما فيه غير القابل للتنفيذ (UNKNOWN) — فتسلسل `pending → succeeded` بنفس المعرّف يُبتلع كـ«duplicate» ولا يُنفَّذ أبدًا. الآن **الحدث النهائي القابل للتنفيذ فقط** يحتجز المفتاح؛ الحدث غير القابل للتنفيذ يُقرّ ولا يُسجَّل، وإعادة الحدث النهائي تبقى idempotent.
+- **RC-5** `modules/payments/service.ts`: الاسترداد لم يكن يعكس عمولة/رسم WASIT، فتبقى العمولة كاملة رغم إرجاع المال. أُضيف `reverseCommissionAndFee`: عكس **تناسبي** لقيود `COMMISSION`+`PAYMENT_FEE` (CREDIT مقابل كل قيد أصلي) مبني على **المبلغ المُسترد التراكمي** ⇒ idempotent بطبيعته ولا يعكس أكثر من الأصل. وصار `transactions.status` يتبع حالة الاسترداد (`REFUNDED`/`PARTIALLY_REFUNDED`).
+- **RC-3** `modules/analytics/service.ts` + `modules/revenue/service.ts` + `lib/ledger-flows.ts`: وحدتان كانتا تناقضان نفسها — `/api/revenue/report` كان يُخرج عمولة **سالبة** (`-686.2000`) بينما admin breakdown يُخرجها **موجبة** (`686.2000`)، و`analytics` كان يعدّ **رسوم المزوّد إيرادًا** بينما التقرير يعدّها **تكلفة**. أُضيف `ledger-flow-totals` كمصدر وحيد للاتفاقية: كل المبالغ تُقرأ **موجبة** (CREDIT−DEBIT ثم abs بعد roundMoney)، والرسوم تتبع اتفاقية الـledger (مستفيدها `payment-provider`) ⇒ **تكلفة**، والاسترداد يخفض الصافي. الآن الوجهان متطابقان رقميًا.
+
+**الإثبات (أرقام فعلية)**:
+- **من الواجهة الحيّة**: `/api/revenue/report` و`/api/admin/analytics/revenue-breakdown` أصبحا **متطابقين تمامًا**: `commission 733.2000 / paymentFees 366.6000 / refunds 584.5000 / net -217.9000` (قبل: `-686.2000` مقابل `+686.2000`).
+- **RC-1/RC-4/RC-5 حيًّا عبر API حقيقي**: tx = `PENDING` قبل الدفع و`PAID` بعده؛ `pending` بنفس `eventId` ⇒ `applied:false` ثم `succeeded` ⇒ `applied:true` وإعادة ⇒ `duplicate:true`؛ ledger العمولة/الرسوم `4/2 → 2/1 (استرداد 50%) → 0/0 (كامل)`.
+- **`e2e/settlement-integrity.spec.ts` جديد: 4/4** — كل حالة من الواجهة (admin transactions/orders/ledger/analytics) مع تحقق API/DB.
+- **Full server suite: 554/554** (52 ملفًا) — **Typecheck** (server+web) و**Build** (server) نظيفان.
+- **E2E انحدار**: `payments` + `financial-audit` + `admin-refunds` + `admin-reports` + `admin-unit-economics` = **18/18**، وعمولة **4% = 2%+2%** ظلّت مثبَّتة (كل تأكيدات `financial-audit` للعمولة نجحت).
+- لا migrations ولا reset/drop/push، وبلا مساس بـMarketing Video Agent (89e68d7).
+
 ---
 
 ## ✅ حالة معتمدة — M7: إصلاح هوية ميزانية الذكاء (الهدف + الدورة) من الواجهة (2026-09-23)
