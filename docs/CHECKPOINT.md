@@ -17,6 +17,8 @@
 
 ### التحقق
 - **Full E2E**: **167/167** (6.1m). **الخادم**: **531/531** (51 ملفًا). **Typecheck** و**Build** (server + web) نظيفان.
+- **Browser Functional Smoke حقيقي** (Playwright/Chromium على الخادم والواجهة الحقيقيين، PostgreSQL حقيقي): `auth` + `marketplace` + `rbac` + `library` + `messages` + `notifications` = **31/31**.
+- **جلسة يدوية من المتصفح** (تاجر `merchanta@wasit.tn`): `/dashboard/inventory` تُظهر للصفوف المؤرشفة «منتج مؤرشف — لا يمكن تعديل مخزونه» بلا أزرار مخزون، ولا تزال تعرض «الحركات»؛ ودفعة مخزون فعلية على `MER-OO-1L-004` من الواجهة رفعت الكمية **42 → 47**، وأثبتت القراءة من القاعدة سجل حركة `PURCHASE +5` — أي handler→API→DB→انعكاس على الواجهة.
 - ملاحظة: `business-numbers.test.ts` «does not collide…» اختبار احتمالي قد يفشل عشوائيًا (~4% عند 500k سحب من 36^8)؛ ليس من هذا التغيير، ويثبت 3/3 عند الإعادة.
 - لا migrations ولا reset/drop/push. العمولة **4% = 2%+2%** والـMarketing Video Agent بلا مساس.
 
