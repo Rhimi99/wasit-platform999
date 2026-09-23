@@ -418,23 +418,77 @@ test.describe('MARKETING VIDEO — full studio flow', () => {
     await expect.poll(async () => page.locator('video').count()).toBeLessThan(before);
   });
 
-  test('rejects a duration outside the pinned 4–60s window without rendering', async ({ page }) => {
-    // The pinned Marketing Video Agent (89e68d7) defines a 4–60s window; a
-    // "35–120s" rule was explicitly reverted as an unrequested behaviour change.
-    // The UI input enforces 4..60 and the API schema rejects anything outside it.
+  test('enforces the WASIT 35–120s window in the UI and at the API', async ({ page }) => {
+    // WASIT duration policy: 35–120s inclusive. The UI control must reflect it
+    // and the API schema must refuse anything outside it — including the old
+    // 4–60 defaults that this change replaces.
     await page.goto('/dashboard/video-studio');
     const duration = page.locator('#v-duration');
-    await expect(duration).toHaveAttribute('min', '4');
-    await expect(duration).toHaveAttribute('max', '60');
+    await expect(duration).toHaveAttribute('min', '35');
+    await expect(duration).toHaveAttribute('max', '120');
+    await expect(duration).toHaveValue('60');
 
-    await expect.poll(async () => page.locator('#v-product option').count()).toBeGreaterThan(1);
-    const productId = (await page.locator('#v-product option').nth(1).getAttribute('value'))!;
+    // Only ACTIVE products can be rendered; an INACTIVE one would 422 for the
+    // wrong reason and hide a broken duration guard.
+    const productOptions = page.locator('#v-product option');
+    await expect.poll(async () => productOptions.count()).toBeGreaterThan(1);
+    let activeValue: string | null = null;
+    for (let i = 1; i < (await productOptions.count()); i++) {
+      const label = (await productOptions.nth(i).textContent()) ?? '';
+      if (/ACTIVE/.test(label) && !/INACTIVE/.test(label)) {
+        activeValue = (await productOptions.nth(i).getAttribute('value'))!;
+        break;
+      }
+    }
+    expect(activeValue, 'an ACTIVE product must be selectable in the studio').not.toBeNull();
+    const productId = activeValue!;
 
-    for (const bad of [3, 61, 120]) {
+    // Below the floor and above the ceiling are refused by the API.
+    for (const bad of [4, 34, 121, 300]) {
       const res = await page.request.post('/api/media/marketing-videos', {
         data: { productId, language: 'ar', audience: 'B2B', style: 'MODERN', durationSeconds: bad },
       });
       expect(res.status(), `duration ${bad} must be refused`).toBe(422);
+      const body = await res.json();
+      expect(body.error.code, `duration ${bad} must fail on the duration rule`).toBe('VALIDATION_ERROR');
+    }
+  });
+
+  test('generates a 35s and a 120s video from the studio and shows the real MP4', async ({ page }) => {
+    test.setTimeout(120_000);
+    // Both inclusive bounds must produce a real, previewable asset whose stored
+    // duration matches — proving the limit is enforced on the asset, not just
+    // the request. The 120s case is the one a provider with a short ceiling
+    // would silently truncate.
+    await page.goto('/dashboard/video-studio');
+    const options = page.locator('#v-product option');
+    await expect.poll(async () => options.count()).toBeGreaterThan(1);
+
+    // Pick an ACTIVE product (the studio only offers sellable ones).
+    let activeValue: string | null = null;
+    for (let i = 1; i < (await options.count()); i++) {
+      const label = (await options.nth(i).textContent()) ?? '';
+      if (/ACTIVE/.test(label) && !/INACTIVE/.test(label)) {
+        activeValue = (await options.nth(i).getAttribute('value'))!;
+        break;
+      }
+    }
+    expect(activeValue, 'an ACTIVE product must be selectable in the studio').not.toBeNull();
+    await page.locator('#v-product').selectOption(activeValue!);
+
+    for (const seconds of [35, 120]) {
+      const before = await page.locator('video').count();
+      await page.locator('#v-duration').fill(String(seconds));
+      await page.getByRole('button', { name: /توليد|Generate/i }).click();
+      await expect(page.getByText(/تم توليد|Video generated|generated successfully/i).first()).toBeVisible();
+      await expect.poll(async () => page.locator('video').count()).toBe(before + 1);
+
+      const newest = ((await (await page.request.get('/api/media/assets?kind=MARKETING_VIDEO&limit=1')).json()).data as {
+        items: Array<{ id: string; durationSeconds: number | null; status: string; provider: string }>;
+      }).items.find((a) => a.status === 'READY');
+      expect(newest, `a READY ${seconds}s video must exist`).toBeTruthy();
+      expect(newest!.durationSeconds).toBe(seconds);
+      expect(newest!.provider).toMatch(/structural/i);
     }
   });
 });

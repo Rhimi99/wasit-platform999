@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 import { and, desc, eq } from 'drizzle-orm';
-import { ApiError, type UserRole } from '@wasit/shared';
+import { ApiError, type UserRole, MARKETING_VIDEO_DURATION } from '@wasit/shared';
 import type { DB } from '../../db/client.js';
 import { mediaAssets } from '../../db/schema/media.js';
 import { products } from '../../db/schema/products.js';
@@ -11,6 +11,7 @@ import { newId } from '../../lib/ids.js';
 import { assertWithinBudget, recordAiRequest, resolveLimit, upsertAiUsage } from '../../lib/ai/cost-control.js';
 import { env } from '../../lib/env.js';
 import { resolveMediaStorage, resolveVideoProvider } from '../../lib/media/resolve.js';
+import { measureMp4DurationSeconds } from '../../lib/media/mp4.js';
 import { downloadTtlSeconds, signDownloadToken, verifyDownloadToken } from '../../lib/media/tokens.js';
 import type { RenderSpec } from '../../lib/media/video-types.js';
 
@@ -172,7 +173,11 @@ export async function generateMarketingVideo(
   const language = input.language ?? (['ar', 'fr', 'en', 'zh'].includes(actor.locale ?? '') ? (actor.locale as 'ar') : 'en');
   const audience = input.audience ?? (product.purchaseIntent === 'B2C' ? 'B2C' : 'B2B');
   const style = input.style ?? 'MODERN';
-  const durationSeconds = clamp(input.durationSeconds ?? 12, 4, 60);
+  const durationSeconds = clamp(
+    input.durationSeconds ?? MARKETING_VIDEO_DURATION.default,
+    MARKETING_VIDEO_DURATION.min,
+    MARKETING_VIDEO_DURATION.max,
+  );
 
   // AI cost-control: the render is booked against the user's video budget.
   const { periodWindow, currencyCode } = await resolveLimit(
@@ -244,6 +249,20 @@ export async function generateMarketingVideo(
     if (rendered.bytes.length > env.MEDIA_MAX_VIDEO_BYTES) {
       throw new Error(`Rendered video exceeds the ${env.MEDIA_MAX_VIDEO_BYTES} byte limit`);
     }
+    // Verify the ACTUAL asset, not the requested number: read the duration back
+    // out of the rendered bytes and refuse anything outside the WASIT window.
+    // `rendered.durationSeconds` is only a fallback for a non-MP4/external
+    // provider, which is still held to the same policy bounds.
+    const measuredDuration = measureMp4DurationSeconds(rendered.bytes) ?? rendered.durationSeconds;
+    if (
+      measuredDuration < MARKETING_VIDEO_DURATION.min ||
+      measuredDuration > MARKETING_VIDEO_DURATION.max
+    ) {
+      throw new Error(
+        `Rendered video is ${measuredDuration}s, outside the required ` +
+          `${MARKETING_VIDEO_DURATION.min}–${MARKETING_VIDEO_DURATION.max}s range`,
+      );
+    }
     const storageKey = `videos/${assetId}.${rendered.extension}`;
     const stored = await storage.put({ key: storageKey, body: rendered.bytes, contentType: rendered.mimeType });
 
@@ -255,7 +274,7 @@ export async function generateMarketingVideo(
         mimeType: rendered.mimeType,
         extension: rendered.extension,
         sizeBytes: stored.size,
-        durationSeconds: String(rendered.durationSeconds),
+        durationSeconds: String(Math.round(measuredDuration)),
         width: String(rendered.width),
         height: String(rendered.height),
         provider: rendered.provider,

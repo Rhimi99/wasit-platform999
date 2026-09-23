@@ -41,7 +41,9 @@ function resolveFontsDir(): string {
   return '';
 }
 
-function run(bin: string, args: string[], timeoutMs = 120_000): Promise<void> {
+// A 120s marketing video renders in a single ffmpeg pass; the ceiling is set
+// well above the observed render time so a slower host cannot truncate it.
+function run(bin: string, args: string[], timeoutMs = 300_000): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(bin, args, { maxBuffer: 1024 * 1024 * 16, timeout: timeoutMs }, (err, _stdout, stderr) => {
       if (err) {

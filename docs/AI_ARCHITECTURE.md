@@ -84,7 +84,13 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 | التخزين الخاص | `LocalMediaStorage` | `lib/media/local-storage.ts` |
 | روابط موقّعة | `signDownloadToken`/`verifyDownloadToken` | `lib/media/tokens.ts` |
 | التسجيل | `resolveMediaStorage`/`resolveVideoProvider`/`describeMediaProviders` | `lib/media/resolve.ts` |
+| قياس مدة الأصل | `measureMp4DurationSeconds` (قراءة `moov/mvhd` من bytes) | `lib/media/mp4.ts` |
 
+- **سياسة المدة 35–120ث**: ثوابت موحّدة في `@wasit/shared` (`MARKETING_VIDEO_DURATION`: min 35،
+  max 120، default 60) يشترك فيها الـAPI والرندر والواجهة فلا تتفرّق. بعد كل render تُقرأ المدة
+  **فعليًا من bytes الـMP4** (`measureMp4DurationSeconds`)؛ إن خرجت عن 35–120 يُرفض الأصل ويُسجَّل
+  `FAILED` ولا يصبح READY، وتُخزَّن **القيمة المقاسة** لا قيمة الطلب — أي أن المزوّد لا يستطيع
+  إدّعاء مدة لا تحملها البايتات.
 - **Provider-agnostic**: لا SDK مزوّد يُستورد خارج `resolve.ts`. إضافة مزوّد generative
   خارجي (async) لاحقاً = تطبيق الواجهة + سطر في `resolve.ts`، دون لمس الخدمة/الـroutes/الواجهة.
   الواجهة تحمل `isAsync` جاهزاً للمزوّدين الذين يعيدون job id ويكملون لاحقاً.

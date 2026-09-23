@@ -6,14 +6,30 @@ import { db } from '../src/db/client.js';
 import { mediaAssets } from '../src/db/schema/media.js';
 import { eq } from 'drizzle-orm';
 import { resolveVideoProvider } from '../src/lib/media/resolve.js';
+import { StructuralVideoProvider } from '../src/lib/media/video-provider.js';
+import { measureMp4DurationSeconds } from '../src/lib/media/mp4.js';
 
 const app = createApp();
 
+let seq = 0;
+function uniq(prefix: string): string {
+  seq += 1;
+  return `${prefix}-${Date.now()}-${seq}-${Math.floor(Math.random() * 1e6)}`;
+}
+
+// Distinct IPs keep each case in its own rate-limit bucket, so adding cases to
+// this file cannot trip the shared auth-register limit (same pattern as
+// price-comparison.test.ts). The /16 subnet is randomised per run so parallel
+// test files cannot land in each other's buckets either.
+let ipSeq = 0;
+const ipSubnet = Math.floor(Math.random() * 250) + 1;
 function makeClient() {
   let cookie = '';
+  ipSeq += 1;
+  const ip = `198.18.${ipSubnet}.${(ipSeq % 250) + 1}`;
   return {
     async req(path: string, options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}) {
-      const headers: Record<string, string> = { ...options.headers };
+      const headers: Record<string, string> = { 'x-forwarded-for': ip, ...options.headers };
       if (options.body !== undefined) headers['Content-Type'] = 'application/json';
       if (cookie) headers.Cookie = cookie;
       const res = await app.request(path, {
@@ -30,12 +46,6 @@ function makeClient() {
       return { res, data: data as any, status: res.status, contentType };
     },
   };
-}
-
-let seq = 0;
-function uniq(prefix: string): string {
-  seq += 1;
-  return `${prefix}-${Date.now()}-${seq}-${Math.floor(Math.random() * 1e6)}`;
 }
 
 async function register(c: ReturnType<typeof makeClient>, role = 'SUPPLIER') {
@@ -177,7 +187,7 @@ describe('Marketing Video Generation Agent', () => {
 
     const gen = await client.req('/api/media/marketing-videos', {
       method: 'POST',
-      body: { productId, language: 'ar', audience: 'B2B', style: 'MODERN', durationSeconds: 4 },
+      body: { productId, language: 'ar', audience: 'B2B', style: 'MODERN', durationSeconds: 35 },
     });
     expect(gen.status).toBe(201);
     const asset = gen.data.data;
@@ -189,7 +199,7 @@ describe('Marketing Video Generation Agent', () => {
     expect(asset.previewable).toBe(true);
     expect(asset.downloadable).toBe(true);
     expect(asset.sizeBytes).toBeGreaterThan(1000);
-    expect(asset.durationSeconds).toBe(4);
+    expect(asset.durationSeconds).toBe(35);
     expect(asset.width).toBeGreaterThan(0);
     expect(asset.height).toBeGreaterThan(0);
     expect(asset.previewUrl).toContain(`/api/media/assets/${asset.id}/content?token=`);
@@ -220,7 +230,7 @@ describe('Marketing Video Generation Agent', () => {
     const { client, productId } = await setupSellerWithProduct();
     const gen = await client.req('/api/media/marketing-videos', {
       method: 'POST',
-      body: { productId, language: 'ar', style: 'BOLD', durationSeconds: 4, title: 'زيت زيتون ممتاز' },
+      body: { productId, language: 'ar', style: 'BOLD', durationSeconds: 35, title: 'زيت زيتون ممتاز' },
     });
     expect(gen.status).toBe(201);
     const asset = gen.data.data as { id: string; previewUrl: string };
@@ -238,7 +248,7 @@ describe('Marketing Video Generation Agent', () => {
     const b = await setupSellerWithProduct();
     const gen = await a.client.req('/api/media/marketing-videos', {
       method: 'POST',
-      body: { productId: a.productId, durationSeconds: 4 },
+      body: { productId: a.productId, durationSeconds: 35 },
     });
     const assetId = gen.data.data.id as string;
 
@@ -260,7 +270,7 @@ describe('Marketing Video Generation Agent', () => {
     const { client, productId } = await setupSellerWithProduct();
     const gen = await client.req('/api/media/marketing-videos', {
       method: 'POST',
-      body: { productId, durationSeconds: 4 },
+      body: { productId, durationSeconds: 35 },
     });
     const assetId = gen.data.data.id as string;
 
@@ -283,7 +293,7 @@ describe('Marketing Video Generation Agent', () => {
     const { client, productId } = await setupSellerWithProduct();
     const gen = await client.req('/api/media/marketing-videos', {
       method: 'POST',
-      body: { productId, durationSeconds: 4 },
+      body: { productId, durationSeconds: 35 },
     });
     expect(gen.status).toBe(201);
     const assetId = gen.data.data.id as string;
@@ -312,6 +322,67 @@ describe('Marketing Video Generation Agent', () => {
     expect(mine!.previewable).toBe(true);
     expect(mine!.mediaUrl).toContain(`/api/media/assets/${assetId}/content?token=`);
     expect(mine!.downloadUrl).toContain('download=1');
+  });
+
+  // WASIT duration policy: 35–120s inclusive, verified on the ACTUAL asset.
+  it('refuses a duration below the 35s floor and above the 120s ceiling', async () => {
+    const { client, productId } = await setupSellerWithProduct();
+    for (const bad of [34, 121, 4, 300]) {
+      const r = await client.req('/api/media/marketing-videos', {
+        method: 'POST',
+        body: { productId, durationSeconds: bad },
+      });
+      expect(r.status, `duration ${bad} must be refused by the API schema`).toBe(422);
+    }
+  });
+
+  it('accepts both 35s and 120s and stores the real MP4 duration', async () => {
+    const { client, productId } = await setupSellerWithProduct();
+
+    for (const requested of [35, 120]) {
+      const gen = await client.req('/api/media/marketing-videos', {
+        method: 'POST',
+        body: { productId, durationSeconds: requested },
+      });
+      expect(gen.status, `duration ${requested} must be accepted`).toBe(201);
+      const asset = gen.data.data as { id: string; durationSeconds: number; previewUrl: string };
+      // The stored duration comes from the bytes, and for this renderer must
+      // equal the requested value — proving the number is measured, not echoed.
+      expect(asset.durationSeconds).toBe(requested);
+
+      // Re-read the bytes through the signed URL and measure independently.
+      const preview = new URL(asset.previewUrl, 'http://localhost');
+      const content = await client.req(`${preview.pathname}${preview.search}`);
+      const bytes = Buffer.from(content.data as ArrayBuffer);
+      const measured = measureMp4DurationSeconds(bytes);
+      expect(measured, 'the persisted MP4 must carry a readable duration').toBe(requested);
+
+      // The DB row must store the measured value, not the request echo.
+      const rows = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));
+      expect(Number(rows[0].durationSeconds)).toBe(requested);
+    }
+  }, 30_000);
+
+  it('measures duration from bytes and rejects an out-of-range rendered asset', async () => {
+    // A provider that renders shorter than the policy floor (or longer than the
+    // ceiling) must be caught by the post-render check — not merely by the input
+    // schema. This simulates a future vendor whose output drifts from the ask.
+    const originalRender = StructuralVideoProvider.prototype.render;
+    StructuralVideoProvider.prototype.render = function (spec) {
+      return originalRender.call(this, { ...spec, durationSeconds: 10 });
+    };
+    try {
+      const { client, productId } = await setupSellerWithProduct();
+      const r = await client.req('/api/media/marketing-videos', {
+        method: 'POST',
+        body: { productId, durationSeconds: 35 },
+      });
+      expect(r.status).toBe(502);
+      expect(r.data.error.code).toBe('SERVICE_UNAVAILABLE');
+      expect(String(r.data.error.message)).toMatch(/outside the required 35–120s range/);
+    } finally {
+      StructuralVideoProvider.prototype.render = originalRender;
+    }
   });
 });
 

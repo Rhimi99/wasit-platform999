@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { ApiError, PERMISSIONS } from '@wasit/shared';
+import {
+  ApiError,
+  PERMISSIONS,
+  MARKETING_VIDEO_DURATION,
+} from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
@@ -21,7 +25,12 @@ const generateSchema = z.object({
   language: z.enum(VIDEO_LANGUAGES).optional(),
   audience: z.enum(VIDEO_AUDIENCES).optional(),
   style: z.enum(VIDEO_STYLES).optional(),
-  durationSeconds: z.coerce.number().int().min(4).max(60).optional(),
+  durationSeconds: z.coerce
+    .number()
+    .int()
+    .min(MARKETING_VIDEO_DURATION.min)
+    .max(MARKETING_VIDEO_DURATION.max)
+    .optional(),
   campaignId: z.string().max(36).optional().nullable(),
 });
 

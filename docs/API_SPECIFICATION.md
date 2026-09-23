@@ -220,9 +220,12 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 
 - `POST /marketing-videos` — توليد فيديو تسويقي حقيقي لمنتج. Body: `productId` (إلزامي)،
   `title?`، `language?` (`ar|fr|en|zh`)، `audience?` (`B2B|B2C`)، `style?`
-  (`MODERN|MINIMAL|BOLD|ELEGANT`)، `durationSeconds?`، `campaignId?`.
+  (`MODERN|MINIMAL|BOLD|ELEGANT`)، `durationSeconds?` (**35–120 ثانية شاملة؛ الافتراضي 60**؛
+  أي قيمة خارج النافذة تُرفض بـ422)، `campaignId?`.
   صلاحية `media:upload`؛ المنتج يجب أن يخصّ كيان المستخدم (أو Admin) وأن يكون **ACTIVE**.
-  يعيد 201 بأصل `READY` مع `previewUrl`/`downloadUrl` موقّعين. يُسجَّل في AI Cost Control.
+  يعيد 201 بأصل `READY` مع `previewUrl`/`downloadUrl` موقّعين. **المدة المُخزَّنة تُقاس فعليًا من
+  bytes الـMP4 الناتج (`moov/mvhd`) لا من قيمة الطلب؛ وإن خرجت المدة الفعلية عن 35–120 يُرفض
+  الأصل ولا يُصبح READY.** يُسجَّل في AI Cost Control.
 - `GET /assets` — مكتبة وسائط المالك (filters: `kind`, `productId`, `limit`)
 - `GET /assets/:id` — تفاصيل أصل مملوك (أو Admin)
 - `DELETE /assets/:id` — حذف ناعم (DELETED) مع إبقاء السجل للـ Audit

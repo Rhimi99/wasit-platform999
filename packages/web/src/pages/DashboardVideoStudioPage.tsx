@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { MARKETING_VIDEO_DURATION } from '@wasit/shared';
 import { api, apiCall, ApiClientError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
@@ -22,7 +23,7 @@ export function DashboardVideoStudioPage() {
   const [language, setLanguage] = useState<(typeof LANGUAGES)[number]>('ar');
   const [audience, setAudience] = useState<(typeof AUDIENCES)[number]>('B2B');
   const [style, setStyle] = useState<(typeof STYLES)[number]>('MODERN');
-  const [durationSeconds, setDurationSeconds] = useState(12);
+  const [durationSeconds, setDurationSeconds] = useState<number>(MARKETING_VIDEO_DURATION.default);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -109,12 +110,15 @@ export function DashboardVideoStudioPage() {
               <label className="label" htmlFor="v-duration">{t('studio.duration')}</label>
               <input id="v-duration"
                 type="number"
-                min={4}
-                max={60}
+                min={MARKETING_VIDEO_DURATION.min}
+                max={MARKETING_VIDEO_DURATION.max}
                 value={durationSeconds}
-                onChange={(e) => setDurationSeconds(Number(e.target.value) || 12)}
+                onChange={(e) => setDurationSeconds(Number(e.target.value) || MARKETING_VIDEO_DURATION.default)}
                 className="input"
               />
+              <p className="mt-1 text-xs text-slate-500" data-testid="duration-hint">
+                {t('studio.durationHint')} {MARKETING_VIDEO_DURATION.min}–{MARKETING_VIDEO_DURATION.max}s
+              </p>
             </div>
             <button
               type="submit"
