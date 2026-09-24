@@ -4,6 +4,31 @@
 > **الفرع**: `master`
 > **HEAD**: `bada224` + هذا الـcommit
 
+---
+
+## تحديث 2026-09-24 — PS-01 / PS-02 / PS-04 / WASIT Receipt (من `9b164f5`)
+
+**القرار المعماري محفوظ**: Automated-First · لا Staff في المسار الطبيعي · Commission Policy 4% = 2% + 2% بلا تغيير · PS-05 خارج Money Path (صفر مراجع برمجية) · لا Wallet.
+
+| المرحلة | الـcommit | ما نُفِّذ فعليًا | الاختبارات |
+| --- | --- | --- | --- |
+| **PS-01 Settlement Ledger** | `1ecfc23` | طبقة `modules/settlements` تملك **الكاتب الوحيد** لـ`transaction_ledger.status='SETTLED'` وتُنشئ **قيد `SETTLEMENT` واحدًا** فقط خلف دليل صالح (مرجع transaction/order + amount + currency + provider + `settlementRef` إلزامي + timestamp عند توفره). العملية داخل DB transaction واحد ⇒ لا نصف حالة. Idempotent: قفل `FOR UPDATE` + نفس المرجع = no-op، مرجع مختلف = conflict. | **9** اختبارات جديدة (`settlement-ledger.test.ts`) |
+| **PS-02 Seller Payout** | `e9a99de` | محرّك Payout مستقل (خالص): `CREATED→PROCESSING→COMPLETED/FAILED/HELD`. `COMPLETED` يتطلّب `payoutRef` + مطابقة مبلغ/عملة. `CREATED ≠ COMPLETED`. بوابة `assertPayoutCapable` تمنع مزوّد الديمو. صافي البائع = `itemsTotal − sellerCommission` = 980 للطلب 1020. | **11** اختبار (`payout-engine.test.ts`) |
+| **PS-04 Reconciliation** | `f2fadad` | مطابقة ثلاثية (Provider ↔ Bank ↔ Ledger) بفروق **مصنَّفة** (missing/amount/fee/net/currency/not-settled) تظهر كـMISMATCH ولا تتحوّل لنجاح. خالص وidempotent. | **11** اختبار (`reconciliation-engine.test.ts`) |
+| **WASIT Receipt** | `f2fadad` | `Funds Received = RECEIVED` بدليل statement فقط (مرجع + مبلغ + عملة). التسوية وحدها لا تعطي RECEIVED. | ضمن نفس الملف |
+
+**بوابات التحقق (منفَّذة فعليًا):**
+- server tests: **59 ملف / 625/625** ناجح (كان 594 قبل هذه المرحلة: +9 PS-01، +11 PS-02، +11 PS-04/Receipt).
+- typecheck: 0 أخطاء (server + web) · build: PASS.
+- `verify-money-path`: OK — 0 انتهاكات (لا SETTLED على معاملة غير PAID، ولا SETTLED بلا أثر `SETTLEMENT.CONFIRMED`).
+- تدقيق الكُتّاب: كاتب `SETTLED` الوحيد = `modules/settlements/service.ts:149` · كاتب قيد `SETTLEMENT` الوحيد = `modules/settlements/service.ts:165`.
+- PS-05: **صفر مراجع برمجية** ⇒ لا يزال خارج Money Path.
+- لا migration، لا DB reset/drop/push، لا حذف migrations.
+
+**نقطة توقف مطلوبة (schema migration) — لم يُنفَّذ بعد:**
+باقي PS-02 (جدول `payouts` + endpoints) وPS-04 (تخزين الـfeeds/القرارات + Receipt state) يحتاج **migration**، وهو مسار توقف حسب القواعد. لم تُنشأ أي migration. التصميم المقترح موثّق في تقرير المرحلة.
+
+
 ## ✅ الحالة — Money Path Invariants: `Payment ≠ Settlement` (2026-09-24)
 
 **السياق**: نُفِّذت إصلاحات المسار المالي وفق أحدث READ-ONLY AUDIT، مع الحفاظ على قرار
