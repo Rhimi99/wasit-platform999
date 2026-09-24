@@ -34,6 +34,36 @@ export const test = base;
 export { expect };
 
 /**
+ * Completes email verification for a freshly registered account, tolerating both
+ * environments the suite runs against.
+ *
+ * The public demo sets DEMO_SKIP_EMAIL_VERIFICATION, so a registration is already
+ * verified and the dev helper answers 422 ALREADY_VERIFIED (or the account is
+ * ready to sign in immediately). Every other environment keeps the real flow:
+ * mint the token through the dev helper and consume it via POST /verify-email,
+ * exactly as the emailed link would. Returns whether a verification was actually
+ * performed, so a spec can assert on the right post-registration message.
+ */
+export async function completeEmailVerification(
+  ctx: { post: (url: string, options?: { data?: unknown }) => Promise<{ ok(): boolean; status(): number; json(): Promise<unknown> }> },
+  email: string,
+): Promise<boolean> {
+  const link = await ctx.post('/api/auth/dev/verification-link', { data: { email } });
+  if (link.ok()) {
+    const token = ((await link.json()) as { data: { token: string } }).data.token;
+    const verified = await ctx.post('/api/auth/verify-email', { data: { token } });
+    if (!verified.ok()) throw new Error(`verify-email failed: HTTP ${verified.status()}`);
+    return true;
+  }
+  // Already verified by the demo bypass: there is nothing to click.
+  const body = (await link.json()) as { error?: { code?: string; fieldErrors?: Array<{ code?: string }> } };
+  const alreadyVerified =
+    body.error?.fieldErrors?.some((f) => f.code === 'ALREADY_VERIFIED') === true;
+  if (!alreadyVerified) throw new Error(`dev/verification-link failed: HTTP ${link.status()}`);
+  return false;
+}
+
+/**
  * Places a real order through the UI and returns its id (from the orders API).
  *
  * Walks the marketplace listings until a product accepts the order. The demo

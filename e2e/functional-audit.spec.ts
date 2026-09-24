@@ -1,4 +1,4 @@
-import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi, loginViaUi } from './helpers';
+import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi, loginViaUi, completeEmailVerification } from './helpers';
 
 /**
  * Functional audit (UI-driven, real backend + PostgreSQL, no mocks).
@@ -286,12 +286,9 @@ test.describe('SUBSCRIPTIONS — live catalog, subscribe, change, cancel', () =>
       data: { email: unique, password: DEMO_PASSWORD, firstName: 'Sub', role: 'CUSTOMER' },
     });
     expect(reg.status()).toBe(201);
-    // Registration requires a verified email before login (no mailbox locally), so
-    // complete the real dev verification flow through the API, then log in via the UI.
-    const link = await page.request.post('/api/auth/dev/verification-link', { data: { email: unique } });
-    const { token } = (await link.json()).data as { token: string };
-    const verified = await page.request.post('/api/auth/verify-email', { data: { token } });
-    expect(verified.ok()).toBeTruthy();
+    // Verification is required before login in most environments; the public demo
+    // stores the account verified. Either way, complete it through the real flow.
+    await completeEmailVerification(page.request, unique);
     await loginViaUi(page, unique);
     await expect(page).toHaveURL(/\/dashboard/);
 
@@ -670,15 +667,15 @@ test.describe('ADMIN — every admin surface', () => {
       await userPage.locator('form input[type="email"]').fill(email);
       await userPage.locator('form input[type="password"]').fill(password);
       await userPage.locator('form button[type="submit"]').click();
-      await expect(userPage.getByText(/تم إنشاء الحساب|Account created/i)).toBeVisible();
+      // The demo stores the account verified and says so; every other environment
+      // asks the visitor to check their inbox. Either message proves the form ran.
+      await expect(
+        userPage.getByText(/تم إنشاء الحساب|Account created/i).first(),
+      ).toBeVisible();
 
-      // Complete the real email-verification token path (dev helper, disabled in
-      // production) so the account can sign in without the unverified override.
-      const linkRes = await userPage.request.post('/api/auth/dev/verification-link', { data: { email } });
-      expect(linkRes.ok()).toBeTruthy();
-      const token = (await linkRes.json()).data.token as string;
-      const verifyRes = await userPage.request.post('/api/auth/verify-email', { data: { token } });
-      expect(verifyRes.ok()).toBeTruthy();
+      // Complete the real email-verification token path where the environment
+      // requires it (the dev helper is disabled in production).
+      await completeEmailVerification(userPage.request, email);
 
       await userPage.goto('/login');
       await userPage.locator('form input[type="email"]').fill(email);
@@ -794,11 +791,17 @@ test.describe('ONBOARDING — entity creation from the UI', () => {
     await page.locator('form button[type="submit"]').click();
     await expect(page.getByRole('status')).toBeVisible();
 
-    // Registration requires email verification; complete it through the real UI page.
-    const linkRes = await page.request.post('/api/auth/dev/verification-link', { data: { email } });
-    const token = (await linkRes.json()).data.token as string;
-    await page.goto(`/verify-email?token=${token}`);
-    await expect(page.getByText(/تم التحقق|verified/i).first()).toBeVisible();
+    // Where verification is required, complete it through the real token path;
+    // the public demo already has the account verified and skips it.
+    const verified = await completeEmailVerification(page.request, email);
+
+    if (verified) {
+      // Exercise the emailed link's own UI page in environments that need it.
+      const linkRes = await page.request.post('/api/auth/dev/verification-link', { data: { email } });
+      const token = (await linkRes.json()).data.token as string;
+      await page.goto(`/verify-email?token=${token}`);
+      await expect(page.getByText(/تم التحقق|verified/i).first()).toBeVisible();
+    }
 
     await page.goto('/login');
     await page.locator('form input[type="email"]').fill(email);

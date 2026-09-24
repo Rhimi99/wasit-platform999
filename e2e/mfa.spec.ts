@@ -1,4 +1,4 @@
-import { test, expect, DEMO_PASSWORD } from './helpers';
+import { test, expect, DEMO_PASSWORD, completeEmailVerification } from './helpers';
 import type { Page } from '@playwright/test';
 
 /**
@@ -24,13 +24,9 @@ async function registerAndLogin(page: Page, email: string): Promise<void> {
   await page.locator('form button[type="submit"]').click();
   await expect(page.getByRole('status')).toBeVisible();
 
-  // Fetch the verification token through the real dev helper, then consume it
-  // through the same endpoint the email link would hit (POST /verify-email).
-  const linkRes = await page.request.post('/api/auth/dev/verification-link', { data: { email } });
-  expect(linkRes.ok()).toBeTruthy();
-  const { data } = (await linkRes.json()) as { data: { token: string } };
-  const verifyRes = await page.request.post('/api/auth/verify-email', { data: { token: data.token } });
-  expect(verifyRes.ok()).toBeTruthy();
+  // Complete verification through the real token path where the environment
+  // still requires it (the public demo stores the account already verified).
+  await completeEmailVerification(page.request, email);
 
   await signIn(page, email, PASSWORD);
 }

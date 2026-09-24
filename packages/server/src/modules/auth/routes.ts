@@ -32,7 +32,7 @@ import {
   devPhoneCode,
 } from './service';
 import { ApiError } from '@wasit/shared';
-import { env, devToolingEnabled, cookieSecure } from '../../lib/env';
+import { env, devToolingActive, cookieSecure } from '../../lib/env';
 import { hashToken } from '../../lib/security';
 
 const mfaEnrollSchema = z.object({});
@@ -58,6 +58,13 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+  /**
+   * Dev/test convenience so an integration suite can reach the code under test
+   * without a mailbox. It is only honoured where the dev tooling itself is
+   * enabled (development, test, or a staging stack that opted in), never in
+   * production — otherwise a caller could skip the email-verification gate by
+   * simply sending `true`.
+   */
   allowUnverifiedEmail: z.boolean().optional().default(false),
 });
 
@@ -99,7 +106,10 @@ authRoutes.post(
     const result = await loginUser(ctx.db, body, {
       ipAddress: ctx.ipAddress,
       userAgent: ctx.userAgent,
-      allowUnverifiedEmail: body.allowUnverifiedEmail,
+      // The request flag is honoured only where the dev tooling is enabled.
+      // Production never enables it, so the verification gate cannot be skipped
+      // by a caller that simply sends `allowUnverifiedEmail: true`.
+      allowUnverifiedEmail: body.allowUnverifiedEmail && devToolingActive(),
     });
 
     if (result.kind === 'mfa_required') {
@@ -165,7 +175,7 @@ authRoutes.post(
   rateLimit({ windowSeconds: 60, max: registerRateMax, keyPrefix: 'auth-dev-verify' }),
   validateBody(devVerificationSchema),
   async (c) => {
-    if (!devToolingEnabled) {
+    if (!devToolingActive()) {
       throw new ApiError(404, 'NOT_FOUND', 'Not available in this environment');
     }
     const body = getValidatedBody<z.infer<typeof devVerificationSchema>>(c);
@@ -214,7 +224,7 @@ authRoutes.post(
   rateLimit({ windowSeconds: 60, max: registerRateMax, keyPrefix: 'auth-dev-phone' }),
   validateBody(devVerificationSchema),
   async (c) => {
-    if (!devToolingEnabled) {
+    if (!devToolingActive()) {
       throw new ApiError(404, 'NOT_FOUND', 'Not available in this environment');
     }
     const body = getValidatedBody<z.infer<typeof devVerificationSchema>>(c);
@@ -250,7 +260,7 @@ authRoutes.post(
       // production the token is delivered by email and never returned. An empty
       // token (unknown address) is omitted so the response stays uniform.
       data:
-        !devToolingEnabled || !resetToken ? undefined : { devResetToken: resetToken },
+        !devToolingActive() || !resetToken ? undefined : { devResetToken: resetToken },
     });
   },
 );
@@ -418,7 +428,7 @@ authRoutes.post(
   rateLimit({ windowSeconds: 60, max: 30, keyPrefix: 'auth-mfa-devtotp' }),
   async (c) => {
     const ctx = getContext(c);
-    if (!devToolingEnabled) {
+    if (!devToolingActive()) {
       return c.json({ success: false, message: 'Not available in this environment' }, 403 as never);
     }
     const body = (await c.req.json().catch(() => ({}))) as { secretBase32?: string };

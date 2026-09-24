@@ -1,6 +1,6 @@
 import { request } from '@playwright/test';
 import { Pool } from 'pg';
-import { test, expect, storageFor, DEMO_PASSWORD } from './helpers';
+import { test, expect, storageFor, DEMO_PASSWORD, completeEmailVerification } from './helpers';
 
 /**
  * Admin privacy / data-deletion desk — functional audit driven from the browser.
@@ -26,9 +26,7 @@ async function createDeletionRequest(reason: string): Promise<{ userId: string; 
   });
   expect(reg.status()).toBe(201);
   const userId = (await reg.json()).data.userId as string;
-  const link = await ctx.post('/api/auth/dev/verification-link', { data: { email } });
-  const { token } = (await link.json()).data as { token: string };
-  expect((await ctx.post('/api/auth/verify-email', { data: { token } })).ok()).toBeTruthy();
+  await completeEmailVerification(ctx, email);
   expect((await ctx.post('/api/auth/login', { data: { email, password: DEMO_PASSWORD } })).ok()).toBeTruthy();
   const del = await ctx.post('/api/privacy/deletion', { data: { reason } });
   expect(del.ok()).toBeTruthy();

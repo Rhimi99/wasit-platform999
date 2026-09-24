@@ -1,6 +1,6 @@
 import { request } from '@playwright/test';
 import { Pool } from 'pg';
-import { test, expect, storageFor, DEMO_PASSWORD } from './helpers';
+import { test, expect, storageFor, DEMO_PASSWORD, completeEmailVerification } from './helpers';
 
 /**
  * Admin subscriptions desk — functional audit driven entirely from the browser.
@@ -18,9 +18,7 @@ async function createSubscribedCustomer(planCode: string): Promise<{ email: stri
     data: { email, password: DEMO_PASSWORD, firstName: 'AdminSub', role: 'CUSTOMER' },
   });
   expect(reg.status()).toBe(201);
-  const link = await ctx.post('/api/auth/dev/verification-link', { data: { email } });
-  const { token } = (await link.json()).data as { token: string };
-  expect((await ctx.post('/api/auth/verify-email', { data: { token } })).ok()).toBeTruthy();
+  await completeEmailVerification(ctx, email);
   expect((await ctx.post('/api/auth/login', { data: { email, password: DEMO_PASSWORD } })).ok()).toBeTruthy();
 
   const plansBody = await (await ctx.get('/api/subscriptions/plans')).json();

@@ -23,6 +23,10 @@ export function RegisterPage() {
   const [role, setRole] = useState('CUSTOMER');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  // The server decides whether the account still needs verification (the public
+  // demo stores it verified). The message must match what actually happens next,
+  // otherwise the demo tells the visitor to check an inbox that will never ring.
+  const [needsVerification, setNeedsVerification] = useState(true);
   const [loading, setLoading] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
@@ -30,7 +34,8 @@ export function RegisterPage() {
     setError(null);
     setLoading(true);
     try {
-      await api.register({ email, password, firstName: firstName || undefined, lastName: lastName || undefined, role, locale: undefined });
+      const result = await api.register({ email, password, firstName: firstName || undefined, lastName: lastName || undefined, role, locale: undefined });
+      setNeedsVerification(result.requiresEmailVerification);
       setSuccess(true);
       // بعد التسجيل، اقترح الدخول
       setTimeout(() => navigate('/login'), 1800);
@@ -48,7 +53,7 @@ export function RegisterPage() {
           <h1 className="text-2xl font-bold text-slate-900">{t('auth.register')}</h1>
           {success ? (
             <div className="mt-6 rounded-md bg-green-50 p-4 text-sm text-green-800" role="status">
-              {t('auth.registerSuccess')}
+              {needsVerification ? t('auth.registerSuccess') : t('auth.registerSuccessVerified')}
             </div>
           ) : (
             <form onSubmit={submit} className="mt-6 space-y-4">

@@ -20,7 +20,7 @@ import {
   verifyPassword,
 } from '../../lib/security';
 import { verifyMfaChallenge } from '../../lib/mfa';
-import { env } from '../../lib/env';
+import { env, demoEmailVerificationSkipped } from '../../lib/env';
 import { writeAudit } from '../../lib/audit';
 import { sendMail } from '../../lib/mail/send';
 import { buildPasswordResetEmail, buildVerificationEmail } from '../../lib/mail/templates';
@@ -135,6 +135,12 @@ export async function registerUser(
   const passwordHash = await hashPassword(input.password);
   const phone = normalizePhone(input.phone);
 
+  // Public demo only (never production — see `demoEmailVerificationSkipped`): the
+  // visitor has no mailbox to click, so the account is stored already verified
+  // and no verification token is minted. Every other environment leaves this
+  // false and keeps the full verification flow.
+  const skipEmailVerification = demoEmailVerificationSkipped();
+
   await db.insert(users).values({
     id: userId,
     email,
@@ -143,7 +149,7 @@ export async function registerUser(
     lastName: input.lastName ?? null,
     phone,
     locale: input.locale ?? 'ar',
-    emailVerified: false,
+    emailVerified: skipEmailVerification,
   });
 
   await db.insert(userRoles).values({
@@ -152,17 +158,27 @@ export async function registerUser(
     roleId,
   });
 
-  // Email verification token. The link is delivered by the active mail
-  // transport; a transport failure must not abort registration (the account is
-  // already persisted and the audit row records the delivery attempt).
-  const token = await issueEmailVerificationToken(db, userId);
-
   await writeAudit(db, { actorId: userId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
     action: 'AUTH.REGISTER',
     entityType: 'USER',
     entityId: userId,
-    after: { email, role: roleName },
+    after: { email, role: roleName, emailVerified: skipEmailVerification },
   });
+
+  if (skipEmailVerification) {
+    await writeAudit(db, { actorId: userId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+      action: 'AUTH.EMAIL_VERIFICATION_SKIPPED',
+      entityType: 'USER',
+      entityId: userId,
+      metadata: { reason: 'DEMO_SKIP_EMAIL_VERIFICATION' },
+    });
+    return { userId, requiresEmailVerification: false };
+  }
+
+  // Email verification token. The link is delivered by the active mail
+  // transport; a transport failure must not abort registration (the account is
+  // already persisted and the audit row records the delivery attempt).
+  const token = await issueEmailVerificationToken(db, userId);
 
   const verifyLink = `${env.APP_URL}/verify-email?token=${token}`;
   await sendMail(

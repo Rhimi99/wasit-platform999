@@ -98,6 +98,17 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  /**
+   * Public-demo convenience: a registration is stored already email-verified, so
+   * a visitor can sign in immediately instead of waiting for a mailbox that a
+   * throwaway demo does not have. Off by default, so every other environment
+   * keeps verification mandatory. Refused outright in production (see below) —
+   * the flag can never relax the gate on a real deployment, even if it is set.
+   */
+  DEMO_SKIP_EMAIL_VERIFICATION: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Rate-limit store. `memory` keeps counters in-process (dev / tests / a
   // single instance). `postgres` shares counters across instances so limits
   // hold when the API is scaled out — no extra infrastructure required.
@@ -196,14 +207,39 @@ export const env = parsed.data;
  * A deployed environment must opt in explicitly with `ALLOW_DEV_TOOLING=true`
  * (staging only — production is refused below), because anyone who can reach the
  * API could otherwise mint tokens for any address.
+ *
+ * Read at call time by {@link devToolingActive} rather than frozen into a
+ * constant, so the gate follows the parsed env and stays testable over HTTP.
  */
-export const devToolingEnabled =
-  env.NODE_ENV === 'development' || env.NODE_ENV === 'test' || env.ALLOW_DEV_TOOLING;
+export function devToolingActive(): boolean {
+  return env.NODE_ENV === 'development' || env.NODE_ENV === 'test' || env.ALLOW_DEV_TOOLING;
+}
 
 if (env.NODE_ENV === 'production' && env.ALLOW_DEV_TOOLING) {
   // eslint-disable-next-line no-console
   console.error('Refusing to start: ALLOW_DEV_TOOLING cannot be enabled in production.');
   process.exit(1);
+}
+
+/**
+ * Whether registration marks the account email-verified so the visitor can sign
+ * in immediately (public demo only). Production is excluded twice over: the
+ * deployment refuses to boot with the flag set, and the resolver ignores it, so
+ * a stray `DEMO_SKIP_EMAIL_VERIFICATION=true` in a production secret store can
+ * neither start the process nor relax the gate. Read at call time by
+ * {@link demoEmailVerificationSkipped}.
+ */
+if (env.NODE_ENV === 'production' && env.DEMO_SKIP_EMAIL_VERIFICATION) {
+  // eslint-disable-next-line no-console
+  console.error(
+    'Refusing to start: DEMO_SKIP_EMAIL_VERIFICATION cannot be enabled in production. ' +
+      'Email verification is mandatory on a real deployment.',
+  );
+  process.exit(1);
+}
+
+export function demoEmailVerificationSkipped(): boolean {
+  return env.NODE_ENV !== 'production' && env.DEMO_SKIP_EMAIL_VERIFICATION;
 }
 
 /**

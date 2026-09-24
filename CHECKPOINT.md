@@ -1,8 +1,45 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-23 — **PUBLIC DEMO FUNCTIONAL AUDIT — تدقيق وظيفي حقيقي من الواجهة على الرابط العام HTTPS**
+> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: تسجيل بلا تحقق بريد + إغلاق متجه تجاوز بوابة الدخول**
 > **الفرع**: `master`
-> **HEAD**: `0549432` + إصلاحات التدقيق الوظيفي (هذا الـcommit)
+> **HEAD**: `0549432` + هذا الـcommit
+
+## ✅ حالة معتمدة — تسجيل فوري في العرض العام + إصلاح ثغرة تجاوز بوابة الدخول (2026-09-24)
+
+**الهدف**: زائر العرض العام لا يملك صندوق بريد، فكان يسجّل ثم يُطالَب بتحقق مستحيل. المطلوب: بعد التسجيل يستطيع الدخول فورًا — **دون** إضعاف بوابة التحقق على أي بيئة حقيقية.
+
+### 1) السبب الجذري الأهم: بوابة الدخول كانت تحت سيطرة العميل
+كانت `POST /api/auth/login` تقرأ `allowUnverifiedEmail` من جسم الطلب وتمرّرها كما هي إلى `loginUser`. أي أن **أي مُتصل** يستطيع إرسال `{"allowUnverifiedEmail": true}` وتجاوز بوابة التحقق — على الإنتاج أيضًا. لم يكن مجرد خيار dev، بل متجه تجاوز حقيقي.
+
+- **الإصلاح (`modules/auth/routes.ts`)**: `allowUnverifiedEmail: body.allowUnverifiedEmail && devToolingActive()`. يجب أيضًا أن تكون أداة dev مُفعّلة (development/test أو staging opt-in)، لذا الإنتاج لا يمكن أن يفتح البوابة عبر جسم الطلب.
+- **`lib/env.ts`**: `devToolingEnabled` (ثابت وقت الاستيراد) → `devToolingActive()` قارئ **وقت النداء**؛ كل بوابات dev (السطور 178/227/263/431) تستخدمه الآن. لا ثابت ميت.
+
+### 2) تخطّي التحقق في العرض العام فقط، مع حرس مزدوج
+- **`lib/env.ts`**: علم `DEMO_SKIP_EMAIL_VERIFICATION` (افتراضي false). الإنتاج **يرفض الإقلاع** إذا كان true (نفس نمط `ALLOW_DEV_TOOLING`)، و`demoEmailVerificationSkipped()` يستثني الإنتاج مرة ثانية عند النداء.
+- **`auth/service.ts`**: في التسجيل، `skipEmailVerification = demoEmailVerificationSkipped()` ⇒ الحساب يُخزَّن `emailVerified=true` ولا يُصدر رمز تحقق، ويُكتب سجل تدقيق `AUTH.EMAIL_VERIFICATION_SKIPPED`. الاستجابة تحمل `requiresEmailVerification:false`.
+- **الواجهة (`RegisterPage.tsx` + `i18n.ts`)**: الرسالة تتبع نتيجة الخادم الفعلية بدل أن تدّعي دائمًا «تحقق من بريدك». مفتاح جديد `auth.registerSuccessVerified` بأربع لغات (ar/en/fr/zh).
+
+### الاختبار الحقيقي (لا Mock)
+- **`packages/server/tests/demo-email-verification.test.ts` (جديد، 6 حالات، HTTP حقيقي)**: السلوك الافتراضي يبقى صارمًا (حساب غير مُتحقق + رمز + رفض دخول)؛ `allowUnverifiedEmail` يُتجاهل حين تكون أدوات dev معطّلة؛ مع التفعيل: حساب مُتحقق، لا رمز، و`/api/auth/me` يؤكده.
+- **`e2e/demo-registration.spec.ts` (جديد، حالتان)**: يكتشف البيئة من نص البانر ويكتسب العقد المطابق — إما دخول فوري (عرض عام) أو **403 EMAIL_NOT_VERIFIED** (بيئة تفرض التحقق). يقود نموذجي التسجيل والدخول فعليًا ويؤكد `GET /api/auth/me`.
+- **`e2e/helpers.ts`**: `completeEmailVerification()` يتحمّل الوضعين (رمز حقيقي، أو 422 ALREADY_VERIFIED في العرض العام)؛ حُدّثت مواضع استخدامه في `functional-audit`/`mfa`/`admin-privacy`/`admin-subscriptions`.
+- **HTTP حقيقي على الرابط العام HTTPS**: تسجيل ⇒ `requiresEmailVerification:false`، دخول ⇒ 200 + `emailVerified:true`، `/api/auth/me` ⇒ جلسة صحيحة.
+- **Browser smoke من عرض هاتف (Pixel 5) على الرابط العام**: **6/6 PASS** (بانر «يمكنك تسجيل الدخول الآن»، دخول → داشبورد، شريط جانبي، صفحة الطلبات، 12 منتجًا في المتجر).
+
+### البوابات
+- **حزمة الخادم**: 54 ملفًا / **564 اختبارًا ناجحًا** (كانت 558؛ +6).
+- **حزمة E2E كاملة (وضع العرض العام)**: **196/196 ناجح** (كانت 194؛ +2 صافي).
+- **typecheck**: 0 أخطاء. **build**: PASS (server + web).
+
+### الملفات
+- `packages/server/src/lib/env.ts`، `packages/server/src/modules/auth/service.ts`، `packages/server/src/modules/auth/routes.ts`
+- `packages/web/src/pages/RegisterPage.tsx`، `packages/web/src/lib/i18n.ts`
+- `packages/server/tests/demo-email-verification.test.ts` (جديد)، `e2e/demo-registration.spec.ts` (جديد)
+- `e2e/helpers.ts`، `e2e/functional-audit.spec.ts`، `e2e/mfa.spec.ts`، `e2e/admin-privacy.spec.ts`، `e2e/admin-subscriptions.spec.ts`، `playwright.config.ts`، `.env.staging.example`
+
+### القيود المُحترمة
+لا migration/`db reset/drop/push`؛ سياسة العمولة 4% (2%+2%) دون تغيير؛ لا مساس بـMarketing Video `89e68d7`؛ لا Mock؛ لم تُعطّل أزرار لإخفاء أخطاء؛ RBAC كما هو؛ ar/fr/en/zh وRTL محفوظة؛ `wasit_dev`/الإنتاج دون تغيير.
+
 ---
 
 ## ✅ حالة معتمدة — FUNCTIONAL AUDIT من الواجهة على الرابط العام HTTPS (2026-09-23)

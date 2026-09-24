@@ -55,6 +55,10 @@ export default defineConfig({
         // Point the backup-freshness alert at a scratch heartbeat so the
         // observability spec can age it on disk and prove the alert fires.
         BACKUP_HEARTBEAT_FILE: path.resolve('.e2e/backup-heartbeat.json'),
+        // Default: verification is mandatory, as in every non-demo environment.
+        // Run the suite with DEMO_SKIP_EMAIL_VERIFICATION=true to exercise the
+        // public-demo contract (register then sign in with no mailbox).
+        DEMO_SKIP_EMAIL_VERIFICATION: process.env.DEMO_SKIP_EMAIL_VERIFICATION ?? 'false',
       },
     },
     {
