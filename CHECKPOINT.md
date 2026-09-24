@@ -39,11 +39,39 @@
 بلا تجاوزات rate-limit الخاصة بالـE2E، فتظهر 13 إخفاقة كاذبة في مكاتب admin. شغّل الـE2E على منفذ
 حرّ (أوقف الخادم اليدوي أولًا).
 
+**إعادة تشغيل رابط الـPreview (كان 502)**: قاعدة `wasit_demo` وخدمتا الـAPI/الويب لم تكونا تعملان في
+بيئة التشغيل الجديدة. أُعيد إنشاؤها **معزولة تمامًا** (`wasit_dev` بلا مساس: 22 منتج / 78 مستخدمًا كما هي):
+`CREATE ROLE/DATABASE wasit_demo` ← `drizzle-kit migrate` ← `seed.ts` ← `seed-demo.ts` (لا reset/drop/push)،
+ثم API بـ`.env.demo` على `:3000` والويب **بناء إنتاج** (`VITE_DEMO_MODE=true`) عبر `vite preview` على
+`:12000` مع `API_URL=http://localhost:3000`. النتيجة: `/`, `/demo/owner`, `/demo/customer`, `/marketplace`
+= **200** و`/api/health/ready` = `{"status":"ready","db":"connected"}` — فيمكن التجربة من الهاتف.
+
+**Browser Functional Smoke حقيقي (Chromium ضد البناء المُقدَّم على `:12000`، جلسات حقيقية عبر `/api/auth/me`)**:
+**26/26 PASS** — CUSTOMER (auto-login، حجب 403، Marketplace 12 بطاقة، بحث 3 نتائج، تفاصيل منتج،
+orders/notifications/messages، صفحة الطلبات) · OWNER/MERCHANT (جلسة staff حقيقية، تبديل الدور إلى
+`merchanta@wasit.tn` مع بقاء RBAC 403، `/api/products/mine` 200، تسع صفحات dashboard) ·
+ADMIN (**15/15** سطح إداري يرندر لصاحب الجلسة) · MARKETING VIDEO (اختيار منتج/لغة/جمهور/نمط/مدة 35s،
+Generate، ظهور `<video>` جديد، حمولة MP4 حقيقية `720×1280 d=35 readyState=4`، زر تنزيل، حذف يزيله).
+
 | Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
 | --- | --- | --- | --- | --- | --- |
 | Risk desk: reassess user (رسالة أولى بخيط جديد) | ✅ | ✅ PASS | `openDirectThread` لم يستدعِ كاشف التهريب → لا إشارة ولا ملف مخاطر | استخراج `scanMessageForFeeEvasion` واستدعاؤها من مساري الكتابة | E2E + وحدة (12 حالة) |
 | Anti-fee-evasion: رسالة أولى نظيفة | ✅ | ✅ PASS | — | — | وحدة (حالة انحدار جديدة) |
 | Anti-fee-evasion: ردّ داخل الخيط | ✅ | ✅ PASS | — | — | وحدة + إثبات حيّ |
+| CUSTOMER: تسجيل الدخول / auto-login | ✅ | ✅ PASS | — | — | Browser smoke |
+| CUSTOMER: RBAC (حجب `/api/admin/stats` 403) | ✅ | ✅ PASS | — | — | Browser smoke |
+| CUSTOMER: تصفح Marketplace | ✅ | ✅ PASS | — | — | Browser smoke (12 بطاقة) |
+| CUSTOMER: البحث + صفحة النتائج | ✅ | ✅ PASS | — | — | Browser smoke (3 منتجات) |
+| CUSTOMER: تفاصيل المنتج | ✅ | ✅ PASS | — | — | Browser smoke |
+| CUSTOMER: الطلبات / الإشعارات / الرسائل | ✅ | ✅ PASS | — | — | Browser smoke + E2E |
+| MERCHANT: Dashboard KPIs | ✅ | ✅ PASS | — | — | Browser smoke + E2E |
+| MERCHANT: Products / Inventory / Orders | ✅ | ✅ PASS | — | — | Browser smoke + E2E |
+| MERCHANT: Ads / AI / Analytics / Subscriptions | ✅ | ✅ PASS | — | — | Browser smoke + E2E |
+| MERCHANT: إنشاء/تعديل/نشر منتج | ✅ | ✅ PASS | — | — | E2E (functional-audit) |
+| ADMIN: 15 سطحًا (Users/Products/Orders/Ledger/Audit/Verification/Trust/Risk/Disputes/Ads/AI/Subscriptions/Analytics) | ✅ | ✅ PASS | — | — | Browser smoke 15/15 + E2E |
+| ADMIN: دمج KPIs من API الحيّ | ✅ | ✅ PASS | — | — | E2E |
+| MARKETING VIDEO: كل الحقول + Generate + Preview + Download + Delete | ✅ | ✅ PASS | — | — | Browser smoke (MP4 حقيقي) |
+| MARKETING VIDEO: نافذة المدة 35–120s | ✅ | ✅ PASS | — | — | E2E |
 
 ---
 
