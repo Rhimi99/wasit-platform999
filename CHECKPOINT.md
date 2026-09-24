@@ -4,6 +4,49 @@
 > **الفرع**: `master`
 > **HEAD**: `9e71048` + هذا الـcommit
 
+## ✅ الحالة — Functional Audit: إصلاح تجاوز كشف التهريب خارج المنصة (2026-09-24)
+
+**العَرَض**: في تشغيل الـE2E الكامل، فشلت حالة واحدة حقيقية:
+`functional-audit.spec.ts:600 › risk desk reassesses a user and the refreshed score is rendered`
+— `/api/admin/risk/profiles` أعاد **0 صفوف** بعد إرسال رسالة تحتوي رقم هاتف.
+
+**السبب الجذري**: `openDirectThread` في `modules/messaging/service.ts` كان يكتب الرسالة الأولى
+دون استدعاء `detectOffPlatformSignals`/`recordRiskSignal`، بينما `sendMessage` (الردود داخل نفس
+الخيط) يستدعيهما. فكانت **الرسالة الأولى في أي خيط جديد** — وهي المكان الطبيعي لعرض نقل الصفقة
+خارج المنصة — تتجاوز محرّك المخاطر بالكامل (ثغرة تجاوز عمولة C5، لا مجرد عيب اختبار).
+
+**الإصلاح**: استُخرج الكشف إلى `scanMessageForFeeEvasion(...)` خاصية واحدة، تُستدعى الآن من مساري
+الكتابة (`openDirectThread` و`sendMessage`). لا تغيير في سلوك الردود، ولا في القواعد/الأوزان،
+ولا في الخصوصية (تُخزَّن رموز الإشارات فقط، لا نص الرسالة ولا الرقم).
+
+**الإثبات الحي** (خادم حقيقي + PostgreSQL، قبل/بعد):
+- قبل: رسالة أولى بـ`+216 99 123 456` → لا صف في `risk_profiles` (0).
+- بعد: نفس الرسالة → `currentScore=15` مع `reasonCodes:["OFF_PLATFORM_PHONE"]`.
+- ردّ داخل الخيط كان يعمل قبل وبعد: `wa.me` + «avoid the commission» → `currentScore=30`.
+
+**التحقق الآلي الكامل**:
+- **E2E**: **200 passed / 0 failed** (كانت 199 passed + 1 failed) — 6.9m.
+- **Unit/Integration**: **585/585** (55 ملفًا) — +2 حالات انحدار جديدة في `fee-evasion.test.ts`
+  (الرسالة الأولى في خيط جديد تُسجّل الإشارة؛ والرسالة الأولى النظيفة لا تُسجّل).
+- **Typecheck** (server+web) = 0 · **Build** = 0.
+- `ffmpeg`/`ffprobe` مثبّتان محليًا لتشغيل مسار Marketing Video الحقيقي (المُصيّر البنيوي عبر
+  `ffmpeg-static` كان متاحًا أصلًا لاختبارات الوحدة؛ التثبيت النظامي يخدم التشغيل اليدوي).
+
+**بلا مساس**: لا تغيير في الإنتاج، RBAC، Commission Policy (4% = 2%+2%)، Payment Kernel/iPay،
+أو Marketing Video Agent (89e68d7). لا migration، لا DB reset/drop/push.
+
+**ملاحظة تشغيلية**: تشغيل الـE2E بينما خادم يدوي يعمل على `:3000` يُعاد استخدامه (`reuseExistingServer`)
+بلا تجاوزات rate-limit الخاصة بالـE2E، فتظهر 13 إخفاقة كاذبة في مكاتب admin. شغّل الـE2E على منفذ
+حرّ (أوقف الخادم اليدوي أولًا).
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+| --- | --- | --- | --- | --- | --- |
+| Risk desk: reassess user (رسالة أولى بخيط جديد) | ✅ | ✅ PASS | `openDirectThread` لم يستدعِ كاشف التهريب → لا إشارة ولا ملف مخاطر | استخراج `scanMessageForFeeEvasion` واستدعاؤها من مساري الكتابة | E2E + وحدة (12 حالة) |
+| Anti-fee-evasion: رسالة أولى نظيفة | ✅ | ✅ PASS | — | — | وحدة (حالة انحدار جديدة) |
+| Anti-fee-evasion: ردّ داخل الخيط | ✅ | ✅ PASS | — | — | وحدة + إثبات حيّ |
+
+---
+
 ## ✅ الحالة — PUBLIC DEMO: Owner Audit Center + Functional Audit حقيقي (2026-09-24)
 
 **الهدف**: إتاحة تدقيق وظيفي حقيقي للمنصة (CUSTOMER / MERCHANT / SUPPLIER / ADMIN / MARKETING VIDEO)

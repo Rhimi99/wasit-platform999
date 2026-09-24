@@ -339,6 +339,8 @@ export async function openDirectThread(
     metadata: { participant: input.participantUserId },
   });
 
+  await scanMessageForFeeEvasion(db, { userId, threadId, messageId, body: input.body, audit });
+
   return { threadId, messageId };
 }
 
@@ -438,30 +440,54 @@ export async function sendMessage(
     metadata: { messageId, senderId: userId },
   });
 
-  // Anti-fee-evasion: scan for off-platform deal hints. Only signal codes are
-  // persisted (see lib/fee-evasion.ts); the message text is never stored here.
-  const signals = detectOffPlatformSignals(input.body);
-  if (signals.length > 0) {
-    const reasonCode = signals.map((s) => s.code).join('|');
-    const weight = Math.min(30, signals.reduce((sum, s) => sum + s.weight, 0));
-    await recordRiskSignal(db, {
-      userId,
-      eventType: 'FEE_EVASION_SIGNAL',
-      reasonCode,
-      weight,
-      severity: weight >= 25 ? 'HIGH' : 'MEDIUM',
-      recommendedAction: 'REVIEW',
-      details: { threadId, messageId, signalCodes: signals.map((s) => s.code) },
-    });
-    await writeAudit(db, { actorId: userId, ipAddress: audit.ipAddress, userAgent: audit.userAgent }, {
-      action: 'MESSAGING.FEE_EVASION_SIGNAL',
-      entityType: 'USER',
-      entityId: userId,
-      metadata: { threadId, messageId, signalCodes: signals.map((s) => s.code), weight },
-    });
-  }
+  await scanMessageForFeeEvasion(db, { userId, threadId, messageId, body: input.body, audit });
 
   return { id: messageId, createdAt: new Date().toISOString(), status: 'SENT' };
+}
+
+/**
+ * Anti-fee-evasion scan shared by every message-writing path.
+ *
+ * Both {@link sendMessage} and {@link openDirectThread} are "the user sent a
+ * message" events, so both must run the detector — scanning only replies would
+ * let a thread's very first message (the natural place to propose taking the
+ * deal off-platform) bypass the Risk engine entirely. Only signal codes are
+ * persisted (see lib/fee-evasion.ts); the message text is never stored here.
+ */
+async function scanMessageForFeeEvasion(
+  db: DB,
+  input: {
+    userId: string;
+    threadId: string;
+    messageId: string;
+    body: string;
+    audit: { ipAddress?: string | null; userAgent?: string | null };
+  },
+): Promise<void> {
+  const signals = detectOffPlatformSignals(input.body);
+  if (signals.length === 0) return;
+  const reasonCode = signals.map((s) => s.code).join('|');
+  const weight = Math.min(30, signals.reduce((sum, s) => sum + s.weight, 0));
+  await recordRiskSignal(db, {
+    userId: input.userId,
+    eventType: 'FEE_EVASION_SIGNAL',
+    reasonCode,
+    weight,
+    severity: weight >= 25 ? 'HIGH' : 'MEDIUM',
+    recommendedAction: 'REVIEW',
+    details: { threadId: input.threadId, messageId: input.messageId, signalCodes: signals.map((s) => s.code) },
+  });
+  await writeAudit(db, { actorId: input.userId, ipAddress: input.audit.ipAddress, userAgent: input.audit.userAgent }, {
+    action: 'MESSAGING.FEE_EVASION_SIGNAL',
+    entityType: 'USER',
+    entityId: input.userId,
+    metadata: {
+      threadId: input.threadId,
+      messageId: input.messageId,
+      signalCodes: signals.map((s) => s.code),
+      weight,
+    },
+  });
 }
 
 /** Marks a thread as read: updates participant lastReadAt and message readAt. */

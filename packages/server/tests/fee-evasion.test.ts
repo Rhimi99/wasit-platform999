@@ -156,6 +156,54 @@ describe('Anti-Fee-Evasion (integration through messaging)', () => {
     expect(list.status).toBe(200);
   });
 
+  it('scans the first message of a new thread, not only replies', async () => {
+    // Regression: openDirectThread used to skip the detector, so the opening
+    // message of a conversation — the natural place to propose moving a deal
+    // off-platform — never raised a signal. Both write paths must scan.
+    const { a, aId, bId } = await createUserPair('it-fee-open');
+    const open = await a.req('/api/messages', {
+      method: 'POST',
+      body: {
+        participantUserId: bId,
+        subject: 'Initial contact',
+        body: 'lets avoid the commission, whatsapp me on wa.me/21655999888',
+      },
+    });
+    expect(open.status).toBe(200);
+
+    const events = await db
+      .select()
+      .from(riskEvents)
+      .where(and(eq(riskEvents.userId, aId), eq(riskEvents.eventType, 'FEE_EVASION_SIGNAL')))
+      .orderBy(desc(riskEvents.createdAt))
+      .limit(1);
+    expect(events.length).toBe(1);
+    expect(events[0].reasonCode).toContain('OFF_PLATFORM_SOCIAL');
+
+    const profile = await db
+      .select()
+      .from(riskProfiles)
+      .where(eq(riskProfiles.userId, aId))
+      .limit(1);
+    expect(profile.length).toBe(1);
+    expect(profile[0].currentScore).toBeGreaterThan(0);
+  });
+
+  it('does not create a risk event for a clean first message', async () => {
+    const { a, aId, bId } = await createUserPair('it-fee-open-clean');
+    const open = await a.req('/api/messages', {
+      method: 'POST',
+      body: { participantUserId: bId, subject: 'Quote', body: 'Can you ship to Sfax?' },
+    });
+    expect(open.status).toBe(200);
+
+    const events = await db
+      .select()
+      .from(riskEvents)
+      .where(and(eq(riskEvents.userId, aId), eq(riskEvents.eventType, 'FEE_EVASION_SIGNAL')));
+    expect(events.length).toBe(0);
+  });
+
   it('does not create a risk event for a clean message', async () => {
     const { a, b, aId, bId } = await createUserPair('it-fee-clean');
     const open = await a.req('/api/messages', {
