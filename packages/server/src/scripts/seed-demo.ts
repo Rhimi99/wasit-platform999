@@ -8,14 +8,17 @@
  */
 import { db, closeDb } from '../db/client';
 import { eq, sql } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { registerUser } from '../modules/auth/service';
+import { hashPassword } from '../lib/security';
+import { env } from '../lib/env';
 import { createSupplier } from '../modules/suppliers/service';
 import { createMerchant } from '../modules/merchants/service';
 import { createCompany } from '../modules/companies/service';
 import { createProduct } from '../modules/products/service';
 import { createOrder } from '../modules/orders/service';
 import { openDirectThread, sendMessage } from '../modules/messaging/service';
+import { DEMO_PUBLISHED_PASSWORD, DEMO_TEST_ACCOUNT_EMAIL, resolveStaffPassword } from '../lib/demo-account';
 import { users, userRoles, roles } from '../db/schema/auth';
 import { suppliers, merchants, companies } from '../db/schema/trade';
 import { categories, products } from '../db/schema/products';
@@ -35,13 +38,34 @@ const RESET_STOCK = process.env.SEED_RESET_STOCK === '1';
 /**
  * Official PUBLIC-DEMO test account, provisioned by this seeder (not by any
  * login special-case). It is an ordinary CUSTOMER — active, email-verified in
- * the demo only, with no staff role and no password bypass. The address is
- * public and safe to commit; the password never is: it comes from
+ * the demo only, with no staff role and no password bypass. The address lives in
+ * `lib/demo-account.ts` so the `/api/auth/demo-session` route opens a session for
+ * exactly this account; the password never is committed: it comes from
  * `DEMO_TEST_ACCOUNT_PASSWORD` in the environment, so the credential stays in
  * the git-ignored demo env (`.env.demo`) exactly like every other demo secret.
  */
-const DEMO_TEST_ACCOUNT_EMAIL = 'rhimiimed18@gmail.com';
 const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_TEST_ACCOUNT_PASSWORD?.trim();
+
+/**
+ * Password for the two staff fixtures below. Delegates the policy to
+ * {@link resolveStaffPassword}: an explicit `DEMO_STAFF_PASSWORD` wins, the public
+ * demo generates a random one, and dev/test keeps the known password for E2E.
+ */
+function staffPassword(): string {
+  const pw = resolveStaffPassword({
+    nodeEnv: env.NODE_ENV,
+    configuredPassword: process.env.DEMO_STAFF_PASSWORD,
+    generate: () => randomBytes(32).toString('base64url'),
+  });
+  if (!process.env.DEMO_STAFF_PASSWORD?.trim() && env.NODE_ENV === 'staging') {
+    console.warn(
+      '[seed-demo] DEMO_STAFF_PASSWORD not set; generated a random staff password ' +
+        'for this run (not committed):',
+      pw,
+    );
+  }
+  return pw;
+}
 
 // تونس — الثابتة تُستخرج من قاعدة البيانات (وليست Hardcoded في Core):
 let TUNISIA_ID = '';
@@ -64,12 +88,26 @@ interface CreatedUser {
   email: string;
 }
 
-async function ensureDevUser(emailBase: string, password: string, role: 'CUSTOMER' | 'SUPPLIER' | 'MERCHANT' | 'COMPANY' | 'ADMIN' | 'SUPER_ADMIN'): Promise<CreatedUser> {
+async function ensureDevUser(
+  emailBase: string,
+  password: string,
+  role: 'CUSTOMER' | 'SUPPLIER' | 'MERCHANT' | 'COMPANY' | 'ADMIN' | 'SUPER_ADMIN',
+  options: { enforcePassword?: boolean } = {},
+): Promise<CreatedUser> {
   const email = emailBase.toLowerCase();
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing.length > 0) {
     // Dev shortcut: اجعل مستخدمي الديمو موثقي البريد تلقائيًا (بيئة تطوير فقط).
     await db.update(users).set({ emailVerified: true }).where(eq(users.id, existing[0].id));
+    // Staff fixtures must never keep a stale password across runs — otherwise a
+    // demo rebuilt from an earlier seeder run would still answer to the published
+    // password. Re-hash so the stored credential always matches `password`.
+    if (options.enforcePassword) {
+      await db
+        .update(users)
+        .set({ passwordHash: await hashPassword(password) })
+        .where(eq(users.id, existing[0].id));
+    }
     return { userId: existing[0].id, email };
   }
   const { userId } = await registerUser(db, {
@@ -212,14 +250,17 @@ async function main(): Promise<void> {
   console.log('Demo Seeder — seeding dev/test environment...');
   await loadRefs();
 
-  const pw = 'Passw0rd!2026';
+  const pw = DEMO_PUBLISHED_PASSWORD;
+  const staffPw = staffPassword();
 
   // المستخدمون التجريبيون
   const customer = await ensureDevUser('customer1@wasit.tn', pw, 'CUSTOMER');
   const supplierUser = await ensureDevUser('supplierA@wasit.tn', pw, 'SUPPLIER');
   const merchantUser = await ensureDevUser('merchantA@wasit.tn', pw, 'MERCHANT');
   const companyUser = await ensureDevUser('companyA@wasit.tn', pw, 'COMPANY');
-  const adminUser = await ensureDevUser('admin@wasit.tn', pw, 'SUPER_ADMIN');
+  const adminUser = await ensureDevUser('admin@wasit.tn', staffPw, 'SUPER_ADMIN', {
+    enforcePassword: true,
+  });
   await assignRoleDirect(adminUser.userId, 'SUPER_ADMIN');
   await assignRoleDirect(adminUser.userId, 'ADMIN');
 
@@ -227,7 +268,9 @@ async function main(): Promise<void> {
   // a dispute from reviewing the appeal of that decision, so proving the positive
   // review path (from the UI) requires a distinct staff actor. There is no
   // product endpoint that grants a staff role, so this fixture is seeded here.
-  const reviewerUser = await ensureDevUser('admin2@wasit.tn', pw, 'ADMIN');
+  const reviewerUser = await ensureDevUser('admin2@wasit.tn', staffPw, 'ADMIN', {
+    enforcePassword: true,
+  });
   await assignRoleDirect(reviewerUser.userId, 'ADMIN');
 
   // Official PUBLIC-DEMO test account (ordinary CUSTOMER). Idempotent: an
@@ -509,12 +552,14 @@ async function main(): Promise<void> {
 
   console.log('Demo Seed complete.');
   console.log('Test users (password: ' + pw + '):');
-  console.log('  admin@wasit.tn     (SUPER_ADMIN)');
-  console.log('  admin2@wasit.tn    (ADMIN — second reviewer, for appeal recusal tests)');
   console.log('  customer1@wasit.tn (CUSTOMER)');
   console.log('  supplierA@wasit.tn (SUPPLIER)');
   console.log('  merchantA@wasit.tn (MERCHANT)');
   console.log('  companyA@wasit.tn  (COMPANY)');
+  console.log(
+    'Staff fixtures (admin@wasit.tn SUPER_ADMIN, admin2@wasit.tn ADMIN) use a separate ' +
+      'credential: DEMO_STAFF_PASSWORD (never the published demo password).',
+  );
 }
 
 main()

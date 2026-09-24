@@ -109,6 +109,18 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  /**
+   * Public-demo convenience: allow the one-off `/demo/customer` entry point to
+   * open a session for the seeded demo account without a login form. Off by
+   * default, so no other environment can mint a session this way. Refused
+   * outright in production (see below) — the route can never exist on a real
+   * deployment, even if the flag is set. It is an explicit opt-in, separate from
+   * DEMO_SKIP_EMAIL_VERIFICATION, so enabling one never silently enables the other.
+   */
+  DEMO_AUTO_LOGIN: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Rate-limit store. `memory` keeps counters in-process (dev / tests / a
   // single instance). `postgres` shares counters across instances so limits
   // hold when the API is scaled out — no extra infrastructure required.
@@ -240,6 +252,26 @@ if (env.NODE_ENV === 'production' && env.DEMO_SKIP_EMAIL_VERIFICATION) {
 
 export function demoEmailVerificationSkipped(): boolean {
   return env.NODE_ENV !== 'production' && env.DEMO_SKIP_EMAIL_VERIFICATION;
+}
+
+/**
+ * Whether the `/demo/customer` auto-login entry point may mint a session for the
+ * seeded demo account. Production is excluded twice over, exactly like
+ * {@link demoEmailVerificationSkipped}: the deployment refuses to boot with the
+ * flag set, and this resolver ignores it, so a stray `DEMO_AUTO_LOGIN=true` in a
+ * production secret store can neither start the process nor open the route.
+ */
+if (env.NODE_ENV === 'production' && env.DEMO_AUTO_LOGIN) {
+  // eslint-disable-next-line no-console
+  console.error(
+    'Refusing to start: DEMO_AUTO_LOGIN cannot be enabled in production. ' +
+      'Demo auto-login mints a real session without credentials.',
+  );
+  process.exit(1);
+}
+
+export function demoAutoLoginEnabled(): boolean {
+  return env.NODE_ENV !== 'production' && env.DEMO_AUTO_LOGIN;
 }
 
 /**

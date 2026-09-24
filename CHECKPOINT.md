@@ -1,8 +1,58 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: حساب اختبار رسمي ثابت (`rhimiimed18@gmail.com`) عبر الـDemo seed**
+> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: إصلاح فجوة حسابـات staff (كلمة مرور منشورة)**
 > **الفرع**: `master`
-> **HEAD**: `d676dfd` + هذا الـcommit
+> **HEAD**: `9e71048` + هذا الـcommit
+
+## ✅ الحالة — إصلاح regression أمني حقيقي: حسابات staff لم تكن محصّنة في الـseed (2026-09-24)
+
+**النتيجة**: التدقيق الأمني `scripts/demo-security-smoke.sh` على الرابط العام = **37/37 PASS** (كان
+**31/33** مع فشلين: `admin@wasit.tn` و`admin2@wasit.tn` يُفتحان بكلمة المرور المنشورة).
+
+**السبب الجذري الحقيقي**: commit `c41cf06` وثّق أن "كلمات مرور الـstaff دُوِّرت على مستوى قاعدة
+البيانات فقط (بلا تغيير كود/RBAC)". لكن `seed-demo.ts` كان **ما زال** ينشئ/يحدّث `admin@wasit.tn`
+و`admin2@wasit.tn` بكلمة المرور المنشورة `Passw0rd!2026` (السطر 216 سابقًا). أي إعادة بناء لقاعدة
+الـDemo — بما فيها تشغيل `seed-demo.ts` من E2E global-setup — كانت **تتراجع** عن التدوير يدويًا
+تُبطله. هذا ليس خطأ اختبار؛ إنه فجوة provisioning دائمة.
+
+**الإصلاح (أقل تغيير ممكن، بلا مساس بأي شيء محظور)**:
+- `packages/server/src/lib/demo-account.ts`: دالة نقية `resolveStaffPassword({nodeEnv, configuredPassword, generate})`
+  + ثابت `DEMO_PUBLISHED_PASSWORD`. السياسة: `DEMO_STAFF_PASSWORD` الصريحة تفوز؛ وعلى الـDemo العام
+  (`NODE_ENV=staging`) تُولَّد كلمة مرور عشوائية **لا** تعود أبدًا إلى كلمة المرور المنشورة؛ وفي
+  dev/test تبقى كلمة المرور المعروفة كي تستطيع E2E قيادة مكاتب الـadmin.
+- `seed-demo.ts`: يستخدم `staffPassword()` لحسابي الـstaff، و`enforcePassword: true` في `ensureDevUser`
+  يعيد الـhash في كل تشغيل (فلا تبقى كلمة مرور قديمة عبر عمليات seed متتالية)، ويطبع تذكيرًا بأن
+  الـstaff لهم credential منفصل.
+- `.env.demo` (git-ignored): `DEMO_STAFF_PASSWORD` عشوائي — لا plaintext في Git.
+- `scripts/demo-security-smoke.sh`: قسم 2b جديد يثبت أن كلمة مرور الـstaff المُدوَّرة **تفتح** مكاتب
+  الـstaff (login + `/api/admin/stats` = 200)، ولا تفتح حساب الـdemo العام، وأن كلمة المرور المنشورة
+  ما زالت تفتح الحسابات العامة — فلا يُقفل الإصلاح أحدًا.
+- `packages/server/tests/demo-auto-login.test.ts`: 5 اختبارات وحدة للسياسة (بوابة regression).
+
+**تحقق حقيقي على الرابط العام**: `admin@/admin2@` + كلمة المرور المنشورة = **401**؛ كلمة مرور الـstaff
+المُدوَّرة = **200** مع `admin/stats=200`؛ `customer1@` بكلمة المرور المنشورة = **200**، وبكلمة مرور
+الـstaff = **401**. متصفح فعلي: `/demo/customer` ⇒ جلسة CUSTOMER حقيقية ⇒ `/dashboard`؛ السوق (13
+منتجًا)، تفاصيل منتج، الرسائل، الإشعارات، دخول merchant من النموذج، لوحة merchant بطلبات/منتجات حقيقية،
+نموذج إنشاء منتج، واستوديو الفيديو التسويقي (منتج/لغة/جمهور/نمط/مدة 35–120s + توليد) تعمل.
+
+**بوابات**: server tests **576/576**؛ E2E (demo، `DEMO_SKIP_EMAIL_VERIFICATION=true DEMO_AUTO_LOGIN=true`)
+**200/200**؛ typecheck 0 أخطاء؛ build PASS.
+
+**القيود المُحترمة**: لا migration/reset/drop/push؛ Commission Policy 4% (2%+2%) دون تغيير؛ لا مساس بـ
+Payment Kernel/iPay ولا Marketing Video Agent (89e68d7)؛ RBAC كما هو؛ لا Mock؛ لم تُعطّل أزرار.
+
+### جدول
+| الميزة | اختُبرت من الواجهة | النتيجة | السبب الجذري عند الفشل | الإصلاح | حالة الاختبار |
+|---|---|---|---|---|---|
+| `/demo/customer` ⇒ جلسة حقيقية | نعم (Public HTTPS) | PASS | — | — | PASS |
+| staff بمفتاح منشور | نعم (API + رأس الصفحة) | **PASS بعد الإصلاح** | `seed-demo.ts` يمنح الـstaff كلمة المرور المنشورة فتُبطِل التدوير اليدوي عند كل rebuild | `resolveStaffPassword` + `enforcePassword` + `DEMO_STAFF_PASSWORD` | PASS (37/37 smoke) |
+| كلمة مرور staff المُدوَّرة تفتح الـstaff فقط | نعم | PASS | — | — | PASS |
+| product browse/detail/search | نعم | PASS | — | — | PASS |
+| messaging/notifications | نعم | PASS | — | — | PASS |
+| merchant dashboard/orders/products | نعم | PASS | — | — | PASS |
+| create-product form + video studio | نعم (تحميل + ضوابط) | PASS | — | — | PASS |
+
+---
 
 ## ✅ الحالة — حساب اختبار Demo رسمي وثابت (2026-09-24)
 

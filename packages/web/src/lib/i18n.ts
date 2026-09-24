@@ -13,6 +13,9 @@ export const LOCALES: { code: Locale; label: string; dir: 'rtl' | 'ltr' }[] = [
 type Dict = Record<string, string>;
 
 const ar: Dict = {
+  'demo.entering': 'جارٍ تجهيز جلسة العرض التجريبي…',
+  'demo.failed': 'تعذّر بدء جلسة العرض التجريبي',
+  'demo.notAvailable': 'مدخل العرض التجريبي غير مُتاح على هذه البيئة.',
   'app.name': 'وسيط الأعمال العالمية',
   'app.tagline': 'منصة الوساطة التجارية العالمية',
   'nav.home': 'الرئيسية',
@@ -1163,6 +1166,9 @@ const ar: Dict = {
 };
 
 const en: Dict = {
+  'demo.entering': 'Preparing your demo session…',
+  'demo.failed': 'Could not start the demo session',
+  'demo.notAvailable': 'The demo entry point is not available in this environment.',
   'app.name': 'WASIT Global Trade',
   'app.tagline': 'Global trade intermediary platform',
   'nav.home': 'Home',
@@ -2315,6 +2321,9 @@ const en: Dict = {
 
 // French and Chinese inherit from English where not overridden (fallback).
 const fr: Dict = {
+  'demo.entering': 'Préparation de votre session de démonstration…',
+  'demo.failed': 'Impossible de démarrer la session de démonstration',
+  'demo.notAvailable': "Le point d'entrée de démonstration n'est pas disponible dans cet environnement.",
   'app.name': 'WASIT Commerce Mondial',
   'app.tagline': 'Plateforme d\'intermédiation commerciale mondiale',
   'nav.home': 'Accueil',
@@ -3217,6 +3226,9 @@ const fr: Dict = {
 };
 
 const zh: Dict = {
+  'demo.entering': '正在准备演示会话…',
+  'demo.failed': '无法启动演示会话',
+  'demo.notAvailable': '此环境不支持演示入口。',
   'app.name': 'WASIT 全球贸易',
   'app.tagline': '全球贸易中介平台',
   'nav.home': '首页',

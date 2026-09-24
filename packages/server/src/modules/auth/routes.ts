@@ -27,6 +27,7 @@ import {
   listSessions,
   revokeSession,
   devVerificationLink,
+  demoAutoLogin,
   issuePhoneVerificationCode,
   verifyPhoneCode,
   devPhoneCode,
@@ -128,6 +129,32 @@ authRoutes.post(
       maxAge: 30 * 86400,
     });
     return c.json({ success: true, data: { ...result.session.user, mfaRequired: false } });
+  },
+);
+
+// POST /api/auth/demo-session — public-demo auto-login for the single seeded
+// demo account. Exists only while DEMO_AUTO_LOGIN is enabled (never production).
+// Takes no body and no parameters: the account is a compiled-in constant, so a
+// caller cannot influence whose session is opened. Rate-limited like login so the
+// entry point cannot be used to spray sessions.
+authRoutes.post(
+  '/demo-session',
+  rateLimit({ windowSeconds: 60, max: 30, keyPrefix: 'auth-demo-session' }),
+  async (c) => {
+    const ctx = getContext(c);
+    const session = await demoAutoLogin(ctx.db, {
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+
+    setCookie(c, SESSION_COOKIE, session.token, {
+      httpOnly: true,
+      sameSite: 'Lax',
+      path: '/',
+      secure: cookieSecure,
+      maxAge: 30 * 86400,
+    });
+    return c.json({ success: true, data: { ...session.user, mfaRequired: false } });
   },
 );
 

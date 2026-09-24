@@ -36,6 +36,7 @@ import { AdminAdsPage } from './pages/AdminAdsPage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
+import { DemoCustomerEntryPage } from './pages/DemoCustomerEntryPage';
 
 /** Enabled only on the public demo build; production builds leave it unset. */
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -67,6 +68,13 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
+      {/* Public-demo entry: opens a session for the seeded demo customer. The
+          route is always registered; the backend decides whether auto-login is
+          allowed (demo only, never production) and answers 404 everywhere else,
+          which the page renders as "not available". Gating the route on a
+          separate build flag only risked the two flags drifting apart and
+          breaking the link. */}
+      <Route path="/demo/customer" element={<DemoCustomerEntryPage />} />
 
       {/* Protected */}
       <Route path="/checkout" element={<RequireAuth><CheckoutPage /></RequireAuth>} />

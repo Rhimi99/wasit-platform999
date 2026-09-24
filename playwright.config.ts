@@ -59,6 +59,9 @@ export default defineConfig({
         // Run the suite with DEMO_SKIP_EMAIL_VERIFICATION=true to exercise the
         // public-demo contract (register then sign in with no mailbox).
         DEMO_SKIP_EMAIL_VERIFICATION: process.env.DEMO_SKIP_EMAIL_VERIFICATION ?? 'false',
+        // The public-demo auto-login endpoint is off unless the demo run opts in,
+        // so the default suite proves it is refused rather than merely untested.
+        DEMO_AUTO_LOGIN: process.env.DEMO_AUTO_LOGIN ?? 'false',
       },
     },
     {

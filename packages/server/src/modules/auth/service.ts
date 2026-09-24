@@ -20,7 +20,8 @@ import {
   verifyPassword,
 } from '../../lib/security';
 import { verifyMfaChallenge } from '../../lib/mfa';
-import { env, demoEmailVerificationSkipped } from '../../lib/env';
+import { env, demoEmailVerificationSkipped, demoAutoLoginEnabled } from '../../lib/env';
+import { DEMO_TEST_ACCOUNT_EMAIL } from '../../lib/demo-account';
 import { writeAudit } from '../../lib/audit';
 import { sendMail } from '../../lib/mail/send';
 import { buildPasswordResetEmail, buildVerificationEmail } from '../../lib/mail/templates';
@@ -451,6 +452,66 @@ export async function loginUser(
   });
 
   return { kind: 'session', session };
+}
+
+/**
+ * Opens a session for the one seeded demo account, without a password.
+ *
+ * This is the backend half of the public `/demo/customer` entry point. It is
+ * deliberately narrow so it cannot become a general authentication bypass:
+ *
+ *  * it only runs where `demoAutoLoginEnabled()` is true (never production, and
+ *    the process refuses to boot there with the flag set);
+ *  * the address is the single compiled-in demo constant — it is never taken
+ *    from the request, so a caller cannot choose whose session to mint;
+ *  * the account must exist (provisioned by the demo seeder), be active, and not
+ *    be locked; a missing account is an explicit 404 rather than a silent create;
+ *  * the session itself is issued through the ordinary {@link issueSession}, so
+ *    the cookie and TTL match a normal login.
+ *
+ * It grants no role: the account keeps whatever roles the seeder gave it (an
+ * ordinary CUSTOMER), so the staff surface stays forbidden.
+ */
+export async function demoAutoLogin(
+  db: DB,
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+): Promise<LoginResult> {
+  if (!demoAutoLoginEnabled()) {
+    // Same shape as an unknown route: on a real deployment this path does not exist.
+    throw ApiError.notFound('Demo auto-login is not available');
+  }
+
+  const email = DEMO_TEST_ACCOUNT_EMAIL.toLowerCase();
+  const row = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (row.length === 0) {
+    throw ApiError.notFound('Demo account is not provisioned');
+  }
+
+  const user = row[0];
+  if (user.isLocked) {
+    throw ApiError.forbidden('Account locked. Please reset your password or contact support.');
+  }
+  if (!user.isActive) {
+    throw ApiError.forbidden('Account disabled');
+  }
+
+  // The demo account is seeded verified, but a demo rebuild or an older row could
+  // predate that. Mirror the demo login waiver so the app sees one consistent
+  // state, and never relax this outside the demo (the resolver above guarantees it).
+  if (!user.emailVerified) {
+    await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
+    user.emailVerified = true;
+  }
+
+  const session = await issueSession(db, user, ctx);
+
+  await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'AUTH.DEMO_AUTO_LOGIN',
+    entityType: 'USER',
+    entityId: user.id,
+  });
+
+  return session;
 }
 
 /**

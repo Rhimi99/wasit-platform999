@@ -228,9 +228,9 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 | SUPPLIER | `suppliera@wasit.tn` | |
 | MERCHANT | `merchanta@wasit.tn` | |
 | COMPANY | `companya@wasit.tn` | |
-| ADMIN/SUPER_ADMIN | `admin@wasit.tn` | |
+| ADMIN/SUPER_ADMIN | `admin@wasit.tn` | في dev/test فقط؛ على الـDemo العام يستخدم `DEMO_STAFF_PASSWORD` لا الكلمة المنشورة |
 
-> ملاحظة: مستخدمو Dev/seed أُنشئوا في `wasit_dev` (ليست من الاختبار).
+> ملاحظة: مستخدمو Dev/seed أُنشئوا في `wasit_dev` (ليست من الاختبار). حسابات الـstaff (`admin@`/`admin2@`) تأخذ كلمة مرورها من `DEMO_STAFF_PASSWORD`: على الـDemo العام (`NODE_ENV=staging`) تُولَّد عشوائيًا إن لم تُضبط، فلا تُفتح أبدًا بكلمة المرور المنشورة حتى بعد إعادة بناء قاعدة الـDemo (انظر `lib/demo-account.ts: resolveStaffPassword`).
 
 ## قاعدة الاختبار
 

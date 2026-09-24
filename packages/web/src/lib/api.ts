@@ -94,6 +94,14 @@ export const api = {
       body: JSON.stringify({ challengeToken, code }),
     });
   },
+  /**
+   * Public-demo auto-login. Opens a session for the seeded demo account on the
+   * server; returns the same shape as `login`. The server refuses it outside the
+   * demo, so the SPA only calls it from the demo entry route.
+   */
+  async demoSession() {
+    return request<User>('/api/auth/demo-session', { method: 'POST', body: JSON.stringify({}) });
+  },
   async mfaStatus() {
     return request<MfaStatus>('/api/auth/mfa/status');
   },

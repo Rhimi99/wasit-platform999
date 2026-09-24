@@ -28,6 +28,30 @@ for a in admin admin2; do
   [ "$c" != 200 ] && ok "$a@wasit.tn with published pw rejected ($c)" || bad "$a@wasit.tn OPENED WITH PUBLISHED PW"
 done
 
+# When the operator supplies the rotated staff credential, prove the staff desks
+# are still reachable with *that* password (the fix must not lock staff out).
+if [ -n "${DEMO_STAFF_PASSWORD:-}" ]; then
+  echo "== 2b. Rotated staff password opens staff accounts (and only them) =="
+  for a in admin admin2; do
+    jar="$(mktemp)"
+    c="$(code -c "$jar" -X POST "$U/api/auth/login" -H 'Content-Type: application/json' \
+         -d "{\"email\":\"$a@wasit.tn\",\"password\":\"$DEMO_STAFF_PASSWORD\"}")"
+    s="$(code -b "$jar" -o /dev/null "$U/api/admin/stats")"
+    [ "$c" = 200 ] && [ "$s" = 200 ] && ok "$a@wasit.tn rotated pw login=200 admin/stats=200" \
+      || bad "$a@wasit.tn rotated pw login=$c admin/stats=$s"
+  done
+  # The rotated staff credential must not open a public demo account either.
+  c="$(code -o /dev/null -X POST "$U/api/auth/login" -H 'Content-Type: application/json' \
+       -d "{\"email\":\"customer1@wasit.tn\",\"password\":\"$DEMO_STAFF_PASSWORD\"}")"
+  [ "$c" != 200 ] && ok "customer1 rejects rotated staff pw ($c)" || bad "customer1 OPENED WITH STAFF PW"
+  # And the published password must still open the public demo customers.
+  c="$(code -o /dev/null -X POST "$U/api/auth/login" -H 'Content-Type: application/json' \
+       -d "{\"email\":\"customer1@wasit.tn\",\"password\":\"$PW\"}")"
+  [ "$c" = 200 ] && ok "customer1 published pw still works (200)" || bad "customer1 published pw regressed ($c)"
+else
+  echo "== 2b. DEMO_STAFF_PASSWORD not set; skipping positive staff check =="
+fi
+
 echo "== 3. Demo customer cannot reach any Admin/Staff API =="
 CJ="${JAR[customer1]}"
 for ep in /api/admin/stats /api/admin/users /api/admin/orders /api/admin/transactions \
