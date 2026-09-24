@@ -15,6 +15,7 @@ import { writeAudit } from '../../lib/audit';
 import { createNotification } from '../../lib/notifications-service.js';
 import { resolvePaymentProvider } from '../../lib/payments/resolve';
 import type { PaymentMethod, PaymentProvider } from '../../lib/payments/port';
+import { confirmSettlement } from '../settlements/service.js';
 import {
   applyInvoicePaymentSucceeded,
   applyInvoicePaymentFailed,
@@ -322,9 +323,9 @@ export async function handlePaymentWebhook(
       await applyRefundSucceeded(db, effectiveRef, input.ipAddress ?? null);
       applied = true;
     } else if (effectiveType === 'SETTLEMENT_CONFIRMED' && effectiveRef) {
-      // The evidence must name the amount and currency, and it must match the
-      // intent, exactly as payment confirmation does. A settlement claim is the
-      // strongest statement the system accepts, so it is the most tightly checked.
+      // Settlement is applied by the dedicated settlement layer, which owns the
+      // only SETTLED writer and the SETTLEMENT ledger entry. It re-checks the
+      // amount/currency against the intent and requires a transfer reference.
       if (event.amount == null || event.currencyCode == null) {
         throw ApiError.validation([
           {
@@ -334,9 +335,16 @@ export async function handlePaymentWebhook(
           },
         ]);
       }
-      await assertEvidenceMatchesIntent(db, effectiveRef, event.amount, event.currencyCode);
-      await applySettlementConfirmed(db, effectiveRef, provider.id, event.settlementRef ?? null, input.ipAddress ?? null);
-      applied = true;
+      const result = await confirmSettlement(db, {
+        externalRef: effectiveRef,
+        amount: event.amount,
+        currencyCode: event.currencyCode,
+        providerId: provider.id,
+        settlementRef: event.settlementRef ?? '',
+        providerRef: event.settlementRef ?? null,
+        ipAddress: input.ipAddress ?? null,
+      });
+      applied = result.applied;
     }
   } catch (err) {
     // Applying the side-effect failed, so the event must NOT stay claimed: the
@@ -523,63 +531,6 @@ async function applyPaymentSucceeded(db: DB, providerId: string, externalRef: st
     title: 'Payment confirmed',
     body: `Payment for order ${order[0].orderNumber} was confirmed.`,
     data: { orderId, intentId: intent.id },
-  });
-}
-
-/**
- * Promotes the ledger entries of a paid transaction to `SETTLED`, on the
- * strength of real settlement evidence.
- *
- * This is the ONLY writer of `transaction_ledger.status = 'SETTLED'`. It is
- * deliberately separate from payment confirmation: confirming a payment proves
- * the money reached the provider, whereas settlement proves the funds actually
- * moved on the provider/bank side. Keeping the two apart is what makes
- * `Payment ≠ Settlement` true in code, not just in the design document.
- *
- * Guards:
- *  - the intent must exist and its payment must be confirmed (a settlement of an
- *    unpaid order is meaningless and would fabricate a state transition);
- *  - the provider must declare `settlementEvidence` (enforced by the caller);
- *  - promotion is idempotent: only `PENDING`/`PROCESSING` rows move, so a replay
- *    cannot re-settle a refunded or already-settled entry.
- */
-async function applySettlementConfirmed(
-  db: DB,
-  externalRef: string,
-  providerId: string,
-  settlementRef: string | null,
-  ipAddress: string | null,
-): Promise<void> {
-  const intentRows = await db.select().from(paymentIntents).where(eq(paymentIntents.externalRef, externalRef)).limit(1);
-  if (intentRows.length === 0) throw ApiError.notFound('Payment intent');
-  const intent = intentRows[0];
-  if (!intent.orderId || !intent.transactionId) {
-    throw ApiError.conflict('Settlement evidence targets a non-order payment intent');
-  }
-  if (intent.status !== 'SUCCEEDED') {
-    throw ApiError.conflict('Cannot settle an intent whose payment is not confirmed');
-  }
-
-  await db
-    .update(transactionLedger)
-    .set({ status: 'SETTLED', paymentProvider: providerId } as never)
-    .where(
-      and(
-        eq(transactionLedger.transactionId, intent.transactionId),
-        sql`${transactionLedger.status} in ('PENDING','PROCESSING')`,
-      ),
-    );
-
-  await db
-    .update(orders)
-    .set({ settlementStatus: 'SETTLED', updatedAt: new Date() })
-    .where(and(eq(orders.id, intent.orderId), sql`${orders.settlementStatus} <> 'SETTLED'`));
-
-  await writeAudit(db, { actorId: null, ipAddress }, {
-    action: 'SETTLEMENT.CONFIRMED',
-    entityType: 'ORDER',
-    entityId: intent.orderId,
-    after: { transactionId: intent.transactionId, provider: providerId, settlementRef },
   });
 }
 
