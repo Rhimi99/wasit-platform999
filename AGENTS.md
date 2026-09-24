@@ -319,3 +319,12 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - رسوم الدفع تأتي من `payment_fee_policies` — سياسة افتراضية `WASIT Default Processing Fee` (2%) تُدار من DB/Admin لاحقاً.
 - استجابة `createOrder` والـ Audit يعرضان `paymentFeePolicyId`/`feePolicyId`.
 - الاختبارات: `tests/payment-fee-policy.test.ts` يثبت أن تغيير السياسة يغيّر الرسوم (مضاد Hardcoding).
+
+## Money Path Invariants (2026-09-24)
+
+- **`Payment ≠ Settlement`** (عقد مُنفَّذ في الكود): تأكيد الدفع (`applyPaymentSucceeded`) **لا يكتب** `transaction_ledger.status='SETTLED'` أبداً — القيود تبقى `PENDING`. الكاتب **الوحيد** لـ`SETTLED` هو `applySettlementConfirmed` في `modules/payments/service.ts`، ولا يُستدعى إلا من حدث webhook نوعه `settlement.confirmed` من مزوّد يعلن `capabilities.settlementEvidence`.
+- **حدود القدرات**: كل مزوّد يعرّف `capabilities = { settlementEvidence, payout, demo }` في `lib/payments/providers.ts`. `manual` هو `{ demo: true, settlementEvidence: false }` — هيكل عرض/اختبار، ليس قناة أموال. `resolvePaymentProvider()` يرفض أي مزوّد `demo` إلا عند `DEMO_PAYMENT_MODE=true` (والـproduction يرفض الإقلاع به).
+- **تشغيل الاختبارات/E2E**: `DEMO_PAYMENT_MODE=true` مُضاف إلى `vitest.config.ts` و`playwright.config.ts` و`.env.demo` — لأن مزوّد `manual` محجوب افتراضياً. أي suite جديدة تستخدم المزوّد اليدوي يجب أن تُشغَّل مع هذه الراية.
+- **Revert/إصلاح**: لا تُعِد كتابة `SETTLED` داخل مسار تأكيد الدفع، ولا تسمح بحدث `settlement.confirmed` من مزوّد ديمو — حرسان مُثبتان في `tests/money-path-invariants.test.ts`.
+- **تدقيق قراءة فقط**: `npx tsx src/scripts/verify-money-path.ts` يكشف صفوف `SETTLED` بلا دليل تسوية (`SETTLEMENT.CONFIRMED` في `audit_logs`) ويُخرج exit code غير صفري عند وجود مخالفة. لا يكتب شيئاً.
+- **E2E محلي**: Playwright يحتاج `wasit_dev`؛ إن لم توجد فأنشئها فقط (`CREATE DATABASE wasit_dev`) ثم `npx drizzle-kit migrate` + `npx tsx src/scripts/seed.ts`. **ممنوع** `db reset/drop/push`.

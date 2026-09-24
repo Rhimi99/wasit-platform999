@@ -22,6 +22,9 @@ export default defineConfig({
       // Payment tests exercise the full service against a real (offline) provider
       // and a real HMAC secret — no external network, no mocking of WASIT logic.
       PAYMENT_PROVIDER: 'manual',
+      // The offline provider is a demonstration harness; the suite runs with no
+      // real money, so it opts into demo payment mode explicitly.
+      DEMO_PAYMENT_MODE: 'true',
       PAYMENT_WEBHOOK_SECRET: 'test-webhook-secret-0123456789',
       // Keep the suite output readable: the observability middleware logs every
       // request, and tests make thousands of them.

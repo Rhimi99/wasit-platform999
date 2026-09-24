@@ -35,6 +35,12 @@ import type {
 export class FlouciPaymentProvider implements PaymentProvider {
   readonly id = 'flouci';
   readonly isFunctional = true;
+  /**
+   * A licensed acquirer: it exposes transfer-level settlement and pays out
+   * through its own API, so it can be the evidence behind `SETTLED` and a
+   * seller payout reference.
+   */
+  readonly capabilities = { settlementEvidence: true, payout: true, demo: false };
   readonly requiresStatusRecheck = true;
 
   constructor(

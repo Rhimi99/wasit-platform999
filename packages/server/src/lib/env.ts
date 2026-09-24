@@ -41,6 +41,17 @@ const envSchema = z.object({
   PAYMENT_BASE_URL: z.string().optional(),
   /** HMAC secret used to sign/verify provider webhooks (manual / open-checkout). */
   PAYMENT_WEBHOOK_SECRET: z.string().default(''),
+  /**
+   * Explicitly marks this deployment as a public demo. The offline `manual`
+   * provider and the offline refund path move no real money, so they are only
+   * accepted where this is `true`. Default off: an unspecified environment is
+   * treated as real money and refuses them, so a missing flag fails closed
+   * rather than quietly running a demo rail on a live deployment.
+   */
+  DEMO_PAYMENT_MODE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Flouci Payment Gateway — keys are issued per application (test app is
   // available immediately after uploading the RNE; production needs KYB).
   // Amounts are sent in minor units (millimes for TND).
@@ -272,6 +283,27 @@ if (env.NODE_ENV === 'production' && env.DEMO_AUTO_LOGIN) {
 
 export function demoAutoLoginEnabled(): boolean {
   return env.NODE_ENV !== 'production' && env.DEMO_AUTO_LOGIN;
+}
+
+/**
+ * Whether this deployment may run a demonstration payment rail (the offline
+ * `manual` provider, whose "confirmation" is self-attested rather than observed
+ * at a bank). Production is excluded twice over, like the other demo flags: the
+ * deployment refuses to boot with it, and this resolver ignores it, so a stray
+ * `DEMO_PAYMENT_MODE=true` in a production secret store can neither start the
+ * process nor admit a self-attested payment on real money.
+ */
+if (env.NODE_ENV === 'production' && env.DEMO_PAYMENT_MODE) {
+  // eslint-disable-next-line no-console
+  console.error(
+    'Refusing to start: DEMO_PAYMENT_MODE cannot be enabled in production. ' +
+      'The offline payment provider proves nothing about real money.',
+  );
+  process.exit(1);
+}
+
+export function demoPaymentMode(): boolean {
+  return env.NODE_ENV !== 'production' && env.DEMO_PAYMENT_MODE;
 }
 
 /**

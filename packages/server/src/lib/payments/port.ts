@@ -83,11 +83,48 @@ export interface ProviderStatus {
 
 export interface NormalizedWebhookEvent {
   eventId: string;
-  eventType: 'PAYMENT_SUCCEEDED' | 'PAYMENT_FAILED' | 'REFUND_SUCCEEDED' | 'UNKNOWN';
+  /**
+   * `SETTLEMENT_CONFIRMED` is the one event that may lift a ledger entry to
+   * `SETTLED`. It is a different fact from `PAYMENT_SUCCEEDED`: the payment says
+   * money reached the provider, settlement says the funds actually moved on the
+   * provider/ banking side. Only a provider that declares
+   * `capabilities.settlementEvidence` may emit it.
+   */
+  eventType:
+    | 'PAYMENT_SUCCEEDED'
+    | 'PAYMENT_FAILED'
+    | 'REFUND_SUCCEEDED'
+    | 'SETTLEMENT_CONFIRMED'
+    | 'UNKNOWN';
   externalRef: string | null;
   amount: string | null;
   currencyCode: string | null;
+  /** Provider/bank transfer reference proving the settlement actually happened. */
+  settlementRef?: string | null;
   raw: Record<string, unknown>;
+}
+
+/**
+ * What a provider can actually prove — not just do. Confirming a payment is not
+ * the same as moving money, so these flags gate the *terminal* financial states:
+ * a provider that cannot produce settlement evidence can never lift a ledger
+ * entry to `SETTLED`, no matter what webhook it sends.
+ */
+export interface ProviderCapabilities {
+  /**
+   * Provider reports real transfer-level settlement (funds moved out of the
+   * acquirer) as machine-readable evidence, distinct from payment authorisation.
+   * Only such a provider may drive `transaction_ledger.status = SETTLED`.
+   */
+  readonly settlementEvidence: boolean;
+  /** Provider can execute a seller payout and return a transfer reference. */
+  readonly payout: boolean;
+  /**
+   * Provider is a demonstration/offline harness rather than a licensed acquirer.
+   * A demo provider can exercise checkout but can never be proof that money
+   * moved, so it is refused on any environment that is not itself a demo.
+   */
+  readonly demo: boolean;
 }
 
 export interface PaymentProvider {
@@ -96,6 +133,8 @@ export interface PaymentProvider {
   isAvailable(): boolean;
   /** True when the provider implements charge creation/refunds (vs. a wiring harness). */
   readonly isFunctional: boolean;
+  /** What the provider can prove. Absent means "can prove nothing beyond payment". */
+  readonly capabilities?: ProviderCapabilities;
   /**
    * When true, a webhook is NOT trusted on its own: the service re-checks the
    * transaction status directly with the provider before applying side-effects.

@@ -223,8 +223,11 @@ describe('Unsigned provider (status recheck) end-to-end', () => {
     expect(order[0].paymentStatus).toBe('PAID');
     const pay = await db.select().from(payments).where(eq(payments.orderId, s.orderId)).limit(1);
     expect(pay[0].status).toBe('PAID');
+    // Confirmed payment ≠ settled funds. Flouci reports an AVAILABLE settlement
+    // balance, but no transfer reference here, so the ledger must stay PENDING
+    // until real settlement evidence promotes it.
     const ledger = await db.select().from(transactionLedger).where(eq(transactionLedger.transactionId, s.transactionId));
-    expect(ledger.every((l) => l.status === 'SETTLED')).toBe(true);
+    expect(ledger.every((l) => l.status === 'PENDING')).toBe(true);
     expect(ledger.every((l) => l.paymentProvider === 'flouci')).toBe(true);
 
     // A replayed callback is an idempotent no-op.

@@ -213,9 +213,12 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
     const pay = await db.select().from(payments).where(eq(payments.orderId, s.orderId)).limit(1);
     expect(pay[0].status).toBe('PAID');
 
+    // Payment confirmation is NOT settlement: the ledger stays PENDING. The
+    // demo provider can never assert settlement, so nothing here is SETTLED.
     const ledger = await db.select().from(transactionLedger).where(eq(transactionLedger.transactionId, s.transactionId));
-    expect(ledger.every((l) => l.status === 'SETTLED')).toBe(true);
+    expect(ledger.every((l) => l.status === 'PENDING')).toBe(true);
     expect(ledger.every((l) => l.paymentProvider === 'manual')).toBe(true);
+    expect(ledger.every((l) => l.status !== 'SETTLED')).toBe(true);
 
     // Replaying the same event id is an idempotent no-op.
     const replay = await postWebhook(payload);

@@ -23,6 +23,7 @@ import type {
 export class NoopPaymentProvider implements PaymentProvider {
   readonly id = 'noop';
   readonly isFunctional = false;
+  readonly capabilities = { settlementEvidence: false, payout: false, demo: false };
   isAvailable(): boolean {
     return false;
   }
@@ -43,19 +44,27 @@ export class NoopPaymentProvider implements PaymentProvider {
 /**
  * Manual / offline provider: no external network. A payment intent is recorded
  * and the operator (or a signed webhook emitted by the settlement desk) moves it
- * to SUCCEEDED/FAILED. This is a real, deployable mode used before an online
- * acquirer is contracted, not a placeholder.
+ * to SUCCEEDED/FAILED.
+ *
+ * This is a **demonstration harness**, not an acquirer. A signed payload only
+ * proves the caller knows the shared HMAC secret — it is NOT evidence that money
+ * moved, and it can never be produced by a bank. The provider therefore declares
+ * `demo: true` and `settlementEvidence: false`, so the platform refuses it on a
+ * real-money deployment (`DEMO_PAYMENT_MODE` off) and never lets it lift a
+ * ledger entry to `SETTLED`. It remains available in demos and tests, where no
+ * real money is involved and a working checkout is what is being exercised.
  */
 export class ManualPaymentProvider implements PaymentProvider {
   readonly id = 'manual';
   readonly isFunctional = true;
+  readonly capabilities = { settlementEvidence: false, payout: false, demo: true };
   isAvailable(): boolean {
     return true;
   }
   /**
    * The offline desk settles any rail out of band, so it advertises both method
-   * families. This is what keeps checkout testable before an online acquirer is
-   * contracted — it is a real deployable mode, not a placeholder.
+   * families. This is what keeps checkout testable where no online acquirer is
+   * configured — it is a demo mode, not a real settlement rail.
    */
   supportedMethods(): ProviderCapability[] {
     return [
@@ -76,6 +85,8 @@ export class ManualPaymentProvider implements PaymentProvider {
     };
   }
   async refund(input: RefundInput): Promise<RefundResult> {
+    // No network and no money: the offline desk records the reversal out of band.
+    // The reference is a local marker, never a bank/transfer reference.
     return { externalRef: `manualrf_${input.idempotencyKey.slice(0, 12)}`, status: 'SUCCEEDED' };
   }
   verifyAndNormalizeWebhook(rawBody: string, signature: string | undefined): NormalizedWebhookEvent {
@@ -102,6 +113,11 @@ export class ManualPaymentProvider implements PaymentProvider {
 export class OpenCheckoutPaymentProvider implements PaymentProvider {
   readonly id = 'open-checkout';
   readonly isFunctional = true;
+  /**
+   * A real acquirer that reports settlement and pays out through its own API,
+   * so it can be the evidence behind `SETTLED` and a seller payout reference.
+   */
+  readonly capabilities = { settlementEvidence: true, payout: true, demo: false };
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
@@ -176,7 +192,20 @@ export class OpenCheckoutPaymentProvider implements PaymentProvider {
       eventType: mapEventType(String(parsed.type ?? '')),
       externalRef: parsed.paymentIntent ? String(parsed.paymentIntent) : parsed.externalRef ? String(parsed.externalRef) : null,
       amount: parsed.amount != null ? String(parsed.amount) : null,
-      currencyCode: parsed.currency ? String(parsed.currency) : null,
+      // Accept the explicit `currencyCode` (our own contract) and the short
+      // `currency` some acquirers use; either names the currency of the funds.
+      currencyCode: parsed.currencyCode
+        ? String(parsed.currencyCode)
+        : parsed.currency
+          ? String(parsed.currency)
+          : null,
+      // The acquirer's transfer/bank reference, present only on settlement
+      // notifications. It is the proof `SETTLED` is written against.
+      settlementRef: parsed.settlementRef
+        ? String(parsed.settlementRef)
+        : parsed.transferId
+          ? String(parsed.transferId)
+          : null,
       raw: parsed,
     };
   }
@@ -228,6 +257,9 @@ export function fromMinorUnits(minor: string | number, decimals: number): string
 
 function mapEventType(t: string): NormalizedWebhookEvent['eventType'] {
   const v = t.toLowerCase();
+  // Settlement is checked first: it is the distinct "funds moved" fact, and must
+  // never be collapsed into a payment-success match.
+  if (v.includes('settl')) return 'SETTLEMENT_CONFIRMED';
   // Refund must be matched before the generic "succeed" test, since
   // `refund.succeeded` also contains "succeed".
   if (v.includes('refund')) return v.includes('fail') ? 'UNKNOWN' : 'REFUND_SUCCEEDED';

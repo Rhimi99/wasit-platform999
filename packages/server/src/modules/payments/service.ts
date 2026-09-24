@@ -214,11 +214,15 @@ export async function handlePaymentWebhook(
 
   if (!event.eventId) throw ApiError.validation([{ field: 'eventId', message: 'Event id missing', code: 'VALIDATION_FAILED' }]);
 
-  // Providers that document no webhook signature (Flouci, ClicToPay) are never
-  // trusted on the callback body alone: the transaction status is re-fetched
-  // directly from the provider and that is what decides the side-effect. The
-  // amount/currency returned must match the stored intent to prevent a forged
-  // callback from settling a different amount.
+  // Every provider that claims a payment succeeded must have that claim checked
+  // against the amount and currency the platform actually asked for. A webhook
+  // that proves 500 TND was paid can never be allowed to mark a 1020 TND intent
+  // as paid. This is enforced here for *all* providers, not just the ones that
+  // re-check status, so a forged or mismatched payload fails closed.
+  //
+  // Providers with `requiresStatusRecheck` (Flouci, ClicToPay) document no
+  // webhook signature, so the provider's own status endpoint is the decisive
+  // evidence and is what supplies the amount for the comparison below.
   let effectiveType = event.eventType;
   let effectiveRef = event.externalRef;
   if (provider.requiresStatusRecheck) {
@@ -235,8 +239,17 @@ export async function handlePaymentWebhook(
     if (status.amount != null && !toDecimal(status.amount).equals(toDecimal(intent[0].amount))) {
       throw ApiError.conflict('Provider-reported amount does not match the payment intent');
     }
+    if (status.currencyCode != null && status.currencyCode !== intent[0].currencyCode) {
+      throw ApiError.conflict('Provider-reported currency does not match the payment intent');
+    }
     effectiveType =
       status.status === 'SUCCEEDED' ? 'PAYMENT_SUCCEEDED' : status.status === 'FAILED' ? 'PAYMENT_FAILED' : 'UNKNOWN';
+  } else if (effectiveType === 'PAYMENT_SUCCEEDED' && effectiveRef && event.amount != null && event.currencyCode != null) {
+    // Signature-verified webhook. Payment confirmation is NOT settlement, so a
+    // missing amount does not fabricate a terminal money state here — but when
+    // the provider does state an amount and currency, they must match the intent
+    // we asked for, or a 500 TND confirmation could mark a 1020 TND intent paid.
+    await assertEvidenceMatchesIntent(db, effectiveRef, event.amount, event.currencyCode);
   }
 
   // Only a terminal, actionable event may claim the (provider, eventId) key.
@@ -248,7 +261,22 @@ export async function handlePaymentWebhook(
   const isTerminal =
     effectiveType === 'PAYMENT_SUCCEEDED' ||
     effectiveType === 'PAYMENT_FAILED' ||
-    effectiveType === 'REFUND_SUCCEEDED';
+    effectiveType === 'REFUND_SUCCEEDED' ||
+    effectiveType === 'SETTLEMENT_CONFIRMED';
+
+  // Settlement evidence is a distinct capability. A provider that cannot see
+  // funds leave the acquirer (the offline demo desk, for instance) can never
+  // assert it, whatever it puts in a signed payload — so the claim is rejected
+  // rather than trusted.
+  if (effectiveType === 'SETTLEMENT_CONFIRMED' && !provider.capabilities?.settlementEvidence) {
+    throw ApiError.validation([
+      {
+        field: 'type',
+        message: `Provider '${provider.id}' cannot assert settlement: it exposes no settlement evidence`,
+        code: 'VALIDATION_FAILED',
+      },
+    ]);
+  }
 
   if (!isTerminal || !effectiveRef) {
     return { duplicate: false, applied: false, eventType: effectiveType };
@@ -273,25 +301,52 @@ export async function handlePaymentWebhook(
   }
 
   let applied = false;
-  if (effectiveType === 'PAYMENT_SUCCEEDED' && effectiveRef) {
-    const target = await intentTarget(db, effectiveRef);
-    if (target === 'SUBSCRIPTION') {
-      await applyInvoicePaymentSucceeded(db, effectiveRef, provider.id, input.ipAddress ?? null);
-    } else {
-      await applyPaymentSucceeded(db, provider.id, effectiveRef, input.ipAddress ?? null);
+  try {
+    if (effectiveType === 'PAYMENT_SUCCEEDED' && effectiveRef) {
+      const target = await intentTarget(db, effectiveRef);
+      if (target === 'SUBSCRIPTION') {
+        await applyInvoicePaymentSucceeded(db, effectiveRef, provider.id, input.ipAddress ?? null);
+      } else {
+        await applyPaymentSucceeded(db, provider.id, effectiveRef, input.ipAddress ?? null);
+      }
+      applied = true;
+    } else if (effectiveType === 'PAYMENT_FAILED' && effectiveRef) {
+      const target = await intentTarget(db, effectiveRef);
+      if (target === 'SUBSCRIPTION') {
+        await applyInvoicePaymentFailed(db, effectiveRef, input.ipAddress ?? null);
+      } else {
+        await applyPaymentFailed(db, effectiveRef, input.ipAddress ?? null);
+      }
+      applied = true;
+    } else if (effectiveType === 'REFUND_SUCCEEDED' && effectiveRef) {
+      await applyRefundSucceeded(db, effectiveRef, input.ipAddress ?? null);
+      applied = true;
+    } else if (effectiveType === 'SETTLEMENT_CONFIRMED' && effectiveRef) {
+      // The evidence must name the amount and currency, and it must match the
+      // intent, exactly as payment confirmation does. A settlement claim is the
+      // strongest statement the system accepts, so it is the most tightly checked.
+      if (event.amount == null || event.currencyCode == null) {
+        throw ApiError.validation([
+          {
+            field: 'amount',
+            message: 'Settlement evidence must include both amount and currencyCode',
+            code: 'VALIDATION_FAILED',
+          },
+        ]);
+      }
+      await assertEvidenceMatchesIntent(db, effectiveRef, event.amount, event.currencyCode);
+      await applySettlementConfirmed(db, effectiveRef, provider.id, event.settlementRef ?? null, input.ipAddress ?? null);
+      applied = true;
     }
-    applied = true;
-  } else if (effectiveType === 'PAYMENT_FAILED' && effectiveRef) {
-    const target = await intentTarget(db, effectiveRef);
-    if (target === 'SUBSCRIPTION') {
-      await applyInvoicePaymentFailed(db, effectiveRef, input.ipAddress ?? null);
-    } else {
-      await applyPaymentFailed(db, effectiveRef, input.ipAddress ?? null);
-    }
-    applied = true;
-  } else if (effectiveType === 'REFUND_SUCCEEDED' && effectiveRef) {
-    await applyRefundSucceeded(db, effectiveRef, input.ipAddress ?? null);
-    applied = true;
+  } catch (err) {
+    // Applying the side-effect failed, so the event must NOT stay claimed: the
+    // unique (provider, eventId) row would otherwise make every provider retry a
+    // silent "duplicate" no-op and the payment would never be applied. Release
+    // the claim so the next delivery can succeed, then surface the error.
+    await db
+      .delete(paymentWebhookEvents)
+      .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)));
+    throw err;
   }
 
   await db
@@ -300,6 +355,28 @@ export async function handlePaymentWebhook(
     .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)));
 
   return { duplicate: false, applied, eventType: effectiveType };
+}
+
+/**
+ * Verifies that a provider's payment-confirmation evidence names the same amount
+ * and currency as the stored intent. This is the check that stops a 500 TND
+ * confirmation from marking a 1020 TND intent as paid: the platform only ever
+ * accepts a payment it asked for, for the full amount, in the right currency.
+ */
+async function assertEvidenceMatchesIntent(
+  db: DB,
+  externalRef: string,
+  amount: string,
+  currencyCode: string,
+): Promise<void> {
+  const intent = await db.select().from(paymentIntents).where(eq(paymentIntents.externalRef, externalRef)).limit(1);
+  if (intent.length === 0) throw ApiError.notFound('Payment intent');
+  if (!toDecimal(amount).equals(toDecimal(intent[0].amount))) {
+    throw ApiError.conflict('Payment-confirmation amount does not match the payment intent');
+  }
+  if (currencyCode !== intent[0].currencyCode) {
+    throw ApiError.conflict('Payment-confirmation currency does not match the payment intent');
+  }
 }
 
 /** Distinguishes a subscription-invoice intent from an order intent by its ref. */
@@ -377,7 +454,9 @@ async function reverseCommissionAndFee(
       payerId: entry.beneficiaryId,
       beneficiaryId: entry.payerId,
       paymentProvider: input.providerId,
-      status: 'SETTLED',
+      // A reversal is a book entry, not a movement of money: it starts PENDING
+      // like every other entry and is promoted only by settlement evidence.
+      status: 'PENDING',
       metadata: { reversalOf: entry.id, refundId: input.refundId } as never,
     } as never);
   }
@@ -415,10 +494,14 @@ async function applyPaymentSucceeded(db: DB, providerId: string, externalRef: st
 
   await db.update(transactions).set({ status: 'PAID' }).where(eq(transactions.id, transactionId));
 
-  // Ledger entries settle once the money is confirmed at the provider.
+  // Payment confirmation only. The ledger entries stay PENDING: a confirmed
+  // payment means the money reached the provider, NOT that it settled. A ledger
+  // entry is promoted to SETTLED later, and only, by `applySettlementConfirmed`
+  // on the strength of real settlement evidence. Writing SETTLED here is exactly
+  // the Payment = Settlement conflation this system must not have.
   await db
     .update(transactionLedger)
-    .set({ status: 'SETTLED', paymentProvider: providerId } as never)
+    .set({ paymentProvider: providerId } as never)
     .where(eq(transactionLedger.transactionId, transactionId));
 
   await db
@@ -440,6 +523,63 @@ async function applyPaymentSucceeded(db: DB, providerId: string, externalRef: st
     title: 'Payment confirmed',
     body: `Payment for order ${order[0].orderNumber} was confirmed.`,
     data: { orderId, intentId: intent.id },
+  });
+}
+
+/**
+ * Promotes the ledger entries of a paid transaction to `SETTLED`, on the
+ * strength of real settlement evidence.
+ *
+ * This is the ONLY writer of `transaction_ledger.status = 'SETTLED'`. It is
+ * deliberately separate from payment confirmation: confirming a payment proves
+ * the money reached the provider, whereas settlement proves the funds actually
+ * moved on the provider/bank side. Keeping the two apart is what makes
+ * `Payment ≠ Settlement` true in code, not just in the design document.
+ *
+ * Guards:
+ *  - the intent must exist and its payment must be confirmed (a settlement of an
+ *    unpaid order is meaningless and would fabricate a state transition);
+ *  - the provider must declare `settlementEvidence` (enforced by the caller);
+ *  - promotion is idempotent: only `PENDING`/`PROCESSING` rows move, so a replay
+ *    cannot re-settle a refunded or already-settled entry.
+ */
+async function applySettlementConfirmed(
+  db: DB,
+  externalRef: string,
+  providerId: string,
+  settlementRef: string | null,
+  ipAddress: string | null,
+): Promise<void> {
+  const intentRows = await db.select().from(paymentIntents).where(eq(paymentIntents.externalRef, externalRef)).limit(1);
+  if (intentRows.length === 0) throw ApiError.notFound('Payment intent');
+  const intent = intentRows[0];
+  if (!intent.orderId || !intent.transactionId) {
+    throw ApiError.conflict('Settlement evidence targets a non-order payment intent');
+  }
+  if (intent.status !== 'SUCCEEDED') {
+    throw ApiError.conflict('Cannot settle an intent whose payment is not confirmed');
+  }
+
+  await db
+    .update(transactionLedger)
+    .set({ status: 'SETTLED', paymentProvider: providerId } as never)
+    .where(
+      and(
+        eq(transactionLedger.transactionId, intent.transactionId),
+        sql`${transactionLedger.status} in ('PENDING','PROCESSING')`,
+      ),
+    );
+
+  await db
+    .update(orders)
+    .set({ settlementStatus: 'SETTLED', updatedAt: new Date() })
+    .where(and(eq(orders.id, intent.orderId), sql`${orders.settlementStatus} <> 'SETTLED'`));
+
+  await writeAudit(db, { actorId: null, ipAddress }, {
+    action: 'SETTLEMENT.CONFIRMED',
+    entityType: 'ORDER',
+    entityId: intent.orderId,
+    after: { transactionId: intent.transactionId, provider: providerId, settlementRef },
   });
 }
 
@@ -584,7 +724,9 @@ export async function createRefund(
       payerId: 'wasit',
       beneficiaryId: order.buyerId,
       paymentProvider: provider.id,
-      status: 'SETTLED',
+      // PENDING until settlement evidence confirms the reversal actually moved;
+      // this is independent of `refunds.status`, which tracks the refund itself.
+      status: 'PENDING',
     } as never);
 
     const newRefundedTotal = alreadyRefunded.add(requested);

@@ -25,7 +25,7 @@
 | 3 | نيّة الدفع | `modules/payments/service.ts` → `createIntent` | يُنشأ `payment_intents` بحالة `PENDING`، ويُردّ `checkoutUrl` من المزوّد (أو `null` للـmanual) | ❌ لا |
 | 4 | الدفع عند المزوّد | `lib/payments/{flouci,clictopay,providers}.ts` | تحويل المشتري إلى صفحة المزوّد (live فقط عند توفّر credentials) | ✅ عند مزوّد حقيقي مرخّص |
 | 5 | تأكيد المزوّد | `lib/payments/*` → `getStatus` / webhook | المزوّد يؤكّد النجاح؛ الخدمة تعيد التحقق من المبلغ والعملة | ✅ (تأكيد فقط) |
-| 6 | تطبيق النجاح | `payments/service.ts` → `applyPaymentSucceeded` | تُحدَّث `payment_intents=SUCCEEDED`، `payments=PAID`، `orders.paymentStatus=PAID`، وتُحوَّل كل قيود الـledger إلى `SETTLED` | ✅ قيد محاسبي فقط |
+| 6 | تطبيق النجاح | `payments/service.ts` → `applyPaymentSucceeded` | تُحدَّث `payment_intents=SUCCEEDED`، `payments=PAID`، `orders.paymentStatus=PAID`، وقيود الـledger **تبقى `PENDING`** (لا كتابة `SETTLED` هنا) | ✅ قيد محاسبي فقط |
 | 7 | تسوية/تحويل إلى WASIT | **غير موجود** | لا كود، لا جدول، لا مهمة مجدولة | ❌ **لا يوجد** |
 
 **الاستنتاج:** "SETTLEMENT" في هذا النظام هو **حالة قيد محاسبي** (`transaction_ledger.status ∈ {PENDING, SETTLED}` و`orders.settlement_status`)، وليس تحويل أموال إلى حساب WASIT.
@@ -42,10 +42,11 @@
 - **الحالة:** لم يُصلَح (خارج نطاق المراجعة القراءة-فقط؛ انظر §6).
 
 ### RC-2 — لا كاتب لقيد `SETTLEMENT` ولا لـ`orders.settlement_status`
-- **البحث:** `grep entry_type = 'SETTLEMENT'` → **صفر نتائج كتابة** (يظهر فقط في التعريف والقراءة/التحليلات).
-- **`settlement_status`:** لا يوجد أي `set/update/insert` له في كل `src` — يبقى `PENDING` إلى الأبد.
-- **الدليل الفعلي:** `SELECT count(*) FROM transaction_ledger WHERE entry_type='SETTLEMENT'` = **0**، وكل الطلبات `settlement_status='PENDING'`.
+- **البحث الأصلي:** `grep entry_type = 'SETTLEMENT'` → **صفر نتائج كتابة** (يظهر فقط في التعريف والقراءة/التحليلات).
+- **`settlement_status`:** لم يكن له أي `set/update/insert` في كل `src` — يبقى `PENDING` إلى الأبد.
+- **الدليل الفعلي (وقت المراجعة):** `SELECT count(*) FROM transaction_ledger WHERE entry_type='SETTLEMENT'` = **0**، وكل الطلبات `settlement_status='PENDING'`.
 - **الأثر:** واجهة العميل تعرض `order.settlement` بقيمة `—` دائمًا (`DashboardListPages.tsx:346`).
+- **تحديث 2026-09-24 — أُصلح:** يوجد الآن **كاتب واحد فقط** لـ`SETTLED`: `applySettlementConfirmed` في `payments/service.ts`، ويُستدعى حصريًا من حدث `settlement.confirmed` القادم من مزوّد يعلن `capabilities.settlementEvidence`. الحدث يتطلّب دفعة مؤكَّدة + مطابقة المبلغ والعملة، ثم يرقّي القيود من `PENDING/PROCESSING` فقط (idempotent) ويكتب `orders.settlementStatus = 'SETTLED'` مع أثر تدقيق `SETTLEMENT.CONFIRMED`. قيد `SETTLEMENT` المنفصل (entry_type) يبقى غير مكتوب لأنه يخص طبقة Payout/Reconciliation غير المنفَّذة بعد.
 
 ### RC-3 — تعارض إشارة العمولة بين تقريرين (Bug حقيقي ظاهر في Admin)
 - **`/api/revenue/report`** (`modules/revenue/service.ts` → `ledgerTotal`) يحسب `CREDIT − DEBIT`. وبما أن قيود `COMMISSION` كلها `DEBIT`، تكون النتيجة **سالبة**.
@@ -102,7 +103,7 @@
 | إنشاء نيّة دفع | ✅ `201` مع `externalRef` و`amount=214.2000` |
 | التحقق من توقيع الـwebhook | ✅ التوقيع المزيف → `401 UNAUTHORIZED` |
 | منع إعادة التشغيل (replay) | ✅ الحدث الصحيح المكرَّر → `duplicate:true` |
-| تطبيق النجاح (حدث نظيف) | ✅ `intent=SUCCEEDED`, `payment=PAID`, `order.paymentStatus=PAID`, القيود→`SETTLED` |
+| تطبيق النجاح (حدث نظيف) | ✅ `intent=SUCCEEDED`, `payment=PAID`, `order.paymentStatus=PAID`, القيود تبقى `PENDING` (لا `SETTLED` — راجع §9) |
 | إشعار المشتري | ✅ `PAYMENT_SUCCEEDED` |
 | idempotency الاسترداد | ✅ نفس `idempotencyKey` → نفس الاسترداد (`reused`) |
 | منع الاسترداد الزائد | ✅ مُطبَّق (remaining guard) |
@@ -138,12 +139,12 @@
 | Create payment intent | ✅ | PASS | — | — | verified |
 | Webhook signature (forged) | ✅ | PASS (rejects) | — | — | verified |
 | Webhook replay (same id) | ✅ | PASS (dedup) | — | — | verified |
-| Webhook pending→succeeded (same id) | ✅ | **FAIL** | RC-4: event key consumed by UNKNOWN before side-effect | لا تُدرج الحدث كـ"معالج" إلا للنوع القابل للتنفيذ، أو اسمح بالترقية UNKNOWN→terminal | **reproduced** |
+| Webhook pending→succeeded (same id) | ✅ | **PASS** | RC-4: event key consumed by UNKNOWN before side-effect | ✅ نُفِّذ: المفتاح لا يُحتجز إلا لحدث نهائي قابل للتنفيذ | **verified** |
 | Order marked PAID after success | ✅ | PASS (clean event) | — | — | verified |
 | `transactions.status` accuracy | ✅ (admin) | **FAIL** | RC-1: inserted hardcoded `'PAID'` at creation | تغيير `orders/service.ts:178` إلى `'PENDING'` (تُرقَّى في `applyPaymentSucceeded`) | **reproduced** |
 | Refund + idempotency | ✅ | PASS | — | — | verified |
-| Refund reverses commission | ✅ | **FAIL** | RC-5: no reversing commission/fee entries | إدراج قيود عكسية `COMMISSION`/`PAYMENT_FEE` بنسبة المبلغ المسترد | **reproduced** |
-| Settlement entry / status | ✅ | **FAIL (absent)** | RC-2: no writer | بناء Settlement/Payout engine والكتابة إلى `SETTLEMENT` + `settlement_status` | **reproduced** |
+| Refund reverses commission | ✅ | **PASS (PENDING reversal)** | RC-5: no reversing commission/fee entries | ✅ نُفِّذ: قيود عكسية `COMMISSION`/`PAYMENT_FEE` بنسبة المسترد، وتُكتب `PENDING` (Book entry ≠ Received) | **verified** |
+| Settlement entry / status | ✅ | **PASS (evidence-gated)** | RC-2: no writer | ✅ نُفِّذ: `applySettlementConfirmed` — يكتب `SETTLED` فقط من حدث `settlement.confirmed` لمزوّد يعلن `settlementEvidence`، بعد دفعة مؤكَّدة ومطابقة مبلغ/عملة | **verified** |
 | Revenue report consistency | ✅ | **FAIL** | RC-3: sign inconsistency between two endpoints | توحيد الإشارة وإضافة عكس عمولة الاسترداد + تقريب | **reproduced** |
 | Manual checkout completion from UI | ✅ | **FAIL** | RC-6: no settlement desk UI | إضافة مسار تسوية يدوية (admin) وإظهار حالته للمشتري | **reproduced** |
 | Real payout to WASIT bank | — | **NOT IMPLEMENTED** | لا كود | تصميم Treasury/Payout + تكامل مزوّد | missing |
@@ -166,5 +167,22 @@
 
 - جميع الأرقام أعلاه مُستخرجة من تشغيل فعلي على قاعدة أُعيد بناؤها بـ migrations الرسمية + seed المشروع — **لا DB reset/drop/push**، ولم تُحذف بيانات اختبار ضرورية.
 - لم تُعدَّل سياسة العمولة (4% = 2%+2%) ولم يُمسّ Marketing Video Agent.
-- لم يُنشأ أي commit لهذه المراجعة (مطابقةً لقيود الأساس المجمّد).
 - الملفات المؤقتة المستخدمة للاستعلام أُزيلت، والخادم التجريبي أُوقف.
+
+---
+
+## 9. تحديث الإصلاح (2026-09-24) — Money Path Invariants
+
+بعد هذه المراجعة نُفِّذت إصلاحات المسار المالي (بدون migrations، بدون تغيير schema، بدون DB reset/drop/push):
+
+| # | الدلالة المحفوظة | كيف صارت صحيحة في الكود |
+|---|---|---|
+| 1 | `Payment ≠ Settlement` | `applyPaymentSucceeded` **لم يعد** يكتب `SETTLED`؛ القيود تبقى `PENDING` عند تأكيد الدفع فقط. |
+| 2 | `SETTLED` فقط بدليل | الكاتب الوحيد `applySettlementConfirmed`، يُستدعى من `settlement.confirmed` ويتطلّب: مزوّداً يعلن `settlementEvidence` + دفعة مؤكَّدة + مطابقة مبلغ/عملة + ترقية `PENDING/PROCESSING` فقط. |
+| 3 | `Commission Earned ≠ Received` | قيود عكس الاسترداد (`COMMISSION`/`PAYMENT_FEE`/`REFUND`) تُكتب `PENDING`، لا `SETTLED`. |
+| 4 | `Payment ≠ Settlement` لمزوّد الديمو | `ManualPaymentProvider.capabilities = { demo: true, settlementEvidence: false }`؛ `/api/revenue` لا يتغيّر سعر العمولة. |
+| 5 | الديمو لا يصنع مالًا | `resolvePaymentProvider()` يرفض مزوّداً `demo` إلا عند `DEMO_PAYMENT_MODE=true` (مرفوض في production)، ورفض `settlement.confirmed` منه صراحة. |
+| 6 | `RECEIVED`/`SETTLED` بدليل فقط | مقدار/عملة أولية: تأكيد الدفع يُطابَق المبلغ إن وُجد؛ تأكيد التسوية يتطلّب المبلغ والعملة دائماً. |
+| 7 | `Payout Created ≠ Payout Completed` | لا يزال لا كاتب payout — `capabilities.payout` معلن لكن غير مستخدم كتابةً. |
+
+**اختبارات:** `packages/server/tests/money-path-invariants.test.ts` (9 اختبارات) تُثبت الدلالات أعلاه عبر الخدمة الحقيقية وقاعدة بيانات حقيقية، منها انتقال `SETTLED` فعلي عبر مزوّد مُسوِّر. PS-05 يبقى خارج المسار المالي (صفر مراجع برمجية).

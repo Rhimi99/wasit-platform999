@@ -51,6 +51,9 @@ export default defineConfig({
         RATE_LIMIT_FORGOT_MAX: '500',
         // Exercise the real payment kernel offline (no external acquirer calls).
         PAYMENT_PROVIDER: 'manual',
+        // The offline provider is a demo harness; the E2E stack runs no real
+        // money, so it opts into demo payment mode explicitly.
+        DEMO_PAYMENT_MODE: 'true',
         PAYMENT_WEBHOOK_SECRET: 'e2e-webhook-secret-0123456789',
         // Point the backup-freshness alert at a scratch heartbeat so the
         // observability spec can age it on disk and prove the alert fires.

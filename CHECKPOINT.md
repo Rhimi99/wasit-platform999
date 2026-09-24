@@ -2,7 +2,46 @@
 
 > **التاريخ**: 2026-09-24 — **PUBLIC DEMO: Owner Audit Center + Functional Audit (من الواجهة، بلا mocks)**
 > **الفرع**: `master`
-> **HEAD**: `9e71048` + هذا الـcommit
+> **HEAD**: `bada224` + هذا الـcommit
+
+## ✅ الحالة — Money Path Invariants: `Payment ≠ Settlement` (2026-09-24)
+
+**السياق**: نُفِّذت إصلاحات المسار المالي وفق أحدث READ-ONLY AUDIT، مع الحفاظ على قرار
+Automated-First وإبقاء PS-05 خارج المسار المالي (صفر مراجع برمجية له).
+
+**ما أُصلح (جذريًا، لا إخفاءً):**
+
+1. **`Payment ≠ Settlement`**: `applyPaymentSucceeded` لم يعد يكتب `transaction_ledger.status='SETTLED'`.
+   القيود تبقى `PENDING` عند تأكيد الدفع. الكتابة الوحيدة لـ`SETTLED` صارت
+   `applySettlementConfirmed`، ولا تُستدعى إلا من حدث `settlement.confirmed`.
+2. **`Commission Earned ≠ Received`**: قيود عكس الاسترداد (`COMMISSION`/`PAYMENT_FEE`/`REFUND`)
+   تُكتب `PENDING`، و`refunds.status` يبقى مستقلاً عن حالة القيد.
+3. **الديمو لا يصنع مالًا**: `ManualPaymentProvider.capabilities = { demo: true, settlementEvidence: false }`.
+   `resolvePaymentProvider()` يرفض مزوّدًا `demo` إلا عند `DEMO_PAYMENT_MODE=true`
+   (والـproduction يرفض الإقلاع به)، ورفض `settlement.confirmed` من مزوّد لا يعلن `settlementEvidence`.
+4. **الأدلة تطابق النية**: تأكيد الدفع يُطابَق المبلغ/العملة إن وُجدا؛ تأكيد التسوية يتطلّب
+   المبلغ والعملة والعملة المطابقة دائماً — فلا يُوسم intent بـ1020 TND مدفوعًا بتأكيد 500 TND.
+5. **موثوقية الـwebhook**: مفتاح idempotency يُحتجز فقط للحدث النهائي القابل للتنفيذ، ويُحرَّر
+   إن فشل تطبيق الأثر (كان الحدث يُفقد نهائيًا في نمط `pending → succeeded`).
+6. **تناقض التوثيق**: صُحّح `docs/PAYMENT_SETTLEMENT_AUDIT.md` (أضيف §9) ولم تعد RC-2/4/5 مفتوحة خطأً.
+
+**ملفات الإصلاح**: `lib/payments/port.ts` · `lib/payments/providers.ts` · `lib/payments/resolve.ts`
+· `lib/payments/flouci.ts` · `lib/payments/clictopay.ts` · `lib/env.ts` · `modules/payments/service.ts`.
+
+**فحوص إلزامية جديدة**:
+- `packages/server/tests/money-path-invariants.test.ts` — 9 اختبارات على الخدمة الحقيقية وقاعدة حقيقية،
+  منها انتقال `SETTLED` فعلي عبر مزوّد مُسوِّر.
+- `packages/server/src/scripts/verify-money-path.ts` — تدقيق **قراءة فقط** لكشف صفوف `SETTLED`
+  بلا دليل تسوية، وتصدير exit code غير صفري عند وجود مخالفة.
+
+**المصادقة**: زُرع `wasit_dev` (CREATE DATABASE جديد فقط — لا drop/reset/push، ولم تُمَس `wasit_test`).
+
+**النتائج**:
+- server tests: **594/594 PASS** (54 ملفًا).
+- Browser E2E حقيقي: `payments`/`settlement-integrity` = **10/10**،
+  `functional-audit`+`admin-refunds`+`order-lifecycle` = **61/61** (يشمل Marketing Video كاملًا وكل مساحات admin).
+- typecheck = 0 أخطاء · build = PASS · `verify-money-path` = 0 مخالفة.
+- لم تُمس Commission Policy (4% = 2%+2%) ولا Marketing Video Agent (`89e68d7`) ولا الـschema/الـmigrations.
 
 ## ✅ الحالة — Functional Audit: إصلاح تجاوز كشف التهريب خارج المنصة (2026-09-24)
 
