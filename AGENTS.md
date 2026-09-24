@@ -244,7 +244,10 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - المستخدم `wasit` يحتاج `CREATEDB` وإلا يفشل globalSetup بـ `42501`.
 - عند إعادة إنشاء القاعدة من صفر: `npm run db:migrate` ← `npx tsx src/scripts/seed.ts` ← `seed-demo.ts` (اختياري).
 - **حساب اختبار Demo الرسمي** `rhimiimed18@gmail.com`: يُنشَأ من `seed-demo.ts` (CUSTOMER عادي، verified في Demo). كلمة مروره من `DEMO_TEST_ACCOUNT_PASSWORD` في `.env.demo` (git-ignored)، لا plaintext في الكود. عند rebuild لقاعدة الـDemo يعود تلقائيًا بعد الـbootstrap.
-- **فخ تشغيل الـDemo**: `.env.demo` يضبط `API_URL` على الرابط العام لخدمة الـAPI؛ لا تُصدِّره لـ`vite preview` وإلا صار proxy الويب يشير إلى نفسه ⇒ حلقة proxy و`431 Request Header Fields Too Large` على كل `/api/*`. شغّل الويب بـ`API_URL=http://localhost:3000`.
+- **مركز تدقيق المالك** `/demo/owner` (`DemoOwnerAuditPage` + `lib/demo-owner-catalog.ts`): يفتح جلسات Demo حقيقية لكل دور عبر `POST /api/auth/demo-audit-session` بمعرّف دور فقط (`{persona}`) ضد قائمة مُصرَّحة في `lib/demo-account.ts`. الخادم يتحقق أن الحساب يحمل الدور المُعلن (وإلا 409)، والجلسة تحمل صلاحيات الحساب المخزَّنة فقط — لا توسيع من الواجهة. اختباره `e2e/demo-owner.spec.ts`.
+- **فخ تشغيل الـDemo**: `.env.demo` يضبط `API_URL` على الرابط العام لخدمة الـAPI؛ لا تُصدِّره لـ`vite preview` وإلا صار proxy الويب يشير إلى نفسه ⇒ حلقة proxy و`431 Request Header Fields Too Large` على كل `/api/*`. شغّل الويب بـ`API_URL=http://localhost:3000`. ولبناء الـDemo استخدم `VITE_DEMO_MODE=true npm run build -w @wasit/web` كي يظهر البانر.
+- **فخ تشغيل E2E على الرابط العام**: `globalSetup` يسجّل الدخول عبر `E2E_API_URL` (localhost) ويخزّن الكوكي لـ`localhost`، ثم المتصفح يتنقّل إلى `E2E_WEB_URL` العام ⇒ الكوكي لا يُرسل فتظهر بعض الاختبارات كأنها فاشلة. شغّل E2E على `E2E_WEB_URL=http://localhost:12000` لتطابق الأصل. و`DEMO_AUTO_LOGIN`/`DEMO_SKIP_EMAIL_VERIFICATION` يجب أن تطابق إعداد الخادم، وإلا تُخطّى/تفشل مواصفات الـDemo.
+- **14 فشل E2E متوقّع في وضع Demo**: مواصفات تعتمد `dev/verification-link` (404 في staging) أو locators `getByRole('status')` التي يزاحمها بانر DEMO. تُمرَّر في إعداد dev الأصلي (منافذ معزولة، بلا بانر) — ليست regressions.
 
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
 
