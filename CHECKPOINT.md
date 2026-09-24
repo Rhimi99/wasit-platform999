@@ -28,6 +28,31 @@
 **نقطة توقف مطلوبة (schema migration) — لم يُنفَّذ بعد:**
 باقي PS-02 (جدول `payouts` + endpoints) وPS-04 (تخزين الـfeeds/القرارات + Receipt state) يحتاج **migration**، وهو مسار توقف حسب القواعد. لم تُنشأ أي migration. التصميم المقترح موثّق في تقرير المرحلة.
 
+---
+
+## تحديث 2026-09-24 (2) — Additive Migration `0024` + Persistence
+
+**DESIGN = PASS (بالتعديلات الإلزامية)** ثم نُفِّذت migration **إضافية** فقط.
+
+**التعديلات المعتمدة على التصميم الأولي:**
+- `payouts.seller_id` = **كيان** (mirror `orders.sellerId`) + أُضيف `seller_type` (يكفي للتحقق لدى `resolvePaymentProviderById`).
+- `reconciliation_lines`: `gross_amount` / `provider_fee` / `net_amount` / `currency_code` (اصطلاح المشروع).
+- `reconciliation_decisions`: أُضيف `matched_transaction_id`, `ledger_entry_id`, `audit_log_id`; `provider varchar(100)`.
+- `reconciliation_imports`: أُضيف `import_key`; unique `(source, checksum)`.
+- `wasit_receipts`: enum `wasit_receipt_status = PENDING | RECEIVED | REVERSED` (Money Received قابل للعكس).
+- **لا FKs** (المشروع بلا FKs).
+
+**نجح:** migration `0024_remarkable_redwing.sql` (additive فقط — صفر `DROP/ALTER/TRUNCATE/DELETE/RENAME`) طُبِّقت بـ`drizzle-kit migrate`.
+- 5 enums + 5 جداول + 20 index + 1 CHECK + **0 FK**.
+- typecheck: 0 · build: PASS · server tests: **60 ملف / 635/635** (كان 625: +10 persistence).
+- targeted (settlement/payout/reconciliation/persistence): **41/41**.
+- `verify-money-path`: OK — 0 انتهاكات.
+- **PS-05 = 0 مراجع** · Commission/Wallet/Payment semantics بلا تغيير.
+- كُتّاب واحد لكل انتقال: SETTLED=`settlements/service.ts` · receipt=`reconciliation/receipt-service.ts` · payout=`payouts/service.ts` (يثبته اختبار `persistence-invariants`).
+
+**ملاحظة**: اختبار `unit/business-numbers` (500k توليد) **flaky سابق** غير مرتبط (ينجح 3/3 منفردًا؛ لم يُلمس).
+
+
 
 ## ✅ الحالة — Money Path Invariants: `Payment ≠ Settlement` (2026-09-24)
 

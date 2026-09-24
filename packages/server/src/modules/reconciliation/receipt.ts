@@ -22,7 +22,7 @@ export interface ReceiptEvidence {
   source: 'BANK_STATEMENT' | 'ACQUIRER' | 'PROVIDER';
 }
 
-export type WasitReceiptStatus = 'PENDING' | 'RECEIVED';
+export type WasitReceiptStatus = 'PENDING' | 'RECEIVED' | 'REVERSED';
 
 export interface ReceiptDecision {
   status: WasitReceiptStatus;
@@ -74,4 +74,19 @@ export function applyReceiptEvidence(
     currencyCode: evidence.currencyCode,
     source: evidence.source,
   };
+}
+
+/**
+ * Reverses a previously RECEIVED amount (bank reversal/chargeback). Funds that
+ * arrived can un-arrive, so RECEIVED is not treated as an immutable terminal
+ * state — it ends at REVERSED, never by deleting the original evidence.
+ */
+export function reverseReceipt(reason: string): { status: WasitReceiptStatus; reason: string } {
+  const trimmed = reason?.trim();
+  if (!trimmed) {
+    throw ApiError.validation([
+      { field: 'reason', message: 'A receipt reversal must carry a reason', code: 'VALIDATION_FAILED' },
+    ]);
+  }
+  return { status: 'REVERSED', reason: trimmed };
 }

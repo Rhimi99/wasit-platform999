@@ -51,6 +51,34 @@ function selectProvider(): PaymentProvider {
 }
 
 /**
+ * Resolves a specific provider by its id, for flows that name the rail
+ * explicitly (e.g. payout). Mirrors `selectProvider`'s mapping; unknown ids are
+ * refused rather than silently falling back, so a payout can never be routed to
+ * an unconfigured channel.
+ */
+export function resolvePaymentProviderById(id: string): PaymentProvider {
+  switch (id) {
+    case 'manual':
+      return new ManualPaymentProvider();
+    case 'noop':
+      return new NoopPaymentProvider();
+    case 'open-checkout':
+      return new OpenCheckoutPaymentProvider(
+        env.PAYMENT_BASE_URL?.trim() ?? '',
+        env.PAYMENT_API_KEY?.trim() ?? '',
+      );
+    case 'flouci':
+      return resolveFlouci();
+    case 'clictopay':
+      return resolveClicToPay();
+    default:
+      throw ApiError.validation([
+        { field: 'provider', message: `Unknown payment provider '${id}'`, code: 'VALIDATION_FAILED' },
+      ]);
+  }
+}
+
+/**
  * Describes every known provider and whether it is configured right now, so the
  * checkout UI can offer only the rails that can actually be used and explain the
  * rest. Never exposes credentials — only availability and a human reason.

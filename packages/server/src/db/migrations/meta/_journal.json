@@ -169,6 +169,13 @@
       "when": 1789971193287,
       "tag": "0023_cache_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790285922597,
+      "tag": "0024_remarkable_redwing",
+      "breakpoints": true
     }
   ]
 }
