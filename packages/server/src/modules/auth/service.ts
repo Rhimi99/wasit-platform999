@@ -407,9 +407,18 @@ export async function loginUser(
   }
 
   if (!user.emailVerified && !ctx.allowUnverifiedEmail) {
-    throw new ApiError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email before logging in', {
-      details: { or: 'Check your inbox' },
-    });
+    if (!demoEmailVerificationSkipped()) {
+      throw new ApiError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email before logging in', {
+        details: { or: 'Check your inbox' },
+      });
+    }
+    // Public demo only (never production — see `demoEmailVerificationSkipped`):
+    // the visitor has no mailbox, so an account left unverified — one created
+    // before this waiver existed, or seeded without it — must still be able to
+    // sign in. Mirror registration (which stores demo accounts verified) so the
+    // rest of the app sees one consistent state instead of a half-verified user.
+    await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
+    user.emailVerified = true;
   }
 
   // Second factor: a correct password is not enough when MFA is enabled. Issue a

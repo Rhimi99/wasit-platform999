@@ -162,6 +162,47 @@ describe('Demo bypass enabled — registration is immediately usable', () => {
   });
 });
 
+describe('Demo bypass enabled — an already-unverified account can still sign in', () => {
+  it('lets a pre-existing unverified account log in and stores it verified', async () => {
+    const email = `demo-legacy-${Date.now()}@wasit.tn`;
+    const password = 'StrongPass123!';
+    const c = makeClient(app);
+
+    // Register under mandatory verification, so the account is persisted
+    // unverified — exactly the state of an account created before the demo
+    // waiver existed. The visitor has no mailbox to click.
+    const reg = await c.req('/api/auth/register', {
+      method: 'POST',
+      body: { email, password, firstName: 'Legacy', role: 'CUSTOMER' },
+    });
+    expect(reg.status).toBe(201);
+    expect(reg.data.data.requiresEmailVerification).toBe(true);
+
+    const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    expect(row.emailVerified).toBe(false);
+
+    // With mandatory verification the account is still refused.
+    const denied = await c.req('/api/auth/login', { method: 'POST', body: { email, password } });
+    expect(denied.status).toBe(403);
+    expect(denied.data.error.code).toBe('EMAIL_NOT_VERIFIED');
+
+    // Under the demo waiver the same stored account signs in, and the waiver
+    // normalises the row so the rest of the session sees a verified user.
+    const login = await withEnv({ DEMO_SKIP_EMAIL_VERIFICATION: true }, () =>
+      c.req('/api/auth/login', { method: 'POST', body: { email, password } }),
+    );
+    expect(login.status).toBe(200);
+    expect(login.data.data.emailVerified).toBe(true);
+
+    const after = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    expect(after[0].emailVerified).toBe(true);
+
+    const me = await c.req('/api/auth/me');
+    expect(me.status).toBe(200);
+    expect(me.data.data.emailVerified).toBe(true);
+  });
+});
+
 describe('The verification gate cannot be skipped by the caller', () => {
   it('ignores allowUnverifiedEmail when the dev tooling is disabled', async () => {
     const email = `force-bypass-${Date.now()}@wasit.tn`;
