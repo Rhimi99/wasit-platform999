@@ -32,6 +32,17 @@ import { ensureInventoryItem } from '../lib/inventory-engine';
  */
 const RESET_STOCK = process.env.SEED_RESET_STOCK === '1';
 
+/**
+ * Official PUBLIC-DEMO test account, provisioned by this seeder (not by any
+ * login special-case). It is an ordinary CUSTOMER — active, email-verified in
+ * the demo only, with no staff role and no password bypass. The address is
+ * public and safe to commit; the password never is: it comes from
+ * `DEMO_TEST_ACCOUNT_PASSWORD` in the environment, so the credential stays in
+ * the git-ignored demo env (`.env.demo`) exactly like every other demo secret.
+ */
+const DEMO_TEST_ACCOUNT_EMAIL = 'rhimiimed18@gmail.com';
+const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_TEST_ACCOUNT_PASSWORD?.trim();
+
 // تونس — الثابتة تُستخرج من قاعدة البيانات (وليست Hardcoded في Core):
 let TUNISIA_ID = '';
 let FOOD_CAT = '';
@@ -219,7 +230,22 @@ async function main(): Promise<void> {
   const reviewerUser = await ensureDevUser('admin2@wasit.tn', pw, 'ADMIN');
   await assignRoleDirect(reviewerUser.userId, 'ADMIN');
 
-  console.log('Users ready:', [customer, supplierUser, merchantUser, companyUser].map((u) => u.email).join(', '));
+  // Official PUBLIC-DEMO test account (ordinary CUSTOMER). Idempotent: an
+  // existing row is kept as-is and only (re-)marked verified in the demo, so
+  // re-running the seeder never duplicates or resets the account. Re-provisioned
+  // automatically whenever the demo database is rebuilt from scratch.
+  const demoTestUser = await ensureDevUser(
+    DEMO_TEST_ACCOUNT_EMAIL,
+    DEMO_TEST_ACCOUNT_PASSWORD ?? pw,
+    'CUSTOMER',
+  );
+  if (!DEMO_TEST_ACCOUNT_PASSWORD) {
+    console.warn(
+      `[seed-demo] DEMO_TEST_ACCOUNT_PASSWORD not set; ${DEMO_TEST_ACCOUNT_EMAIL} uses the published demo password.`,
+    );
+  }
+
+  console.log('Users ready:', [customer, supplierUser, merchantUser, companyUser, demoTestUser].map((u) => u.email).join(', '));
 
   // إنشاء الكيانات التجارية إن لم تكن موجودة
   const supExisting = await db.select().from(suppliers).where(eq(suppliers.userId, supplierUser.userId)).limit(1);

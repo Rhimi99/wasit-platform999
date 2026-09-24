@@ -1,4 +1,4 @@
-import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi, loginViaUi, completeEmailVerification } from './helpers';
+import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi, loginViaUi, completeEmailVerification, isDemoVerified } from './helpers';
 
 /**
  * Functional audit (UI-driven, real backend + PostgreSQL, no mocks).
@@ -793,10 +793,10 @@ test.describe('ONBOARDING — entity creation from the UI', () => {
 
     // Where verification is required, complete it through the real token path;
     // the public demo already has the account verified and skips it.
-    const verified = await completeEmailVerification(page.request, email);
-
-    if (verified) {
-      // Exercise the emailed link's own UI page in environments that need it.
+    if (!(await isDemoVerified(page.request, email))) {
+      // Mint the token once and drive the emailed link's own UI page with it, so
+      // the verify-email page itself is covered. A second mint is impossible:
+      // the first consumption clears the stored token.
       const linkRes = await page.request.post('/api/auth/dev/verification-link', { data: { email } });
       const token = (await linkRes.json()).data.token as string;
       await page.goto(`/verify-email?token=${token}`);

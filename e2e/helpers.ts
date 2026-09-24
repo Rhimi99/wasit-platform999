@@ -12,6 +12,14 @@ export const DEMO_USERS = {
   admin2: 'admin2@wasit.tn',
 } as const;
 
+/**
+ * Official PUBLIC-DEMO test account, provisioned by `seed-demo.ts` (not by any
+ * login special-case) as an ordinary CUSTOMER. It shares the published demo
+ * password unless the demo env overrides it via `DEMO_TEST_ACCOUNT_PASSWORD`.
+ */
+export const DEMO_TEST_ACCOUNT = 'rhimiimed18@gmail.com';
+export const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_TEST_ACCOUNT_PASSWORD ?? DEMO_PASSWORD;
+
 export type DemoRole = keyof typeof DEMO_USERS;
 
 /** Path to the storage state created by global-setup (real API session per role). */
@@ -61,6 +69,21 @@ export async function completeEmailVerification(
     body.error?.fieldErrors?.some((f) => f.code === 'ALREADY_VERIFIED') === true;
   if (!alreadyVerified) throw new Error(`dev/verification-link failed: HTTP ${link.status()}`);
   return false;
+}
+
+/**
+ * Whether the environment already stores a fresh registration verified, i.e. the
+ * public-demo bypass is active. Probes the dev verification-link helper without
+ * consuming anything: `ALREADY_VERIFIED` means there is nothing to click.
+ */
+export async function isDemoVerified(
+  ctx: { post: (url: string, options?: { data?: unknown }) => Promise<{ ok(): boolean; status(): number; json(): Promise<unknown> }> },
+  email: string,
+): Promise<boolean> {
+  const link = await ctx.post('/api/auth/dev/verification-link', { data: { email } });
+  if (link.ok()) return false;
+  const body = (await link.json()) as { error?: { fieldErrors?: Array<{ code?: string }> } };
+  return body.error?.fieldErrors?.some((f) => f.code === 'ALREADY_VERIFIED') === true;
 }
 
 /**

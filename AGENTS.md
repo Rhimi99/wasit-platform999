@@ -243,6 +243,8 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - التشغيل: `sudo pg_ctlcluster 17 main start` (الأوامر الكاملة في `docs/DEPLOYMENT.md`).
 - المستخدم `wasit` يحتاج `CREATEDB` وإلا يفشل globalSetup بـ `42501`.
 - عند إعادة إنشاء القاعدة من صفر: `npm run db:migrate` ← `npx tsx src/scripts/seed.ts` ← `seed-demo.ts` (اختياري).
+- **حساب اختبار Demo الرسمي** `rhimiimed18@gmail.com`: يُنشَأ من `seed-demo.ts` (CUSTOMER عادي، verified في Demo). كلمة مروره من `DEMO_TEST_ACCOUNT_PASSWORD` في `.env.demo` (git-ignored)، لا plaintext في الكود. عند rebuild لقاعدة الـDemo يعود تلقائيًا بعد الـbootstrap.
+- **فخ تشغيل الـDemo**: `.env.demo` يضبط `API_URL` على الرابط العام لخدمة الـAPI؛ لا تُصدِّره لـ`vite preview` وإلا صار proxy الويب يشير إلى نفسه ⇒ حلقة proxy و`431 Request Header Fields Too Large` على كل `/api/*`. شغّل الويب بـ`API_URL=http://localhost:3000`.
 
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
 

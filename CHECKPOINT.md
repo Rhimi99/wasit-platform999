@@ -1,8 +1,60 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: تسجيل بلا تحقق بريد + إغلاق متجه تجاوز بوابة الدخول**
+> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: حساب اختبار رسمي ثابت (`rhimiimed18@gmail.com`) عبر الـDemo seed**
 > **الفرع**: `master`
-> **HEAD**: `0549432` + هذا الـcommit
+> **HEAD**: `d676dfd` + هذا الـcommit
+
+## ✅ الحالة — حساب اختبار Demo رسمي وثابت (2026-09-24)
+
+**السبب الجذري السابق**: الحساب `rhimiimed18@gmail.com` كان **غير موجود** في `wasit_demo`
+(0 صفوف، لا حساب `@gmail.com` إطلاقًا؛ عنقود Postgres أُنشئ اليوم 05:06 وأقدم حساب 05:35).
+`loginUser` كان يأخذ فرع `USER_NOT_FOUND` (مقارنة على هاش وهمي لموازنة التوقيت) ⇒ **لا خطأ كود**، بل
+فقدان بيانات بسبب قاعدة Demo مؤقتة/رخوة. لا bypass، ولا مشكلة كلمة مرور.
+
+**الحل المطبَّق**: إضافة الحساب إلى **آلية الـDemo seed الحالية** (`seed-demo.ts`)، وليس أي
+workaround داخل login. الـseed هو المصدر الوحيد: أي إعادة بناء لـDemo DB تعيد إنشاءه تلقائيًا.
+
+- **الحساب**: `rhimiimed18@gmail.com` — `CUSTOMER` عادي، `active=true`، `email_verified=true` (في
+  Demo فقط عبر `ensureDevUser` الحالي)، **لا Admin/Staff** ولا bypass كلمة مرور ولا تفويض خاص.
+- **كلمة المرور**: لا plaintext في الكود إطلاقًا. تُقرأ من `DEMO_TEST_ACCOUNT_PASSWORD` في
+  `.env.demo` (git-ignored، كبقية أسرار الـDemo)، وتُمرَّر عبر **نفس** `hashPassword`/`registerUser`
+  المستخدم في نظام المصادقة. لا أسرار إنتاج. لا كلمة مرور في logs/CHECKPOINT/التقرير.
+- **Idempotent**: تشغيل الـseed مرتين لا يُنشئ نسخة ثانية (تحقّقنا: `count(*)=1` بعد تشغيلين)،
+  ويحافظ على الصف والبيانات القائمة؛ لا delete/recreate، لا reset/drop/truncate، ولا مساس بحسابات
+  أخرى. `login`/الـauth **لا يعرفان هذا البريد** (لا شرط خاص).
+- **إعادة الإنشاء بعد rebuild**: أُثبت على قاعدة scratch جديدة تمامًا (migrate → `seed.ts` →
+  `seed-demo.ts`) أن الحساب يُنشأ تلقائيًا `CUSTOMER`/verified/active ثم حُذفت قاعدة الـscratch وحدها.
+
+### الاختبار الحقيقي (لا Mock)
+- **Public HTTPS UI (Pixel 5)**: **11/11 PASS** — login، `/api/auth/me`، customer dashboard،
+  search، product details، favorites toggle (قراءة/كتابة حقيقية)، messaging، notifications،
+  orders، logout (`me=401`)، login مرة ثانية.
+- **بعد restart طبيعي للـDemo**: أُعيد التدقيق 11/11 PASS عبر الرابط العام.
+- **E2E جديد** `e2e/demo-test-account.spec.ts` (حالتان): دخول كـCUSTOMER عادي مع
+  `roles=['CUSTOMER']`، ورفض سطح الـAdmin (Forbidden + `403` على `/api/admin/stats`).
+
+### البوابات
+- **server tests**: 54 ملفًا / **565/565** ناجح.
+- **E2E — default/production verification**: **198/198** ناجح.
+- **E2E — demo mode** (`DEMO_SKIP_EMAIL_VERIFICATION=true`): **198/198** ناجح.
+- **typecheck**: 0 أخطاء. **build**: PASS (server + web).
+
+### إصلاح جانبي حقيقي (سبب جذري، لا إخفاء)
+- **`e2e/functional-audit.spec.ts:796`** — شرط `verified` كان يستهلك رمز التحقق عبر
+  `completeEmailVerification` ثم يطلب **رمزًا ثانيًا** لنفس الحساب، وهو مستحيل لأن الاستهلاك الأول
+  يمسح الرمز ⇒ `data.token` undefined في وضع التحقق الإلزامي. أُضيف `isDemoVerified()` (فحص غير
+  استهلاكي) ونُفّذت صفحة `/verify-email` برمز **واحد**؛ صار السpec يغطي الصفحة فعليًا في الوضعين.
+
+### القيود المُحترمة
+لا DB reset/drop/push؛ حُذفت قاعدة scratch وحدها؛ الإنتاج و`wasit_dev` دون تغيير؛ تحقق بريد الإنتاج
+دون تغيير؛ سياسة العمولة 4% (2%+2%) دون تغيير؛ Marketing Video `89e68d7` دون مساس؛ لا كلمة مرور
+حقيقية في Git.
+
+### الملفات
+`packages/server/src/scripts/seed-demo.ts`، `e2e/helpers.ts`، `e2e/demo-test-account.spec.ts` (جديد)،
+`e2e/functional-audit.spec.ts`، `.env.demo` (git-ignored).
+
+---
 
 ## ✅ حالة معتمدة — تسجيل فوري في العرض العام + إصلاح ثغرة تجاوز بوابة الدخول (2026-09-24)
 
