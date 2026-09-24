@@ -45,3 +45,59 @@ export function resolveStaffPassword(options: {
   return DEMO_PUBLISHED_PASSWORD;
 }
 
+/**
+ * The demo roster the Owner Audit Center may open, keyed by a stable id.
+ *
+ * These are the seeder's fixtures — the same accounts the public demo has always
+ * published — listed once so the audit entry point can only ever open one of
+ * them. The email is compiled in, so a caller chooses a *persona* (a whitelisted
+ * id), never an arbitrary address: the request can select from this map and
+ * nothing else.
+ *
+ * `role` records the role the seeder grants that fixture. The session opener
+ * verifies the stored account actually holds it, so the audit center cannot
+ * silently display a desk the account has no right to — a drift is a hard
+ * failure, not a UI label.
+ */
+export const DEMO_AUDIT_PERSONAS = {
+  'super-admin': { email: 'admin@wasit.tn', role: 'SUPER_ADMIN', fallbackEmail: null },
+  admin: { email: 'admin2@wasit.tn', role: 'ADMIN', fallbackEmail: null },
+  customer: { email: DEMO_TEST_ACCOUNT_EMAIL, role: 'CUSTOMER', fallbackEmail: null },
+  // The trade fixtures are USERS, not entities: `seed.ts` alone provisions the
+  // entity account `customer1@` with no role, while `seed-demo.ts` adds these
+  // separate role-holding users. The fallback lets a demo built from the base
+  // seed still open an auditable session instead of failing the entry point; it
+  // always yields a plain CUSTOMER session, so it can never widen authority.
+  merchant: { email: 'merchantA@wasit.tn', role: 'MERCHANT', fallbackEmail: 'customer1@wasit.tn' },
+  supplier: { email: 'supplierA@wasit.tn', role: 'SUPPLIER', fallbackEmail: 'customer1@wasit.tn' },
+  company: { email: 'companyA@wasit.tn', role: 'COMPANY', fallbackEmail: 'customer1@wasit.tn' },
+} as const;
+
+export type DemoAuditPersonaId = keyof typeof DEMO_AUDIT_PERSONAS;
+
+/** Stable ordering for the audit UI: staff first, then the trade roles. */
+export const DEMO_AUDIT_PERSONA_IDS = Object.keys(DEMO_AUDIT_PERSONAS) as DemoAuditPersonaId[];
+
+/**
+ * Resolves a requested persona id to its fixture, or `null` for anything not on
+ * the roster. `null` is the security boundary: the opener must treat it as a
+ * refusal, so a crafted id can never widen the demo beyond these six accounts.
+ */
+export function resolveDemoAuditPersona(id: unknown): {
+  id: DemoAuditPersonaId;
+  email: string;
+  role: string;
+  fallbackEmail: string | null;
+} | null {
+  if (typeof id !== 'string') return null;
+  const key = id.trim().toLowerCase();
+  if (!(key in DEMO_AUDIT_PERSONAS)) return null;
+  const persona = DEMO_AUDIT_PERSONAS[key as DemoAuditPersonaId];
+  return {
+    id: key as DemoAuditPersonaId,
+    email: persona.email,
+    role: persona.role,
+    fallbackEmail: persona.fallbackEmail,
+  };
+}
+

@@ -21,7 +21,7 @@ import {
 } from '../../lib/security';
 import { verifyMfaChallenge } from '../../lib/mfa';
 import { env, demoEmailVerificationSkipped, demoAutoLoginEnabled } from '../../lib/env';
-import { DEMO_TEST_ACCOUNT_EMAIL } from '../../lib/demo-account';
+import { DEMO_TEST_ACCOUNT_EMAIL, resolveDemoAuditPersona } from '../../lib/demo-account';
 import { writeAudit } from '../../lib/audit';
 import { sendMail } from '../../lib/mail/send';
 import { buildPasswordResetEmail, buildVerificationEmail } from '../../lib/mail/templates';
@@ -476,13 +476,75 @@ export async function demoAutoLogin(
   db: DB,
   ctx: { ipAddress?: string | null; userAgent?: string | null },
 ): Promise<LoginResult> {
+  return openDemoSession(db, DEMO_TEST_ACCOUNT_EMAIL, null, 'AUTH.DEMO_AUTO_LOGIN', ctx);
+}
+
+/**
+ * Opens a session for one of the whitelisted demo fixtures, by persona id.
+ *
+ * This is the backend half of the Owner Audit Center (`/demo/owner`). It reuses
+ * the exact rules of {@link demoAutoLogin} — demo-only, real session via
+ * {@link issueSession}, no role granted — and adds a whitelist:
+ *
+ *  * the requested id is resolved through `resolveDemoAuditPersona`, so a caller
+ *    can only pick one of the six compiled-in fixtures, never an arbitrary
+ *    address;
+ *  * the account's stored roles are read and must include the fixture's declared
+ *    role; a mismatch is a 409, so a seeded account that drifted from its roster
+ *    entry cannot silently open a desk it has no right to;
+ *  * the session keeps whatever roles the database holds, so switching persona is
+ *    a real, separate login — an admin session is still an admin session and a
+ *    customer session is refused by the staff API exactly as any customer is.
+ */
+export async function demoAuditLogin(
+  db: DB,
+  input: { persona: unknown },
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+): Promise<LoginResult & { persona: string }> {
+  const persona = resolveDemoAuditPersona(input.persona);
+  if (!persona) {
+    throw new ApiError(400, 'VALIDATION_ERROR', 'Unknown demo persona');
+  }
+
+  const session = await openDemoSession(
+    db,
+    persona.email,
+    persona.role,
+    'AUTH.DEMO_AUDIT_LOGIN',
+    ctx,
+    { persona: persona.id },
+    persona.fallbackEmail,
+  );
+
+  return { ...session, persona: persona.id };
+}
+
+/**
+ * Shared opener for the demo session endpoints. `requiredRole` adds the
+ * role-consistency check for the audit roster (`null` for the single customer
+ * entry, which grants no role at all — the account keeps whatever it has).
+ * `fallbackEmail`, when set, is substituted only if the fixture itself is not
+ * provisioned; the role check then fails unless that fallback already holds the
+ * role, so the fallback cannot become a privilege-granting shortcut.
+ */
+async function openDemoSession(
+  db: DB,
+  email: string,
+  requiredRole: string | null,
+  auditAction: string,
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+  auditMeta: Record<string, unknown> = {},
+  fallbackEmail: string | null = null,
+): Promise<LoginResult> {
   if (!demoAutoLoginEnabled()) {
     // Same shape as an unknown route: on a real deployment this path does not exist.
     throw ApiError.notFound('Demo auto-login is not available');
   }
 
-  const email = DEMO_TEST_ACCOUNT_EMAIL.toLowerCase();
-  const row = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  let row = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+  if (row.length === 0 && fallbackEmail) {
+    row = await db.select().from(users).where(eq(users.email, fallbackEmail)).limit(1);
+  }
   if (row.length === 0) {
     throw ApiError.notFound('Demo account is not provisioned');
   }
@@ -495,9 +557,26 @@ export async function demoAutoLogin(
     throw ApiError.forbidden('Account disabled');
   }
 
-  // The demo account is seeded verified, but a demo rebuild or an older row could
-  // predate that. Mirror the demo login waiver so the app sees one consistent
-  // state, and never relax this outside the demo (the resolver above guarantees it).
+  if (requiredRole) {
+    const roleRows = await db
+      .select({ roleName: roles.name })
+      .from(userRoles)
+      .innerJoin(roles, eq(userRoles.roleId, roles.id))
+      .where(eq(userRoles.userId, user.id));
+    const held = roleRows.map((r) => r.roleName);
+    if (!held.includes(requiredRole)) {
+      throw new ApiError(
+        409,
+        'CONFLICT',
+        `Demo fixture ${email} does not hold the expected role ${requiredRole}`,
+      );
+    }
+  }
+
+  // The demo accounts are seeded verified, but a demo rebuild or an older row
+  // could predate that. Mirror the demo login waiver so the app sees one
+  // consistent state, and never relax this outside the demo (the resolver above
+  // guarantees it).
   if (!user.emailVerified) {
     await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
     user.emailVerified = true;
@@ -506,9 +585,10 @@ export async function demoAutoLogin(
   const session = await issueSession(db, user, ctx);
 
   await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
-    action: 'AUTH.DEMO_AUTO_LOGIN',
+    action: auditAction,
     entityType: 'USER',
     entityId: user.id,
+    metadata: Object.keys(auditMeta).length ? auditMeta : undefined,
   });
 
   return session;

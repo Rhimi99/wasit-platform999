@@ -28,6 +28,7 @@ import {
   revokeSession,
   devVerificationLink,
   demoAutoLogin,
+  demoAuditLogin,
   issuePhoneVerificationCode,
   verifyPhoneCode,
   devPhoneCode,
@@ -155,6 +156,42 @@ authRoutes.post(
       maxAge: 30 * 86400,
     });
     return c.json({ success: true, data: { ...session.user, mfaRequired: false } });
+  },
+);
+
+// POST /api/auth/demo-audit-session — opens a session for one of the whitelisted
+// demo fixtures so the Owner Audit Center can hop between real, role-scoped
+// sessions. Body carries only a persona id (`{ persona: "merchant" }`), never an
+// email, id, or password: the id is resolved through the compiled-in roster or
+// the request is refused. Same demo-only gate as `/demo-session` — 404 in
+// production — and the issued session holds exactly the account's stored roles,
+// so a customer persona still cannot reach the staff API.
+const demoAuditSessionSchema = z.object({ persona: z.string().min(1).max(40) });
+
+authRoutes.post(
+  '/demo-audit-session',
+  rateLimit({ windowSeconds: 60, max: 60, keyPrefix: 'auth-demo-audit-session' }),
+  validateBody(demoAuditSessionSchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const { persona } = getValidatedBody<{ persona: string }>(c);
+    const session = await demoAuditLogin(
+      ctx.db,
+      { persona },
+      { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    );
+
+    setCookie(c, SESSION_COOKIE, session.token, {
+      httpOnly: true,
+      sameSite: 'Lax',
+      path: '/',
+      secure: cookieSecure,
+      maxAge: 30 * 86400,
+    });
+    return c.json({
+      success: true,
+      data: { ...session.user, mfaRequired: false, persona: session.persona },
+    });
   },
 );
 

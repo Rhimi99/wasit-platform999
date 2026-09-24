@@ -102,6 +102,18 @@ export const api = {
   async demoSession() {
     return request<User>('/api/auth/demo-session', { method: 'POST', body: JSON.stringify({}) });
   },
+  /**
+   * Owner Audit Center: opens a session for one whitelisted demo fixture. The
+   * body carries only the persona id; the server resolves it against a
+   * compiled-in roster and refuses anything else. Returns the session user plus
+   * the persona id it actually opened, so the UI never has to assume which one.
+   */
+  async demoAuditSession(persona: string) {
+    return request<User & { persona: string }>('/api/auth/demo-audit-session', {
+      method: 'POST',
+      body: JSON.stringify({ persona }),
+    });
+  },
   async mfaStatus() {
     return request<MfaStatus>('/api/auth/mfa/status');
   },

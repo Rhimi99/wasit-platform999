@@ -1,8 +1,72 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: إصلاح فجوة حسابـات staff (كلمة مرور منشورة)**
+> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: Owner Audit Center + Functional Audit (من الواجهة، بلا mocks)**
 > **الفرع**: `master`
 > **HEAD**: `9e71048` + هذا الـcommit
+
+## ✅ الحالة — PUBLIC DEMO: Owner Audit Center + Functional Audit حقيقي (2026-09-24)
+
+**الهدف**: إتاحة تدقيق وظيفي حقيقي للمنصة (CUSTOMER / MERCHANT / SUPPLIER / ADMIN / MARKETING VIDEO)
+من الواجهة نفسها على الـPreview، وليس SPA routes ولا HTTP 200. كل اختبار يقود Chromium حقيقيًا،
+يضغط الأزرار الفعلية، ثم يتحقق من الأثر عبر `GET /api/auth/me` والـAPI الحيّ. Backend حقيقي +
+PostgreSQL `wasit_demo`، بلا mocks.
+
+**الميزة الجديدة — Owner Audit Center (`/demo/owner`)**:
+- `packages/web/src/pages/DemoOwnerAuditPage.tsx` + `lib/demo-owner-catalog.ts`: كتالوج واحد يجمع
+  مكاتب CUSTOMER/MERCHANT/SUPPLIER/COMPANY/ADMIN ومساراتها وprobe endpoints، مع شبكة أدوار
+  وزرّي «افتح مساحة الدور» (ينقل إلى `/dashboard`) و«Session» (يفتح الجلسة في المكان) و«افحص» (probe
+  حيّ يعرض كود الحالة الفعلي).
+- `packages/server/src/modules/auth/{routes.ts,service.ts}`: `POST /api/auth/demo-audit-session`
+  يعيد استخدام قواعد `/demo-session` نفسها (بوابة demo-only، جلسة حقيقية عبر `issueSession`، بلا
+  منح أدوار) ويضيف **قائمة أدوار مُصرَّحة** في `lib/demo-account.ts` (`resolveDemoAuditPersona`).
+  الطلب يحمل **معرّف دور فقط** `{persona}`، لا بريدًا ولا كلمة مرور. يُتحقق أن الحساب المخزَّن يحمل
+  الدور المُعلن فعلًا وإلا **409** (انحراف الـseed لا يفتح مكتبًا بلا حق).
+- **حماية RBAC حقيقية**: جلسة `customer` تُرفض بـ**403** على `/api/admin/stats` تمامًا كأي عميل،
+  والواجهة تعرض ذلك. الـprobe يُثبت أن الشارات نتائج خادم حيّة لا تسميات ثابتة (200 ثم 403 بعد التبديل).
+- **fallback محدود وآمن**: إن بُنيت قاعدة Demo من `seed.ts` فقط (بلا `seed-demo.ts`) تُستبدل حسابات
+  الأدوار التجارية الثلاثة بالحساب الأساسي `customer1@wasit.tn` (CUSTOMER بلا دور) — ولا ينجح الاستبدال
+  إلا إن حمل الـfallback الدور المطلوب، فلا يوسّع الصلاحيات أبدًا.
+- لا تغيير في الإنتاج، RBAC، سياسة العمولة (4% = 2%+2%)، Payment Kernel/iPay، ولا Marketing Video
+  Agent (89e68d7). لا migration، لا DB reset/drop/push.
+
+**نتائج Functional Audit (متجر demo الافتراضي)**:
+- **`e2e/demo-owner.spec.ts` (جديد)**: **6/6 PASS** ضد الرابط العام (وضع demo) —
+  فتح جلسة super-admin بلا نموذج دخول، تبديل الدور يغيّر الجلسة فعليًا (merchant/customer) مع بقاء
+  RBAC، probes 200→403، فتح مكتب `/admin/users` بصفوف حقيقية، تسجيل الخروج يُنهي الجلسة، ورفض
+  المعرّف المجهول **400**؛ والوضع المعطّل (production/dev) يعرض «غير مُتاح» و**404** بلا جلسة.
+- **`e2e/demo-auto-login.spec.ts`**: **2/2 + 1 skip** (وضع demo).
+- **Full browser E2E على الرابط العام (وضع demo)**: **192 passed / 14 failed / 2 skipped (7.0m)**.
+  الفشل الـ14 **ليست regressions**: كلها تعتمد قدرات Dev-only أو locators تتأثر ببانر DEMO
+  (`dev/verification-link` = 404 في staging، `getByRole('status')` يطابق عنصرين بسبب البانر، إلخ).
+- **إعادة تشغيل الـ14 في إعداد Dev الأصلي** (منافذ معزولة `:3100`/`:5273` و`DEMO_AUTO_LOGIN=false`
+  و`DEMO_SKIP_EMAIL_VERIFICATION=false`): **70/70 PASS** ⇒ الفشل تهيئة اختبار لا عيب منتج.
+- **Server suite**: **583/583 (55 ملفًا)** في بيئة نظيفة. **Typecheck** (server+web) = 0.
+  **Build** (`VITE_DEMO_MODE=true npm run build -w @wasit/web`) = PASS.
+- **الرابط العام HTTPS**: `/`, `/demo/owner`, `/demo/customer` = 200؛ `demo-audit-session` يفتح
+  `admin2@wasit.tn` بدور ADMIN مع كوكي جلسة حقيقي؛ البناء الجديد `index-C4xoDGfW.js` مُخدَّم.
+
+**الملفات**: جديدة `packages/web/src/pages/DemoOwnerAuditPage.tsx`,
+`packages/web/src/lib/demo-owner-catalog.ts`, `e2e/demo-owner.spec.ts`. معدّلة
+`packages/server/src/lib/demo-account.ts`, `packages/server/src/modules/auth/{routes,service}.ts`,
+`packages/server/tests/demo-auto-login.test.ts`, `packages/web/src/{App.tsx,lib/api.ts,lib/i18n.ts}`.
+
+**جدول التدقيق الوظيفي (Functional Audit Matrix)**:
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+| --- | --- | --- | --- | --- | --- |
+| Owner Audit Center: فتح جلسة staff | ✅ | ✅ PASS | — | — | E2E (demo) |
+| Owner Audit Center: تبديل الدور + RBAC | ✅ | ✅ PASS | — | — | E2E (demo) |
+| Owner Audit Center: probe حيّ 200→403 | ✅ | ✅ PASS | — | — | E2E (demo) |
+| Owner Audit Center: فتح مكتب `/admin/users` | ✅ | ✅ PASS | — | — | E2E (demo) |
+| Owner Audit Center: logout | ✅ | ✅ PASS | — | — | E2E (demo) |
+| Owner Audit Center: رفض معرّف مجهول | — (API) | ✅ PASS (400) | — | — | E2E |
+| Owner Audit Center: الوضع المعطّل | ✅ | ✅ PASS (404 بلا جلسة) | — | — | E2E (dev) |
+| `/demo/customer` جلسة عميل حقيقية | ✅ | ✅ PASS | — | — | E2E (demo) |
+| CUSTOMER: تسجيل/دخول/بحث/تصفح/تفاصيل/طلب/طلبات/إشعارات/رسائل | ✅ | ✅ PASS | — | — | E2E `functional-audit` |
+| MERCHANT: dashboard/إنشاء/تعديل/نشر/مخزون/طلبات/إعلانات/AI/فيديو/تحليلات/اشتراك | ✅ | ✅ PASS | — | — | E2E `functional-audit` |
+| ADMIN: KPIs/users/products/orders/transactions/ledger/audit/verification/trust/risk/disputes/ads/AI/subscriptions | ✅ | ✅ PASS | — | — | E2E `functional-audit` + dev run |
+| MARKETING VIDEO: منتج→لغة→جمهور→نمط→مدة→Generate→READY→معاينة→تنزيل→حذف | ✅ | ✅ PASS | الأصل المحذوف يبقى للتدقيق (سلوك مقصود) | تصفية `DELETED` في الواجهة | E2E |
+
 
 ## ✅ الحالة — إصلاح regression أمني حقيقي: حسابات staff لم تكن محصّنة في الـseed (2026-09-24)
 

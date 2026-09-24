@@ -6,8 +6,10 @@ import { users } from '../src/db/schema/auth.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { env, demoAutoLoginEnabled } from '../src/lib/env.js';
 import {
+  DEMO_AUDIT_PERSONAS,
   DEMO_PUBLISHED_PASSWORD,
   DEMO_TEST_ACCOUNT_EMAIL,
+  resolveDemoAuditPersona,
   resolveStaffPassword,
 } from '../src/lib/demo-account.js';
 
@@ -204,5 +206,99 @@ describe('Demo auto-login — route behavior', () => {
       .limit(1);
     const audits = await db.select().from(auditLogs).where(eq(auditLogs.entityId, row[0].id));
     expect(audits.some((a) => a.action === 'AUTH.DEMO_AUTO_LOGIN')).toBe(true);
+  });
+});
+
+
+/**
+ * Demo persona roster (`resolveDemoAuditPersona`) — the whitelist behind the
+ * Owner Audit Center. The id must resolve to a compiled-in fixture and nothing
+ * else; an arbitrary address or unknown id is refused rather than trusted.
+ */
+describe('resolveDemoAuditPersona', () => {
+  it('resolves every roster id to its compiled-in fixture', () => {
+    for (const [id, persona] of Object.entries(DEMO_AUDIT_PERSONAS)) {
+      const resolved = resolveDemoAuditPersona(id);
+      expect(resolved).not.toBeNull();
+      expect(resolved!.email).toBe(persona.email);
+      expect(resolved!.role).toBe(persona.role);
+      expect(resolved!.fallbackEmail).toBe(persona.fallbackEmail);
+    }
+  });
+
+  it('only offers a role-less fallback for the trade fixtures', () => {
+    // The fallback exists so a base-seed demo can still open the entry point, but
+    // it must never be the fixture's own account nor a staff account.
+    for (const id of ['customer', 'admin', 'super-admin'] as const) {
+      expect(resolveDemoAuditPersona(id)!.fallbackEmail).toBeNull();
+    }
+    for (const id of ['merchant', 'supplier', 'company'] as const) {
+      expect(resolveDemoAuditPersona(id)!.fallbackEmail).toBe('customer1@wasit.tn');
+    }
+  });
+
+  it('is case/whitespace tolerant but never maps an unknown id', () => {
+    expect(resolveDemoAuditPersona(' MERCHANT ')?.email).toBe(DEMO_AUDIT_PERSONAS.merchant.email);
+    expect(resolveDemoAuditPersona('superuser')).toBeNull();
+    expect(resolveDemoAuditPersona('admin@wasit.tn')).toBeNull();
+    expect(resolveDemoAuditPersona('')).toBeNull();
+    expect(resolveDemoAuditPersona(null)).toBeNull();
+    expect(resolveDemoAuditPersona(42)).toBeNull();
+  });
+});
+
+/**
+ * Owner Audit Center session opener (`POST /api/auth/demo-audit-session`).
+ *
+ * Proves the two properties the audit center relies on, against the real route:
+ *   1. the same demo-only gate as the customer entry — 404 when off, and 404 in
+ *      production even with the flag on;
+ *   2. the opened session holds the fixture's *real* stored role, so a customer
+ *      persona is refused by the staff API (no role is forged for the UI).
+ */
+describe('Demo audit session — route behavior', () => {
+  it('refuses an unknown persona even when auto-login is enabled', async () => {
+    const c = makeClient();
+    const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'nope' } }),
+    );
+    expect(res.status).toBe(400);
+    const me = await c.req('/api/auth/me');
+    expect(me.status).toBe(401);
+  });
+
+  it('is refused when the flag is off', async () => {
+    const c = makeClient();
+    const res = await c.req('/api/auth/demo-audit-session', {
+      method: 'POST',
+      body: { persona: 'customer' },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('is refused in production even with the flag on', async () => {
+    const c = makeClient();
+    const res = await withEnv({ NODE_ENV: 'production', DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'super-admin' } }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('opens a real customer session that cannot reach the staff API', async () => {
+    await ensureDemoAccount();
+    const c = makeClient();
+    const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'customer' } }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.data.data.email).toBe(DEMO_TEST_ACCOUNT_EMAIL);
+    expect(res.data.data.roles).toEqual(['CUSTOMER']);
+    expect(res.data.data.persona).toBe('customer');
+
+    // The session is real and carries no staff authority.
+    const me = await c.req('/api/auth/me');
+    expect(me.status).toBe(200);
+    const stats = await c.req('/api/admin/stats');
+    expect(stats.status).toBe(403);
   });
 });

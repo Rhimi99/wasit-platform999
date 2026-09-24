@@ -37,6 +37,7 @@ import { AdminReportsPage } from './pages/AdminReportsPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
 import { DemoCustomerEntryPage } from './pages/DemoCustomerEntryPage';
+import { DemoOwnerAuditPage } from './pages/DemoOwnerAuditPage';
 
 /** Enabled only on the public demo build; production builds leave it unset. */
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -75,6 +76,11 @@ export default function App() {
           separate build flag only risked the two flags drifting apart and
           breaking the link. */}
       <Route path="/demo/customer" element={<DemoCustomerEntryPage />} />
+      {/* Owner Audit Center: opens a real session for a whitelisted demo fixture
+          and indexes every role desk + module. Same backend gate as the customer
+          entry (demo only, 404 in production); no identity or credential ever
+          travels in the URL. */}
+      <Route path="/demo/owner" element={<DemoOwnerAuditPage />} />
 
       {/* Protected */}
       <Route path="/checkout" element={<RequireAuth><CheckoutPage /></RequireAuth>} />
