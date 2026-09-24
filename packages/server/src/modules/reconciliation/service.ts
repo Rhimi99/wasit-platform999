@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
+import { orders, transactionLedger, transactions } from '../../db/schema/commerce';
+import { paymentIntents } from '../../db/schema/payments_extras';
+import { auditLogs } from '../../db/schema/audit';
 import {
   reconciliationDecisions,
   reconciliationImports,
@@ -16,6 +19,11 @@ import {
   type ProviderFeedLine,
   type ReconciliationReport,
 } from './engine';
+import {
+  resolveReportProvenance,
+  type LedgerEntryRow,
+  type ProvenanceContext,
+} from './provenance';
 
 /**
  * PS-04 — Reconciliation persistence.
@@ -57,6 +65,90 @@ function checksumOf(source: 'PROVIDER' | 'BANK', lines: { reference: string }[])
   return createHash('sha256').update(`${source}:${canonical}`).digest('hex');
 }
 
+/**
+ * Gathers the real rows needed to link decisions back to the ledger. Queries are
+ * bounded by the references in the report, never a full-table scan, and only
+ * real ids are ever read back.
+ */
+async function loadProvenanceContext(
+  db: DB,
+  report: ReconciliationReport,
+): Promise<ProvenanceContext> {
+  const refs = [...new Set(report.decisions.map((d) => d.reference))];
+  if (refs.length === 0) {
+    return { intents: [], transactions: [], ledgerEntries: [], orders: [], audits: [] };
+  }
+
+  const intents = await db
+    .select({
+      externalRef: paymentIntents.externalRef,
+      orderId: paymentIntents.orderId,
+      transactionId: paymentIntents.transactionId,
+    })
+    .from(paymentIntents)
+    .where(inArray(paymentIntents.externalRef, refs));
+
+  const transactionIds = [...new Set(intents.map((i) => i.transactionId).filter((v): v is string => v !== null))];
+  if (transactionIds.length === 0) {
+    return { intents, transactions: [], ledgerEntries: [], orders: [], audits: [] };
+  }
+
+  const txs = await db
+    .select({ id: transactions.id, orderId: transactions.orderId })
+    .from(transactions)
+    .where(inArray(transactions.id, transactionIds));
+
+  const orderIds = [...new Set(txs.map((t) => t.orderId).filter((v): v is string => v !== null))];
+  if (orderIds.length === 0) {
+    return { intents, transactions: txs, ledgerEntries: [], orders: [], audits: [] };
+  }
+
+  const ledgerRows = await db
+    .select({
+      id: transactionLedger.id,
+      transactionId: transactionLedger.transactionId,
+      entryType: transactionLedger.entryType,
+      status: transactionLedger.status,
+      currencyCode: transactionLedger.currencyCode,
+      metadata: transactionLedger.metadata,
+    })
+    .from(transactionLedger)
+    .where(inArray(transactionLedger.transactionId, transactionIds));
+
+  const ledgerEntries: LedgerEntryRow[] = ledgerRows.map((row) => {
+    const meta = (row.metadata ?? {}) as { settlementRef?: unknown; providerRef?: unknown };
+    return {
+      id: row.id,
+      transactionId: row.transactionId,
+      entryType: row.entryType,
+      status: row.status,
+      currencyCode: row.currencyCode,
+      settlementRef: typeof meta.settlementRef === 'string' ? meta.settlementRef : null,
+      providerRef: typeof meta.providerRef === 'string' ? meta.providerRef : null,
+    };
+  });
+
+  const orderRows = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(inArray(orders.id, orderIds));
+
+  const auditRows = await db
+    .select({
+      id: auditLogs.id,
+      action: auditLogs.action,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+    })
+    .from(auditLogs)
+    .where(and(eq(auditLogs.entityType, 'ORDER'), eq(auditLogs.action, 'SETTLEMENT.CONFIRMED')));
+
+  // Bound the audit set to the orders this report touches.
+  const audits = auditRows.filter((a) => a.entityId !== null && orderIds.includes(a.entityId));
+
+  return { intents, transactions: txs, ledgerEntries, orders: orderRows, audits };
+}
+
 export async function importReconciliationFeed(db: DB, input: ImportFeedsInput): Promise<ImportResult> {
   const sourceLines: (ProviderFeedLine | BankFeedLine)[] =
     input.source === 'PROVIDER' ? input.provider : input.bank;
@@ -80,6 +172,11 @@ export async function importReconciliationFeed(db: DB, input: ImportFeedsInput):
   if (existing.length > 0) {
     return { importId: existing[0].id, duplicate: true, insertedLines: 0, report };
   }
+
+  // Resolve real provenance for MATCHED decisions before writing anything. A
+  // decision that cannot be traced to exactly one transaction/ledger/audit is
+  // stored without linkage rather than linked to a guessed row.
+  const provenance = resolveReportProvenance(report.decisions, await loadProvenanceContext(db, report));
 
   const importId = newId();
   await db.transaction(async (tx) => {
@@ -113,15 +210,22 @@ export async function importReconciliationFeed(db: DB, input: ImportFeedsInput):
     );
 
     await tx.insert(reconciliationDecisions).values(
-      report.decisions.map((d) => ({
-        id: newId(),
-        importId,
-        reference: d.reference,
-        status: d.status,
-        mismatches: d.mismatches,
-        detail: null,
-        provider: input.providerId ?? null,
-      })),
+      report.decisions.map((d) => {
+        // Provenance exists only for a MATCHED decision that resolved cleanly.
+        const link = provenance.get(d.reference) ?? null;
+        return {
+          id: newId(),
+          importId,
+          reference: d.reference,
+          status: d.status,
+          mismatches: d.mismatches,
+          detail: null,
+          provider: input.providerId ?? null,
+          matchedTransactionId: link?.transactionId ?? null,
+          ledgerEntryId: link?.ledgerEntryId ?? null,
+          auditLogId: link?.auditLogId ?? null,
+        };
+      }),
     );
 
     await writeAudit(

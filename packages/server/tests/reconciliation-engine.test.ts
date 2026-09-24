@@ -4,8 +4,14 @@ import {
   type BankFeedLine,
   type LedgerFeedLine,
   type ProviderFeedLine,
+  type ReconciliationDecision,
 } from '../src/modules/reconciliation/engine.js';
 import { applyReceiptEvidence } from '../src/modules/reconciliation/receipt.js';
+import {
+  resolveDecisionProvenance,
+  resolveReportProvenance,
+  type ProvenanceContext,
+} from '../src/modules/reconciliation/provenance.js';
 
 /**
  * PS-04 — Reconciliation / Treasury.
@@ -137,5 +143,85 @@ describe('WASIT Receipt — RECEIVED requires statement evidence', () => {
         { amount: '40.0000', currencyCode: 'TND' },
       ),
     ).toThrow(/currency/);
+  });
+});
+
+describe('PS-04 — provenance resolver never guesses', () => {
+  function decision(over: Partial<ReconciliationDecision> = {}): ReconciliationDecision {
+    return {
+      reference: 'ext_1',
+      status: 'MATCHED',
+      mismatches: [],
+      provider: null,
+      bank: null,
+      ledger: null,
+      ...over,
+    };
+  }
+
+  function context(over: Partial<ProvenanceContext> = {}): ProvenanceContext {
+    return {
+      intents: [{ externalRef: 'ext_1', orderId: 'ord_1', transactionId: 'txn_1' }],
+      transactions: [{ id: 'txn_1', orderId: 'ord_1' }],
+      ledgerEntries: [
+        {
+          id: 'led_1',
+          transactionId: 'txn_1',
+          entryType: 'SETTLEMENT',
+          status: 'SETTLED',
+          currencyCode: 'TND',
+          settlementRef: 'ext_1',
+          providerRef: 'acq_1',
+        },
+      ],
+      orders: [{ id: 'ord_1' }],
+      audits: [{ id: 'aud_1', action: 'SETTLEMENT.CONFIRMED', entityType: 'ORDER', entityId: 'ord_1' }],
+      ...over,
+    };
+  }
+
+  it('links a clean reference end to end', () => {
+    const link = resolveDecisionProvenance(decision(), context());
+    expect(link).toEqual({ transactionId: 'txn_1', ledgerEntryId: 'led_1', auditLogId: 'aud_1' });
+  });
+
+  it('returns null when the reference resolves to no transaction', () => {
+    expect(resolveDecisionProvenance(decision({ reference: 'unknown' }), context())).toBeNull();
+  });
+
+  it('returns null when the reference is ambiguous across two transactions', () => {
+    const ctx = context({
+      intents: [
+        { externalRef: 'ext_1', orderId: 'ord_1', transactionId: 'txn_1' },
+        { externalRef: 'ext_1', orderId: 'ord_2', transactionId: 'txn_2' },
+      ],
+    });
+    expect(resolveDecisionProvenance(decision(), ctx)).toBeNull();
+  });
+
+  it('returns null when no SETTLEMENT entry matches the reference', () => {
+    const ctx = context({
+      ledgerEntries: [
+        {
+          id: 'led_1',
+          transactionId: 'txn_1',
+          entryType: 'SETTLEMENT',
+          status: 'SETTLED',
+          currencyCode: 'TND',
+          settlementRef: 'other',
+          providerRef: null,
+        },
+      ],
+    });
+    expect(resolveDecisionProvenance(decision(), ctx)).toBeNull();
+  });
+
+  it('returns null without a SETTLEMENT.CONFIRMED audit record', () => {
+    expect(resolveDecisionProvenance(decision(), context({ audits: [] }))).toBeNull();
+  });
+
+  it('never attaches provenance to a MISMATCH decision', () => {
+    const report = resolveReportProvenance([decision({ status: 'MISMATCH' })], context());
+    expect(report.size).toBe(0);
   });
 });

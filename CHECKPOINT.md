@@ -1644,3 +1644,58 @@ POST /api/auth/login -> 403 {"code":"EMAIL_NOT_VERIFIED","message":"Please verif
 | register + login + dashboard + logout + login ثانٍ | نعم | PASS | — | — | PASS |
 | Production email verification | — | لم تُمس | — | — | PASS (9/9) |
 | Demo-only behavior | نعم | PASS | — | — | PASS |
+
+
+---
+
+## ✅ FINAL PLATFORM COMPLETION — Reconciliation Provenance Fix + Final Audit (2026-09-24)
+
+**الهدف**: إغلاق الفجوة الداخلية المتبقية من آخر READ-ONLY POST-MIGRATION AUDIT (provenance غير مكتوب في `reconciliation_decisions`)، ثم إعادة تدقيق المنصة كاملة وإصدار تقرير نهائي مبني على أدلة حقيقية.
+
+### المرحلة 1 — إغلاق Reconciliation Provenance
+كانت `reconciliation_decisions` تحوي `matched_transaction_id`/`ledger_entry_id`/`audit_log_id` لكن **صفر كتابة**. أُضيف `modules/reconciliation/provenance.ts` (محلّل نقي) و`loadProvenanceContext()` في الخدمة:
+`reference → payment_intents(external_ref) → transactions → SETTLEMENT ledger entry (metadata.settlementRef/providerRef) → SETTLEMENT.CONFIRMED audit (entity=ORDER)`.
+- **قواعد**: IDs حقيقية فقط؛ لا اختراع؛ لا FK جديدة؛ لا migration (الأعمدة موجودة)؛ MATCHED فقط يأخذ linkage؛ MISMATCH/غير القابل للحسم = NULL (لا تخمين)؛ idempotency محفوظة؛ reconciliation **لا يكتب** SETTLED/RECEIVED/PAYOUT-COMPLETED.
+
+### المرحلة 2/3 — جرد الفجوات
+- الفجوات الداخلية المُشخَّصة سابقًا (PS-01/PS-02/PS-04، Admin Ads/Reports/AI writes، Product edit، Suspension، Verification/Dispute/Appeal، Subscriptions expiry، Inventory archived) **مُغلقة ومُثثبَتة** في الجلسات السابقة ومحصورة في `docs/MASTER_GAP_AUDIT.md`/`PRODUCTION_GAP_LIST.md`.
+- فحص جديد: 16 دالة API بلا مستهلك واجهة — جميعها **مكافئة وظيفيًا** للمسارات المُستخدَمة (مثال: `getThread` يمرّر `markRead:true` أصلاً؛ `listThreads({q})` يغطّي البحث) ⇒ **ليست فجوات داخلية**.
+- Marketing Video مطابق للمواصفة: `min=35`, `max=120`, `default=60`، والتحقق على **المدة المقيسة من بايتات MP4** لا على الرقم المطلوب.
+- لم يُعثر على أي **🔴 INTERNAL GAP** قابل للإصلاح داخل المستودع.
+
+### المرحلة 4 — Financial Invariants (لا تغيير)
+`PAID ≠ SETTLED ≠ PAYOUT COMPLETED ≠ WASIT RECEIVED` — محفوظة؛ `verify-money-path` = 0 مخالفة؛ العمولة الحيّة `210 → 8.40 = 4%`، `buyer=4.20 (2%)`، `grand_total = items + buyer_commission`؛ PS-05 في `src` = **0**؛ لا Wallet.
+
+### المرحلة 5 — التحقق النهائي (كلها PASS)
+| البوابة | النتيجة |
+|---|---|
+| Full server tests | **60 ملف / 645/645** |
+| Full E2E (Playwright, real backend+DB) | **200/200** (6.6م) |
+| Targeted (settlement+payout+recon+persistence) | 41/41 |
+| Typecheck | 0 |
+| Build | PASS |
+| Money-path verification | 0 مخالفة |
+| drizzle-kit check / drift | نظيف / لا تغييرات |
+| Schema/migration | 25 migration · 92 جدول · 0 FK جديدة |
+
+### جدول الوظائف المُختبرة من الواجهة
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+|---|---|---|---|---|---|
+| Reconciliation provenance (MATCHED→txn/ledger/audit) | نعم (API+DB) | PASS | provenance غير مكتوب | `provenance.ts` + `loadProvenanceContext` | PASS |
+| MISMATCH/no-evidence → بلا linkage | نعم | PASS | — | — | PASS |
+| Duplicate feed → لا تكرار decision/audit | نعم | PASS | — | — | PASS |
+| Reconciliation لا يكتب SETTLED/RECEIVED/payout | نعم | PASS | — | — | PASS |
+| Settlement / Payout / Receipt / Money-path | API+DB | PASS | — | — | PASS |
+| Customer/Merchant/Admin flows | E2E 200/200 | PASS | — | — | PASS |
+| Commission 4% = 2%+2% | DB حيّ + E2E | PASS | — | — | PASS |
+| PS-05 خارج المسار المالي | فحص `src` | PASS (0) | — | — | PASS |
+| Wallet | فحص | PASS (غير موجود) | — | — | PASS |
+
+### الملفات
+- `packages/server/src/modules/reconciliation/provenance.ts` (جديد)
+- `packages/server/src/modules/reconciliation/service.ts`
+- `packages/server/tests/reconciliation-engine.test.ts` (+6 حالات)
+- `packages/server/tests/persistence-invariants.test.ts` (+4 حالات، 14 إجمالاً)
+
+### القيود المُحترمة
+لا DB reset/drop/truncate/delete؛ لا drizzle push؛ لا migration جديدة؛ لا FK؛ لا Mock؛ لا تعطيل أزرار؛ لا تغيير Commission/RBAC/Wallet/PS-05؛ لا Security Guardian؛ لا force push؛ لا تغيير commits سابقة.

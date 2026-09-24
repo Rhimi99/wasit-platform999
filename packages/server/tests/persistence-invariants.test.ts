@@ -8,6 +8,11 @@ import { db, closeDb } from '../src/db/client.js';
 import { orders, transactionLedger } from '../src/db/schema/commerce.js';
 import { payouts } from '../src/db/schema/payouts.js';
 import { wasitReceipts } from '../src/db/schema/receipts.js';
+import {
+  reconciliationDecisions,
+  reconciliationImports,
+} from '../src/db/schema/reconciliation.js';
+import { auditLogs } from '../src/db/schema/audit.js';
 import { handlePaymentWebhook } from '../src/modules/payments/service.js';
 import { confirmSettlement } from '../src/modules/settlements/service.js';
 import {
@@ -146,14 +151,16 @@ async function payAndSettle(s: Awaited<ReturnType<typeof setupOrder>>) {
     new ManualPaymentProvider(),
   );
 
+  const settlementRef = `trf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   await confirmSettlement(db, {
     externalRef: intent.externalRef,
     amount: s.grandTotal,
     currencyCode: 'TND',
     providerId: ACQUIRER,
-    settlementRef: `trf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    settlementRef,
     providerRef: `acq-${Date.now()}`,
   });
+  return { externalRef: intent.externalRef, settlementRef };
 }
 
 afterAll(async () => {
@@ -349,6 +356,113 @@ describe('Persistence invariants — evidence per transition', () => {
     });
     expect(replay.duplicate).toBe(true);
     expect(replay.importId).toBe(first.importId);
+  });
+});
+
+describe('PS-04 — reconciliation provenance links MATCHED to real rows', () => {
+  /** Builds a full matched feed for a real settled order. */
+  async function importMatched(s: Awaited<ReturnType<typeof setupOrder>>, ref: string, settlementRef: string) {
+    return importReconciliationFeed(db, {
+      source: 'PROVIDER',
+      currencyCode: 'TND',
+      providerId: ACQUIRER,
+      provider: [{ reference: ref, settlementRef, grossAmount: '1020.0000', providerFee: '4.2000', netAmount: '1015.8000', currencyCode: 'TND' }],
+      bank: [{ reference: ref, settlementRef, amount: '1015.8000', currencyCode: 'TND' }],
+      ledger: [{ reference: ref, grossAmount: '1020.0000', providerFee: '4.2000', netAmount: '1015.8000', currencyCode: 'TND', settled: true }],
+    });
+  }
+
+  it('links a MATCHED decision to the real transaction, ledger entry and audit record', async () => {
+    const s = await setupOrder();
+    const { externalRef, settlementRef } = await payAndSettle(s);
+
+    const { importId } = await importMatched(s, externalRef, settlementRef);
+
+    const decision = (
+      await db.select().from(reconciliationDecisions).where(eq(reconciliationDecisions.importId, importId))
+    ).find((d) => d.reference === externalRef)!;
+    expect(decision.status).toBe('MATCHED');
+
+    // transaction link is the real one for this order.
+    expect(decision.matchedTransactionId).toBe(s.transactionId);
+
+    // ledger entry link is a real SETTLED SETTLEMENT entry of that transaction.
+    const entry = (await db.select().from(transactionLedger).where(eq(transactionLedger.id, decision.ledgerEntryId!)))[0];
+    expect(entry).toBeTruthy();
+    expect(entry.transactionId).toBe(s.transactionId);
+    expect(entry.entryType).toBe('SETTLEMENT');
+    expect(entry.status).toBe('SETTLED');
+    expect((entry.metadata as { settlementRef?: string }).settlementRef).toBe(settlementRef);
+
+    // audit link is a real SETTLEMENT.CONFIRMED record for this order.
+    const audit = (await db.select().from(auditLogs).where(eq(auditLogs.id, decision.auditLogId!)))[0];
+    expect(audit).toBeTruthy();
+    expect(audit.action).toBe('SETTLEMENT.CONFIRMED');
+    expect(audit.entityType).toBe('ORDER');
+    expect(audit.entityId).toBe(s.orderId);
+  });
+
+  it('does not attach provenance to a MISMATCH, nor to a MATCHED line with no real evidence', async () => {
+    const s = await setupOrder();
+    const { externalRef } = await payAndSettle(s);
+
+    // A second reference that exists in all three feeds but has no transaction.
+    const ghost = `ghost-${Date.now()}`;
+    const { importId } = await importReconciliationFeed(db, {
+      source: 'PROVIDER',
+      currencyCode: 'TND',
+      providerId: ACQUIRER,
+      provider: [
+        { reference: externalRef, grossAmount: '1020.0000', providerFee: '4.2000', netAmount: '1015.8000', currencyCode: 'TND' },
+        { reference: ghost, grossAmount: '10.0000', providerFee: '0.0000', netAmount: '10.0000', currencyCode: 'TND' },
+      ],
+      bank: [
+        { reference: externalRef, amount: '1015.8000', currencyCode: 'TND' },
+        { reference: ghost, amount: '10.0000', currencyCode: 'TND' },
+      ],
+      ledger: [
+        { reference: externalRef, grossAmount: '1020.0000', providerFee: '4.2000', netAmount: '1015.8000', currencyCode: 'TND', settled: true },
+        { reference: ghost, grossAmount: '10.0000', providerFee: '0.0000', netAmount: '10.0000', currencyCode: 'TND', settled: true },
+      ],
+    });
+
+    const decisions = await db.select().from(reconciliationDecisions).where(eq(reconciliationDecisions.importId, importId));
+    // `ghost` matches internally but resolves to no transaction → no linkage.
+    const ghostDecision = decisions.find((d) => d.reference === ghost)!;
+    expect(ghostDecision.status).toBe('MATCHED');
+    expect(ghostDecision.matchedTransactionId).toBeNull();
+    expect(ghostDecision.ledgerEntryId).toBeNull();
+    expect(ghostDecision.auditLogId).toBeNull();
+  });
+
+  it('keeps provenance idempotent: a duplicate feed creates no second decision or audit row', async () => {
+    const s = await setupOrder();
+    const { externalRef, settlementRef } = await payAndSettle(s);
+
+    const first = await importMatched(s, externalRef, settlementRef);
+    const importsBefore = (await db.select().from(reconciliationImports)).length;
+    const decisionsBefore = (await db.select().from(reconciliationDecisions)).length;
+    const auditsBefore = (await db.select().from(auditLogs)).length;
+
+    const replay = await importMatched(s, externalRef, settlementRef);
+    expect(replay.duplicate).toBe(true);
+    expect(replay.importId).toBe(first.importId);
+
+    expect((await db.select().from(reconciliationImports)).length).toBe(importsBefore);
+    expect((await db.select().from(reconciliationDecisions)).length).toBe(decisionsBefore);
+    expect((await db.select().from(auditLogs)).length).toBe(auditsBefore);
+  });
+
+  it('reconciliation writes neither SETTLED, RECEIVED nor a completed payout', async () => {
+    const s = await setupOrder();
+    const { externalRef, settlementRef } = await payAndSettle(s);
+    const { importId } = await importMatched(s, externalRef, settlementRef);
+    expect(importId).toBeTruthy();
+
+    // No receipt was fabricated by reconciliation.
+    expect((await db.select().from(wasitReceipts).where(eq(wasitReceipts.transactionId, s.transactionId))).length).toBe(0);
+    // No payout was created by reconciliation.
+    expect((await db.select().from(payouts).where(eq(payouts.transactionId, s.transactionId))).length).toBe(0);
   });
 });
 
