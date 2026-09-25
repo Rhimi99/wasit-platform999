@@ -1,8 +1,44 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-25 — **Home Page Redesign + Functional Audit (من الواجهة، على preview حقيقي)**
+> **التاريخ**: 2026-09-25 — **إعادة بناء بيئة الديمو + تدقيق وظيفي على الرابط العام (حقيقي)**
 > **الفرع**: `master`
-> **HEAD**: `ef7bb5e` + هذا الـcommit
+> **HEAD**: `5e87f35` (fix) على `1364e09` (home redesign) على `ef7bb5e`
+
+---
+
+## تحديث 2026-09-25 (جلسة 2) — إعادة بناء DB الديمو + تدقيق على الرابط العام
+
+**السياق**: بعد reset الحاوية ضاع volume `/workspace/pgdata`. أُعيد بناء بيئة الديمو من الصفر
+(تهيئة بيئة فارغة، وليس reset لبيانات قائمة): PostgreSQL 17 → دور `wasit_demo` + قاعدة `wasit_demo`
+→ `drizzle-kit migrate` (migrations قائمة فقط، لا جديدة) → `seed` + `seed-demo`. ثم API على 3000
+وpreview على 12000، والرابط العام `https://work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev/`.
+
+**العوائق المُصلَحة في الجلسة**:
+- Playwright browsers كانت مفقودة → `npx playwright install chromium`.
+- الاختبار الأول استخدم مسار `/products` (غير موجود)؛ المسار الصحيح للقائمة هو `/marketplace`.
+- مصطلح البحث `huile` أعطى 0 لأن البيانات بأسماء إنجليزية؛ البحث سليم (`olive`/`dates` → 3 منتجات).
+
+**Bug حقيقي مُصلَح** (commit `5e87f35`): تمرير أفقي 9px على الهاتف في `/suppliers` و`/companies`.
+السبب: بطاقة الدليل عنصر flex داخل grid track، و`min-width:auto` يمنع انكماشها. الإصلاح: `min-w-0`
+على بطاقات suppliers/merchants/companies. **مُوثَّق أنه pre-existing** (أُعيد إنتاجه على build للأساس السابق).
+
+**التحقق النهائي على الرابط العام (build من الكود المُلتزَم، bundle مطابق للـserved)**: **13/13 PASS**.
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+|---|---|---|---|---|---|
+| الصفحة الرئيسية تُعرض | نعم | PASS | — | — | PASS |
+| قائمة المنتجات (12 منتج حقيقي) | نعم | PASS | — | — | PASS |
+| دليل الموردين (بيانات حقيقية) | نعم | PASS | — | — | PASS |
+| البحث (olive/dates) | نعم | PASS | مصطلح الاختبار كان فرنسياً والبيانات إنجليزية | لا تغيير كود | PASS |
+| تفاصيل المنتج | نعم | PASS | — | — | PASS |
+| تسجيل الدخول → dashboard | نعم | PASS | — | — | PASS |
+| التسجيل من الواجهة → /login | نعم | PASS | — | — | PASS |
+| تغيير اللغة (rtl→ltr) | نعم | PASS | — | — | PASS |
+| لا أخطاء صفحة/شبكة (desktop) | نعم | PASS | — | — | PASS |
+| لا overflow أفقي (mobile × 4 مسارات) | نعم | PASS | `min-width:auto` على بطاقة grid | `min-w-0` | PASS |
+
+**القيود المُحترمة**: لا DB reset/drop/push؛ لا migration جديدة؛ لا Mock؛ لا تعطيل أزرار؛
+Commission 4% = 2%+2% لم تُمس؛ Marketing Video Agent (commit `89e68d7`) لم يُمس؛ لم تُغيَّر وحدات تعمل.
 
 ---
 
