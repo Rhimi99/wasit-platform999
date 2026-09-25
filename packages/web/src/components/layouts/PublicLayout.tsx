@@ -6,17 +6,26 @@ import { useAuth } from '@/lib/auth-context';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { Brand } from '@/components/brand/Brand';
 
+/** Enabled only on the public demo build; production builds leave it unset. */
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
+
+/** Primary desktop navigation — the entry points requested for the landing. */
+const NAV_LINKS: Array<{ key: string; to: string }> = [
+  { key: 'nav.home', to: '/' },
+  { key: 'nav.products', to: '/marketplace' },
+  { key: 'nav.suppliers', to: '/suppliers' },
+  { key: 'nav.merchants', to: '/merchants' },
+  { key: 'nav.howItWorks', to: '/#how-it-works' },
+  { key: 'nav.ai', to: '/#ai' },
+];
+
 function NavItems() {
   const { t } = useI18n();
   return (
     <>
-      <Link to="/" className="nav-link">{t('nav.home')}</Link>
-      <Link to="/#a-propos" className="nav-link">{t('nav.about')}</Link>
-      <Link to="/#solutions" className="nav-link">{t('nav.solutions')}</Link>
-      <Link to="/marketplace" className="nav-link">{t('nav.markets')}</Link>
-      <Link to="/price-comparison" className="nav-link">{t('nav.priceComparison')}</Link>
-      <Link to="/#ressources" className="nav-link">{t('nav.resources')}</Link>
-      <Link to="/#contact" className="nav-link">{t('nav.contact')}</Link>
+      {NAV_LINKS.map((l) => (
+        <Link key={l.key} to={l.to} className="nav-link">{t(l.key)}</Link>
+      ))}
     </>
   );
 }
@@ -34,61 +43,81 @@ export function PublicHeader() {
   };
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
-      <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:gap-5 sm:px-6">
-        <Brand compact />
-        <nav className="ms-auto hidden items-center gap-6 text-sm font-semibold text-slate-600 xl:flex">
+    <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/85 backdrop-blur-lg">
+      <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3 sm:gap-3 sm:px-6">
+        <Link to="/" className="min-w-0 shrink"><Brand compact /></Link>
+        <nav className="ms-auto hidden items-center gap-6 text-sm font-semibold text-slate-600 xl:flex" aria-label={t('nav.home')}>
           <NavItems />
         </nav>
-        <div className="ms-auto flex items-center gap-2 sm:gap-3 xl:ms-4">
+        <div className="ms-auto flex shrink-0 items-center gap-2 sm:gap-3 xl:ms-6">
           <LanguageSwitcher />
           {isAuthenticated ? (
             <>
               <Link to="/dashboard" className="btn-secondary hidden sm:inline-flex">{t('nav.myDashboard')}</Link>
-              <button onClick={handleLogout} className="text-sm font-semibold text-slate-500 hover:text-red-600">
+              <button
+                onClick={handleLogout}
+                className="hidden text-sm font-semibold text-slate-500 transition-colors hover:text-red-600 sm:block"
+              >
                 {t('nav.logout')}
               </button>
             </>
           ) : (
             <>
-              <Link to="/login" className="hidden text-sm font-semibold text-slate-600 transition-colors hover:text-wasit-700 sm:block">
+              <Link
+                to="/login"
+                className="hidden text-sm font-semibold text-slate-600 transition-colors hover:text-brand-700 sm:block"
+              >
                 {t('nav.login')}
               </Link>
-              <Link to="/register" className="btn-primary">{t('nav.register')}</Link>
+              <Link to="/register" className="btn-primary hidden sm:inline-flex">{t('nav.register')}</Link>
             </>
           )}
           {user?.roles.includes('ADMIN') || user?.roles.includes('SUPER_ADMIN') ? (
-            <Link to="/admin" className="hidden text-sm font-semibold text-wasit-700 hover:underline lg:block">{t('nav.admin')}</Link>
+            <Link to="/admin" className="hidden text-sm font-semibold text-brand-700 hover:underline lg:block">{t('nav.admin')}</Link>
           ) : null}
-          {/* زر القائمة (موبايل) */}
           <button
             type="button"
             aria-label="Menu"
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
-            className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-700 xl:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:border-brand-300 hover:text-brand-700 xl:hidden"
           >
             <span className="text-xl leading-none">{menuOpen ? '✕' : '☰'}</span>
           </button>
         </div>
       </div>
-      {/* قائمة موبايل */}
+
       {menuOpen ? (
-        <nav className="border-t border-slate-100 bg-white px-4 py-3 shadow-card xl:hidden" aria-label="Mobile navigation">
-          <div className="flex flex-col gap-1">
-            <Link to="/" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.home')}</Link>
-            <Link to="/#a-propos" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.about')}</Link>
-            <Link to="/#solutions" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.solutions')}</Link>
-            <Link to="/marketplace" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.markets')}</Link>
-            <Link to="/price-comparison" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.priceComparison')}</Link>
-            <Link to="/#ressources" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.resources')}</Link>
-            <Link to="/#contact" onClick={() => setMenuOpen(false)} className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{t('nav.contact')}</Link>
+        <nav
+          className="border-t border-slate-100 bg-white px-4 pb-4 pt-2 shadow-card xl:hidden"
+          aria-label="Mobile navigation"
+        >
+          <div className="flex flex-col">
+            {NAV_LINKS.map((l) => (
+              <Link
+                key={l.key}
+                to={l.to}
+                onClick={() => setMenuOpen(false)}
+                className="border-b border-slate-100 py-3 text-sm font-semibold text-slate-700 last:border-0 hover:text-brand-700"
+              >
+                {t(l.key)}
+              </Link>
+            ))}
+            <Link
+              to="/price-comparison"
+              onClick={() => setMenuOpen(false)}
+              className="border-b border-slate-100 py-3 text-sm font-semibold text-slate-700 hover:text-brand-700"
+            >
+              {t('nav.priceComparison')}
+            </Link>
             {!isAuthenticated ? (
-              <div className="mt-2 flex gap-2 border-t border-slate-100 pt-3">
+              <div className="mt-4 flex gap-2">
                 <Link to="/login" onClick={() => setMenuOpen(false)} className="btn-secondary flex-1">{t('nav.login')}</Link>
                 <Link to="/register" onClick={() => setMenuOpen(false)} className="btn-primary flex-1">{t('nav.register')}</Link>
               </div>
-            ) : null}
+            ) : (
+              <button onClick={handleLogout} className="btn-secondary mt-4">{t('nav.logout')}</button>
+            )}
           </div>
         </nav>
       ) : null}
@@ -98,42 +127,66 @@ export function PublicHeader() {
 
 export function Footer() {
   const { t } = useI18n();
+  const year = new Date().getFullYear();
   return (
-    <footer className="border-t border-slate-200 bg-slate-50/70">
-      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6">
-        <div className="grid gap-8 md:grid-cols-4">
-          {/* العلامة */}
-          <div className="md:col-span-2">
+    <footer className="border-t border-slate-200 bg-white">
+      <div className="mx-auto max-w-7xl px-4 py-14 sm:px-6">
+        <div className="grid gap-10 md:grid-cols-12">
+          <div className="md:col-span-5">
             <Brand />
-            <p className="mt-4 max-w-md text-sm leading-relaxed text-slate-500">{t('app.tagline')}</p>
-            <p className="mt-3 text-sm text-slate-500">{t('nav.contact')}: <span className="font-medium text-slate-700">contact@lewassit.com</span></p>
+            <p className="mt-4 max-w-sm text-sm leading-relaxed text-slate-500">{t('app.tagline')}</p>
+            <p className="mt-4 text-sm text-slate-500">
+              {t('nav.contact')}:{' '}
+              <a href="mailto:contact@lewassit.com" className="font-medium text-slate-700 hover:text-brand-700">
+                contact@lewassit.com
+              </a>
+            </p>
+            {DEMO_MODE ? (
+              <span className="mt-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
+                <span className="h-1.5 w-1.5 rounded-full bg-teal-500" aria-hidden />
+                {t('footer.demoEnv')}
+              </span>
+            ) : null}
           </div>
-          {/* المنصة */}
-          <div>
-            <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-400">{t('nav.marketplace')}</h4>
-            <ul className="space-y-2 text-sm text-slate-600">
-              <li><Link to="/marketplace" className="transition-colors hover:text-wasit-700">{t('nav.marketplace')}</Link></li>
-              <li><Link to="/suppliers" className="transition-colors hover:text-wasit-700">{t('nav.suppliers')}</Link></li>
-              <li><Link to="/merchants" className="transition-colors hover:text-wasit-700">{t('nav.merchants')}</Link></li>
-              <li><Link to="/companies" className="transition-colors hover:text-wasit-700">{t('nav.companies')}</Link></li>
-              <li><Link to="/categories" className="transition-colors hover:text-wasit-700">{t('nav.categories')}</Link></li>
+
+          <div className="md:col-span-2">
+            <h4 className="mb-4 text-xs font-bold uppercase tracking-wider text-slate-400">{t('footer.marketplace')}</h4>
+            <ul className="space-y-2.5 text-sm text-slate-600">
+              <li><Link to="/marketplace" className="transition-colors hover:text-brand-700">{t('nav.marketplace')}</Link></li>
+              <li><Link to="/marketplace" className="transition-colors hover:text-brand-700">{t('nav.products')}</Link></li>
+              <li><Link to="/suppliers" className="transition-colors hover:text-brand-700">{t('nav.suppliers')}</Link></li>
+              <li><Link to="/merchants" className="transition-colors hover:text-brand-700">{t('nav.merchants')}</Link></li>
+              <li><Link to="/categories" className="transition-colors hover:text-brand-700">{t('nav.categories')}</Link></li>
             </ul>
           </div>
-          {/* الشركة */}
-          <div>
-            <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-400">{t('nav.about')}</h4>
-            <ul className="space-y-2 text-sm text-slate-600">
-              <li><Link to="/#a-propos" className="transition-colors hover:text-wasit-700">{t('nav.about')}</Link></li>
-              <li><Link to="/#solutions" className="transition-colors hover:text-wasit-700">{t('nav.solutions')}</Link></li>
-              <li><Link to="/#ressources" className="transition-colors hover:text-wasit-700">{t('nav.resources')}</Link></li>
-              <li><Link to="/#contact" className="transition-colors hover:text-wasit-700">{t('nav.contact')}</Link></li>
-              <li><Link to="/register" className="transition-colors hover:text-wasit-700">{t('nav.register')}</Link></li>
+
+          <div className="md:col-span-2">
+            <h4 className="mb-4 text-xs font-bold uppercase tracking-wider text-slate-400">{t('footer.platform')}</h4>
+            <ul className="space-y-2.5 text-sm text-slate-600">
+              <li><Link to="/#ai" className="transition-colors hover:text-brand-700">{t('nav.ai')}</Link></li>
+              <li><Link to="/price-comparison" className="transition-colors hover:text-brand-700">{t('nav.priceComparison')}</Link></li>
+              <li><Link to="/#how-it-works" className="transition-colors hover:text-brand-700">{t('nav.howItWorks')}</Link></li>
+              <li><Link to="/#trust" className="transition-colors hover:text-brand-700">{t('footer.trust')}</Link></li>
             </ul>
+          </div>
+
+          <div className="md:col-span-3">
+            <h4 className="mb-4 text-xs font-bold uppercase tracking-wider text-slate-400">{t('footer.company')}</h4>
+            <ul className="space-y-2.5 text-sm text-slate-600">
+              <li><Link to="/#about" className="transition-colors hover:text-brand-700">{t('nav.about')}</Link></li>
+              <li><a href="mailto:contact@lewassit.com" className="transition-colors hover:text-brand-700">{t('nav.contact')}</a></li>
+              <li><Link to="/register" className="transition-colors hover:text-brand-700">{t('nav.register')}</Link></li>
+            </ul>
+            <div className="mt-5">
+              <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">{t('footer.language')}</p>
+              <LanguageSwitcher />
+            </div>
           </div>
         </div>
-        <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-slate-200 pt-6 text-xs text-slate-400 sm:flex-row">
-          <span>{t('footer.rights')}</span>
-          <span className="font-semibold tracking-widest">LE WASSIT — BUSINESS GLOBAL</span>
+
+        <div className="mt-12 flex flex-col items-center justify-between gap-3 border-t border-slate-200 pt-6 text-xs text-slate-400 sm:flex-row">
+          <span>© {year} · {t('footer.rights')}</span>
+          <span className="font-semibold tracking-[0.2em] text-slate-500">BUSINESS GLOBAL</span>
         </div>
       </div>
     </footer>
@@ -142,7 +195,7 @@ export function Footer() {
 
 export function PublicLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col bg-canvas">
       <PublicHeader />
       <main className="flex-1">{children}</main>
       <Footer />

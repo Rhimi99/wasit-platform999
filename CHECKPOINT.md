@@ -1,10 +1,72 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-24 — **PUBLIC DEMO: Owner Audit Center + Functional Audit (من الواجهة، بلا mocks)**
+> **التاريخ**: 2026-09-25 — **Home Page Redesign + Functional Audit (من الواجهة، على preview حقيقي)**
 > **الفرع**: `master`
-> **HEAD**: `bada224` + هذا الـcommit
+> **HEAD**: `ef7bb5e` + هذا الـcommit
 
 ---
+
+## تحديث 2026-09-25 — إعادة تصميم الصفحة الرئيسية + تدقيق وظيفي حقيقي
+
+**النطاق**: إعادة تصميم `/` فقط من واجهة demo إلى واجهة منصة تداول رقمي عالمية حديثة، مع الحفاظ على كل وظائف المنصة وهوية LE WASSIT. **غير تدخّلي** في بقية الوحدات.
+
+### ما نُفِّذ
+- Design tokens في `tailwind.config.js` (`navy`/`brand`/ألوان) + component classes في `index.css`.
+- `PublicLayout.tsx`: هيدر/فوتر مُعاد تصميمهما.
+- مكوّنات جديدة: `brand/TradeNetwork.tsx` (شبكة تجارة للـhero)، `Icon.tsx` (أيقونات خطية)، `DemoBanner.tsx` مبسّط.
+- `HomePage.tsx`: أقسام hero، القيمة، كيف يعمل، المنتجات، الموردون، AI، الثقة، CTA، فوتر.
+- مفاتيح i18n جديدة في `ar/en/fr/zh` (hero/stats/CTA/network/footer). لا اعتماديات جديدة.
+
+### تدقيق وظيفي حقيقي (Browser Functional Smoke على build الإنتاج عبر preview)
+شُغِّل على `desktop-fr` + `desktop-ar` + `mobile-ar` (iPhone 12) مقابل API/Demo حقيقي — بلا mocks:
+**36/36** فحص ناجح + **7/7** فحص مصادقة/لغات ناجح.
+
+| Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
+|---|---|---|---|---|---|
+| Hero title يظهر (ar/fr/zh/en) | نعم | PASS | — | — | PASS |
+| الأقسام (#how-it-works/#ai/#trust) | نعم | PASS | — | — | PASS |
+| بطاقات منتجات حيّة من API | نعم | PASS | — | — | PASS |
+| بطاقات موردين حيّة من API | نعم | PASS | — | — | PASS |
+| بحث من الرئيسية → `/search` | نعم | PASS | — | — | PASS |
+| فتح تفاصيل منتج من الرئيسية | نعم | PASS | — | — | PASS |
+| CTA التسجيل → `/register` | نعم | PASS | — | — | PASS |
+| قائمة الجوال تفتح وتنتقل | نعم | PASS | — | — | PASS |
+| تبديل اللغة (ar يضبط `dir=rtl`, zh/en يعيدان الرسم) | نعم | PASS | — | — | PASS |
+| هيدر بعد الدخول: dashboard + logout | نعم | PASS | — | — | PASS |
+| إخفاء رابط admin عن العميل | نعم | PASS | — | — | PASS |
+| Logout يُنهي الجلسة | نعم | PASS | — | — | PASS |
+| لا أخطاء صفحة/شبكة (عدا probe `/api/auth/me` = 401 متوقّع) | نعم | PASS | — | — | PASS |
+| **تمركز شعار W في hero على الجوال** | نعم | **FAIL → PASS** | `start-1/2` utility **غير موجود** في Tailwind 3.4 (قيمة `/` في inset-inline مرفوضة) ⇒ الشعار يمتد يسارًا ويسبّب تجاوزًا أفقيًا 383px على شاشة 320px | استُبدل بـ`start-0` + إزالة `-translate-x-1/2` | PASS |
+| **تجاوز أفقي في قائمة الهيدر على 320px** | نعم | **FAIL → PASS** | رابط `btn-primary` للتسجيل بدون `hidden sm:inline-flex` + `shrink-0` ناقص على حاوية الأزرار | `hidden sm:inline-flex` + `shrink-0` + `min-w-0` للشعار | PASS |
+| **تجاوز أفقي في شبكة الموردين (320px)** | نعم | **FAIL → PASS** | `grid gap-4 sm:grid-cols-2` بلا `grid-cols-1` صريح ⇒ 367px في عمود واحد | `grid-cols-1` صريح على الشبكات | PASS |
+| تجاوز أفقي عام | نعم | PASS | بعد الإصلاح: 320/390/768/1440 = لا تجاوز | — | PASS |
+
+### بوابات التحقق
+- `npm run typecheck` (server + web): **0 أخطاء**.
+- `npm run build -w @wasit/web` (tsc -b + vite build): **PASS** (تحذير حجم chunk فقط).
+- E2E المتعلّق بالرئيسية (`navigation-audit`, `marketplace`, `seo`): ناجحة.
+- تدقيق المال: `e2e/financial-audit.spec.ts` — **2/2 PASS** على خادم E2E صحيح (Commission 4% = 2%+2% كما هي).
+
+### سبب الفشل "المُوروث" (خطأ بيئي لا علاقة له بالتصميم)
+- تشغيل كامل `e2e` بالتوازي على بيئة بطيئة أعطى أخطاء `HTTP 502` في `/api/auth/login` و`demo-auto-login` وأدواراً أُخرى.
+- **أُثبت بالتحقق العكسي**: نفس اختبارات `e2e/auth.spec.ts` تفشل **بالضبط** (3 failed / 2 passed) على نسخة **baseline** بعد `git stash` لعملي ⇒ السبب بيئي (تسريع/تزامن خادم الاختبار)، وليس إعادة التصميم.
+- الاختبارات المُفردة تمرّ عندما يُشغَّل الخادم بشكل صحيح ومتزامن.
+
+### الملفات
+- `packages/web/tailwind.config.js` — WASIT tokens.
+- `packages/web/src/index.css` — component classes.
+- `packages/web/src/components/DemoBanner.tsx`
+- `packages/web/src/components/Icon.tsx` (جديد)
+- `packages/web/src/components/brand/TradeNetwork.tsx` (جديد)
+- `packages/web/src/components/layouts/PublicLayout.tsx`
+- `packages/web/src/pages/HomePage.tsx`
+- `packages/web/src/lib/i18n.ts` — مفاتيح `ar/en/fr/zh`
+
+### القيود المُحترمة
+لا DB reset/drop/push · لا حذف بيانات اختبار · Commission Policy 4% = 2% seller + 2% buyer محفوظة · Marketing Video Agent (commit `89e68d7`) بلا لمس (لا regression) · لا mocks · لا تعطيل أزرار لإخفاء أخطاء · لا تغيير الوظائف العاملة · تعديل غير تدخّلي على `/` فقط.
+
+---
+
 
 ## تحديث 2026-09-24 — PS-01 / PS-02 / PS-04 / WASIT Receipt (من `9b164f5`)
 

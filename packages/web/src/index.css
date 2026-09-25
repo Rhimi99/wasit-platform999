@@ -16,22 +16,34 @@ body {
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-wasit-500/50 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-wasit-700 text-white shadow-soft hover:bg-wasit-800;
+    @apply btn bg-brand-600 text-white shadow-soft hover:bg-brand-700;
   }
   .btn-secondary {
-    @apply btn bg-white text-slate-700 border border-slate-300 hover:border-wasit-400 hover:bg-slate-50;
+    @apply btn border border-slate-300 bg-white text-slate-700 hover:border-brand-400 hover:bg-brand-50/60 hover:text-brand-700;
+  }
+  .btn-ghost {
+    @apply btn text-slate-600 hover:bg-slate-100 hover:text-brand-700;
+  }
+  .btn-lg {
+    @apply rounded-xl px-6 py-3 text-base;
   }
   .btn-danger {
     @apply btn bg-red-600 text-white hover:bg-red-700;
   }
   .card {
-    @apply rounded-xl border border-slate-200 bg-white shadow-card;
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card;
+  }
+  .card-hover {
+    @apply transition-all duration-200 hover:-translate-y-1 hover:border-brand-200 hover:shadow-lift;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600;
   }
   .input {
-    @apply w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-wasit-600 focus:outline-none focus:ring-1 focus:ring-wasit-600;
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-1 focus:ring-brand-600;
   }
   .label {
     @apply mb-1 block text-sm font-medium text-slate-700;
@@ -46,6 +58,19 @@ body {
     @apply border-b border-slate-100 px-3 py-2 align-middle;
   }
   .nav-link {
-    @apply relative text-sm font-semibold text-slate-600 transition-colors after:absolute after:-bottom-1 after:start-0 after:h-0.5 after:w-0 after:rounded-full after:bg-wasit-600 after:transition-all hover:text-wasit-700 hover:after:w-full;
+    @apply relative text-sm font-semibold text-slate-600 transition-colors after:absolute after:-bottom-1 after:start-0 after:h-0.5 after:w-0 after:rounded-full after:bg-brand-600 after:transition-all hover:text-brand-700 hover:after:w-full;
+  }
+}
+
+@layer utilities {
+  .animate-fade-up {
+    animation: fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-up { animation: none; }
   }
 }

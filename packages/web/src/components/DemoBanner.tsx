@@ -8,22 +8,17 @@ export function DemoBanner() {
     <div
       role="status"
       dir="rtl"
-      style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 60,
-        background: 'linear-gradient(90deg,#7c3aed,#2563eb)',
-        color: '#fff',
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: '13px',
-        lineHeight: 1.4,
-        padding: '6px 12px',
-        textAlign: 'center',
-      }}
+      className="sticky top-0 z-[60] bg-navy px-3 py-1.5 text-center text-[11px] leading-tight text-slate-300 sm:text-xs"
     >
-      <strong>وضع العرض التجريبي (DEMO)</strong> — بيانات تجريبية فقط، لا مدفوعات
-      حقيقية، ولا بيانات مستخدمين حقيقيين. ·{' '}
-      <span dir="ltr">Demo mode — fake data, no real payments.</span>
+      <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
+        <span className="inline-flex items-center gap-1.5 font-bold tracking-wide text-white">
+          <span className="h-1.5 w-1.5 rounded-full bg-teal-400" aria-hidden />
+          DEMO
+        </span>
+        <span className="hidden text-slate-400 sm:inline" aria-hidden>·</span>
+        <span>بيانات تجريبية فقط، لا مدفوعات حقيقية.</span>
+        <span className="text-slate-400" dir="ltr">Fake data, no real payments.</span>
+      </span>
     </div>
   );
 }
