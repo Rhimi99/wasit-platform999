@@ -17,6 +17,15 @@ export function CheckoutPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [successId, setSuccessId] = useState<string | null>(null);
+  const [placed, setPlaced] = useState<{
+    itemsTotal: string;
+    commission: string;
+    commissionSeller: string;
+    commissionBuyer: string;
+    paymentFee: string;
+    grandTotal: string;
+    currencyCode: string;
+  } | null>(null);
   const [payment, setPayment] = useState<{ status: string; provider: string; checkoutUrl: string | null } | null>(null);
   const [paying, setPaying] = useState(false);
   const [method, setMethod] = useState<{ type: 'CARD' | 'MOBILE_WALLET'; scheme?: string }>({ type: 'CARD' });
@@ -95,6 +104,15 @@ export function CheckoutPage() {
         notes: `Order from web for product ${product.name}`,
       });
       setSuccessId(res.orderId);
+      setPlaced({
+        itemsTotal: res.itemsTotal,
+        commission: res.commission,
+        commissionSeller: res.commissionSeller,
+        commissionBuyer: res.commissionBuyer,
+        paymentFee: res.paymentFee,
+        grandTotal: res.grandTotal,
+        currencyCode: res.currencyCode,
+      });
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : String(err));
     } finally {
@@ -139,7 +157,7 @@ export function CheckoutPage() {
           <div className="mt-3 space-y-1 text-sm text-slate-600">
             <div className="flex justify-between"><span>{t('common.quantity')} × {qty}</span><span>{formatMoney(product.basePrice, product.currencyCode)}</span></div>
             <div className="flex justify-between font-semibold text-slate-800"><span>{t('common.total')}</span><span>{formatMoney(lineTotal, product.currencyCode)}</span></div>
-            <div className="flex justify-between text-xs text-slate-400"><span>{t('order.commission')}</span><span>— ({t('order.commission')})</span></div>
+            <div className="flex justify-between text-xs text-slate-400" data-testid="commission-pending"><span>{t('order.commission')}</span><span>{t('order.commissionPending')}</span></div>
           </div>
           {error && (
             <p className="mt-4 rounded bg-red-50 p-2 text-sm text-red-600" role="alert">{error}</p>
@@ -149,6 +167,27 @@ export function CheckoutPage() {
               <div className="rounded bg-green-50 p-3 text-sm text-green-800" role="status">
                 {t('order.createSuccess')} <Link to="/dashboard/orders" className="font-semibold underline">{t('order.myOrders')}</Link>
               </div>
+              {placed && (
+                <div
+                  className="rounded border border-slate-200 p-3 text-sm"
+                  data-testid="order-breakdown"
+                  data-items-total={placed.itemsTotal}
+                  data-commission={placed.commission}
+                  data-commission-seller={placed.commissionSeller}
+                  data-commission-buyer={placed.commissionBuyer}
+                  data-grand-total={placed.grandTotal}
+                  data-payment-fee={placed.paymentFee}
+                >
+                  <div className="flex justify-between text-slate-600"><span>{t('order.items')}</span><span>{formatMoney(placed.itemsTotal, placed.currencyCode)}</span></div>
+                  <div className="mt-1 flex justify-between text-slate-600"><span>{t('order.commission')}</span><span>{formatMoney(placed.commission, placed.currencyCode)}</span></div>
+                  <div className="mt-1 flex justify-between text-xs text-slate-500"><span>{t('order.sellerCommission')}</span><span>{formatMoney(placed.commissionSeller, placed.currencyCode)}</span></div>
+                  <div className="mt-1 flex justify-between text-xs text-slate-500"><span>{t('order.buyerCommission')}</span><span>{formatMoney(placed.commissionBuyer, placed.currencyCode)}</span></div>
+                  {Number(placed.paymentFee) > 0 && (
+                    <div className="mt-1 flex justify-between text-xs text-slate-500"><span>{t('order.fee')}</span><span>{formatMoney(placed.paymentFee, placed.currencyCode)}</span></div>
+                  )}
+                  <div className="mt-2 flex justify-between border-t border-slate-100 pt-2 font-semibold text-slate-800"><span>{t('order.grandTotal')}</span><span>{formatMoney(placed.grandTotal, placed.currencyCode)}</span></div>
+                </div>
+              )}
               <div className="rounded border border-slate-200 p-3 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-slate-700">{t('payment.title')}</span>

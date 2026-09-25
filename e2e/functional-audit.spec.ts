@@ -65,6 +65,108 @@ test.describe('CUSTOMER — auth, discovery, purchase', () => {
       await expect(page.getByText(/عمولة وسيط|WASIT commission/i).first()).toBeVisible();
     });
 
+    test('checkout shows the real Commission Engine breakdown once the order is placed', async ({ page }) => {
+      // Newest-first marketplace ordering surfaces freshly created zero-stock
+      // fixtures, so drive discovery through search and fall back on in-stock
+      // products seeded with real inventory.
+      const hrefs: string[] = [];
+      for (const q of ['olive', 'dates', 'tomato']) {
+        await page.goto(`/search?q=${q}&type=products`);
+        const links = page.locator('a[href^="/products/"]');
+        await links.first().waitFor({ timeout: 10_000 }).catch(() => {});
+        for (let i = 0; i < await links.count(); i++) {
+          const href = await links.nth(i).getAttribute('href');
+          if (href && !hrefs.includes(href)) hrefs.push(href);
+        }
+      }
+      for (let pageNo = 1; pageNo <= 12 && hrefs.length < 40; pageNo++) {
+        await page.goto(`/marketplace?page=${pageNo}`);
+        const links = page.locator('a[href^="/products/"]');
+        await links.first().waitFor({ timeout: 10_000 }).catch(() => {});
+        const count = await links.count();
+        if (count === 0) break;
+        for (let i = 0; i < count && hrefs.length < 40; i++) {
+          const href = await links.nth(i).getAttribute('href');
+          if (href && !hrefs.includes(href)) hrefs.push(href);
+        }
+      }
+      expect(hrefs.length).toBeGreaterThan(0);
+
+      const breakdown = page.getByTestId('order-breakdown');
+      const pending = page.getByTestId('commission-pending');
+      let placed = false;
+      const diag: string[] = [];
+      let apiData: {
+        itemsTotal: string;
+        commission: string;
+        commissionSeller: string;
+        commissionBuyer: string;
+        grandTotal: string;
+        paymentFee: string;
+        currencyCode: string;
+        commissionRate: string;
+        commissionSellerRate: string;
+        commissionBuyerRate: string;
+      } | null = null;
+
+      for (const href of hrefs) {
+        await page.goto(`/checkout?productId=${href.split('/products/')[1]}`);
+        const placeBtn = page.getByRole('button', { name: /إتمام الطلب|Place order|Passer/i }).first();
+        if (!(await placeBtn.waitFor({ state: 'visible', timeout: 4_000 }).then(() => true).catch(() => false))) {
+          diag.push(`${href}: no place button`);
+          continue;
+        }
+
+        // Before placing, the commission is explicitly deferred to the engine —
+        // it must never be rendered as a hardcoded placeholder dash.
+        await expect(pending).toBeVisible();
+        await expect(pending).toContainText(/محرّك العمولة|Commission Engine/i);
+        await expect(pending).not.toContainText('—');
+
+        const [response] = await Promise.all([
+          page.waitForResponse((r) => r.url().endsWith('/api/orders') && r.request().method() === 'POST'),
+          placeBtn.click(),
+        ]);
+        placed = await breakdown.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+        if (placed) {
+          apiData = (await response.json()).data;
+          break;
+        }
+        const alert = page.getByRole('alert');
+        diag.push(`${href}: ${(await alert.first().innerText().catch(() => 'no alert')).replace(/\n/g, ' ')}`);
+      }
+      expect(placed, `no listed product could be ordered:\n${diag.join('\n')}`).toBe(true);
+      expect(apiData).not.toBeNull();
+
+      // The rendered breakdown must equal the values the Commission Engine
+      // returned — this fails if the UI ever invents or hardcodes a figure.
+      await expect(breakdown).toHaveAttribute('data-items-total', apiData!.itemsTotal);
+      await expect(breakdown).toHaveAttribute('data-commission', apiData!.commission);
+      await expect(breakdown).toHaveAttribute('data-commission-seller', apiData!.commissionSeller);
+      await expect(breakdown).toHaveAttribute('data-commission-buyer', apiData!.commissionBuyer);
+      await expect(breakdown).toHaveAttribute('data-grand-total', apiData!.grandTotal);
+      await expect(breakdown).toHaveAttribute('data-payment-fee', apiData!.paymentFee);
+
+      // …and the user-visible text must show the formatted engine figures, not
+      // the pre-order placeholder. formatMoney uses the fr-TN locale/currency.
+      const money = (v: string, ccy: string) =>
+        new Intl.NumberFormat('fr-TN', { style: 'currency', currency: ccy }).format(Number(v));
+      await expect(breakdown).toContainText(money(apiData!.commission, apiData!.currencyCode));
+      await expect(breakdown).toContainText(money(apiData!.grandTotal, apiData!.currencyCode));
+      await expect(breakdown).not.toContainText(/Commission Engine/i);
+
+      // The split must reconcile to the policy the Engine applied, using the
+      // rates the Engine itself reports — no rate is hardcoded in this test.
+      const itemsTotal = Number(apiData!.itemsTotal);
+      const totalRate = Number(apiData!.commissionRate);
+      const sellerRate = Number(apiData!.commissionSellerRate);
+      const buyerRate = Number(apiData!.commissionBuyerRate);
+      expect(sellerRate + buyerRate).toBeCloseTo(totalRate, 6);
+      expect(Number(apiData!.commissionSeller)).toBeCloseTo(itemsTotal * sellerRate, 4);
+      expect(Number(apiData!.commissionBuyer)).toBeCloseTo(itemsTotal * buyerRate, 4);
+      expect(Number(apiData!.commission)).toBeCloseTo(itemsTotal * totalRate, 4);
+    });
+
     test('orders page lists the customer orders', async ({ page }) => {
       await page.goto('/dashboard/orders');
       await expect(page.getByRole('heading', { name: /طلباتي|My orders|Orders/i }).first()).toBeVisible();
