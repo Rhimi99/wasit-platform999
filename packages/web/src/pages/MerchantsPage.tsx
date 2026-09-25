@@ -34,7 +34,7 @@ export function MerchantsPage() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((m) => (
-              <Link key={m.id} to={`/merchants/${m.id}`} className="card flex items-center gap-4 p-4 hover:shadow-md">
+              <Link key={m.id} to={`/merchants/${m.id}`} className="card flex min-w-0 items-center gap-4 p-4 hover:shadow-md">
                 {m.logoUrl ? (
                   <img src={m.logoUrl} alt={m.storeName} className="h-14 w-14 rounded-full object-cover" />
                 ) : (

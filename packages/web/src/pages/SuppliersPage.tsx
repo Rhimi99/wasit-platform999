@@ -34,7 +34,7 @@ export function SuppliersPage() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((s) => (
-              <Link key={s.id} to={`/suppliers/${s.id}`} className="card flex items-center gap-4 p-4 hover:shadow-md">
+              <Link key={s.id} to={`/suppliers/${s.id}`} className="card flex min-w-0 items-center gap-4 p-4 hover:shadow-md">
                 {s.logoUrl ? (
                   <img src={s.logoUrl} alt={s.companyName} className="h-14 w-14 rounded-full object-cover" />
                 ) : (
