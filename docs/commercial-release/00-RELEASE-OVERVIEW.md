@@ -2,7 +2,7 @@
 
 > **Product:** WASIT BUSINESS GLOBAL (LE WASSIT)
 > **Release version:** 0.1.0
-> **Release commit:** `d9edeb8` (branch `master`)
+> **Release commit:** `6f7a029` (branch `master`)
 > **Audience:** receiving Engineering + DevOps team
 > **Status:** source-complete, verified on a fresh environment (see §Verification)
 
@@ -29,7 +29,7 @@ It is **not just source code**. It contains:
 
 ## 2. What "verified" means in this package
 
-Every gate below was re-run against release commit `d9edeb8` before the package
+Every gate below was re-run against release commit `6f7a029` before the package
 was assembled. The exact commands and observed results are recorded in
 [`06-VERIFICATION-EVIDENCE.md`](./06-VERIFICATION-EVIDENCE.md).
 

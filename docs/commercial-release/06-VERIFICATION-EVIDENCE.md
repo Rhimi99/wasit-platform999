@@ -1,6 +1,6 @@
 # Verification Evidence
 
-> **Release commit:** `d9edeb8` (branch `master`)
+> **Release commit:** `6f7a029` (branch `master`)
 > **Date:** 2026-09-26
 > **Method:** every gate below was executed against this commit; the exact
 > commands and observed results are reproduced here.
@@ -16,9 +16,10 @@ than on assurance. Every claim is a command anyone can re-run.
 | --- | --- | --- |
 | Typecheck | `npm run typecheck` | PASS — server + web, 0 errors |
 | Unit / integration | `npm test` | PASS — **645 / 645** tests, 60 files |
-| End-to-end | `npx playwright test` | PASS — **204 / 204** tests, 32 files, 0 failures |
+| End-to-end | `npm run test:e2e` | PASS — **204 passed**, 8 conditional skips, 0 failures, 32 files |
 | Server production build | `npm run build:prod -w @wasit/server` | PASS |
 | Web production build | `npm run build -w @wasit/web` | PASS |
+| Browser functional smoke | `node preview-smoke.mjs` | PASS — 17 / 17 checks, zero 5xx |
 | Fresh-environment rebuild | migrate → seed → boot → login → order | PASS (see §4) |
 
 ---

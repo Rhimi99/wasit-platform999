@@ -1,11 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { generateBusinessNumber, generateOrderNumber, generateTransactionNumber } from '../../src/lib/ids';
 
+// Drawing n values from the 36^8 suffix space is a birthday problem: the
+// expected number of collisions is n(n-1)/(2*36^8), i.e. ~0.002 at 100k draws
+// and ~0.04 at 500k. Demanding zero collisions would fail ~4% of runs against a
+// correct generator, so allow a small tolerance — it still catches the real
+// regression by an enormous margin (a 1296-value suffix space yields ~1296
+// distinct numbers, not ~500k).
+const COLLISION_TOLERANCE = 10;
+
 describe('business document numbers', () => {
   it('is unique across many draws on the same day', () => {
     const seen = new Set<string>();
     for (let i = 0; i < 100_000; i++) seen.add(generateBusinessNumber('ORD'));
-    expect(seen.size).toBe(100_000);
+    expect(seen.size).toBeGreaterThanOrEqual(100_000 - COLLISION_TOLERANCE);
   });
 
   it('does not collide when many issuers share a day prefix', () => {
@@ -15,7 +23,7 @@ describe('business document numbers', () => {
     const date = new Date('2026-09-21T00:00:00Z');
     const seen = new Set<string>();
     for (let i = 0; i < 500_000; i++) seen.add(generateBusinessNumber('TXN', date));
-    expect(seen.size).toBe(500_000);
+    expect(seen.size).toBeGreaterThanOrEqual(500_000 - COLLISION_TOLERANCE);
   });
 
   it('keeps the human-friendly ORD/TXN prefixes and stays within the column width', () => {
