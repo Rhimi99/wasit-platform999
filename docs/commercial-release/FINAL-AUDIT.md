@@ -1,11 +1,47 @@
 # FINAL AUDIT — UI Functional Verification
 
-> **Release commit:** `6f7a029` (branch `master`)
+> **Audited commit:** `f3a730c` (branch `master`)
+> **Packaging commit:** the docs-only commit on top of `f3a730c` (adds this document and the release manifest; no product code)
 > **Date:** 2026-09-26
 > **Method:** every row below was exercised from the running UI in a real
 > browser (Playwright, real API, real PostgreSQL). An HTTP 200 and a rendered
 > page shell were treated as **not** sufficient; each row asserts a user-visible
 > result — a row in a table, a state change, a file on disk, a ledger entry.
+
+---
+
+## 0. Release verification summary
+
+| Check | Result |
+| --- | --- |
+| Audited commit | `f3a730c` |
+| Packaging commit | docs-only commit on top of `f3a730c` |
+| Server tests | **645 / 645 PASS** (60 files) |
+| E2E | **204 passed / 0 failed / 8 conditional skipped** (32 files) |
+| Browser functional smoke | **57 / 57 PASS** (zero 5xx) |
+| — customer smoke | **7 / 7** |
+| — merchant smoke | **15 / 15** |
+| — purchase smoke | **6 / 6** |
+| — video smoke | **10 / 10** |
+| — admin smoke | **19 / 19** |
+| Typecheck | **PASS** (server + web, 0 errors) |
+| Build | **PASS** (server `build:prod` + web `build`) |
+| Commission | **verified: 4% total = 2% seller + 2% buyer** |
+| Marketing Video MP4 download | **verified — real 233,412-byte MP4** |
+| Git tree | **clean** |
+
+The 8 E2E skips are conditional on `DEMO_AUTO_LOGIN`; each skipped branch has a
+working counterpart that runs. They are not failures.
+
+### Known non-blocker — Admin Trust empty state
+
+When the Trust table is empty, the page shows a message instructing the operator
+to recompute scores, but the recompute button is not rendered, so the instruction
+cannot be followed from that screen. This is a real UX/functional gap. It was
+**not** fixed in this session because it falls outside the scope of the current
+final audit, and it does not block any commercial requirement: the self-service
+recompute path (merchant `/dashboard/trust`) and the admin console
+`/admin/trust` both work on non-empty data, as the admin smoke suite proves.
 
 ---
 
@@ -90,7 +126,7 @@ Legend — **Tested from UI**: driven through the browser, not the API alone.
 
 | Feature | Tested from UI | Result | Root cause if failed | Fix | Test status |
 | --- | --- | --- | --- | --- | --- |
-| Select product | Yes — dropdown | 4 selectable products | — | — | PASS |
+| Select product | Yes — dropdown | selectable products from the API | — | — | PASS |
 | Select language | Yes — dropdown | Value applied to the request | — | — | PASS |
 | Select audience | Yes — dropdown | Value applied | — | — | PASS |
 | Select style | Yes — dropdown | Value applied | — | — | PASS |
@@ -120,17 +156,30 @@ rebuilt from migrations and the project's own seeders — **no drop, no reset, n
 | End-to-end | `npm run test:e2e` | **PASS** — 204 passed, 8 conditional skips, **0 failed** (32 files) |
 | Server production build | `npm run build:prod -w @wasit/server` | **PASS** |
 | Web production build | `npm run build -w @wasit/web` | **PASS** |
-| Browser functional smoke | `node preview-smoke.mjs` | **PASS** — 17 / 17, zero 5xx |
+| Browser functional smoke | 5 suites (`customer`, `merchant`, `purchase`, `video`, `preview`) | **PASS** — 57 / 57, zero 5xx |
 
-### One test flake found and corrected
+> Run `npm test` from a shell that has **not** sourced `.env.demo` / `.env.staging`.
+> Those files export `DEMO_AUTO_LOGIN`, `METRICS_ENABLED=false` and `RATE_LIMIT_*`,
+> which are exactly the variables the specs assert are off by default; a polluted
+> shell shows a handful of phantom failures that vanish in a clean one. The suite
+> pins most of these itself, but not all, so a clean shell is still the rule.
 
-`tests/unit/business-numbers.test.ts` demanded zero collisions across 500,000
-draws from a 36^8 suffix space. That is a birthday problem: the expected number
-of collisions is ~0.04, so the assertion failed roughly 4% of runs against a
-**correct** generator (observed once during this audit, then 10 consecutive
-passes). The tolerance is now explicit and the test still catches the real
-regression by an enormous margin — a 1296-value suffix space yields 1296
-distinct numbers, not 500,000, and fails the assertion.
+### Two test issues found and corrected
+
+1. **`tests/unit/business-numbers.test.ts` flake.** It demanded zero collisions
+   across 500,000 draws from a 36^8 suffix space. That is a birthday problem: the
+   expected number of collisions is ~0.04, so the assertion failed roughly 4% of
+   runs against a **correct** generator (observed once during this audit, then 10
+   consecutive passes). The tolerance is now explicit and the test still catches
+   the real regression by an enormous margin — a 1296-value suffix space yields
+   1296 distinct numbers, not 500,000, and fails the assertion.
+
+2. **`purchase-smoke.mjs` miscounted orders.** The "new order visible to the
+   buyer" check read `data.items`, but `GET /api/orders` returns `{ data: Order[] }`
+   — a bare array — so the count was `undefined` both before and after the order
+   (`0 → 0`) even though checkout worked. This was a **harness** bug, not a product
+   bug; accepting both shapes shows the real `5 → 6` transition and the new row on
+   screen. No product code was changed to make it pass.
 
 ---
 

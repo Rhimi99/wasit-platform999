@@ -1,6 +1,6 @@
 # Verification Evidence
 
-> **Release commit:** `6f7a029` (branch `master`)
+> **Release commit:** `f3a730c` (branch `master`)
 > **Date:** 2026-09-26
 > **Method:** every gate below was executed against this commit; the exact
 > commands and observed results are reproduced here.
@@ -19,7 +19,7 @@ than on assurance. Every claim is a command anyone can re-run.
 | End-to-end | `npm run test:e2e` | PASS — **204 passed**, 8 conditional skips, 0 failures, 32 files |
 | Server production build | `npm run build:prod -w @wasit/server` | PASS |
 | Web production build | `npm run build -w @wasit/web` | PASS |
-| Browser functional smoke | `node preview-smoke.mjs` | PASS — 17 / 17 checks, zero 5xx |
+| Browser functional smoke | `customer`/`merchant`/`purchase`/`video`/`preview` smoke suites | PASS — 57 / 57 checks, zero 5xx |
 | Fresh-environment rebuild | migrate → seed → boot → login → order | PASS (see §4) |
 
 ---

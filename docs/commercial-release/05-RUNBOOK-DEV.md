@@ -1,7 +1,7 @@
 # Developer Runbook — from clone to running stack
 
 This is the exact procedure used to verify the release. It was executed on an
-empty directory extracted from release commit `6f7a029`, so following it
+empty directory extracted from release commit `f3a730c`, so following it
 reproduces a known-good environment.
 
 **Prerequisites:** Node.js 22, npm 10+, PostgreSQL 16 (a 17 client also works),
@@ -22,7 +22,7 @@ If you are working from the repository:
 
 ```bash
 git clone <repo-url> wasit && cd wasit
-git checkout 6f7a029
+git checkout f3a730c
 ```
 
 ## 1. Install dependencies

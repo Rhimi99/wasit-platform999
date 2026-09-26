@@ -1,8 +1,33 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + إغلاق ثغرة الـharness + تغطية استوديو الفيديو**
+> **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + تغليف الإصدار التجاري**
 > **الفرع**: `master`
-> **HEAD**: `921693a` (test/audit) على `6f7a029` (fix/audit) على `d9edeb8` (docs)
+> **HEAD**: `f3a730c` (test/audit: سويتات الفحص الوظيفي) على `921693a` على `6f7a029` على `d9edeb8`
+
+---
+
+## إغلاق 2026-09-26 (5) — FINAL COMMERCIAL RELEASE PACKAGING
+
+**الحالة النهائية المعتمدة** (لا إعادة تدقيق): commit `f3a730c`، شجرة git نظيفة.
+
+| البوابة | النتيجة |
+| --- | --- |
+| Server tests | **645/645** (60 ملفًا) |
+| E2E | **204 نجحت / 0 فشل / 8 تخطٍّ شرطي** (32 ملفًا) |
+| Browser functional smoke | **57/57** (صفر 5xx) |
+| — customer / merchant / purchase / video / admin | **7/7 · 15/15 · 6/6 · 10/10 · 19/19** |
+| Typecheck | PASS (server + web) |
+| Build | PASS (server + web) |
+| Commission | **4% = 2% seller + 2% buyer** |
+| Marketing Video MP4 download | متحقَّق (233,412 بايت حقيقية) |
+
+**المخرجات**: `WASIT-BUSINESS-GLOBAL-COMMERCIAL-RELEASE-2026-09-26.zip` (من `git archive`
+على `f3a730c` — بلا `node_modules`، بلا `.env` حقيقي، بلا أسرار، بلا build artifacts)،
+مع `docs/commercial-release/FINAL-AUDIT.md` و`COMMERCIAL-RELEASE-MANIFEST.md`.
+
+**ملاحظة واحدة معروفة غير مُعطِّلة**: Admin Trust empty-state — الرسالة تطلب recompute
+لكن الزر لا يُرسم عندما يكون الجدول فارغًا. لم تُصلح في هذه الجلسة (خارج نطاق التدقيق
+النهائي)، ولا تمنع الإصدار التجاري.
 
 ---
 
