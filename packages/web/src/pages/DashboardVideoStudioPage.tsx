@@ -81,7 +81,7 @@ export function DashboardVideoStudioPage() {
           <form onSubmit={generate} className="grid gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className="label" htmlFor="v-product">{t('studio.product')} *</label>
-              <select id="v-product" value={productId} onChange={(e) => setProductId(e.target.value)} className="input" required>
+              <select id="v-product" value={productId} onChange={(e) => setProductId(e.target.value)} className="input" required data-testid="studio-product">
                 <option value="">{t('studio.selectProduct')}</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -93,19 +93,19 @@ export function DashboardVideoStudioPage() {
             </div>
             <div>
               <label className="label" htmlFor="v-language">{t('studio.language')}</label>
-              <select id="v-language" value={language} onChange={(e) => setLanguage(e.target.value as never)} className="input">
+              <select id="v-language" value={language} onChange={(e) => setLanguage(e.target.value as never)} className="input" data-testid="studio-language">
                 {LANGUAGES.map((l) => <option key={l} value={l}>{l.toUpperCase()}</option>)}
               </select>
             </div>
             <div>
               <label className="label" htmlFor="v-audience">{t('studio.audience')}</label>
-              <select id="v-audience" value={audience} onChange={(e) => setAudience(e.target.value as never)} className="input">
+              <select id="v-audience" value={audience} onChange={(e) => setAudience(e.target.value as never)} className="input" data-testid="studio-audience">
                 {AUDIENCES.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>
             </div>
             <div>
               <label className="label" htmlFor="v-style">{t('studio.style')}</label>
-              <select id="v-style" value={style} onChange={(e) => setStyle(e.target.value as never)} className="input">
+              <select id="v-style" value={style} onChange={(e) => setStyle(e.target.value as never)} className="input" data-testid="studio-style">
                 {STYLES.map((s2) => <option key={s2} value={s2}>{s2}</option>)}
               </select>
             </div>
@@ -118,6 +118,7 @@ export function DashboardVideoStudioPage() {
                 value={durationSeconds}
                 onChange={(e) => setDurationSeconds(Number(e.target.value) || MARKETING_VIDEO_DURATION.default)}
                 className="input"
+                data-testid="studio-duration"
               />
               <p className="mt-1 text-xs text-slate-500" data-testid="duration-hint">
                 {t('studio.durationHint')} {MARKETING_VIDEO_DURATION.min}–{MARKETING_VIDEO_DURATION.max}s
@@ -127,12 +128,13 @@ export function DashboardVideoStudioPage() {
               type="submit"
               disabled={generating || products.length === 0}
               className="btn-primary sm:col-span-2"
+              data-testid="studio-generate"
             >
               {generating ? t('studio.generating') : t('studio.generate')}
             </button>
           </form>
-          {notice && <p className="mt-3 text-sm text-green-700">{notice}</p>}
-          {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+          {notice && <p className="mt-3 text-sm text-green-700" data-testid="studio-notice">{notice}</p>}
+          {error && <p className="mt-3 text-sm text-red-600" role="alert" data-testid="studio-error">{error}</p>}
         </Card>
 
         <Card>
@@ -142,11 +144,11 @@ export function DashboardVideoStudioPage() {
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
               {library.map((asset) => (
-                <div key={asset.id} className="rounded-md border border-slate-200 p-2">
+                <div key={asset.id} className="rounded-md border border-slate-200 p-2" data-testid={`studio-asset-${asset.id}`}>
                   <p className="truncate text-xs font-medium text-slate-700">{asset.title}</p>
                   <div className="mt-1">
                     {asset.previewable && asset.previewUrl ? (
-                      <video src={asset.previewUrl} controls className="h-32 w-full rounded-md bg-slate-900" />
+                      <video src={asset.previewUrl} controls className="h-32 w-full rounded-md bg-slate-900" data-testid={`studio-preview-${asset.id}`} />
                     ) : (
                       <p className="text-xs text-amber-600">{t('studio.notReady')}</p>
                     )}
@@ -157,13 +159,14 @@ export function DashboardVideoStudioPage() {
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1">
                     {asset.downloadUrl && (
-                      <a href={asset.downloadUrl} download className="rounded bg-wasit-600 px-2 py-1 text-[10px] text-white hover:bg-wasit-700">
+                      <a href={asset.downloadUrl} download className="rounded bg-wasit-600 px-2 py-1 text-[10px] text-white hover:bg-wasit-700" data-testid={`studio-download-${asset.id}`}>
                         {t('studio.download')}
                       </a>
                     )}
                     <button
                       onClick={() => void remove(asset.id)}
                       className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600 hover:border-red-400 hover:text-red-600"
+                      data-testid={`studio-delete-${asset.id}`}
                     >
                       {t('studio.delete')}
                     </button>

@@ -22,6 +22,13 @@ export default defineConfig({
       DOTENV_CONFIG_PATH: path.resolve(__dirname, 'tests/.env.test-does-not-exist'),
       DATABASE_URL: TEST_DB_URL,
       NODE_ENV: 'test',
+      // The same hermeticity rule applies to the process environment: a shell
+      // that has `ALLOW_DEV_TOOLING=true` exported (the demo/staging envs set
+      // it) would otherwise make `devToolingActive()` true even under the
+      // `NODE_ENV=production` the specs override, failing the assertion that
+      // production never serves dev tooling. Pin it off so the suite does not
+      // depend on the caller's shell; specs that need it flip `env` directly.
+      ALLOW_DEV_TOOLING: 'false',
       JWT_SECRET: 'test-secret-for-integration-tests-0123456789-abcdefghij',
       // Raise auth rate limits in test so the integration suite (which registers
       // many users in one window) doesn't trip the anti-abuse limiter.

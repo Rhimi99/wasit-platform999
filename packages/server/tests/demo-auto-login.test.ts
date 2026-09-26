@@ -121,7 +121,16 @@ async function ensureDemoAccount(): Promise<string> {
   const c = makeClient();
   const reg = await c.req('/api/auth/register', {
     method: 'POST',
-    body: { email: DEMO_TEST_ACCOUNT_EMAIL, password: 'DemoAccountPass123!', firstName: 'Demo', role: 'CUSTOMER' },
+    body: {
+      email: DEMO_TEST_ACCOUNT_EMAIL,
+      // Must be the credential the demo publishes. A different literal here would
+      // mint the account with a hash that no documented password opens, which is
+      // exactly how the public demo account once stopped answering to its
+      // published password.
+      password: process.env.DEMO_TEST_ACCOUNT_PASSWORD ?? DEMO_PUBLISHED_PASSWORD,
+      firstName: 'Demo',
+      role: 'CUSTOMER',
+    },
   });
   expect(reg.status).toBe(201);
   const row = await db

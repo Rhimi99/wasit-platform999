@@ -1,8 +1,74 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + إصلاح جذري لحلقة proxy وعدم عزل الاختبارات**
+> **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + إغلاق ثغرة الـharness + تغطية استوديو الفيديو**
 > **الفرع**: `master`
-> **HEAD**: `52b97a1` (docs) على `5e87f35` (fix) على `1364e09` (home redesign)
+> **HEAD**: `d9edeb8` (docs) — يليه commit هذا التدقيق
+
+---
+
+## تحديث 2026-09-26 (2) — Functional Audit كامل + إصلاح سبب جذري ثالث
+
+**السياق**: بعد إصلاح حلقة الـproxy وعدم عزل الاختبارات، بقي 13 فشلًا في التشغيل الكامل
+(admin-refunds، payments، financial-audit، admin-observability، admin-privacy، library)
+مع أن **كل السيناريوهات نفسها تنجح منفردة**.
+
+### السبب الجذري الثالث — الـharness يعيد استخدام خادم غريب بصمت
+
+`playwright.config.ts` يضبط `reuseExistingServer: !process.env.CI`. على جهاز المطوّر
+كان هناك خادم يعمل مسبقًا على المنفذ 3000 (`pid 53001`، `NODE_ENV=staging`،
+`DATABASE_URL=wasit_demo`، و`PAYMENT_WEBHOOK_SECRET` مختلف، و`DEMO_SKIP_EMAIL_VERIFICATION=true`).
+Playwright كان **يتبنّاه بصمت** لأنه يجيب على `/api/health/ready` بـ200 — فيجري السويت
+كله على كود وقاعدة بيانات وسرّ webhook مختلفين. لذلك فشلت سيناريوهات المدفوعات/التدقيق
+المالي/الخصوصية، ولم يكن أي منها عيبًا في المنتج.
+
+**الإثبات**: تشغيل hermetic معزول (`PORT=3101`) على خادم يبدأه السويت بنفسه:
+**201/201 نجحت، 0 فشل** — بما فيها كل الـ11 سيناريو التي كانت تفشل.
+
+**الإصلاح (في الـharness لا في المنتج)**: `assertReusableApiServerMatchesSuite()` في
+`playwright.config.ts` يحدّد الـpid المستمع من `/proc/net/tcp` (بدون `lsof`/`ss` غير
+المتوفرين)، يقرأ بيئته من `/proc/<pid>/environ`، ويقارنها ببيئة السويت المعلنة مرة واحدة
+في `SERVER_ENV` (المصدر الوحيد الذي يستخدمه `webServer` أيضًا، فلا ينفصلان). أي اختلاف
+يوقف التشغيل فورًا برسالة تحدّد الـpid والمتغيّر. تجاوز صريح: `E2E_ALLOW_FOREIGN_SERVER=true`.
+
+### تغطية مفقودة — استوديو الفيديو التسويقي
+
+لم يكن هناك أي spec لـMarketing Video Studio (زر Generate، اللغة، الجمهور، النمط، المدة،
+المعاينة، التنزيل، الحذف). أُضيف `e2e/video-studio.spec.ts` (3 سيناريوهات) مع
+`data-testid` مستقرة على عناصر الصفحة، ويغطي:
+توليد فيديو حقيقي من الواجهة (FR/B2C/BOLD/45s) → `READY` + `video/mp4` بحجم > 0 →
+معاينة `<video>` وتنزيل يردّ بايتات فعلية → حذف يُزيل البطاقة من المكتبة فورًا.
+كذلك: رفض التوليد بدون منتج، ورفض API لعميل بلا `media:upload` (403).
+
+**ملاحظة سلوكية موثّقة**: حذف الأصل هو **soft delete** — يبقى الصف بحالة `DELETED`
+و`storageKey=null` لأجل سجل التدقيق، والواجهة تُخفي `DELETED`. الاختبار يتحقق من هذا
+العقد بدل افتراض حذف صف.
+
+### الوظائف المُتحقّقة من الواجهة فعليًا
+
+- **Customer**: دخول حقيقي، بحث (`/search?q=Test` → 16 منتجًا، 55 مورّدًا)، تصفّح،
+  تفاصيل منتج، طلبات، إشعارات، رسائل، مفضّلة، اشتراكات.
+- **Merchant/Supplier**: Dashboard، منتجات (إنشاء/تعديل/تفعيل)، مخزون، طلبات، إعلانات،
+  AI، Analytics، الثقة، التحقق، النزاعات، الرسائل، الاشتراك، **Video Studio كامل**.
+- **Admin**: KPIs حقيقية (582 مستخدم، 126 منتجًا، 124 طلبًا، GMV 22,894.410 DT)،
+  Users، Products، Orders، Transactions، **Ledger** (يُظهر العمولة 2% + رسوم دفع 2% = 4%)،
+  Audit (يُظهر `MEDIA.MARKETING_VIDEO_GENERATED` الحقيقي)، Verification، Trust، Risk،
+  Disputes، Policies، Ads، AI، Subscriptions، Observability، Privacy.
+- **الرئيسية `/`**: تصميم محافظ يحفظ الوظائف وهوية LE WASSIT، وأرقامه حقيقية من المنصة.
+
+### نتائج البوابات (بعد الإصلاح)
+
+| البوابة | الأمر | النتيجة |
+| --- | --- | --- |
+| Unit/Integration | `npm test` | 645/645 PASS (60 ملفًا) |
+| E2E | `npx playwright test` | **204/204 PASS، 0 فشل** (32 ملفًا) |
+| Typecheck | `npm run typecheck` | PASS (server + web) |
+| Build | `npm run build` + `build -w @wasit/web` | PASS |
+
+### لم يُغيَّر
+
+لا منطق أعمال، ولا Commission Policy (**4% = 2% seller + 2% buyer** كما في الـledger)،
+ولا Marketing Video Agent (commit `89e68d7` وما بعده `7da060f`) — لا regression.
+لا DB reset/drop/push، ولا حذف بيانات اختبار ضرورية.
 
 ---
 

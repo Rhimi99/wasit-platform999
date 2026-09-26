@@ -277,10 +277,16 @@ async function main(): Promise<void> {
   // existing row is kept as-is and only (re-)marked verified in the demo, so
   // re-running the seeder never duplicates or resets the account. Re-provisioned
   // automatically whenever the demo database is rebuilt from scratch.
+  //
+  // `enforcePassword` repairs a row whose stored hash no longer matches the
+  // published demo credential — the failure mode a stray registration (or an
+  // integration run that minted the account with its own literal) leaves behind,
+  // where the account exists but the documented password is refused.
   const demoTestUser = await ensureDevUser(
     DEMO_TEST_ACCOUNT_EMAIL,
     DEMO_TEST_ACCOUNT_PASSWORD ?? pw,
     'CUSTOMER',
+    { enforcePassword: true },
   );
   if (!DEMO_TEST_ACCOUNT_PASSWORD) {
     console.warn(

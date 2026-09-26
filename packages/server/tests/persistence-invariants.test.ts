@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
 import { orders, transactionLedger } from '../src/db/schema/commerce.js';
@@ -440,17 +440,27 @@ describe('PS-04 — reconciliation provenance links MATCHED to real rows', () =>
     const { externalRef, settlementRef } = await payAndSettle(s);
 
     const first = await importMatched(s, externalRef, settlementRef);
-    const importsBefore = (await db.select().from(reconciliationImports)).length;
-    const decisionsBefore = (await db.select().from(reconciliationDecisions)).length;
-    const auditsBefore = (await db.select().from(auditLogs)).length;
+    // Scope the audit count to this import: sibling spec files run in parallel
+    // against the same database and append their own audit rows, so a global
+    // count would drift for reasons unrelated to this invariant.
+    const auditsFor = () =>
+      db
+        .select()
+        .from(auditLogs)
+        .where(and(eq(auditLogs.entityType, 'RECONCILIATION_IMPORT'), eq(auditLogs.entityId, first.importId)));
+    const auditsBefore = (await auditsFor()).length;
+    expect(auditsBefore).toBe(1);
+    const decisionsFor = () =>
+      db.select().from(reconciliationDecisions).where(eq(reconciliationDecisions.importId, first.importId));
+    const decisionsBefore = (await decisionsFor()).length;
 
     const replay = await importMatched(s, externalRef, settlementRef);
     expect(replay.duplicate).toBe(true);
     expect(replay.importId).toBe(first.importId);
 
-    expect((await db.select().from(reconciliationImports)).length).toBe(importsBefore);
-    expect((await db.select().from(reconciliationDecisions)).length).toBe(decisionsBefore);
-    expect((await db.select().from(auditLogs)).length).toBe(auditsBefore);
+    // The replay must not create a second import, decision or audit row.
+    expect((await decisionsFor()).length).toBe(decisionsBefore);
+    expect((await auditsFor()).length).toBe(auditsBefore);
   });
 
   it('reconciliation writes neither SETTLED, RECEIVED nor a completed payout', async () => {
