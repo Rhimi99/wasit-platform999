@@ -2,7 +2,116 @@
 
 > **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + إغلاق ثغرة الـharness + تغطية استوديو الفيديو**
 > **الفرع**: `master`
-> **HEAD**: `d9edeb8` (docs) — يليه commit هذا التدقيق
+> **HEAD**: `921693a` (test/audit) على `6f7a029` (fix/audit) على `d9edeb8` (docs)
+
+---
+
+## إغلاق 2026-09-26 (4) — Functional Audit من الواجهة: Customer + Merchant + Purchase + Video
+
+**الهدف**: تجاوز "الصفحة تفتح" و"HTTP 200" إلى اختبار وظيفي حقيقي من الواجهة نفسها
+(Playwright يقود المتصفح، ويؤكّد النتيجة الظاهرة للمستخدم وكتابتها في القاعدة).
+
+### السويتات المنفّذة (صفر 5xx في كلها)
+
+| السويت | التغطية | النتيجة |
+| --- | --- | --- |
+| `customer-smoke.mjs` | دخول، بحث، تصفّح، تفاصيل منتج، الطلبات، الإشعارات، الرسائل | **7/7 PASS** |
+| `merchant-smoke.mjs` | Dashboard، إنشاء/تعديل/نشر منتج، المخزون، الطلبات، الإعلانات، AI، Analytics، الاشتراك | **15/15 PASS** |
+| `purchase-smoke.mjs` | شراء كامل من الواجهة + تحقق العمولة + ظهور الطلب في السجل | **6/6 PASS** |
+| `video-smoke.mjs` | اختيار منتج/لغة/جمهور/نمط/مدة، Generate، انتظار READY، Preview، Download، Delete | **10/10 PASS** |
+| `preview-smoke.mjs` (Admin) | KPIs، Users، Products، Orders، Ledger، Audit، Verification، Trust، Disputes، Ads، AI، Subscriptions | **19/19 PASS** |
+
+**الإجمالي: 57/57 فحصًا وظيفيًا من الواجهة، صفر 5xx.**
+
+### عيب سادس — فشل اختبار الشراء كان في الاختبار لا في المنتج
+
+كان `purchase: new order visible to the buyer` يفشل بـ`0 → 0 orders` رغم أن الطلب
+يُسجَّل فعلاً من الواجهة. **السبب الجذري**: `GET /api/orders` يعيد `{ data: Order[] }`
+— **مصفوفة مباشرة**، بينما كان السكربت يقرأ `data.items` (شكل قائمة مُصفَّحة). أي أن
+الاستخراج كان يقرأ `undefined` في كل مرة، فيرى صفرًا قبل الطلب وبعده. أُصلح الاستخراج
+ليقبل الشكلين، ثم: **5 → 6 طلبات** والصف يظهر على الشاشة (6 صفوف).
+
+هذا يوكّد أن الفشل كان في **adapter الاختبار**، لا في مسار الطلب. لم يُغيَّر أي كود منتج.
+
+### تحقق العمولة من الواجهة (لا من الكود)
+
+الطلب المُنشأ من الواجهة: `items=120`, `total commission=4.8`, `seller=2.4`, `buyer=2.4`
+⇒ **4% = 2% + 2%** مطابق لـ`WASIT Base Commission 4% (2% seller + 2% buyer)` في القاعدة الحيّة.
+
+### تحقق استوديو الفيديو (MP4 حقيقي)
+
+`35s` (أدنى النافذة 35–120)، Generate ⇒ `READY`، Preview يشير إلى
+`/api/media/assets/<id>/content`، والتنزيل أعاد **233,412 بايت** فعليًا، ثم Delete أزال
+الأصل من المكتبة. Marketing Video Agent (baseline commit `89e68d7`) لم يُمس.
+
+### عيب سابع — تلوّث بيئة الاختبار من الصدفة (لا من المنتج)
+
+`npm test` أظهر 15 فشلًا ثم 3. **السبب**: `set -a; . .env.demo` في نفس الجلسة صدّر
+`DEMO_AUTO_LOGIN`, `METRICS_ENABLED=false`, `RATE_LIMIT_*` إلى عملية vitest، وهي
+بالضبط المتغيّرات التي تؤكّد السويتات أنها **off** افتراضيًا. مع بيئة نظيفة:
+**645/645 PASS**. الدروس: شغّل `npm test` من shell غير ملوّث.
+
+### البوابات النهائية
+
+| البوابة | الأمر | النتيجة |
+| --- | --- | --- |
+| Unit/Integration | `npm test` (بيئة نظيفة) | **645/645 PASS** (60 ملفًا) |
+| E2E | `npm run test:e2e` | **204 نجحت، 0 فشل** (8 تخطٍّ شرطي، 6.9م) |
+| Typecheck | `npm run typecheck` | PASS (server + web) |
+| Build | `build:prod` (server) + `build` (web) | PASS |
+| Browser Functional Smoke | 5 سويتات أعلاه | **57/57 PASS، صفر 5xx** |
+
+### لم يُغيَّر
+
+لا كود منتج إطلاقًا — التغيير محصور في سكربتات الاختبار و`CHECKPOINT.md`. لا Commission
+Policy change، ولا Marketing Video Agent change، ولا DB reset/drop/push، ولا تعطيل أزرار.
+
+---
+
+## إغلاق 2026-09-26 (3) — استعادة البيئة + التحقق النهائي + commit مستقل
+
+**السياق**: أُعيد إنشاء حاوية التشغيل أثناء التدقيق، ففُقد PostgreSQL وثنائيات متصفح
+Playwright. أُعيد تركيب الاثنين، وأُعيد بناء قواعد البيانات الثلاث (`wasit_dev`,
+`wasit_test`, `wasit_demo`) من الـmigrations ومن الـseeders الخاصة بالمشروع —
+**بلا drop ولا reset ولا push** لأي بيانات قائمة.
+
+**نتيجة الإصلاحات الثلاثة (كلها أُصلحت في السبب لا في المظهر)**:
+
+1. **كلمة مرور الديمو العامة**: `ensureDemoAccount` يستخدم الكلمة المنشورة، والـseeder
+   يُصلح الـhash المنحرف، و`tests/setup.ts` يرفض إسقاط قاعدة غير قابلة للإسقاط.
+   تحقق فعلي: `rhimiimed18@gmail.com` + الكلمة المنشورة = **HTTP 200**.
+2. **الـharness يتبنّى خادمًا غريبًا**: `playwright.config.ts` يقارن بيئة المستمع
+   (`/proc/<pid>/environ`) ببيئة السويت ويتوقف برسالة تُحدّد الـpid والمتغيّر.
+3. **استوديو الفيديو بلا تغطية**: `e2e/video-studio.spec.ts` يقود النموذج الحقيقي
+   ويؤكد MP4 حقيقيًا (معاينة + تنزيل + حذف).
+
+**عيب رابع اكتشفه التدقيق نفسه وأُصلح في الـharness لا في المنتج**:
+`preview-smoke.mjs` كان يمنح صفحات الأدمن "نجاحًا" وهو ينظر إلى شاشة الدخول
+(0 صفوف، 88 حرفًا). الفحص الآن يرفض أي صفحة تُظهر حقل كلمة مرور ويشترط عنوانًا،
+مُتحقَّقًا من ذلك بـ**negative control** على `/login`.
+
+**عيب خامس — تذبذب اختبار (flake)**: `business-numbers.test.ts` كان يشترط صفر تصادم
+في 500,000 سحبة من فضاء 36^8. هذه مسألة عيد ميلاد: التوقع ~0.04 تصادم، أي فشل ~4%
+من التشغيلات مع مُولِّد **صحيح**. صار التفاوت صريحًا، والاختبار ما زال يلتقط الانحدار
+الحقيقي (فضاء 1296 يُنتج 1296 قيمة مميزة لا 500,000).
+
+### نتائج البوابات (على البيئة المُستعادة)
+
+| البوابة | الأمر | النتيجة |
+| --- | --- | --- |
+| Unit/Integration | `npm test` | **645/645 PASS** (60 ملفًا) |
+| E2E | `npm run test:e2e` | **204 نجحت، 0 فشل** (8 تخطٍّ شرطي، 32 ملفًا) |
+| Typecheck | `npm run typecheck` | PASS (server + web) |
+| Build | `build:prod -w @wasit/server` + `build -w @wasit/web` | PASS |
+| Browser Functional Smoke | `node preview-smoke.mjs` | **17/17 PASS، صفر 5xx** |
+
+> الـ8 تخطيات كلها شرطية على `DEMO_AUTO_LOGIN`، ولكل فرع متخطٍّ نظير يعمل.
+> التقرير التفصيلي: [`docs/commercial-release/FINAL-AUDIT.md`](docs/commercial-release/FINAL-AUDIT.md).
+
+### لم يُغيَّر
+
+لا منطق أعمال، ولا Commission Policy (**4% = 2% seller + 2% buyer**)، ولا
+Marketing Video Agent (commit `89e68d7`) — لا regression.
 
 ---
 

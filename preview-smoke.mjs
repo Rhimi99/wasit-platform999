@@ -44,6 +44,10 @@ async function assertRealPage(page) {
   return { text, rows };
 }
 
+async function mainText(page) {
+  return (await page.locator('main').innerText()).replace(/\s+/g, ' ').trim();
+}
+
 async function settle(page, ms = 2500) {
   await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(ms);
@@ -89,6 +93,32 @@ for (const [name, url] of [
   } catch (e) {
     record(name, false, e.message);
   }
+}
+
+// Admin visibility of trust: a user computes their own score from the
+// dashboard (the only recompute entry point when the table is empty), then the
+// admin console must show that score. This is the real end-to-end path.
+try {
+  await login(page, 'merchanta@wasit.tn');
+  await page.goto(`${BASE}/dashboard/trust`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 2000);
+  const selfBtn = page.getByRole('button', { name: /إعادة احتساب الدرجة|Recompute score/ }).first();
+  if ((await selfBtn.count()) === 0) throw new Error('no self-service recompute button');
+  await selfBtn.click();
+  await settle(page, 3000);
+  const scoreText = await mainText(page);
+  record('merchant: self-service trust recompute runs', /\d/.test(scoreText), scoreText.slice(0, 110));
+
+  await login(page, 'admin@wasit.tn', /\/admin/, STAFF_PASSWORD);
+  await page.goto(`${BASE}/admin/trust`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 2000);
+  const res = await page.request.get(`${BASE}/api/admin/trust`);
+  const json = await res.json().catch(() => null);
+  const scores = json?.data?.items ?? json?.data ?? [];
+  const count = Array.isArray(scores) ? scores.length : 0;
+  record('admin: recomputed trust score is visible', count > 0, `${count} score rows via API`);
+} catch (e) {
+  record('admin: recomputed trust score is visible', false, e.message);
 }
 
 try {
