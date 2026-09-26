@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import path from 'node:path';
 
 const TEST_DB_URL =
   process.env.TEST_DATABASE_URL ??
@@ -12,6 +13,13 @@ export default defineConfig({
     hookTimeout: 30000,
     globalSetup: './tests/setup.ts',
     env: {
+      // `src/lib/env.ts` loads dotenv from the process cwd, so an untracked
+      // `packages/server/.env` (used to run the local demo) would otherwise leak
+      // its development flags — DEMO_SKIP_EMAIL_VERIFICATION, DEMO_AUTO_LOGIN,
+      // RATE_LIMIT_* — into the suite and break the specs that assert those
+      // features are OFF by default. Point dotenv at a path that does not exist
+      // so the suite's own env below is the only source, keeping it hermetic.
+      DOTENV_CONFIG_PATH: path.resolve(__dirname, 'tests/.env.test-does-not-exist'),
       DATABASE_URL: TEST_DB_URL,
       NODE_ENV: 'test',
       JWT_SECRET: 'test-secret-for-integration-tests-0123456789-abcdefghij',
