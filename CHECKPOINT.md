@@ -3,6 +3,7 @@
 > **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + تغليف الإصدار التجاري**
 > **الفرع**: `master`
 > **HEAD**: `f3a730c` (test/audit: سويتات الفحص الوظيفي) على `921693a` على `6f7a029` على `d9edeb8`
+> **commit التدقيق (الكود)**: `f3a730c` · **commit التغليف (وثائق فقط)**: أعلى `f3a730c`، بلا تغيير كود منتج
 
 ---
 
@@ -21,9 +22,59 @@
 | Commission | **4% = 2% seller + 2% buyer** |
 | Marketing Video MP4 download | متحقَّق (233,412 بايت حقيقية) |
 
-**المخرجات**: `WASIT-BUSINESS-GLOBAL-COMMERCIAL-RELEASE-2026-09-26.zip` (من `git archive`
-على `f3a730c` — بلا `node_modules`، بلا `.env` حقيقي، بلا أسرار، بلا build artifacts)،
-مع `docs/commercial-release/FINAL-AUDIT.md` و`COMMERCIAL-RELEASE-MANIFEST.md`.
+**المخرجات**: `WASIT-BUSINESS-GLOBAL-COMMERCIAL-RELEASE-2026-09-26.zip` (**ZIP** مبنيّ من
+ملفات git المتعقّبة على commit التغليف — 483 مدخلًا، ~2.9M — بلا `node_modules`، بلا `.env`
+حقيقي، بلا أسرار، بلا build artifacts)، مع `docs/commercial-release/FINAL-AUDIT.md`
+و`COMMERCIAL-RELEASE-MANIFEST.md`، وبجانبه ملف البصمة
+`WASIT-BUSINESS-GLOBAL-COMMERCIAL-RELEASE-2026-09-26.zip.sha256`.
+
+**ملاحظة تصحيح**: الإصدار السابق من هذه الفقرة وصف المخرج بأنه من `git archive` (tar.gz)
+وذكر بصمة قديمة. المخرج الفعلي **ZIP** (لأن الاسم المطلوب ينتهي بـ`.zip`)، وقد أُعيد بناؤه
+من ملفات git المتعقّبة. البصمة الصحيحة في الملف الجانبي `.sha256` وليست داخل هذا المستند:
+البصمة المكتوبة داخل الأرشيف لا يمكن أن تصف الأرشيف الذي يحتويها.
+
+### التحقق من إمكانية إعادة البناء والتشغيل (استخراج نظيف، قاعدة جديدة)
+
+فُكّ الأرشيف إلى مجلد جديد وشُغّل من الصفر مقابل PostgreSQL أُنشئ للاختبار
+(لا بيانات ولا أسرار من بيئة التطوير):
+
+| الخطوة | الأمر | النتيجة |
+| --- | --- | --- |
+| تثبيت من ملف القفل | `npm ci` | PASS |
+| Typecheck | `npm run typecheck` | PASS |
+| بناء الخادم | `npm run build:prod` | PASS |
+| بناء الويب | `npm run build -w @wasit/web` | PASS |
+| الترحيلات | `npm run db:migrate` | PASS |
+| البذر المرجعي | `npm run db:seed` | PASS |
+| بذر الديمو | `seed-demo.ts` | PASS |
+| حزمة اختبارات الخادم | `npm test` | **645/645، 60 ملفًا** |
+| تشغيل البناء | `node dist-bundle/index.cjs` | PASS — `wasit api listening` |
+| الفحص الصحي | `GET /api/health/ready` | **200** |
+| دخول حقيقي | `POST /api/auth/login` | **200، `success: true`** |
+| كتالوج المنتجات | `GET /api/products` | **200 — 13 منتجًا** |
+
+لا خطوة احتاجت سرًّا غير موثّق في `packages/server/.env.example`.
+
+**إعادة اختبار الواجهة بعد التغليف** (Chromium حقيقي ضد البناء المُقدَّم): **57/57 PASS**
+— customer 7/7 · merchant 15/15 · purchase 6/6 · video 10/10 · admin 19/19، صفر 5xx.
+عمولة الشراء متحقَّقة حيًّا: `total=4.8 seller=2.4 buyer=2.4` (4% = 2%+2%).
+
+### افتراضات مرتبطة ببيئة التطوير (للمراجعة قبل الإنتاج، ليست أسرارًا)
+
+| الملف | الافتراضي | الأثر |
+| --- | --- | --- |
+| `packages/web/vite.config.ts` | `ALLOWED_HOSTS` يضمّ أربعة مضيفين `*.prod-runtime.all-hands.dev` | خادم Vite للتطوير/المعاينة فقط؛ الإنتاج عبر `deploy/nginx.conf` غير متأثر |
+| `preview-smoke.mjs` | `BASE_URL` يشير افتراضيًا إلى رابط بيئة التطوير | سكربت smoke فقط؛ يُمرَّر `BASE_URL` لأي مضيف |
+
+لم يُعدَّل أي منهما في هذا الإصدار: التعليمات كانت تغليف commit التدقيق، وأي تعديل على كود
+المنتج بعد التدقيق يُبطله.
+
+**ملاحظة تشغيلية (استُعيدت أثناء هذه الجلسة)**: رابط الـPreview كان 502 لأن قاعدة
+`wasit_demo` وخدمتي الـAPI/الويب لم تكن تعمل في بيئة التشغيل. أُعيد إنشاؤها معزولة تمامًا
+(`wasit_dev` بلا مساس): `CREATE ROLE/DATABASE wasit_demo` ← `db:migrate` ← `db:seed` ←
+`seed-demo.ts` (لا reset/drop/push)، ثم API بـ`.env.demo` على `:3000` والويب بناء إنتاج
+(`VITE_DEMO_MODE=true`) عبر `vite preview` على `:12000`. النتيجة: `/`, `/marketplace`,
+`/demo/owner`, `/demo/customer` = 200 و`/api/health/ready` = `db: connected`.
 
 **ملاحظة واحدة معروفة غير مُعطِّلة**: Admin Trust empty-state — الرسالة تطلب recompute
 لكن الزر لا يُرسم عندما يكون الجدول فارغًا. لم تُصلح في هذه الجلسة (خارج نطاق التدقيق
