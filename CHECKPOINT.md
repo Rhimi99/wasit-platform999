@@ -7,6 +7,50 @@
 
 ---
 
+## 2026-09-27 (جلسة ثانية) — تدقيق وظيفي موسّع: Video Studio + Verification + Admin + Merchant
+
+**النطاق**: سكربتات تدقيق UI جديدة + تشغيل حقيقي على الرابط العام. **لا تغيير في كود المنتج**، لا migration/reset/drop/push، لا مساس بسياسة العمولة (4% = 2% بائع + 2% مشتري)، ولا بـMarketing Video Agent.
+
+### نتائج السويتات على الرابط العام (`https://work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev/`)
+
+| السويت | النتيجة | ملاحظة |
+| --- | --- | --- |
+| `ui-flows-check.mjs` | **6/6** | تسجيل، إعلانات، AI، تحقق |
+| `ui-messages-check.mjs` | **7/7** | محادثات + تعليم الكل كمقروء |
+| `ui-inventory-search-check.mjs` | **7/7** | بحث مجمّع + مخزون |
+| `ui-subscription-check.mjs` | **7/7** | استعادة الخطة الأصلية `SMALL_MERCHANT` |
+| `ui-merchant-check.mjs` | **11/11** | إنشاء/تعديل/نشر منتج + إشعارات |
+| `ui-purchase-check.mjs` | **8/8** | شراء + تفصيل العمولة 2%+2% |
+| `ui-video-studio-full-check.mjs` (جديد) | **11/11** | اختيار منتج/لغة/جمهور/نمط/مدة → Generate → READY → Preview → Download (128,461 بايت) → Delete |
+| `ui-verification-check.mjs` (جديد) | **10/10** | طلب تحقق من العميل → ظهوره في طابور الأدمن → قرار REJECT → بقاء المستوى وMعاد تفعيل الزر |
+| `ui-merchant-surfaces-check.mjs` (جديد) | **10/10** | dashboard/orders/analytics/ads/AI/subscriptions/products/inventory |
+| `ui-admin-dispute-check.mjs` (جديد) | **22/23 → 23/23** | 12 صفحة أدمن + Trust recompute + دورة نزاع كاملة (إنشاء عميل → طابور أدمن → تحديث حالة → قرار) |
+
+### أعطال حقيقية أُصلحت (كلها في سكربتات التدقيق، لا في كود المنتج)
+1. `ui-video-studio-full-check.mjs` استخدم نمط `CINEMATIC` غير موجود وخيار مدة `20` خارج النطاق — صُحّح إلى `BOLD` و`35`.
+2. المسار الصحيح للوسائط `/api/media/assets` (وليس `/api/media`) — جلب القائمة كان يعيد 404.
+3. حذف الفيديو **soft delete** (`status=DELETED`) والواجهة تُفلتر المحذوف — التوقع صُحّح ليُثبت الاختفاء من الواجهة + الحالة في الـAPI.
+4. طابور التحقق في الأدمن يُرشَّح بالحالة الحرفية؛ الطلب يُخزَّن `SUBMITTED` — الاستعلام صُحّح ليقرأ الطابور المفتوح (`PENDING/SUBMITTED/IN_REVIEW`).
+5. مسار النزاعات `/api/disputes` (وليس `/api/disputes/me`) — إصلاح جلب قائمة العميل.
+6. حالة النزاع بعد القرار هي `DECIDED` — أُضيفت قائمة الحالات المقبولة.
+7. نزاع واحد مفتوح لكل طلب (`409 conflict`) — السكربت يختار طلبًا بلا نزاع مفتوح.
+8. زر "إعادة حساب الثقة" للمستخدم موجود في `/dashboard/trust` (وليس في صفحة الأدمن) — نُقل الفحص إلى الصفحة الصحيحة.
+
+### أعطال بيئية (ليست عطلًا في المنتج)
+- تشغيل `set -a && . ./.env.demo` في نفس shell الاختبارات أدخل `NODE_ENV=staging` و`DEMO_AUTO_LOGIN=true` و`RATE_LIMIT_*=0` و`METRICS_ENABLED=false` إلى سويت الخادم ⇒ 15 فشلًا وهميًا. بعد `unset` لكل مفاتيح `.env.demo`: **645/645 ناجح**.
+
+### البوابات
+| البوابة | النتيجة |
+| --- | --- |
+| Server tests | **645/645** (60 ملفًا) |
+| Typecheck (server + web) | **0 أخطاء** |
+| Build | **PASS** |
+| Public link | `/` = 200 · `/api/health/live` = 200 · `/api/health/ready` = 200 |
+| Commission 4% = 2%+2% | غير متأثر (مُتحقق منه في `ui-purchase-check`) |
+| Marketing Video Agent | غير متأثر؛ التوليد الفعلي يعمل (`provider=structural`) |
+
+---
+
 ## 2026-09-27 — إعادة تصميم الصفحة الرئيسية (LE WASSIT) + تحقق وظيفي حقيقي
 
 **النطاق**: واجهة أمامية فقط. لا تغيير في الخادم ولا قاعدة البيانات ولا في سياسة العمولة (4% = 2% بائع + 2% مشتري)، ولا مساس بـMarketing Video Agent، وبلا migration/reset/drop/push.
