@@ -7,6 +7,40 @@
 
 ---
 
+## 2026-09-27 — إعادة تصميم الصفحة الرئيسية (LE WASSIT) + تحقق وظيفي حقيقي
+
+**النطاق**: واجهة أمامية فقط. لا تغيير في الخادم ولا قاعدة البيانات ولا في سياسة العمولة (4% = 2% بائع + 2% مشتري)، ولا مساس بـMarketing Video Agent، وبلا migration/reset/drop/push.
+
+**ما تغيّر** (كل الملفات تحت `packages/web`):
+- `tailwind.config.js`: لوحة `ink` (أزرق مؤسسي عميق) — إضافة فقط، و`navy` دون تغيير.
+- `src/index.css`: أصناف CSS خاصة بصفحة الهبوط.
+- `src/components/brand/GlobalCommerceHero.tsx` (جديد): مشهد كرة تجارة عالمية بنمط نقاط وأقواس متحركة.
+- `src/components/layouts/PublicLayout.tsx`: ترويسة بتأثير عند التمرير + تنقّل مطلوب + تذييل أنيق.
+- `src/components/LanguageSwitcher.tsx`: دعم نمط داكن.
+- `src/pages/HomePage.tsx`: صفحة الهبوط الجديدة (أقسام about/solutions/markets/resources/ai/how-it-works/trust/contact).
+- `src/lib/i18n.ts`: مفاتيح `lp.*` للغات ar/en/fr/zh + إكمال فجوات `home.stats.*` في الفرنسية والصينية ومفاتيح `nav.*` المفقودة.
+
+**بوابات التحقق**:
+
+| البوابة | النتيجة |
+| --- | --- |
+| Typecheck (server + web) | PASS |
+| Build (server `tsc` + web `vite build`) | PASS |
+| Server unit tests | **645/645** (60 ملفًا) |
+| E2E | **210 نجحت / 0 فشل / 2 تخطٍّ شرطي** (212 إجمالًا) |
+| UI/RTL/responsive audit | **52/52** (صفر أخطاء console، صفر 5xx) |
+| Browser functional smoke على الرابط العام | **35/35** (صفر 5xx) |
+| Public routes | `/`, `/login`, `/marketplace`, `/dashboard`, `/admin`, `/register` = 200 · `/api/health/ready` = 200 |
+
+**تصحيحان لافتراضات الاختبار (لا علاقة بالمنتج)**:
+1. مسارات لوحة البائع/المشتري هي `/dashboard/*` (منها `products`, `inventory`, `ads`, `ai`, `analytics`, `subscriptions`, `video-studio`) — وليست `/products` أو `/ads` على الجذر. سبب «فشل» ظهور الصفحات كان مسارًا خاطئًا في السكربت.
+2. `financial-audit.spec.ts` فشل أول مرة لأن `PAYMENT_WEBHOOK_SECRET` في بيئة الـshell كان مختلفًا عن قيمة `.env.e2e-local`، فتوقيع Webhook لم يطابق. بتوحيد البيئة نجح الاختبار — والعطل لم يكن في المنتج (أُثبت بإعادة التشغيل على الشجرة الأساسية أيضًا).
+
+**ملاحظة عزل البيانات**: أُنشئت `wasit_dev`/`wasit_test` ودور `wasit` من الصفر بعد إعادة تهيئة البيئة (لم تكن موجودة)، مع `CREATEDB` لعزل اختبارات الخادم. `wasit_demo` منفصلة تمامًا ولا مساس بأي بيانات قائمة.
+
+
+---
+
 ## إغلاق 2026-09-26 (5) — FINAL COMMERCIAL RELEASE PACKAGING
 
 **الحالة النهائية المعتمدة** (لا إعادة تدقيق): commit `f3a730c`، شجرة git نظيفة.

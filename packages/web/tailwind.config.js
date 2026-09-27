@@ -53,11 +53,32 @@ export default {
           700: '#0f766e',
         },
         canvas: '#f8fafc',
+        // Deep institutional blue — reserved for the public landing surfaces
+        // (hero, dark bands, footer). Additive: dashboards keep using `navy`.
+        ink: {
+          50: '#eef3ff',
+          100: '#dbe5ff',
+          200: '#bccdff',
+          300: '#8fa8f7',
+          400: '#5f7ceb',
+          500: '#3d59d6',
+          600: '#2c41b4',
+          700: '#233390',
+          800: '#0f1f52',
+          900: '#081335',
+          950: '#050c24',
+        },
+      },
+      fontFamily: {
+        sans: ['Inter var', 'Inter', 'Segoe UI', 'Tahoma', 'Noto Sans Arabic', 'Noto Sans SC', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
         soft: '0 4px 24px -8px rgba(15, 23, 42, 0.14)',
         card: '0 1px 3px rgba(15, 23, 42, 0.08), 0 8px 24px -12px rgba(15, 23, 42, 0.14)',
         lift: '0 12px 32px -12px rgba(15, 23, 42, 0.22)',
+        // Landing-specific elevation: wide, low-opacity blue-tinted shadows.
+        panel: '0 24px 60px -28px rgba(8, 19, 53, 0.35)',
+        glow: '0 30px 90px -40px rgba(37, 99, 235, 0.55)',
       },
     },
   },

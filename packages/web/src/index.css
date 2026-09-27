@@ -60,6 +60,40 @@ body {
   .nav-link {
     @apply relative text-sm font-semibold text-slate-600 transition-colors after:absolute after:-bottom-1 after:start-0 after:h-0.5 after:w-0 after:rounded-full after:bg-brand-600 after:transition-all hover:text-brand-700 hover:after:w-full;
   }
+
+  /* ─── Landing-page primitives ─────────────────────────────────────────────
+     Reserved for the public marketing surface so the dashboard look stays
+     untouched. All logical properties (start/end, ps/pe) so RTL mirrors. */
+  .lp-eyebrow {
+    @apply inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-ink-400;
+  }
+  .lp-title {
+    @apply text-3xl font-black leading-[1.15] tracking-tight text-ink-900 sm:text-4xl;
+  }
+  .lp-sub {
+    @apply mt-4 text-base leading-relaxed text-slate-500;
+  }
+  .lp-card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card transition-all duration-200;
+  }
+  .lp-card-hover {
+    @apply hover:-translate-y-1 hover:border-ink-200 hover:shadow-lift;
+  }
+  .lp-btn-primary {
+    @apply btn rounded-xl bg-ink-800 text-white shadow-soft hover:bg-ink-700;
+  }
+  .lp-btn-light {
+    @apply btn rounded-xl border border-white/25 bg-white/10 text-white backdrop-blur-sm hover:border-white/40 hover:bg-white/20;
+  }
+  .lp-btn-outline {
+    @apply btn rounded-xl border border-slate-300 bg-white text-slate-700 hover:border-ink-300 hover:text-ink-800;
+  }
+  .lp-link-arrow {
+    @apply inline-flex items-center gap-1.5 text-sm font-semibold text-ink-700 transition-colors hover:text-ink-900;
+  }
+  .lp-dark-band {
+    @apply relative overflow-hidden bg-ink-900 text-white;
+  }
 }
 
 @layer utilities {
