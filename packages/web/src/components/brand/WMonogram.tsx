@@ -1,14 +1,15 @@
 // حرف W — العنصر الأساسي في الهوية البصرية لـ LE WASSIT
-// شعار مونوغرامي نظيف بألوان الأزرق الرمادي (Blue-Gray) — مخصص لإعادة الاستخدام.
+// شعار مونوغرامي بأزرق تجاري (Royal → Navy) — مخصص لإعادة الاستخدام.
 
 interface WMonogramProps {
   size?: number;
   className?: string;
-  /** يلون الحرف بتدرج واضح (hero) أو بتدرج هادئ (header/footer) */
+  /** تدرج أزرق واضح للشعار الكبير في الـ Hero، وتدرج أزرق هادئ للـ header/footer */
   variant?: 'default' | 'hero';
 }
 
 export function WMonogram({ size = 48, className = '', variant = 'default' }: WMonogramProps) {
+  const gradId = variant === 'hero' ? 'wg-hero' : 'wg-default';
   return (
     <svg
       width={size}
@@ -21,14 +22,14 @@ export function WMonogram({ size = 48, className = '', variant = 'default' }: WM
       className={className}
     >
       <defs>
-        <linearGradient id={variant === 'hero' ? 'wg-hero' : 'wg-default'} x1="0" y1="0" x2="64" y2="64">
-          <stop offset="0%" stopColor={variant === 'hero' ? '#e0e7ff' : '#64748b'} />
-          <stop offset="100%" stopColor={variant === 'hero' ? '#818cf8' : '#334155'} />
+        <linearGradient id={gradId} x1="6" y1="10" x2="22" y2="56" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#2563eb" />
+          <stop offset="100%" stopColor="#1e3a8a" />
         </linearGradient>
       </defs>
       <path
         d="M8 12h5.6c1.1 0 2.1.6 2.6 1.6L32 40l15.8-26.4c.5-1 1.5-1.6 2.6-1.6H56l2 7.4L40.4 50.6a4.9 4.9 0 0 1-8.2 0L6 19.4 8 12z"
-        fill={`url(#${variant === 'hero' ? 'wg-hero' : 'wg-default'})`}
+        fill={`url(#${gradId})`}
       />
     </svg>
   );

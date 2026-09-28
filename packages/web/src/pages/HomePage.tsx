@@ -6,7 +6,8 @@ import { SearchBar } from '@/components/SearchBar';
 import { ProductCard } from '@/components/ProductCard';
 import { Card, SectionHeader, Spinner } from '@/components/ui';
 import { WMonogram } from '@/components/brand/WMonogram';
-import { GlobalCommerceHero } from '@/components/brand/GlobalCommerceHero';
+import { Brand } from '@/components/brand/Brand';
+import { CorporateHero } from '@/components/brand/CorporateHero';
 import { PublicLayout } from '@/components/layouts/PublicLayout';
 import { Icon, type IconName } from '@/components/Icon';
 import { SeoHead } from '@/components/SeoHead';
@@ -31,7 +32,7 @@ const INDICATORS: Array<{ icon: IconName; key: string }> = [
 ];
 
 const VALUE_CARDS: Array<{ icon: IconName; key: string; tone: string }> = [
-  { icon: 'globe', key: 'global', tone: 'text-ink-700 bg-ink-50' },
+  { icon: 'globe', key: 'global', tone: 'text-brand-700 text-brand-50' },
   { icon: 'sparkles', key: 'ai', tone: 'text-teal-600 bg-teal-50' },
   { icon: 'buildings', key: 'b2b', tone: 'text-slate-700 bg-slate-100' },
   { icon: 'shield', key: 'trust', tone: 'text-emerald-600 bg-emerald-50' },
@@ -79,7 +80,7 @@ function Container({ children, id, className = '' }: { children: React.ReactNode
 function SectionTitle({ title, sub, id }: { title: string; sub?: string; id?: string }) {
   return (
     <div id={id} className="mx-auto mb-12 max-w-2xl scroll-mt-24 text-center">
-      <h2 className="text-2xl font-extrabold tracking-tight text-ink-900 sm:text-3xl">{title}</h2>
+      <h2 className="lp-h2">{title}</h2>
       {sub ? <p className="mt-4 text-sm leading-relaxed text-slate-500 sm:text-base">{sub}</p> : null}
     </div>
   );
@@ -139,117 +140,93 @@ export function HomePage() {
       />
 
       {/* ═══════════ HERO ═══════════ */}
-      <section className="relative overflow-hidden bg-ink-900">
+      <section className="relative overflow-hidden bg-gradient-to-r from-white via-white to-brand-50 rtl:bg-gradient-to-l">
         <div
           className="pointer-events-none absolute inset-0"
           style={{
             backgroundImage:
-              'radial-gradient(58% 58% at 78% 8%, rgba(61,89,214,0.42), transparent 70%), radial-gradient(48% 48% at 4% 92%, rgba(56,189,248,0.16), transparent 70%), linear-gradient(180deg, #081335 0%, #0b1a45 55%, #081335 100%)',
-          }}
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.16]"
-          style={{
-            backgroundImage:
-              'linear-gradient(to right, rgba(143,168,247,0.35) 1px, transparent 1px), linear-gradient(to bottom, rgba(143,168,247,0.35) 1px, transparent 1px)',
-            backgroundSize: '64px 64px',
-            maskImage: 'radial-gradient(70% 70% at 50% 40%, black, transparent 100%)',
-            WebkitMaskImage: 'radial-gradient(70% 70% at 50% 40%, black, transparent 100%)',
+              'radial-gradient(60% 55% at 8% 20%, rgba(255,255,255,0.95), transparent 62%), radial-gradient(50% 50% at 92% 88%, rgba(37,99,235,0.07), transparent 70%)',
           }}
           aria-hidden
         />
 
-        <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 py-16 sm:px-6 lg:grid-cols-[1.05fr_1fr] lg:gap-14 lg:py-24">
+        <div className="relative mx-auto grid max-w-[1400px] items-center gap-10 px-4 pb-14 pt-12 sm:px-6 lg:min-h-[740px] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-12 lg:px-8 lg:pb-16 lg:pt-14">
           <div className="text-center lg:text-start">
-            <span className="lp-eyebrow rounded-full border border-white/15 bg-white/5 px-3.5 py-1.5 text-ink-200 backdrop-blur-sm">
-              <span className="h-1.5 w-1.5 rounded-full bg-teal-400" aria-hidden />
-              {t('lp.hero.badge')}
-            </span>
+            {/* The lockup carries the page's single H1 (W / LE WASSIT / rule / BUSINESS GLOBAL). */}
+            <Brand presentation as="h1" className="justify-center lg:justify-start" />
 
-            <h1 className="mt-6 text-4xl font-black leading-[1.05] tracking-tight text-white sm:text-5xl lg:text-6xl">
-              LE WASSIT
-            </h1>
-            <p className="mt-3 text-xl font-semibold leading-snug text-ink-200 sm:text-2xl">
+            <p className="mt-9 font-serif text-2xl leading-tight text-ink-1000/85 sm:text-4xl lg:text-[40px]">
               {t('lp.hero.tagline')}
             </p>
-            <p className="mx-auto mt-6 max-w-xl text-sm leading-relaxed text-slate-300 sm:text-base lg:mx-0">
+            <p className="mx-auto mt-7 max-w-xl whitespace-pre-line text-base leading-relaxed text-slate-600 sm:text-lg lg:mx-0 lg:text-xl">
               {t('lp.hero.subtitle')}
             </p>
 
-            <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
+            <div className="mt-10 flex flex-col items-center gap-3.5 sm:flex-row sm:justify-center lg:justify-start">
               <Link
                 to="/register"
-                className="btn btn-lg w-full rounded-xl bg-white text-ink-900 shadow-glow hover:bg-ink-50 sm:w-auto"
+                className="inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] bg-brand-600 px-7 text-base font-semibold text-white shadow-lift transition-colors hover:bg-brand-700 sm:w-[270px]"
               >
                 {t('lp.hero.ctaPrimary')}
                 <Icon name="arrow" className="h-4 w-4 rtl:rotate-180" />
               </Link>
-              <Link to="/marketplace" className="lp-btn-light btn-lg w-full sm:w-auto">
+              <Link
+                to="/marketplace"
+                className="inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] border border-brand-300 bg-white px-7 text-base font-semibold text-brand-700 transition-colors hover:border-brand-500 hover:bg-brand-50 sm:w-[270px]"
+              >
                 {t('lp.hero.ctaSecondary')}
+                <svg viewBox="0 0 12 12" className="h-3 w-3 rtl:rotate-180" aria-hidden>
+                  <path d="M3.5 1.8 9 6l-5.5 4.2z" fill="currentColor" />
+                </svg>
               </Link>
             </div>
 
-            {/* Descriptive capability indicators — no figures claimed. */}
-            <div className="mt-9 flex flex-wrap items-center justify-center gap-2.5 lg:justify-start">
+            {/* Descriptive capability indicators — no invented figures. */}
+            <div className="mt-9 flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 lg:justify-start">
               {INDICATORS.map((i) => (
-                <span
-                  key={i.key}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.06] px-3 py-1.5 text-[11px] font-semibold text-slate-200 backdrop-blur-sm"
-                >
-                  <Icon name={i.icon} className="h-3.5 w-3.5 text-teal-300" />
+                <span key={i.key} className="inline-flex items-center gap-2 text-[13px] font-semibold text-slate-600">
+                  <Icon name={i.icon} className="h-4 w-4 text-brand-600" />
                   {t(`lp.ind.${i.key}`)}
                 </span>
               ))}
             </div>
           </div>
 
-          <GlobalCommerceHero className="animate-fade-up" />
+          <CorporateHero className="animate-fade-up lg:-me-4 xl:-me-10" />
         </div>
       </section>
 
-      {/* ═══════════ SEARCH (real function) ═══════════ */}
-      <Container className="-mt-8 sm:-mt-9">
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-panel sm:p-5">
-          <p className="mb-3 text-xs font-bold uppercase tracking-[0.16em] text-ink-500">{t('lp.hero.searchLabel')}</p>
-          <SearchBar />
+      {/* ═══════════ STATISTICS BAR — directly under the hero ═══════════ */}
+      <Container className="-mt-2 pb-10 pt-12 lg:-mt-16 lg:pt-0">
+        <div className="rounded-[26px] bg-gradient-to-r from-brand-900 via-brand-700 to-brand-600 px-6 py-9 text-white shadow-lift sm:px-10 sm:py-11">
+          {stats.length > 0 ? (
+            <>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-9 sm:grid-cols-4 lg:flex lg:items-start lg:justify-between lg:gap-6">
+                {stats.map((s) => (
+                  <div key={s.key} className="flex flex-col items-center text-center lg:min-w-[150px]">
+                    <span className="inline-flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white">
+                      <Icon name={s.icon} className="h-6 w-6" />
+                    </span>
+                    <p className="mt-4 font-serif text-4xl font-bold leading-none text-white sm:text-[42px]">{s.value}</p>
+                    <p className="mt-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-100">
+                      {t(s.key)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-8 text-center text-[11px] text-brand-100/75">{t('home.stats.note')}</p>
+            </>
+          ) : (
+            <p className="text-center text-sm font-semibold text-brand-100">{t('lp.stats.pending')}</p>
+          )}
         </div>
       </Container>
 
-      {/* ═══════════ STATISTICS BAR (live data + descriptors) ═══════════ */}
-      <Container className="py-14">
-        <div className="grid gap-6 rounded-3xl border border-slate-200/80 bg-white p-7 shadow-card sm:p-8 lg:grid-cols-[1.4fr_1fr] lg:items-center">
-          <div>
-            {stats.length > 0 ? (
-              <>
-                <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
-                  {stats.map((s) => (
-                    <div key={s.key}>
-                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-ink-50 text-ink-700">
-                        <Icon name={s.icon} className="h-5 w-5" />
-                      </span>
-                      <p className="mt-3 text-2xl font-black tracking-tight text-ink-900 sm:text-3xl">{s.value}</p>
-                      <p className="mt-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">{t(s.key)}</p>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-5 text-[11px] text-slate-400">{t('home.stats.note')}</p>
-              </>
-            ) : (
-              <p className="text-sm font-semibold text-slate-500">{t('lp.stats.pending')}</p>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2.5 lg:justify-end">
-            {INDICATORS.map((i) => (
-              <span
-                key={i.key}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs font-semibold text-slate-600"
-              >
-                <Icon name={i.icon} className="h-4 w-4 text-ink-600" />
-                {t(`lp.ind.${i.key}`)}
-              </span>
-            ))}
-          </div>
+      {/* ═══════════ SEARCH (real function) ═══════════ */}
+      <Container className="pb-14">
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-panel sm:p-5">
+          <p className="mb-3 text-xs font-bold uppercase tracking-[0.16em] text-brand-600">{t('lp.hero.searchLabel')}</p>
+          <SearchBar />
         </div>
       </Container>
 
@@ -262,7 +239,7 @@ export function HomePage() {
               <span className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ${v.tone}`}>
                 <Icon name={v.icon} className="h-6 w-6" />
               </span>
-              <h3 className="mt-4 text-base font-bold text-ink-900">{t(`home.value.${v.key}`)}</h3>
+              <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.value.${v.key}`)}</h3>
               <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.value.${v.key}.desc`)}</p>
             </div>
           ))}
@@ -275,10 +252,10 @@ export function HomePage() {
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           {AUDIENCES.map((a) => (
             <Link key={a.key} to={a.to} className="lp-card lp-card-hover group flex flex-col p-7">
-              <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-ink-800 text-white shadow-soft">
+              <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
                 <Icon name={a.icon} className="h-5 w-5" />
               </span>
-              <h3 className="mt-5 text-lg font-bold text-ink-900">{t(`lp.audience.${a.key}`)}</h3>
+              <h3 className="mt-5 text-lg font-bold text-slate-900">{t(`lp.audience.${a.key}`)}</h3>
               <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-500">{t(`lp.audience.${a.key}.desc`)}</p>
               <span className="lp-link-arrow mt-5">
                 {t(`lp.audience.${a.key}.cta`)}
@@ -291,18 +268,10 @@ export function HomePage() {
 
       {/* ═══════════ GLOBAL MARKETS (real data) ═══════════ */}
       <section id="markets" className="lp-dark-band scroll-mt-24 py-16">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-90"
-          style={{
-            backgroundImage:
-              'radial-gradient(50% 60% at 85% 12%, rgba(61,89,214,0.35), transparent 70%), radial-gradient(45% 55% at 4% 95%, rgba(56,189,248,0.12), transparent 70%)',
-          }}
-          aria-hidden
-        />
         <Container className="relative">
           <div className="mx-auto mb-12 max-w-2xl text-center">
-            <h2 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl">{t('lp.markets.title')}</h2>
-            <p className="mt-4 text-sm leading-relaxed text-slate-300 sm:text-base">{t('lp.markets.sub')}</p>
+            <h2 className="lp-h2">{t('lp.markets.title')}</h2>
+            <p className="mt-4 text-sm leading-relaxed text-slate-500 sm:text-base">{t('lp.markets.sub')}</p>
           </div>
 
           {/* Active countries — real data only. Inactive markets are never claimed. */}
@@ -316,12 +285,12 @@ export function HomePage() {
                   <span
                     key={c.id}
                     className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold ${
-                      c.isActive ? 'border-white/15 bg-white/10 text-white' : 'border-white/10 bg-transparent text-slate-400'
+                      c.isActive ? 'border-brand-200 bg-brand-50 text-brand-800' : 'border-slate-200 bg-white text-slate-400'
                     }`}
                   >
                     <span aria-hidden>{c.flag ?? '🌐'}</span>
                     {c.name}
-                    {c.isActive ? <span className="h-1.5 w-1.5 rounded-full bg-teal-400" aria-hidden /> : null}
+                    {c.isActive ? <span className="h-1.5 w-1.5 rounded-full bg-brand-500" aria-hidden /> : null}
                   </span>
                 ))}
               </div>
@@ -337,20 +306,20 @@ export function HomePage() {
               <Link
                 key={x.k}
                 to={x.to}
-                className="group rounded-2xl border border-white/10 bg-white/[0.06] p-6 transition-all hover:-translate-y-1 hover:border-teal-400/40 hover:bg-white/10"
+                className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-card transition-all hover:-translate-y-1 hover:border-brand-200 hover:shadow-lift"
               >
-                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-teal-500/15 text-teal-300">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
                   <Icon name={x.icon} className="h-5 w-5" />
                 </span>
-                <h3 className="mt-4 text-base font-bold text-white">{t(`home.global.${x.k}`)}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-300">{t(`home.global.${x.k}.desc`)}</p>
-                <Icon name="arrow" className="mt-4 h-4 w-4 text-teal-300 transition-transform group-hover:translate-x-1 rtl:rotate-180 rtl:group-hover:-translate-x-1" />
+                <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.global.${x.k}`)}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{t(`home.global.${x.k}.desc`)}</p>
+                <Icon name="arrow" className="mt-4 h-4 w-4 text-brand-600 transition-transform group-hover:translate-x-1 rtl:rotate-180 rtl:group-hover:-translate-x-1" />
               </Link>
             ))}
           </div>
 
           <div className="mt-10 text-center">
-            <Link to="/marketplace" className="btn btn-lg rounded-xl bg-white text-ink-900 hover:bg-ink-50">
+            <Link to="/marketplace" className="lp-btn-primary btn-lg">
               {t('home.global.cta')}
             </Link>
           </div>
@@ -358,7 +327,7 @@ export function HomePage() {
       </section>
 
       {/* ═══════════ AI-POWERED COMMERCE ═══════════ */}
-      <section id="ai" className="scroll-mt-24 border-b border-slate-200/70 bg-gradient-to-b from-ink-50/60 to-white py-16">
+      <section id="ai" className="scroll-mt-24 border-b border-slate-200/70 bg-gradient-to-b from-brand-50/60 to-white py-16">
         <Container>
           <SectionTitle title={t('home.ai.title')} sub={t('home.ai.sub')} />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -379,7 +348,7 @@ export function HomePage() {
                     </span>
                   )}
                 </div>
-                <h3 className="mt-4 text-base font-bold text-ink-900">{t(`home.ai.${a.key}`)}</h3>
+                <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.ai.${a.key}`)}</h3>
                 <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.ai.${a.key}.desc`)}</p>
               </div>
             ))}
@@ -397,10 +366,10 @@ export function HomePage() {
               <span className="absolute end-4 top-4 z-0 text-3xl font-black text-slate-100" aria-hidden>
                 0{i + 1}
               </span>
-              <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-ink-800 text-white shadow-soft">
+              <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
                 <Icon name={s.icon} className="h-5 w-5" />
               </span>
-              <h3 className="mt-4 text-base font-bold text-ink-900">{t(`home.how.${s.key}`)}</h3>
+              <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.how.${s.key}`)}</h3>
               <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.how.${s.key}.desc`)}</p>
             </div>
           ))}
@@ -417,7 +386,7 @@ export function HomePage() {
                 <Icon name={item.icon} className="h-5 w-5" />
               </span>
               <div>
-                <h3 className="text-sm font-bold text-ink-900">{t(`home.trust.${item.key}`)}</h3>
+                <h3 className="text-sm font-bold text-slate-900">{t(`home.trust.${item.key}`)}</h3>
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">{t(`home.trust.${item.key}.desc`)}</p>
               </div>
             </div>
@@ -444,7 +413,7 @@ export function HomePage() {
           {categories.length > 0 ? (
             <div className="mt-12">
               <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-bold text-ink-900">{t('home.categories')}</h3>
+                <h3 className="text-lg font-bold text-slate-900">{t('home.categories')}</h3>
                 <Link to="/categories" className="lp-link-arrow">{t('common.viewAll')}</Link>
               </div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -461,7 +430,7 @@ export function HomePage() {
           {suppliers.length > 0 ? (
             <div className="mt-12">
               <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-bold text-ink-900">{t('home.topSuppliers')}</h3>
+                <h3 className="text-lg font-bold text-slate-900">{t('home.topSuppliers')}</h3>
                 <Link to="/suppliers" className="lp-link-arrow">{t('common.viewAll')}</Link>
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -470,7 +439,7 @@ export function HomePage() {
                     {s.logoUrl ? (
                       <img src={s.logoUrl} alt={s.companyName} className="h-11 w-11 shrink-0 rounded-full object-cover" />
                     ) : (
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink-50 text-ink-700">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700">
                         <Icon name="buildings" className="h-5 w-5" />
                       </div>
                     )}
@@ -493,11 +462,11 @@ export function HomePage() {
 
       {/* ═══════════ ABOUT ═══════════ */}
       <Container id="about" className="py-16">
-        <div className="grid items-center gap-10 rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white to-ink-50/60 p-8 shadow-card sm:p-12 lg:grid-cols-2">
+        <div className="grid items-center gap-10 rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white to-brand-50/60 p-8 shadow-card sm:p-12 lg:grid-cols-2">
           <div>
-            <span className="lp-eyebrow text-ink-500">{t('lp.about.eyebrow')}</span>
-            <h2 className="mt-3 text-2xl font-extrabold tracking-tight text-ink-900 sm:text-3xl">{t('home.about.title')}</h2>
-            <p className="mt-2 text-sm font-semibold text-ink-700">{t('home.about.sub')}</p>
+            <span className="lp-eyebrow text-brand-600">{t('lp.about.eyebrow')}</span>
+            <h2 className="lp-h2 mt-3">{t('home.about.title')}</h2>
+            <p className="mt-2 text-sm font-semibold text-brand-700">{t('home.about.sub')}</p>
             <p className="mt-5 text-sm leading-relaxed text-slate-600">{t('home.about.p1')}</p>
             <p className="mt-3 text-sm leading-relaxed text-slate-600">{t('home.about.p2')}</p>
           </div>
@@ -508,26 +477,18 @@ export function HomePage() {
       </Container>
 
       {/* ═══════════ FINAL CTA ═══════════ */}
-      <section id="contact" className="lp-dark-band scroll-mt-24 py-16">
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            backgroundImage:
-              'radial-gradient(55% 70% at 82% 20%, rgba(61,89,214,0.42), transparent 72%), linear-gradient(180deg, #0b1a45 0%, #081335 100%)',
-          }}
-          aria-hidden
-        />
+      <section id="contact" className="scroll-mt-24 border-t border-slate-200 bg-gradient-to-b from-white to-brand-50/60 py-16">
         <Container className="relative">
           <div className="flex flex-col items-center justify-between gap-8 text-center lg:flex-row lg:text-start">
             <div>
-              <h2 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl">{t('lp.cta.title')}</h2>
-              <p className="mt-3 text-sm text-slate-300 sm:text-base">{t('lp.cta.sub')}</p>
+              <h2 className="lp-h2">{t('lp.cta.title')}</h2>
+              <p className="mt-3 text-sm text-slate-500 sm:text-base">{t('lp.cta.sub')}</p>
             </div>
             <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
-              <Link to="/register" className="btn btn-lg rounded-xl bg-white text-ink-900 hover:bg-ink-50">
+              <Link to="/register" className="lp-btn-primary btn-lg">
                 {t('lp.hero.ctaPrimary')}
               </Link>
-              <Link to="/login" className="lp-btn-light btn-lg">{t('lp.nav.login')}</Link>
+              <Link to="/login" className="lp-btn-outline btn-lg">{t('lp.nav.login')}</Link>
             </div>
           </div>
         </Container>

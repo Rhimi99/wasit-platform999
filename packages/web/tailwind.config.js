@@ -67,10 +67,14 @@ export default {
           800: '#0f1f52',
           900: '#081335',
           950: '#050c24',
+          // Deep navy reserved for landing headlines (spec: #0F2747).
+          1000: '#0f2747',
         },
       },
       fontFamily: {
         sans: ['Inter var', 'Inter', 'Segoe UI', 'Tahoma', 'Noto Sans Arabic', 'Noto Sans SC', 'system-ui', 'sans-serif'],
+        // Corporate/elegant serif for the public brand lockup and headlines.
+        serif: ['Georgia', 'Times New Roman', 'Iowan Old Style', 'Palatino Linotype', 'Noto Naskh Arabic', 'serif'],
       },
       boxShadow: {
         soft: '0 4px 24px -8px rgba(15, 23, 42, 0.14)',

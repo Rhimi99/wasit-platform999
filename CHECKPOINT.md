@@ -2191,3 +2191,48 @@ POST /api/auth/login -> 403 {"code":"EMAIL_NOT_VERIFIED","message":"Please verif
 
 ### القيود المُحترمة
 لا DB reset/drop/truncate/delete؛ لا drizzle push؛ لا migration جديدة؛ لا FK؛ لا Mock؛ لا تعطيل أزرار؛ لا تغيير Commission/RBAC/Wallet/PS-05؛ لا Security Guardian؛ لا force push؛ لا تغيير commits سابقة.
+
+---
+
+## PIXEL-CLOSE VISUAL REDESIGN + FUNCTIONAL AUDIT (homepage, frontend only)
+
+النطاق: واجهة عامة فقط (`packages/web`) — لا تغيير في Backend/API/DB/migrations/Auth/RBAC/Payments/Commission/AI/Video.
+المرجع البصري: `LE WASSIT — BUSINESS GLOBAL` (الألوان `#1E3A8A` / `#2563EB` / `#EFF6FF` / `#0F2747`، RTL، responsive).
+
+### ما تم تنفيذه
+- Header أبيض طويل (116px) مع nav مركزي وخط سفلي أزرق للعنصر النشط، منتقي لغة (globe + FR + caret)، وزر أزرق «Se connecter».
+- Hero: تدرّج فاتح white → `#EFF6FF` (مع flip في RTL)، شعار كبير W + LE WASSIT + خط فاصل + BUSINESS GLOBAL بخط serif، عنوان بخط serif بلون `#0F2747`، زرّان CTA (56px).
+- Visual: خريطة عالم بنقاط + شبكة تجارة + Skyline ببرج رئيسي + انعكاس على الماء — SVG بالكامل (بدون صور خارجية).
+- Statistics bar: شريط أزرق صلب (radius 26px) أسفل الـ Hero مباشرة، أيقونات دائرية + أرقام بخط serif من بيانات حقيقية فقط.
+- i18n: نصوص FR المطابقة للمرجع + سطران في subtitle لجميع اللغات.
+
+### الإصلاحات الحقيقية المكتشفة (وليست إخفاءً للأخطاء)
+| # | العطل | السبب الجذري | الإصلاح |
+|---|---|---|---|
+| 1 | تحذير React: `<a>` داخل `<a>` في الـ header | `Brand` يُصدر `<Link>` وتم تغليفه بـ `<Link to="/">` إضافي | إزالة الـ Link الخارجي (`PublicLayout`) |
+| 2 | تكرار «LE WASSIT» مرتين في الـ Hero | وجود h1 منفصل + lockup يحمل نفس الاسم | جعل الـ lockup نفسه هو `h1` وحذف العنوان المكرر |
+| 3 | فشل اختبارات UI زائفة (401 على `/api/messages`، inventory، verification) | كوكي الجلسة `Secure` و Playwright `page.request` لا يرسله على HTTP المحلي | التشغيل على رابط HTTPS العام (كما صُمّمت السويتات) — لا عطل في المنتج |
+
+### نتائج الاختبار النهائية (على الرابط العام HTTPS)
+| Suite | النتيجة |
+|---|---|
+| ui-login | PASS |
+| ui-flows | 6/6 |
+| ui-inventory-search | 7/7 |
+| ui-messages | 7/7 |
+| ui-purchase | 8/8 |
+| ui-subscription | 7/7 |
+| ui-merchant | 11/11 |
+| ui-merchant-surfaces | 10/10 |
+| ui-admin-dispute | 23/23 |
+| ui-verification | 10/10 |
+| ui-video | 14/14 |
+| ui-video-studio-full (Marketing Video) | 11/11 |
+| ui-redesign | 27/27 |
+| ui-mobile-smoke | 16/16 |
+| ui-functional-audit (45 صفحة) | 45/45 |
+| typecheck | PASS |
+| build | PASS |
+
+### القيود المُحترمة
+Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل أزرار؛ لا حذف ميزات؛ لا commit/push/PR؛ Commission 4% = 2%+2% سليمة؛ Marketing Video Agent سليم.
