@@ -2281,3 +2281,45 @@ POST /api/auth/login -> 403 {"code":"EMAIL_NOT_VERIFIED","message":"Please verif
 
 ### القيود المُحترمة
 Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل أزرار؛ لا حذف ميزات؛ لا commit/push/PR؛ Commission 4% = 2%+2% سليمة؛ Marketing Video Agent سليم.
+
+---
+
+## 2026-09-26 — إصلاح تجاوب الصفحة الرئيسية على الجوال (Mobile Responsiveness)
+
+### الأعطال المُشخَّصة (من الواجهة، على عرض 360px و768px)
+| # | العطل | السبب الجذري | الإصلاح |
+|---|---|---|---|
+| 1 | أشرطة/أبراج الـ skyline الزرقاء تغطي زر «ابدأ الآن» والعنوان في الـ Hero | كل طبقات الـ Hero (`map`, `veil`, `skyline`, scrim) والنص داخل نفس الـ stacking context بـ `z-index: auto`. الـ skyline يأتي **بعد** حاوية النص في الـ DOM، فطُبقت قواعد الرسم (paint order) فوق الزر. ومع `preserveAspectRatio="xMidYMid slice"` صعد برج `[654,62,322]` إلى y≈403 بينما الزر عند 572–628 والعنوان عند 351–460 | `isolate` على القسم + `z-0` للطبقات الزخرفية و`z-10` للنص وزر الإجراء؛ وجعل الـ skyline **في التدفق الطبيعي** (`aspect-[1000/310]` + `-mt-16`) كشريط أسفل النص بدل طبقة مطلقة مرتفعة |
+| 2 | جزء من العنوان العلوي مقطوع خلف شريط الترويسة | `scroll-mt-24` (96px) أصغر من ارتفاع الشريط الثابت الفعلي (بانر 42px + ترويسة 72–80px ≈ 114px)، فتهبط عناوين الأقسام عند y=88/72 بينما قاع الترويسة عند 107 | متغيّر `--public-chrome-h = var(--demo-banner-h) + 92px` على `:root`، واستخدامه في `scroll-mt-[var(--public-chrome-h)]` + `html { scroll-padding-top }` ليشمل قفزات `#hash` الأصلية |
+| 3 | تزاحم/مسافات غير متناسقة على الهواتف | `pb-52/64/72` كانت تعوّض طبقة skyline مطلقة | تقليصها إلى `pb-24/28/32` مع شريط skyline في التدفق (ارتفاعه نسبة ثابتة لا نسبة من الـ viewport) |
+
+### التحقق (Measured، لا تخمين)
+- **Pixel sampling** على داخل الزر: 96–97% أزرق العلامة `#2563EB` عند 360/390/768/1440 (الباقي حروف النص).
+- **Painter check** (`elementFromPoint` عند مركز الزر والعنوان): الزر والعنوان هما العنصر الأعلى في كل العروض.
+- **No overlap**: قمة الـ skyline أسفل آخر عنصر نصي في الـ Hero (799 ≥ 767 على 360px؛ 838 ≥ 790 على 1440px).
+- **No horizontal overflow**: 0px على 320/360/390/414.
+- **Nav anchor**: عنوان القسم يهبط أسفل الترويسة (218 ≥ 106). تم اختبار السقوط: عند تعطيل الإصلاح يعود `headingTop=72 < headerBottom=106` (الفشل يُلتقط فعلًا).
+
+### نتائج الاختبار النهائية (على الرابط العام HTTPS)
+| Suite | النتيجة |
+|---|---|
+| ui-redesign | 54/54 (أُضيفت 10 تأكيدات جديدة للطبقات والمراسي) |
+| ui-messages | 7/7 |
+| ui-subscription | 7/7 |
+| ui-inventory-search | 7/7 |
+| ui-mobile-smoke | 16/16 |
+| ui-admin-dispute | 23/23 |
+| ui-merchant | 11/11 |
+| ui-merchant-surfaces | 10/10 |
+| ui-verification | 10/10 |
+| ui-flows | 6/6 |
+| ui-purchase | 10/10 |
+| ui-video | 14/14 |
+| ui-video-studio-full | 11/11 |
+| ui-register | 6/6 |
+| ui-login | PASS |
+| ui-functional-audit | 45/45 |
+| typecheck / build | PASS |
+
+### القيود المُحترمة
+Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل أزرار؛ لا تغيير لوظائف تعمل؛ Commission 4% = 2%+2% سليمة؛ Marketing Video Agent (commit 89e68d7) لم يُمس.

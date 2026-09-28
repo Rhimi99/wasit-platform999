@@ -14,6 +14,22 @@ body {
   font-family: 'Noto Sans Arabic', 'Segoe UI', Tahoma, system-ui, sans-serif;
 }
 
+@layer base {
+  :root {
+    /*
+     * Height of the sticky public chrome (demo banner + header), published as a
+     * scroll offset so anchor jumps land *below* the header instead of tucking
+     * the section heading underneath it. Kept in CSS because the banner height
+     * is only known at runtime and the header shrinks on scroll.
+     */
+    --public-chrome-h: calc(var(--demo-banner-h, 0px) + 92px);
+  }
+  /* Native `#hash` jumps must clear the sticky chrome too, not just our anchors. */
+  html {
+    scroll-padding-top: var(--public-chrome-h);
+  }
+}
+
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed;

@@ -126,6 +126,35 @@ async function open(ctxOpts) {
     JSON.stringify(art),
   );
 
+  // Layer contract: the decorative artwork must never cover the copy. The
+  // skyline is in normal flow, so it has to start below the last copy element,
+  // and the CTA/headline must be the topmost element at their own centres.
+  const layers = await page.evaluate(() => {
+    const hero = document.querySelector('main > section');
+    const copy = hero.querySelector('.relative.z-10');
+    const cta = hero.querySelector('a[href="/register"]');
+    const h2 = hero.querySelector('h2');
+    const sky = [...hero.querySelectorAll('div')].find((d) => d.className.includes('aspect-'));
+    const lastCopy = hero.querySelector('.mt-9.flex.flex-wrap') || hero.querySelector('a[href="/marketplace"]');
+    const contentBottom = Math.round(lastCopy.getBoundingClientRect().bottom);
+    const at = (el) => {
+      const r = el.getBoundingClientRect();
+      return document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    };
+    return {
+      skylineTop: sky ? Math.round(sky.getBoundingClientRect().top) : null,
+      contentBottom,
+      ctaZ: getComputedStyle(cta).zIndex,
+      copyZ: getComputedStyle(copy).zIndex,
+      skyZ: sky ? getComputedStyle(sky).zIndex : null,
+      ctaOnTop: cta.contains(at(cta)) || at(cta) === cta,
+      h2OnTop: h2.contains(at(h2)) || at(h2) === h2,
+    };
+  });
+  record('desktop: skyline sits below the hero copy (no overlap)', layers.skylineTop >= layers.contentBottom, `skylineTop=${layers.skylineTop} contentBottom=${layers.contentBottom}`);
+  record('desktop: CTA is the topmost layer at its centre', layers.ctaOnTop, `z=${layers.ctaZ} (copy ${layers.copyZ}, skyline ${layers.skyZ})`);
+  record('desktop: headline is the topmost layer at its centre', layers.h2OnTop);
+
   // Header nav links scroll to sections and must exist.
   for (const sel of ['#solutions', '#markets', '#resources']) {
     const link = page.locator(`header a[href="/${sel}"]`).first();
@@ -142,6 +171,26 @@ async function open(ctxOpts) {
     (await searchBtn.count()) ? searchBtn.click() : searchInput.press('Enter'),
   ]);
   record('desktop: search lands on results', /\/search\?/.test(page.url()) || /marketplace/.test(page.url()), page.url());
+
+  // Nav anchor jumps must land the section heading *below* the sticky chrome
+  // (demo banner + header); this used to tuck the heading under the header.
+  const anchor = await page.evaluate(() => {
+    const a = [...document.querySelectorAll('header nav a')].find((x) => x.getAttribute('href') === '/#solutions');
+    a?.click();
+    return !!a;
+  });
+  if (anchor) {
+    await page.waitForTimeout(1500);
+    const below = await page.evaluate(() => {
+      const header = document.querySelector('header');
+      const head = document.getElementById('solutions')?.querySelector('h2');
+      if (!head) return null;
+      return { headingTop: Math.round(head.getBoundingClientRect().top), headerBottom: Math.round(header.getBoundingClientRect().bottom) };
+    });
+    record('desktop: nav anchor lands the heading below the header', !!below && below.headingTop >= below.headerBottom, JSON.stringify(below));
+    await page.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 45000 });
+    await page.waitForTimeout(800);
+  }
 
   // Anonymous session probing /api/auth/me yields 401 by design — every other call must succeed.
   record('desktop: no JS console errors', errors.length === 0, errors.slice(0, 2).join(' | '));
@@ -187,6 +236,34 @@ for (const width of [360, 390]) {
   record(`mobile ${width}: brand logo text is not clipped`, head.textClipped === false, `"${head.logoText}"`);
   record(`mobile ${width}: hamburger menu present`, head.burger, `left=${head.burgerLeft}px`);
   record(`mobile ${width}: login action present`, (await page.locator('header a[href="/login"]').count()) > 0);
+
+  // Layer contract on phones, where the skyline used to climb over the CTA.
+  // Runs before the menu opens so the nav overlay cannot sit over the CTA.
+  const mLayers = await page.evaluate(() => {
+    const hero = document.querySelector('main > section');
+    const cta = hero.querySelector('a[href="/register"]');
+    const h2 = hero.querySelector('h2');
+    const sky = [...hero.querySelectorAll('div')].find((d) => d.className.includes('aspect-'));
+    const lastCopy = hero.querySelector('.mt-9.flex.flex-wrap') || hero.querySelector('a[href="/marketplace"]');
+    const contentBottom = Math.round(lastCopy.getBoundingClientRect().bottom);
+    const at = (el) => {
+      const r = el.getBoundingClientRect();
+      return document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    };
+    return {
+      skylineTop: sky ? Math.round(sky.getBoundingClientRect().top) : null,
+      contentBottom,
+      ctaOnTop: cta.contains(at(cta)) || at(cta) === cta,
+      h2OnTop: h2.contains(at(h2)) || at(h2) === h2,
+    };
+  });
+  record(
+    `mobile ${width}: skyline sits below the hero copy (no overlap)`,
+    mLayers.skylineTop >= mLayers.contentBottom,
+    `skylineTop=${mLayers.skylineTop} contentBottom=${mLayers.contentBottom}`,
+  );
+  record(`mobile ${width}: CTA is the topmost layer at its centre`, mLayers.ctaOnTop);
+  record(`mobile ${width}: headline is the topmost layer at its centre`, mLayers.h2OnTop);
 
   const menuBtn = page.locator('header button[aria-label="Menu"]');
   await menuBtn.click();

@@ -79,7 +79,7 @@ const HOW_STEPS: Array<{ icon: IconName; key: string }> = [
 
 function Container({ children, id, className = '' }: { children: React.ReactNode; id?: string; className?: string }) {
   return (
-    <section id={id} className={`mx-auto w-full max-w-7xl scroll-mt-24 px-4 sm:px-6 ${className}`}>
+    <section id={id} className={`mx-auto w-full max-w-7xl scroll-mt-[var(--public-chrome-h)] px-4 sm:px-6 ${className}`}>
       {children}
     </section>
   );
@@ -87,7 +87,7 @@ function Container({ children, id, className = '' }: { children: React.ReactNode
 
 function SectionTitle({ title, sub, id }: { title: string; sub?: string; id?: string }) {
   return (
-    <div id={id} className="mx-auto mb-12 max-w-2xl scroll-mt-24 text-center">
+    <div id={id} className="mx-auto mb-12 max-w-2xl scroll-mt-[var(--public-chrome-h)] text-center">
       <h2 className="lp-h2">{title}</h2>
       {sub ? <p className="mt-4 text-sm leading-relaxed text-slate-500 sm:text-base">{sub}</p> : null}
     </div>
@@ -147,13 +147,18 @@ export function HomePage() {
         jsonLd={ORG_JSON_LD}
       />
 
-      {/* ═══════════ HERO — dark navy global commerce ═══════════ */}
-      <section className="lp-dark-section bg-ink-950">
+      {/* ═══════════ HERO — dark navy global commerce ═══════════
+          Layering contract: the section isolates its own stacking context; the
+          decorative layers (map, veil, skyline, scrim) sit at z-0 and the copy
+          at z-10. The skyline is the *only* layer placed in normal flow (with a
+          negative margin) rather than absolutely, so it is laid out as a band
+          below the copy and can never paint over the headline or the CTA. */}
+      <section className="lp-dark-section isolate bg-ink-950">
         {/* Dotted world map + global trade network behind the headline. */}
-        <CorporateHero part="map" className="pointer-events-none absolute inset-x-0 top-0 h-[62%] opacity-90" />
+        <CorporateHero part="map" className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[62%] opacity-90" />
         {/* Soft electric-blue lighting and a navy veil so the copy always reads. */}
         <div
-          className="pointer-events-none absolute inset-0"
+          className="pointer-events-none absolute inset-0 z-0"
           style={{
             backgroundImage:
               'radial-gradient(75% 60% at 50% 0%, rgba(37,99,235,0.28), transparent 70%), linear-gradient(180deg, rgba(5,12,36,0.55) 0%, rgba(5,12,36,0.86) 62%, #050c24 100%)',
@@ -161,7 +166,7 @@ export function HomePage() {
           aria-hidden
         />
 
-        <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 pb-52 pt-14 text-center sm:px-6 sm:pb-64 lg:pb-72 lg:pt-20">
+        <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center px-4 pb-24 pt-10 text-center sm:px-6 sm:pb-28 sm:pt-14 lg:pb-32 lg:pt-20">
           {/* The lockup carries the page's single H1 (W / LE WASSIT / rule / BUSINESS GLOBAL). */}
           <Brand presentation as="h1" light className="justify-center" />
 
@@ -172,17 +177,17 @@ export function HomePage() {
             {t('lp.hero.subtitle')}
           </p>
 
-          <div className="mt-9 flex w-full flex-col items-stretch gap-3.5 sm:w-auto sm:flex-row sm:items-center sm:justify-center">
+          <div className="relative z-10 mt-9 flex w-full flex-col items-stretch gap-3.5 sm:w-auto sm:flex-row sm:items-center sm:justify-center">
             <Link
               to="/register"
-              className="inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] bg-brand-600 px-7 text-base font-semibold text-white shadow-glow transition-colors hover:bg-brand-500 sm:w-[270px]"
+              className="relative z-10 inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] bg-brand-600 px-7 text-base font-semibold text-white shadow-glow transition-colors hover:bg-brand-500 sm:w-[270px]"
             >
               {t('lp.hero.ctaPrimary')}
               <Icon name="arrow" className="h-4 w-4 rtl:rotate-180" />
             </Link>
             <Link
               to="/marketplace"
-              className="lp-btn-ghost-dark inline-flex h-[56px] w-full items-center justify-center gap-2.5 px-7 text-base font-semibold sm:w-[270px]"
+              className="lp-btn-ghost-dark relative z-10 inline-flex h-[56px] w-full items-center justify-center gap-2.5 px-7 text-base font-semibold sm:w-[270px]"
             >
               {t('lp.hero.ctaSecondary')}
               <svg viewBox="0 0 12 12" className="h-3 w-3 rtl:rotate-180" aria-hidden>
@@ -202,13 +207,18 @@ export function HomePage() {
           </div>
         </div>
 
-        {/* Illuminated skyline along the bottom edge of the hero. */}
-        <CorporateHero part="skyline" className="pointer-events-none absolute inset-x-0 bottom-0 h-[46%] sm:h-[42%]" />
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-24"
-          style={{ backgroundImage: 'linear-gradient(180deg, transparent, #050c24)' }}
-          aria-hidden
-        />
+        {/* Illuminated skyline: in normal flow at a fixed aspect ratio, pulled up
+            so it starts at the copy's baseline band and never overlaps it. Its
+            height comes from the ratio (not a viewport percentage), so `slice`
+            always shows the same slice of the city on every screen width. */}
+        <div className="relative z-0 -mt-16 w-full aspect-[1000/310] sm:-mt-20">
+          <CorporateHero part="skyline" className="pointer-events-none absolute inset-0" />
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ backgroundImage: 'linear-gradient(180deg, rgba(5,12,36,0.9), rgba(5,12,36,0) 45%)' }}
+            aria-hidden
+          />
+        </div>
       </section>
 
       {/* ═══════════ FEATURES — four premium capabilities ═══════════ */}
@@ -303,7 +313,7 @@ export function HomePage() {
         </Container>
 
         {/* ═══════════ GLOBAL MARKETS (real data) ═══════════ */}
-        <section id="markets" className="lp-dark-band scroll-mt-24 py-16">
+        <section id="markets" className="lp-dark-band scroll-mt-[var(--public-chrome-h)] py-16">
           <Container className="relative">
             <div className="mx-auto mb-12 max-w-2xl text-center">
               <h2 className="lp-h2">{t('lp.markets.title')}</h2>
@@ -363,7 +373,7 @@ export function HomePage() {
         </section>
 
         {/* ═══════════ AI-POWERED COMMERCE ═══════════ */}
-        <section id="ai" className="scroll-mt-24 border-b border-slate-200/70 bg-gradient-to-b from-brand-50/60 to-white py-16">
+        <section id="ai" className="scroll-mt-[var(--public-chrome-h)] border-b border-slate-200/70 bg-gradient-to-b from-brand-50/60 to-white py-16">
           <Container>
             <SectionTitle title={t('home.ai.title')} sub={t('home.ai.sub')} />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -431,7 +441,7 @@ export function HomePage() {
         </Container>
 
         {/* ═══════════ RESOURCES: DISCOVERY FROM REAL DATA ═══════════ */}
-        <section id="resources" className="scroll-mt-24 border-y border-slate-200/70 bg-white py-16">
+        <section id="resources" className="scroll-mt-[var(--public-chrome-h)] border-y border-slate-200/70 bg-white py-16">
           <Container>
             <SectionHeader
               title={t('home.discover.title')}
@@ -513,7 +523,7 @@ export function HomePage() {
         </Container>
 
         {/* ═══════════ FINAL CTA ═══════════ */}
-        <section id="contact" className="scroll-mt-24 border-t border-slate-200 bg-gradient-to-b from-white to-brand-50/60 py-16">
+        <section id="contact" className="scroll-mt-[var(--public-chrome-h)] border-t border-slate-200 bg-gradient-to-b from-white to-brand-50/60 py-16">
           <Container className="relative">
             <div className="flex flex-col items-center justify-between gap-8 text-center lg:flex-row lg:text-start">
               <div>
