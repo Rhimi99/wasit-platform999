@@ -7,6 +7,51 @@
 
 ---
 
+## 2026-09-28 — إعادة تصميم الصفحة الرئيسية: Dark Navy Premium (نهائي)
+
+**النطاق**: واجهة عامة فقط (`packages/web`). لا تغيير في Backend/API/DB/migrations/Auth/RBAC/Payments/Commission/AI/Video.
+**المرجع**: تصميم premium أزرق داكن — React/CSS/Tailwind حقيقي (ليس صورة).
+
+### ما تم تنفيذه
+- **Hero داكن (`#050C24`)**: خريطة عالم بنقاط + شبكة تجارة عالمية خلف العنوان، وSkyline مضيء بانعكاس على الماء أسفل الـ Hero — SVG بالكامل، مقسّم إلى `part="map"` و`part="skyline"` (بدون صور خارجية ولا طلبات شبكة).
+- **Header داكن premium على الرئيسية** (وبقاء الأبيض لكل الصفحات العامة الأخرى): شعار LE WASSIT + BUSINESS GLOBAL، nav مركزي، منتقي لغة، زر دخول أزرق، hamburger للهاتف.
+- **شريط DEMO أعلى الصفحة** بخلفية كحلية، ينشر ارتفاعه كـ`--demo-banner-h` كي لا يتغطى الـheader المتحرك ولا يتغطى به.
+- **Features**: أربع قدرات (تجارة عالمية / AI / B2B+B2C / معاملات آمنة) ببطاقات زجاجية داكنة.
+- **Statistics**: شريط داكن بأرقام حقيقية من بيانات المنصة فقط (أو رسالة انتظار).
+- بقية الصفحة (Search/Why/How/Trust/Resources/About/CTA) على سطح أبيض نظيف تحت الـHero.
+- i18n: مفتاح جديد `lp.hero.headline` في اللغات الأربع (ar/en/fr/zh).
+
+### إصلاحات حقيقية (وليست إخفاءً للأخطاء)
+| # | العطل | السبب الجذري | الإصلاح |
+|---|---|---|---|
+| 1 | فيض أفقي 13px عند عرض 360px | Logo `compact` ثابت الحجم (211px) + عناصر التحكم (136px) > 360px | شعار متجاوب (أحجام/تباعد `sm:`) + `min-w-0 shrink` + حشو أضيق |
+| 2 | الـheader المتحرك يغطي/يتغطى بشريط DEMO | الشريطان `sticky top-0` | الـheader يستخدم `top-[var(--demo-banner-h,0px)]` |
+| 3 | «BUSINESS GLOBAL» قد تنقص/تُقتطع على الهاتف | مسافات الحروف الثابتة `tracking-[0.34em]` | تصغير الخط والتباعد على الشاشات الصغيرة |
+| 4 | Headline الـHero مفقود | لا مفتاح `lp.hero.headline` | إضافته في اللغات الأربع + `whitespace-pre-line` |
+
+### نتائج الاختبار النهائية (على الرابط العام HTTPS)
+| Suite | النتيجة |
+|---|---|
+| ui-redesign (محدّث للثيم الداكن: hero/header/features/stats/mobile 360+390/RTL) | **44/44** |
+| ui-login / ui-register | PASS / 6/6 |
+| ui-mobile-smoke | 16/16 |
+| ui-flows / ui-inventory-search / ui-messages / ui-subscription | 6/6 · 7/7 · 7/7 · 7/7 |
+| ui-purchase / ui-merchant / ui-merchant-surfaces | 10/10 · 11/11 · 10/10 |
+| ui-admin-dispute / ui-verification | 23/23 · 10/10 |
+| ui-video / ui-video-studio-full | 14/14 · 11/11 |
+| ui-functional-audit (45 صفحة) | 45/45 |
+| typecheck (server+web) | PASS |
+| build | PASS |
+
+### ملاحظة تشغيلية (مهمة)
+كوكي الجلسة `wasit_session` مضبوط `Secure`، لذا Playwright `page.request` لا يرسله على `http://127.0.0.1` ويُرجع 401 زائفًا في `ui-messages`/`ui-subscription`/`ui-inventory-search`. الواجهة نفسها تعمل (fetch من الصفحة ← 200)، والسويتات تمر كاملة على رابط HTTPS. شغّل السويتات على الرابط العام.
+
+### القيود المُحترمة
+Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل أزرار؛ لا حذف ميزات؛ Commission 4% = 2%+2% سليمة؛ Marketing Video Agent (commit `89e68d7`) بلا مساس.
+
+
+---
+
 ## 2026-09-27 (جلسة ثانية) — تدقيق وظيفي موسّع: Video Studio + Verification + Admin + Merchant
 
 **النطاق**: سكربتات تدقيق UI جديدة + تشغيل حقيقي على الرابط العام. **لا تغيير في كود المنتج**، لا migration/reset/drop/push، لا مساس بسياسة العمولة (4% = 2% بائع + 2% مشتري)، ولا بـMarketing Video Agent.

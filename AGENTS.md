@@ -329,3 +329,16 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - **Revert/إصلاح**: لا تُعِد كتابة `SETTLED` داخل مسار تأكيد الدفع، ولا تسمح بحدث `settlement.confirmed` من مزوّد ديمو — حرسان مُثبتان في `tests/money-path-invariants.test.ts`.
 - **تدقيق قراءة فقط**: `npx tsx src/scripts/verify-money-path.ts` يكشف صفوف `SETTLED` بلا دليل تسوية (`SETTLEMENT.CONFIRMED` في `audit_logs`) ويُخرج exit code غير صفري عند وجود مخالفة. لا يكتب شيئاً.
 - **E2E محلي**: Playwright يحتاج `wasit_dev`؛ إن لم توجد فأنشئها فقط (`CREATE DATABASE wasit_dev`) ثم `npx drizzle-kit migrate` + `npx tsx src/scripts/seed.ts`. **ممنوع** `db reset/drop/push`.
+## Functional UI audit — running the suites correctly (2026-09-28)
+
+- **Always run UI suites against the public HTTPS link**, not `http://127.0.0.1:12000`. The session cookie `wasit_session` is issued with `Secure`, so Playwright's `page.request.*` silently drops it on plain HTTP and returns spurious `401`s. The app itself is fine in that case — an in-page `fetch('/api/...', { credentials: 'include' })` still returns `200`. Suites affected if run over HTTP: `ui-messages-check`, `ui-subscription-check`, `ui-inventory-search-check`.
+- Run: `node scripts/ui-redesign-check.mjs https://work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev`.
+- Preview servers: `vite preview` on port 12000 proxies `/api`, `/sitemap.xml`, `/robots.txt` to the backend (same-origin session semantics as production nginx). Build first with `VITE_DEMO_MODE=true npm run build -w @wasit/web` (the flag turns on the demo banner), then `cd packages/web && npx vite preview --port 12000 --host 0.0.0.0`.
+- **Server integration tests need a disposable DB**: `TEST_DATABASE_URL` must name a database ending in `_test` (hard guard in `packages/server/tests/setup.ts`). `npm test` alone fails with `password authentication failed for user "wasit"`. Use: `PW=$(grep '^DATABASE_URL' .env.demo | sed 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/'); TEST_DATABASE_URL="postgresql://wasit_demo:${PW}@localhost:5432/wasit_test" npm test`.
+
+## Landing page (public marketing surface)
+
+- The homepage is the **dark navy premium** theme (`bg-ink-950`, i.e. `#050c24`). All other public routes keep the light/white header.
+- Hero artwork is pure SVG in `components/brand/CorporateHero.tsx`, split by `part="map"` (dotted world map + trade network) and `part="skyline"` (illuminated city + water reflection). No external images, no network requests.
+- `PublicHeader`/`PublicLayout` take a `dark`/`darkHeader` prop. The header is `sticky top-[var(--demo-banner-h,0px)]`, and `DemoBanner` publishes its measured height as `--demo-banner-h` so the two sticky bars never overlap.
+- Design tokens live in `tailwind.config.js` (`ink-950`, `brand-*`) and `index.css` (`.lp-dark-section`, `.lp-dark-card`, `.lp-btn-ghost-dark`). Hero copy keys are `lp.hero.headline/subtitle/ctaPrimary/ctaSecondary` in all four locales.

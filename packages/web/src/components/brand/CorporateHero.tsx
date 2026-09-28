@@ -2,12 +2,14 @@ import { useMemo } from 'react';
 import { useI18n } from '@/lib/i18n-context';
 
 /**
- * Landing hero visual: a dotted world map with a global trade network over a
- * modern city skyline reflected in water. Rendered entirely with SVG so there
- * is no external/stock imagery, no network request and no RTL mirroring.
+ * Landing hero artwork: a dotted world map with a global trade network over a
+ * modern city skyline reflected in water. Drawn entirely in SVG — no external
+ * imagery, no network request — and tinted for the dark navy hero surface.
  *
  * Stage is 1000x560: map dots in the upper band, skyline anchored on the
- * horizon line (y=430), water below it.
+ * horizon line (y=430), water below it. `part` lets the homepage place the map
+ * behind the headline and the skyline along the bottom edge independently; the
+ * default renders the whole scene as one image.
  */
 
 const STAGE_W = 1000;
@@ -80,7 +82,18 @@ const TOWERS: Array<[number, number, number]> = [
 ];
 const MAIN_TOWER = 13;
 
-export function CorporateHero({ className = '' }: { className?: string }) {
+/** Electric-blue accents on the deep navy hero surface. */
+const ELECTRIC = '#3b82f6';
+const ELECTRIC_LIGHT = '#93c5fd';
+
+export function CorporateHero({
+  className = '',
+  part = 'full',
+}: {
+  className?: string;
+  /** 'map' = world map + network only, 'skyline' = illuminated city only. */
+  part?: 'full' | 'map' | 'skyline';
+}) {
   const { t } = useI18n();
 
   const mapDots = useMemo(() => {
@@ -99,166 +112,181 @@ export function CorporateHero({ className = '' }: { className?: string }) {
     return dots;
   }, []);
 
+  const showMap = part !== 'skyline';
+  const showCity = part !== 'map';
+  const viewBox =
+    part === 'map' ? `0 0 ${STAGE_W} 350` : part === 'skyline' ? `0 250 ${STAGE_W} ${STAGE_H - 250}` : `0 0 ${STAGE_W} ${STAGE_H}`;
+
   return (
     <div className={className} style={{ direction: 'ltr' }}>
       <svg
-        viewBox={`0 0 ${STAGE_W} ${STAGE_H}`}
-        className="h-auto w-full"
+        viewBox={viewBox}
+        className="h-full w-full"
+        preserveAspectRatio="xMidYMid slice"
         role="img"
         aria-label={t('lp.hero.visualAlt')}
       >
         <defs>
-          <linearGradient id="ch-sky" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
-            <stop offset="55%" stopColor="#eff6ff" stopOpacity="0.85" />
-            <stop offset="100%" stopColor="#dbeafe" stopOpacity="0.9" />
+          <linearGradient id="ch-sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#081335" />
+            <stop offset="100%" stopColor="#050c24" />
           </linearGradient>
           <linearGradient id="ch-towerA" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#93c5fd" />
-            <stop offset="55%" stopColor="#5b7c99" />
-            <stop offset="100%" stopColor="#1e3a8a" />
+            <stop offset="0%" stopColor="#3b82f6" />
+            <stop offset="60%" stopColor="#12224f" />
+            <stop offset="100%" stopColor="#0b1220" />
           </linearGradient>
           <linearGradient id="ch-towerB" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#bfdbfe" />
-            <stop offset="60%" stopColor="#8ba2c0" />
-            <stop offset="100%" stopColor="#233390" />
+            <stop offset="0%" stopColor="#2563eb" />
+            <stop offset="65%" stopColor="#0f1f52" />
+            <stop offset="100%" stopColor="#081335" />
           </linearGradient>
           <linearGradient id="ch-towerMain" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#bfdbfe" />
-            <stop offset="40%" stopColor="#2563eb" />
-            <stop offset="100%" stopColor="#1e3a8a" />
+            <stop offset="45%" stopColor="#3b82f6" />
+            <stop offset="100%" stopColor="#1d4ed8" />
           </linearGradient>
           <linearGradient id="ch-water" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#93c5fd" stopOpacity="0.55" />
-            <stop offset="45%" stopColor="#dbeafe" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.4" />
+            <stop offset="45%" stopColor="#1d4ed8" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#050c24" stopOpacity="0" />
           </linearGradient>
           <linearGradient id="ch-glass" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.55" />
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.08" />
             <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
           </linearGradient>
           <radialGradient id="ch-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.35" />
+            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.45" />
             <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
           </radialGradient>
           <linearGradient id="ch-reflectGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#fff" stopOpacity="0.75" />
-            <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+            <stop offset="0%" stopColor="#93c5fd" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="#93c5fd" stopOpacity="0" />
           </linearGradient>
           <mask id="ch-reflect">
             <rect x="0" y={HORIZON} width={STAGE_W} height={STAGE_H - HORIZON} fill="url(#ch-reflectGrad)" />
           </mask>
         </defs>
 
-        {/* ambient wash */}
-        <rect x="0" y="0" width={STAGE_W} height={STAGE_H} fill="url(#ch-sky)" />
-        <circle cx="700" cy="200" r="300" fill="url(#ch-glow)" />
+        {part === 'full' ? <rect x="0" y="0" width={STAGE_W} height={STAGE_H} fill="url(#ch-sky)" /> : null}
 
-        {/* dotted world map — sits behind the city */}
-        <g fill="#2563eb" opacity="0.42">
-          {mapDots.map(([x, y], i) => (
-            <circle key={i} cx={x} cy={y} r="1.5" />
-          ))}
-        </g>
+        {showMap ? (
+          <>
+            {/* ambient blue lighting behind the network */}
+            <circle cx="700" cy="200" r="300" fill="url(#ch-glow)" />
+            <circle cx="240" cy="140" r="230" fill="url(#ch-glow)" />
 
-        {/* global trade network */}
-        <g fill="none" stroke="#2563eb" strokeLinecap="round">
-          {ARCS.map(([a, b], i) => {
-            const [x1, y1] = HUBS[a];
-            const [x2, y2] = HUBS[b];
-            const cx = (x1 + x2) / 2;
-            const cy = Math.min(y1, y2) - Math.abs(x2 - x1) * 0.22 - 14;
-            return (
-              <path
-                key={i}
-                d={`M${x1} ${y1} Q${cx} ${cy} ${x2} ${y2}`}
-                strokeOpacity="0.3"
-                strokeWidth="1.1"
-                strokeDasharray={i % 3 === 0 ? '5 7' : undefined}
-              >
-                {i % 3 === 0 ? (
-                  <animate attributeName="stroke-dashoffset" values="0;-24" dur="3.4s" repeatCount="indefinite" />
-                ) : null}
-              </path>
-            );
-          })}
-        </g>
-        <g>
-          {HUBS.map(([x, y], i) => (
-            <g key={i}>
-              <circle cx={x} cy={y} r="9" fill="#2563eb" opacity="0.14">
-                <animate attributeName="r" values="4;15" dur="3.6s" begin={`${i * 0.35}s`} repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.3;0" dur="3.6s" begin={`${i * 0.35}s`} repeatCount="indefinite" />
-              </circle>
-              <circle cx={x} cy={y} r="3" fill="#1e3a8a" />
-              <circle cx={x} cy={y} r="6.5" fill="none" stroke="#2563eb" strokeOpacity="0.35" strokeWidth="1" />
+            {/* dotted world map */}
+            <g fill={ELECTRIC} opacity="0.55">
+              {mapDots.map(([x, y], i) => (
+                <circle key={i} cx={x} cy={y} r="1.5" />
+              ))}
             </g>
-          ))}
-        </g>
 
-        {/* skyline */}
-        <g>
-          {TOWERS.map(([x, w, h], i) => {
-            const isMain = i === MAIN_TOWER;
-            const fill = isMain ? 'url(#ch-towerMain)' : i % 2 === 0 ? 'url(#ch-towerA)' : 'url(#ch-towerB)';
-            return (
-              <g key={i}>
-                <rect x={x} y={HORIZON - h} width={w} height={h} rx="3" fill={fill} />
-                {isMain ? (
-                  <>
-                    <rect x={x + w / 2 - 2} y={HORIZON - h - 26} width="4" height="26" rx="2" fill="#1e3a8a" />
-                    <circle cx={x + w / 2} cy={HORIZON - h - 28} r="4" fill="#2563eb">
-                      <animate attributeName="opacity" values="1;0.35;1" dur="2.6s" repeatCount="indefinite" />
-                    </circle>
-                  </>
-                ) : null}
-                {/* window banding on the taller towers */}
-                {h > 150
-                  ? Array.from({ length: Math.floor(h / 30) }).map((_, r) => (
-                      <rect
-                        key={r}
-                        x={x + w * 0.22}
-                        y={HORIZON - h + 14 + r * 30}
-                        width={w * 0.56}
-                        height="2.5"
-                        rx="1.25"
-                        fill="#eff6ff"
-                        opacity={isMain ? 0.5 : 0.72}
-                      />
-                    ))
-                  : null}
+            {/* global trade network */}
+            <g fill="none" stroke={ELECTRIC_LIGHT} strokeLinecap="round">
+              {ARCS.map(([a, b], i) => {
+                const [x1, y1] = HUBS[a];
+                const [x2, y2] = HUBS[b];
+                const cx = (x1 + x2) / 2;
+                const cy = Math.min(y1, y2) - Math.abs(x2 - x1) * 0.22 - 14;
+                return (
+                  <path
+                    key={i}
+                    d={`M${x1} ${y1} Q${cx} ${cy} ${x2} ${y2}`}
+                    strokeOpacity="0.35"
+                    strokeWidth="1.1"
+                    strokeDasharray={i % 3 === 0 ? '5 7' : undefined}
+                  >
+                    {i % 3 === 0 ? (
+                      <animate attributeName="stroke-dashoffset" values="0;-24" dur="3.4s" repeatCount="indefinite" />
+                    ) : null}
+                  </path>
+                );
+              })}
+            </g>
+            {/* glowing connection nodes */}
+            <g>
+              {HUBS.map(([x, y], i) => (
+                <g key={i}>
+                  <circle cx={x} cy={y} r="9" fill={ELECTRIC} opacity="0.25">
+                    <animate attributeName="r" values="4;15" dur="3.6s" begin={`${i * 0.35}s`} repeatCount="indefinite" />
+                    <animate attributeName="opacity" values="0.45;0" dur="3.6s" begin={`${i * 0.35}s`} repeatCount="indefinite" />
+                  </circle>
+                  <circle cx={x} cy={y} r="3" fill={ELECTRIC_LIGHT} />
+                  <circle cx={x} cy={y} r="6.5" fill="none" stroke={ELECTRIC} strokeOpacity="0.5" strokeWidth="1" />
+                </g>
+              ))}
+            </g>
+          </>
+        ) : null}
+
+        {showCity ? (
+          <>
+            {/* illuminated skyline */}
+            <g>
+              {TOWERS.map(([x, w, h], i) => {
+                const isMain = i === MAIN_TOWER;
+                const fill = isMain ? 'url(#ch-towerMain)' : i % 2 === 0 ? 'url(#ch-towerA)' : 'url(#ch-towerB)';
+                return (
+                  <g key={i}>
+                    <rect x={x} y={HORIZON - h} width={w} height={h} rx="3" fill={fill} />
+                    {isMain ? (
+                      <>
+                        <rect x={x + w / 2 - 2} y={HORIZON - h - 26} width="4" height="26" rx="2" fill="#1d4ed8" />
+                        <circle cx={x + w / 2} cy={HORIZON - h - 28} r="4" fill={ELECTRIC_LIGHT}>
+                          <animate attributeName="opacity" values="1;0.35;1" dur="2.6s" repeatCount="indefinite" />
+                        </circle>
+                      </>
+                    ) : null}
+                    {/* lit window banding on the taller towers */}
+                    {h > 150
+                      ? Array.from({ length: Math.floor(h / 30) }).map((_, r) => (
+                          <rect
+                            key={r}
+                            x={x + w * 0.22}
+                            y={HORIZON - h + 14 + r * 30}
+                            width={w * 0.56}
+                            height="2.5"
+                            rx="1.25"
+                            fill={ELECTRIC_LIGHT}
+                            opacity={isMain ? 0.55 : 0.7}
+                          />
+                        ))
+                      : null}
+                  </g>
+                );
+              })}
+            </g>
+
+            {/* water + reflection */}
+            <rect x="0" y={HORIZON} width={STAGE_W} height={STAGE_H - HORIZON} fill="url(#ch-water)" />
+            <g mask="url(#ch-reflect)">
+              <g transform={`translate(0 ${HORIZON * 2}) scale(1 -1)`} opacity="0.45">
+                {TOWERS.map(([x, w, h], i) => (
+                  <rect
+                    key={i}
+                    x={x}
+                    y={HORIZON - h}
+                    width={w}
+                    height={h}
+                    rx="3"
+                    fill={i === MAIN_TOWER ? ELECTRIC : '#1d4ed8'}
+                    opacity={i === MAIN_TOWER ? 0.5 : 0.35}
+                  />
+                ))}
               </g>
-            );
-          })}
-        </g>
+            </g>
+            <g stroke={ELECTRIC} strokeOpacity="0.35" strokeWidth="1">
+              {[456, 486, 520, 552].map((y, i) => (
+                <line key={i} x1={i % 2 === 0 ? 40 : 220} y1={y} x2={i % 2 === 0 ? 780 : 960} y2={y} />
+              ))}
+            </g>
+            <line x1="0" y1={HORIZON} x2={STAGE_W} y2={HORIZON} stroke={ELECTRIC} strokeOpacity="0.5" strokeWidth="1.4" />
+          </>
+        ) : null}
 
-        {/* water + reflection */}
-        <rect x="0" y={HORIZON} width={STAGE_W} height={STAGE_H - HORIZON} fill="url(#ch-water)" />
-        <g mask="url(#ch-reflect)">
-          <g transform={`translate(0 ${HORIZON * 2}) scale(1 -1)`} opacity="0.5">
-            {TOWERS.map(([x, w, h], i) => (
-              <rect
-                key={i}
-                x={x}
-                y={HORIZON - h}
-                width={w}
-                height={h}
-                rx="3"
-                fill={i === MAIN_TOWER ? '#2563eb' : '#5b7c99'}
-                opacity={i === MAIN_TOWER ? 0.55 : 0.4}
-              />
-            ))}
-          </g>
-        </g>
-        <g stroke="#93c5fd" strokeOpacity="0.5" strokeWidth="1">
-          {[456, 486, 520, 552].map((y, i) => (
-            <line key={i} x1={i % 2 === 0 ? 40 : 220} y1={y} x2={i % 2 === 0 ? 780 : 960} y2={y} />
-          ))}
-        </g>
-        <line x1="0" y1={HORIZON} x2={STAGE_W} y2={HORIZON} stroke="#bfdbfe" strokeWidth="1.4" />
-
-        {/* glass sheen over the upper band */}
-        <rect x="0" y="0" width={STAGE_W} height="180" fill="url(#ch-glass)" />
+        {part === 'full' ? <rect x="0" y="0" width={STAGE_W} height="180" fill="url(#ch-glass)" /> : null}
       </svg>
     </div>
   );

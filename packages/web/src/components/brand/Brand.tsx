@@ -46,13 +46,16 @@ export function Brand({
   }
 
   return (
-    <Link to="/" className={`group flex items-center gap-3 ${className}`} aria-label={t('app.name')}>
-      <WMonogram size={compact ? 44 : 54} className="shrink-0 transition-transform duration-300 group-hover:scale-[1.03]" />
-      <span className="flex flex-col leading-tight">
-        <span className={`font-serif text-2xl font-bold uppercase tracking-[0.02em] ${name}`}>
+    <Link to="/" className={`group flex min-w-0 items-center gap-2.5 sm:gap-3 ${className}`} aria-label={t('app.name')}>
+      <WMonogram
+        size={compact ? 44 : 54}
+        className="h-9 w-9 shrink-0 transition-transform duration-300 group-hover:scale-[1.03] sm:h-11 sm:w-11"
+      />
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className={`font-serif text-lg font-bold uppercase leading-none tracking-[0.02em] sm:text-2xl ${name}`}>
           {t('brand.name')}
         </span>
-        <span className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.34em] ${sub}`}>
+        <span className={`mt-1 text-[8px] font-semibold uppercase tracking-[0.18em] sm:text-[10px] sm:tracking-[0.34em] ${sub}`}>
           {t('brand.sub')}
         </span>
       </span>

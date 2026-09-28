@@ -1,5 +1,6 @@
 /**
- * Read-only UI verification for the LE WASSIT homepage redesign.
+ * Read-only UI verification for the LE WASSIT homepage redesign — dark navy
+ * premium theme.
  * Drives the running public build; no DB writes, no re-seeding.
  * Usage: node scripts/ui-redesign-check.mjs <baseURL>
  */
@@ -16,9 +17,13 @@ const record = (name, pass, detail = '') => {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
 };
 
+/** Deep navy used by the landing hero surface (#050c24). */
+const NAVY = 'rgb(5, 12, 36)';
+const BRAND = 'rgb(37, 99, 235)';
+
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
 
-async function open(ctxOpts, label) {
+async function open(ctxOpts) {
   const ctx = await browser.newContext(ctxOpts);
   const page = await ctx.newPage();
   const errors = [];
@@ -33,12 +38,13 @@ async function open(ctxOpts, label) {
   page.on('response', (r) => { if (r.status() >= 400 && r.url().includes('/api/')) failed.push(`${r.status()} ${r.url()}`); });
   await page.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 45000 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  return { ctx, page, errors, pageErrors, failed, label };
+  return { ctx, page, errors, pageErrors, failed };
 }
 
 // ── Desktop / French ────────────────────────────────────────────────────────
 {
-  const { ctx, page, errors, pageErrors, failed } = await open({ viewport: { width: 1440, height: 900 }, locale: 'fr-FR' }, 'desktop-fr');
+  const { ctx, page, errors, pageErrors, failed } = await open({ viewport: { width: 1440, height: 900 }, locale: 'fr-FR' });
+  await page.waitForTimeout(1500);
   await page.screenshot({ path: `${OUT}/desktop-fr.png`, fullPage: false });
 
   const h1 = page.locator('h1');
@@ -46,25 +52,40 @@ async function open(ctxOpts, label) {
   record('desktop: H1 lockup shows LE WASSIT', /LE WASSIT/.test(h1Text), h1Text.replace(/\n/g, ' / '));
   record('desktop: H1 lockup also shows BUSINESS GLOBAL', /BUSINESS GLOBAL/.test(h1Text));
 
-  // Hero background is a light white→#EFF6FF gradient (not a flat colour).
-  const heroBg = await page.evaluate(() => {
+  // Hero surface is premium dark navy (not a light gradient).
+  const hero = await page.evaluate(() => {
     const el = document.querySelector('main > section');
-    return { image: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).backgroundColor };
+    return { bg: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color };
   });
-  record('desktop: hero is a light white→#EFF6FF gradient', /linear-gradient/.test(heroBg.image) && /rgb\(239, 246, 255\)/.test(heroBg.image), heroBg.image.slice(0, 80));
+  record('desktop: hero is deep navy (#050c24)', hero.bg === NAVY, hero.bg);
+  record('desktop: hero copy renders in white', /rgb\(255, 255, 255\)/.test(hero.color), hero.color);
+
+  // The hero headline is white and the subtitle is a light brand tint.
+  const heroType = await page.evaluate(() => {
+    const h2 = document.querySelector('main section h2');
+    const p = document.querySelector('main section h2 + p');
+    return {
+      h2: h2 ? getComputedStyle(h2).color : null,
+      h2Text: h2 ? h2.textContent.trim().slice(0, 60) : '',
+      p: p ? getComputedStyle(p).color : null,
+    };
+  });
+  record('desktop: hero headline is white', heroType.h2 === 'rgb(255, 255, 255)', `${heroType.h2} "${heroType.h2Text}"`);
 
   const cta = page.locator('main a[href="/register"]').first();
   const ctaBg = await cta.evaluate((el) => getComputedStyle(el).backgroundColor);
-  record('desktop: primary CTA is brand blue #2563EB', ctaBg === 'rgb(37, 99, 235)', ctaBg);
+  record('desktop: primary CTA is brand blue #2563EB', ctaBg === BRAND, ctaBg);
 
-  // Solid blue statistics bar fed by live platform data.
-  const band = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('main div')].find((e) => /rgb\(30, 58, 138\)/.test(getComputedStyle(e).backgroundImage));
-    return el ? { text: el.textContent.slice(0, 80), radius: getComputedStyle(el).borderRadius } : null;
+  // Statistics band is fed by live platform data (or shows the pending notice).
+  const stats = await page.evaluate(() => {
+    const note = [...document.querySelectorAll('main p')]
+      .map((p) => p.textContent)
+      .find((t) => /chiffres|stats|plateforme|أرقام|منصة/i.test(t));
+    return { hasNote: !!note, note: note ? note.slice(0, 70) : null, sections: document.querySelectorAll('main section').length };
   });
-  record('desktop: solid blue statistics bar present', !!band, band ? `radius=${band.radius}` : 'not found');
+  record('desktop: statistics band renders platform figures/notice', stats.hasNote, stats.note ?? `${stats.sections} sections`);
 
-  // Header: white, tall, centred nav with a blue underline on the active item.
+  // Header: dark navy, premium, centred nav with a blue underline on the active item.
   const header = await page.evaluate(() => {
     const h = document.querySelector('header');
     const active = document.querySelector('header nav a[aria-current="page"]');
@@ -77,24 +98,33 @@ async function open(ctxOpts, label) {
       loginBg: login ? getComputedStyle(login).backgroundColor : null,
     };
   });
-  record('desktop: header is white', header.bg === 'rgb(255, 255, 255)', header.bg);
-  record('desktop: header is tall (>=100px)', header.innerHeight >= 100, `${header.innerHeight}px`);
-  record('desktop: active nav item has a blue underline', header.underline === 'rgb(37, 99, 235)' && parseFloat(header.underlineW) > 0, `${header.underlineW}`);
-  record('desktop: "Se connecter" is a blue button', header.loginBg === 'rgb(37, 99, 235)', header.loginBg ?? 'not found');
+  // The header is 95%-opaque navy over the hero artwork, so accept the alpha form too.
+  record('desktop: header is dark navy', /rgba?\(5, 12, 36(, 0\.95)?\)/.test(header.bg), header.bg);
+  record('desktop: header is premium tall (>=96px)', header.innerHeight >= 96, `${header.innerHeight}px`);
+  record('desktop: active nav item has a blue underline', header.underline === 'rgb(96, 165, 250)' && parseFloat(header.underlineW) > 0, `${header.underline}`);
+  record('desktop: "Se connecter" is a blue button', header.loginBg === BRAND, header.loginBg ?? 'not found');
 
   // Hero artwork: dotted world map + skyline + network, drawn in SVG.
   const art = await page.evaluate(() => {
     const svgs = [...document.querySelectorAll('main svg')];
-    const svg = svgs.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0];
-    if (!svg) return null;
+    const all = svgs.map((s) => ({
+      circles: s.querySelectorAll('circle').length,
+      rects: s.querySelectorAll('rect').length,
+      paths: s.querySelectorAll('path').length,
+      mask: !!s.querySelector('mask'),
+    }));
     return {
-      circles: svg.querySelectorAll('circle').length,
-      rects: svg.querySelectorAll('rect').length,
-      paths: svg.querySelectorAll('path').length,
-      mask: !!svg.querySelector('mask'),
+      circles: all.reduce((n, a) => n + a.circles, 0),
+      rects: all.reduce((n, a) => n + a.rects, 0),
+      paths: all.reduce((n, a) => n + a.paths, 0),
+      mask: all.some((a) => a.mask),
     };
   });
-  record('desktop: hero artwork renders map + skyline + reflection', !!art && art.circles > 300 && art.rects > 60 && art.paths > 5 && art.mask, JSON.stringify(art));
+  record(
+    'desktop: hero artwork renders map + skyline + reflection',
+    art.circles > 300 && art.rects > 60 && art.paths > 5 && art.mask,
+    JSON.stringify(art),
+  );
 
   // Header nav links scroll to sections and must exist.
   for (const sel of ['#solutions', '#markets', '#resources']) {
@@ -103,15 +133,15 @@ async function open(ctxOpts, label) {
     record(`desktop: nav target ${sel} exists`, (await link.count()) > 0 && exists > 0, `${exists} node(s)`);
   }
 
-  // Search actually filters → navigates to marketplace with a query.
+  // Search actually filters → navigates to search results.
   const searchInput = page.locator('input[placeholder]').first();
   await searchInput.fill('test');
   const searchBtn = page.locator('form button').first();
   await Promise.all([
-    page.waitForURL(/marketplace/, { timeout: 15000 }).catch(() => null),
+    page.waitForURL(/search|marketplace/, { timeout: 15000 }).catch(() => null),
     (await searchBtn.count()) ? searchBtn.click() : searchInput.press('Enter'),
   ]);
-  record('desktop: search lands on /search results', /\/search\?/.test(page.url()) || /marketplace/.test(page.url()), page.url());
+  record('desktop: search lands on results', /\/search\?/.test(page.url()) || /marketplace/.test(page.url()), page.url());
 
   // Anonymous session probing /api/auth/me yields 401 by design — every other call must succeed.
   record('desktop: no JS console errors', errors.length === 0, errors.slice(0, 2).join(' | '));
@@ -121,40 +151,100 @@ async function open(ctxOpts, label) {
   await ctx.close();
 }
 
-// ── Mobile viewport ─────────────────────────────────────────────────────────
-{
-  const { ctx, page, errors, pageErrors, failed } = await open({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: 'fr-FR' }, 'mobile');
-  await page.screenshot({ path: `${OUT}/mobile-fr.png`, fullPage: false });
+// ── Mobile viewport: dark premium header, no clipping, working menu ─────────
+for (const width of [360, 390]) {
+  const { ctx, page, errors, pageErrors, failed } = await open({
+    viewport: { width, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    locale: 'fr-FR',
+  });
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${OUT}/mobile-${width}-fr.png`, fullPage: false });
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  record('mobile: no horizontal overflow', overflow <= 2, `overflow=${overflow}px`);
+  record(`mobile ${width}: no horizontal overflow`, overflow <= 2, `overflow=${overflow}px`);
+
+  // Dark premium header: hamburger present, logo fully visible (no clipping).
+  const head = await page.evaluate(() => {
+    const h = document.querySelector('header');
+    const row = h.firstElementChild;
+    const brand = row.querySelector('a[aria-label]');
+    const logoText = brand ? brand.querySelector('span span') : null;
+    const t = logoText ? logoText.getBoundingClientRect() : null;
+    const burger = h.querySelector('button[aria-label="Menu"]');
+    const b = burger ? burger.getBoundingClientRect() : null;
+    const vw = document.documentElement.clientWidth;
+    return {
+      bg: getComputedStyle(h).backgroundColor,
+      textClipped: t ? t.right > vw + 1 || t.left < -1 : null,
+      logoText: logoText ? logoText.textContent.trim() : null,
+      burger: !!b,
+      burgerLeft: b ? Math.round(b.left) : null,
+    };
+  });
+  record(`mobile ${width}: header is dark navy`, /rgba?\(5, 12, 36(, 0\.95)?\)/.test(head.bg), head.bg);
+  record(`mobile ${width}: brand logo text is not clipped`, head.textClipped === false, `"${head.logoText}"`);
+  record(`mobile ${width}: hamburger menu present`, head.burger, `left=${head.burgerLeft}px`);
+  record(`mobile ${width}: login action present`, (await page.locator('header a[href="/login"]').count()) > 0);
+
   const menuBtn = page.locator('header button[aria-label="Menu"]');
-  record('mobile: menu button visible', await menuBtn.isVisible());
   await menuBtn.click();
   await page.waitForTimeout(300);
   const mobileNav = await page.locator('nav[aria-label="Mobile navigation"]').count();
-  record('mobile: menu opens', mobileNav > 0);
-  await page.screenshot({ path: `${OUT}/mobile-menu.png` });
-  record('mobile: no JS console errors', errors.length === 0, errors.slice(0, 2).join(' | '));
-  record('mobile: no uncaught exceptions', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
-  record('mobile: no failing API calls (401 excused)', failed.filter((f) => !/\/api\/auth\/me/.test(f)).length === 0);
+  record(`mobile ${width}: menu opens`, mobileNav > 0);
+  await page.screenshot({ path: `${OUT}/mobile-${width}-menu.png` });
+
+  // The hero must not be hidden behind the sticky header/banner.
+  const heroVisible = await page.evaluate(() => {
+    const h1 = document.querySelector('h1');
+    const header = document.querySelector('header');
+    if (!h1 || !header) return null;
+    const a = h1.getBoundingClientRect();
+    const b = header.getBoundingClientRect();
+    return { h1Top: Math.round(a.top), headerBottom: Math.round(b.bottom) };
+  });
+  record(
+    `mobile ${width}: hero lockup starts below the header`,
+    !!heroVisible && heroVisible.h1Top >= heroVisible.headerBottom - 1,
+    JSON.stringify(heroVisible),
+  );
+
+  record(`mobile ${width}: no JS console errors`, errors.length === 0, errors.slice(0, 2).join(' | '));
+  record(`mobile ${width}: no uncaught exceptions`, pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
+  record(`mobile ${width}: no failing API calls (401 excused)`, failed.filter((f) => !/\/api\/auth\/me/.test(f)).length === 0);
   await ctx.close();
 }
 
 // ── Arabic RTL ──────────────────────────────────────────────────────────────
 {
-  const { ctx, page, errors, pageErrors } = await open({ viewport: { width: 1440, height: 900 }, locale: 'ar' }, 'rtl');
+  const { ctx, page, errors, pageErrors } = await open({ viewport: { width: 1440, height: 900 }, locale: 'ar' });
+  await page.waitForTimeout(1500);
   const dir = await page.evaluate(() => document.documentElement.dir);
   record('rtl: document dir = rtl', dir === 'rtl', dir);
-  // Hero grid must put text on the right in RTL (logical start).
+
+  // The hero is centred, so the lockup must be horizontally centred in RTL too.
   const pos = await page.evaluate(() => {
     const h1 = document.querySelector('h1');
     const r = h1.getBoundingClientRect();
-    return { left: Math.round(r.left), right: Math.round(r.right), vw: window.innerWidth };
+    const vw = document.documentElement.clientWidth;
+    const centre = r.left + r.width / 2;
+    return { centre: Math.round(centre), vw, delta: Math.round(Math.abs(centre - vw / 2)) };
   });
-  record('rtl: hero heading sits on the right side', pos.left > pos.vw / 3, JSON.stringify(pos));
+  record('rtl: hero lockup is centred', pos.delta <= 24, JSON.stringify(pos));
   await page.screenshot({ path: `${OUT}/rtl-ar.png` });
   record('rtl: no JS console errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   record('rtl: no uncaught exceptions', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
+  await ctx.close();
+}
+
+// ── Non-home public routes keep the light header ─────────────────────────────
+{
+  const { ctx, page } = await open({ viewport: { width: 1440, height: 900 }, locale: 'fr-FR' });
+  await page.goto(BASE + '/marketplace', { waitUntil: 'networkidle', timeout: 45000 });
+  await page.waitForTimeout(1200);
+  const headerBg = await page.evaluate(() => getComputedStyle(document.querySelector('header')).backgroundColor);
+  record('marketplace: header stays light (white)', headerBg === 'rgb(255, 255, 255)', headerBg);
   await ctx.close();
 }
 

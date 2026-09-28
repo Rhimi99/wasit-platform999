@@ -31,6 +31,14 @@ const INDICATORS: Array<{ icon: IconName; key: string }> = [
   { icon: 'shield', key: 'secure' },
 ];
 
+/** The four headline capabilities shown directly under the hero. */
+const FEATURES: Array<{ icon: IconName; key: string }> = [
+  { icon: 'globe', key: 'global' },
+  { icon: 'sparkles', key: 'ai' },
+  { icon: 'buildings', key: 'b2b' },
+  { icon: 'shield', key: 'secure' },
+];
+
 const VALUE_CARDS: Array<{ icon: IconName; key: string; tone: string }> = [
   { icon: 'globe', key: 'global', tone: 'text-brand-700 text-brand-50' },
   { icon: 'sparkles', key: 'ai', tone: 'text-teal-600 bg-teal-50' },
@@ -131,7 +139,7 @@ export function HomePage() {
   ].filter(Boolean) as Array<{ icon: IconName; value: number; key: string }>;
 
   return (
-    <PublicLayout>
+    <PublicLayout darkHeader>
       <SeoHead
         title="LE WASSIT — Business Global | منصة الوساطة التجارية"
         description="LE WASSIT relie acheteurs, fournisseurs et entreprises : marketplace B2B/B2C, comparaison de prix, confiance et croissance."
@@ -139,360 +147,389 @@ export function HomePage() {
         jsonLd={ORG_JSON_LD}
       />
 
-      {/* ═══════════ HERO ═══════════ */}
-      <section className="relative overflow-hidden bg-gradient-to-r from-white via-white to-brand-50 rtl:bg-gradient-to-l">
+      {/* ═══════════ HERO — dark navy global commerce ═══════════ */}
+      <section className="lp-dark-section bg-ink-950">
+        {/* Dotted world map + global trade network behind the headline. */}
+        <CorporateHero part="map" className="pointer-events-none absolute inset-x-0 top-0 h-[62%] opacity-90" />
+        {/* Soft electric-blue lighting and a navy veil so the copy always reads. */}
         <div
           className="pointer-events-none absolute inset-0"
           style={{
             backgroundImage:
-              'radial-gradient(60% 55% at 8% 20%, rgba(255,255,255,0.95), transparent 62%), radial-gradient(50% 50% at 92% 88%, rgba(37,99,235,0.07), transparent 70%)',
+              'radial-gradient(75% 60% at 50% 0%, rgba(37,99,235,0.28), transparent 70%), linear-gradient(180deg, rgba(5,12,36,0.55) 0%, rgba(5,12,36,0.86) 62%, #050c24 100%)',
           }}
           aria-hidden
         />
 
-        <div className="relative mx-auto grid max-w-[1400px] items-center gap-10 px-4 pb-14 pt-12 sm:px-6 lg:min-h-[740px] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-12 lg:px-8 lg:pb-16 lg:pt-14">
-          <div className="text-center lg:text-start">
-            {/* The lockup carries the page's single H1 (W / LE WASSIT / rule / BUSINESS GLOBAL). */}
-            <Brand presentation as="h1" className="justify-center lg:justify-start" />
+        <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 pb-52 pt-14 text-center sm:px-6 sm:pb-64 lg:pb-72 lg:pt-20">
+          {/* The lockup carries the page's single H1 (W / LE WASSIT / rule / BUSINESS GLOBAL). */}
+          <Brand presentation as="h1" light className="justify-center" />
 
-            <p className="mt-9 font-serif text-2xl leading-tight text-ink-1000/85 sm:text-4xl lg:text-[40px]">
-              {t('lp.hero.tagline')}
-            </p>
-            <p className="mx-auto mt-7 max-w-xl whitespace-pre-line text-base leading-relaxed text-slate-600 sm:text-lg lg:mx-0 lg:text-xl">
-              {t('lp.hero.subtitle')}
-            </p>
+          <h2 className="mt-8 whitespace-pre-line font-serif text-[28px] font-bold leading-[1.3] text-white sm:text-4xl lg:text-[46px] lg:leading-[1.25]">
+            {t('lp.hero.headline')}
+          </h2>
+          <p className="mx-auto mt-6 max-w-2xl whitespace-pre-line text-base leading-relaxed text-brand-100 sm:text-lg lg:text-xl">
+            {t('lp.hero.subtitle')}
+          </p>
 
-            <div className="mt-10 flex flex-col items-center gap-3.5 sm:flex-row sm:justify-center lg:justify-start">
-              <Link
-                to="/register"
-                className="inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] bg-brand-600 px-7 text-base font-semibold text-white shadow-lift transition-colors hover:bg-brand-700 sm:w-[270px]"
-              >
-                {t('lp.hero.ctaPrimary')}
-                <Icon name="arrow" className="h-4 w-4 rtl:rotate-180" />
+          <div className="mt-9 flex w-full flex-col items-stretch gap-3.5 sm:w-auto sm:flex-row sm:items-center sm:justify-center">
+            <Link
+              to="/register"
+              className="inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] bg-brand-600 px-7 text-base font-semibold text-white shadow-glow transition-colors hover:bg-brand-500 sm:w-[270px]"
+            >
+              {t('lp.hero.ctaPrimary')}
+              <Icon name="arrow" className="h-4 w-4 rtl:rotate-180" />
+            </Link>
+            <Link
+              to="/marketplace"
+              className="lp-btn-ghost-dark inline-flex h-[56px] w-full items-center justify-center gap-2.5 px-7 text-base font-semibold sm:w-[270px]"
+            >
+              {t('lp.hero.ctaSecondary')}
+              <svg viewBox="0 0 12 12" className="h-3 w-3 rtl:rotate-180" aria-hidden>
+                <path d="M3.5 1.8 9 6l-5.5 4.2z" fill="currentColor" />
+              </svg>
+            </Link>
+          </div>
+
+          {/* Descriptive capability indicators — no invented figures. */}
+          <div className="mt-9 flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5">
+            {INDICATORS.map((i) => (
+              <span key={i.key} className="inline-flex items-center gap-2 text-[13px] font-semibold text-brand-100">
+                <Icon name={i.icon} className="h-4 w-4 text-brand-300" />
+                {t(`lp.ind.${i.key}`)}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Illuminated skyline along the bottom edge of the hero. */}
+        <CorporateHero part="skyline" className="pointer-events-none absolute inset-x-0 bottom-0 h-[46%] sm:h-[42%]" />
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-24"
+          style={{ backgroundImage: 'linear-gradient(180deg, transparent, #050c24)' }}
+          aria-hidden
+        />
+      </section>
+
+      {/* ═══════════ FEATURES — four premium capabilities ═══════════ */}
+      <section className="lp-dark-section bg-ink-950 pb-16 pt-14 sm:pt-16">
+        <Container>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {FEATURES.map((f) => (
+              <div key={f.key} className="lp-dark-card p-6 text-center sm:text-start">
+                <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-brand-400/30 bg-brand-500/15 text-brand-300">
+                  <Icon name={f.icon} className="h-6 w-6" />
+                </span>
+                <h3 className="mt-4 text-base font-bold text-white">{t(`lp.ind.${f.key}`)}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-brand-100/75">{t(`home.value.${f.key}.desc`)}</p>
+              </div>
+            ))}
+          </div>
+        </Container>
+      </section>
+
+      {/* ═══════════ STATISTICS — real platform data only ═══════════ */}
+      <section className="lp-dark-section bg-ink-950 pb-16">
+        <Container>
+          <div className="rounded-[26px] border border-brand-400/25 bg-gradient-to-br from-brand-900/70 via-ink-900 to-ink-950 px-6 py-9 shadow-glow sm:px-10 sm:py-11">
+            {stats.length > 0 ? (
+              <>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-9 sm:grid-cols-4">
+                  {stats.map((s) => (
+                    <div key={s.key} className="flex flex-col items-center text-center">
+                      <span className="inline-flex h-14 w-14 items-center justify-center rounded-full border border-brand-400/40 bg-brand-500/15 text-brand-300">
+                        <Icon name={s.icon} className="h-6 w-6" />
+                      </span>
+                      <p className="mt-4 font-serif text-4xl font-bold leading-none text-white sm:text-[42px]">{s.value}</p>
+                      <p className="mt-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-200">
+                        {t(s.key)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-8 text-center text-[11px] text-brand-200/70">{t('home.stats.note')}</p>
+              </>
+            ) : (
+              <p className="text-center text-sm font-semibold text-brand-200">{t('lp.stats.pending')}</p>
+            )}
+          </div>
+        </Container>
+      </section>
+
+      {/* Light surface begins here — everything below the dark hero block. */}
+        <div className="bg-white">
+        {/* ═══════════ SEARCH (real function) ═══════════ */}
+        <Container className="pb-14 pt-14">
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-panel sm:p-5">
+            <p className="mb-3 text-xs font-bold uppercase tracking-[0.16em] text-brand-600">{t('lp.hero.searchLabel')}</p>
+            <SearchBar />
+          </div>
+        </Container>
+
+        {/* ═══════════ WHY LE WASSIT / SOLUTIONS ═══════════ */}
+        <Container id="solutions" className="pb-16">
+          <SectionTitle title={t('lp.why.title')} sub={t('lp.why.sub')} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {VALUE_CARDS.map((v) => (
+              <div key={v.key} className="lp-card lp-card-hover p-6">
+                <span className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ${v.tone}`}>
+                  <Icon name={v.icon} className="h-6 w-6" />
+                </span>
+                <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.value.${v.key}`)}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.value.${v.key}.desc`)}</p>
+              </div>
+            ))}
+          </div>
+        </Container>
+
+        {/* ═══════════ AUDIENCES: BUYERS · SUPPLIERS & MERCHANTS · COMPANIES ═══════════ */}
+        <Container className="pb-16">
+          <SectionTitle title={t('lp.audience.title')} sub={t('lp.audience.sub')} />
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            {AUDIENCES.map((a) => (
+              <Link key={a.key} to={a.to} className="lp-card lp-card-hover group flex flex-col p-7">
+                <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
+                  <Icon name={a.icon} className="h-5 w-5" />
+                </span>
+                <h3 className="mt-5 text-lg font-bold text-slate-900">{t(`lp.audience.${a.key}`)}</h3>
+                <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-500">{t(`lp.audience.${a.key}.desc`)}</p>
+                <span className="lp-link-arrow mt-5">
+                  {t(`lp.audience.${a.key}.cta`)}
+                  <Icon name="arrow" className="h-4 w-4 transition-transform group-hover:translate-x-1 rtl:rotate-180 rtl:group-hover:-translate-x-1" />
+                </span>
               </Link>
-              <Link
-                to="/marketplace"
-                className="inline-flex h-[56px] w-full items-center justify-center gap-2.5 rounded-[10px] border border-brand-300 bg-white px-7 text-base font-semibold text-brand-700 transition-colors hover:border-brand-500 hover:bg-brand-50 sm:w-[270px]"
-              >
-                {t('lp.hero.ctaSecondary')}
-                <svg viewBox="0 0 12 12" className="h-3 w-3 rtl:rotate-180" aria-hidden>
-                  <path d="M3.5 1.8 9 6l-5.5 4.2z" fill="currentColor" />
-                </svg>
-              </Link>
+            ))}
+          </div>
+        </Container>
+
+        {/* ═══════════ GLOBAL MARKETS (real data) ═══════════ */}
+        <section id="markets" className="lp-dark-band scroll-mt-24 py-16">
+          <Container className="relative">
+            <div className="mx-auto mb-12 max-w-2xl text-center">
+              <h2 className="lp-h2">{t('lp.markets.title')}</h2>
+              <p className="mt-4 text-sm leading-relaxed text-slate-500 sm:text-base">{t('lp.markets.sub')}</p>
             </div>
 
-            {/* Descriptive capability indicators — no invented figures. */}
-            <div className="mt-9 flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 lg:justify-start">
-              {INDICATORS.map((i) => (
-                <span key={i.key} className="inline-flex items-center gap-2 text-[13px] font-semibold text-slate-600">
-                  <Icon name={i.icon} className="h-4 w-4 text-brand-600" />
-                  {t(`lp.ind.${i.key}`)}
-                </span>
+            {/* Active countries — real data only. Inactive markets are never claimed. */}
+            {activeCountries.length > 0 ? (
+              <div className="mb-10">
+                <p className="mb-4 text-center text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">
+                  {t('home.global.activeMarkets')}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                  {countries.slice(0, 12).map((c) => (
+                    <span
+                      key={c.id}
+                      className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold ${
+                        c.isActive ? 'border-brand-200 bg-brand-50 text-brand-800' : 'border-slate-200 bg-white text-slate-400'
+                      }`}
+                    >
+                      <span aria-hidden>{c.flag ?? '🌐'}</span>
+                      {c.name}
+                      {c.isActive ? <span className="h-1.5 w-1.5 rounded-full bg-brand-500" aria-hidden /> : null}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {[
+                { icon: 'globe' as IconName, to: '/suppliers', k: 'suppliers' },
+                { icon: 'buildings' as IconName, to: '/merchants', k: 'merchants' },
+                { icon: 'buildings' as IconName, to: '/companies', k: 'companies' },
+              ].map((x) => (
+                <Link
+                  key={x.k}
+                  to={x.to}
+                  className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-card transition-all hover:-translate-y-1 hover:border-brand-200 hover:shadow-lift"
+                >
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+                    <Icon name={x.icon} className="h-5 w-5" />
+                  </span>
+                  <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.global.${x.k}`)}</h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{t(`home.global.${x.k}.desc`)}</p>
+                  <Icon name="arrow" className="mt-4 h-4 w-4 text-brand-600 transition-transform group-hover:translate-x-1 rtl:rotate-180 rtl:group-hover:-translate-x-1" />
+                </Link>
               ))}
             </div>
-          </div>
 
-          <CorporateHero className="animate-fade-up lg:-me-4 xl:-me-10" />
-        </div>
-      </section>
-
-      {/* ═══════════ STATISTICS BAR — directly under the hero ═══════════ */}
-      <Container className="-mt-2 pb-10 pt-12 lg:-mt-16 lg:pt-0">
-        <div className="rounded-[26px] bg-gradient-to-r from-brand-900 via-brand-700 to-brand-600 px-6 py-9 text-white shadow-lift sm:px-10 sm:py-11">
-          {stats.length > 0 ? (
-            <>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-9 sm:grid-cols-4 lg:flex lg:items-start lg:justify-between lg:gap-6">
-                {stats.map((s) => (
-                  <div key={s.key} className="flex flex-col items-center text-center lg:min-w-[150px]">
-                    <span className="inline-flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white">
-                      <Icon name={s.icon} className="h-6 w-6" />
-                    </span>
-                    <p className="mt-4 font-serif text-4xl font-bold leading-none text-white sm:text-[42px]">{s.value}</p>
-                    <p className="mt-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-100">
-                      {t(s.key)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-8 text-center text-[11px] text-brand-100/75">{t('home.stats.note')}</p>
-            </>
-          ) : (
-            <p className="text-center text-sm font-semibold text-brand-100">{t('lp.stats.pending')}</p>
-          )}
-        </div>
-      </Container>
-
-      {/* ═══════════ SEARCH (real function) ═══════════ */}
-      <Container className="pb-14">
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-panel sm:p-5">
-          <p className="mb-3 text-xs font-bold uppercase tracking-[0.16em] text-brand-600">{t('lp.hero.searchLabel')}</p>
-          <SearchBar />
-        </div>
-      </Container>
-
-      {/* ═══════════ WHY LE WASSIT / SOLUTIONS ═══════════ */}
-      <Container id="solutions" className="pb-16">
-        <SectionTitle title={t('lp.why.title')} sub={t('lp.why.sub')} />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {VALUE_CARDS.map((v) => (
-            <div key={v.key} className="lp-card lp-card-hover p-6">
-              <span className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ${v.tone}`}>
-                <Icon name={v.icon} className="h-6 w-6" />
-              </span>
-              <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.value.${v.key}`)}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.value.${v.key}.desc`)}</p>
-            </div>
-          ))}
-        </div>
-      </Container>
-
-      {/* ═══════════ AUDIENCES: BUYERS · SUPPLIERS & MERCHANTS · COMPANIES ═══════════ */}
-      <Container className="pb-16">
-        <SectionTitle title={t('lp.audience.title')} sub={t('lp.audience.sub')} />
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-          {AUDIENCES.map((a) => (
-            <Link key={a.key} to={a.to} className="lp-card lp-card-hover group flex flex-col p-7">
-              <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
-                <Icon name={a.icon} className="h-5 w-5" />
-              </span>
-              <h3 className="mt-5 text-lg font-bold text-slate-900">{t(`lp.audience.${a.key}`)}</h3>
-              <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-500">{t(`lp.audience.${a.key}.desc`)}</p>
-              <span className="lp-link-arrow mt-5">
-                {t(`lp.audience.${a.key}.cta`)}
-                <Icon name="arrow" className="h-4 w-4 transition-transform group-hover:translate-x-1 rtl:rotate-180 rtl:group-hover:-translate-x-1" />
-              </span>
-            </Link>
-          ))}
-        </div>
-      </Container>
-
-      {/* ═══════════ GLOBAL MARKETS (real data) ═══════════ */}
-      <section id="markets" className="lp-dark-band scroll-mt-24 py-16">
-        <Container className="relative">
-          <div className="mx-auto mb-12 max-w-2xl text-center">
-            <h2 className="lp-h2">{t('lp.markets.title')}</h2>
-            <p className="mt-4 text-sm leading-relaxed text-slate-500 sm:text-base">{t('lp.markets.sub')}</p>
-          </div>
-
-          {/* Active countries — real data only. Inactive markets are never claimed. */}
-          {activeCountries.length > 0 ? (
-            <div className="mb-10">
-              <p className="mb-4 text-center text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">
-                {t('home.global.activeMarkets')}
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-2.5">
-                {countries.slice(0, 12).map((c) => (
-                  <span
-                    key={c.id}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold ${
-                      c.isActive ? 'border-brand-200 bg-brand-50 text-brand-800' : 'border-slate-200 bg-white text-slate-400'
-                    }`}
-                  >
-                    <span aria-hidden>{c.flag ?? '🌐'}</span>
-                    {c.name}
-                    {c.isActive ? <span className="h-1.5 w-1.5 rounded-full bg-brand-500" aria-hidden /> : null}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {[
-              { icon: 'globe' as IconName, to: '/suppliers', k: 'suppliers' },
-              { icon: 'buildings' as IconName, to: '/merchants', k: 'merchants' },
-              { icon: 'buildings' as IconName, to: '/companies', k: 'companies' },
-            ].map((x) => (
-              <Link
-                key={x.k}
-                to={x.to}
-                className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-card transition-all hover:-translate-y-1 hover:border-brand-200 hover:shadow-lift"
-              >
-                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
-                  <Icon name={x.icon} className="h-5 w-5" />
-                </span>
-                <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.global.${x.k}`)}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{t(`home.global.${x.k}.desc`)}</p>
-                <Icon name="arrow" className="mt-4 h-4 w-4 text-brand-600 transition-transform group-hover:translate-x-1 rtl:rotate-180 rtl:group-hover:-translate-x-1" />
+            <div className="mt-10 text-center">
+              <Link to="/marketplace" className="lp-btn-primary btn-lg">
+                {t('home.global.cta')}
               </Link>
-            ))}
-          </div>
+            </div>
+          </Container>
+        </section>
 
-          <div className="mt-10 text-center">
-            <Link to="/marketplace" className="lp-btn-primary btn-lg">
-              {t('home.global.cta')}
-            </Link>
-          </div>
-        </Container>
-      </section>
-
-      {/* ═══════════ AI-POWERED COMMERCE ═══════════ */}
-      <section id="ai" className="scroll-mt-24 border-b border-slate-200/70 bg-gradient-to-b from-brand-50/60 to-white py-16">
-        <Container>
-          <SectionTitle title={t('home.ai.title')} sub={t('home.ai.sub')} />
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {AI_AGENTS.map((a) => (
-              <div key={a.key} className="lp-card lp-card-hover p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
-                    <Icon name={a.icon} className="h-5 w-5" />
-                  </span>
-                  {a.live ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                      {t('home.ai.live')}
+        {/* ═══════════ AI-POWERED COMMERCE ═══════════ */}
+        <section id="ai" className="scroll-mt-24 border-b border-slate-200/70 bg-gradient-to-b from-brand-50/60 to-white py-16">
+          <Container>
+            <SectionTitle title={t('home.ai.title')} sub={t('home.ai.sub')} />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {AI_AGENTS.map((a) => (
+                <div key={a.key} className="lp-card lp-card-hover p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
+                      <Icon name={a.icon} className="h-5 w-5" />
                     </span>
-                  ) : (
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                      {t('home.ai.soon')}
-                    </span>
-                  )}
-                </div>
-                <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.ai.${a.key}`)}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.ai.${a.key}.desc`)}</p>
-              </div>
-            ))}
-          </div>
-          <p className="mx-auto mt-8 max-w-2xl text-center text-xs leading-relaxed text-slate-400">{t('home.ai.note')}</p>
-        </Container>
-      </section>
-
-      {/* ═══════════ HOW IT WORKS ═══════════ */}
-      <Container id="how-it-works" className="py-16">
-        <SectionTitle title={t('home.how.title')} sub={t('home.how.sub')} />
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {HOW_STEPS.map((s, i) => (
-            <div key={s.key} className="lp-card relative p-6">
-              <span className="absolute end-4 top-4 z-0 text-3xl font-black text-slate-100" aria-hidden>
-                0{i + 1}
-              </span>
-              <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
-                <Icon name={s.icon} className="h-5 w-5" />
-              </span>
-              <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.how.${s.key}`)}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.how.${s.key}.desc`)}</p>
-            </div>
-          ))}
-        </div>
-      </Container>
-
-      {/* ═══════════ TRUST & VERIFICATION ═══════════ */}
-      <Container id="trust" className="pb-16">
-        <SectionTitle title={t('home.trust.title')} sub={t('home.trust.sub')} />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {TRUST_ITEMS.map((item) => (
-            <div key={item.key} className="lp-card flex items-start gap-4 p-5">
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-                <Icon name={item.icon} className="h-5 w-5" />
-              </span>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">{t(`home.trust.${item.key}`)}</h3>
-                <p className="mt-1 text-sm leading-relaxed text-slate-500">{t(`home.trust.${item.key}.desc`)}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Container>
-
-      {/* ═══════════ RESOURCES: DISCOVERY FROM REAL DATA ═══════════ */}
-      <section id="resources" className="scroll-mt-24 border-y border-slate-200/70 bg-white py-16">
-        <Container>
-          <SectionHeader
-            title={t('home.discover.title')}
-            subtitle={t('home.discover.sub')}
-            action={<Link to="/marketplace" className="lp-link-arrow">{t('common.viewAll')}</Link>}
-          />
-          {products.length === 0 ? (
-            <Card className="text-center text-sm text-slate-500">{t('common.noData')}</Card>
-          ) : (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-              {products.map((p) => <ProductCard key={p.id} product={p} />)}
-            </div>
-          )}
-
-          {categories.length > 0 ? (
-            <div className="mt-12">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-bold text-slate-900">{t('home.categories')}</h3>
-                <Link to="/categories" className="lp-link-arrow">{t('common.viewAll')}</Link>
-              </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                {categories.slice(0, 8).map((c) => (
-                  <Link key={c.id} to="/marketplace" className="lp-card lp-card-hover flex items-center gap-3 p-4">
-                    <span className="text-2xl" aria-hidden>{c.icon ?? '📦'}</span>
-                    <span className="font-medium text-slate-800">{c.nameAr ?? c.name}</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {suppliers.length > 0 ? (
-            <div className="mt-12">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-bold text-slate-900">{t('home.topSuppliers')}</h3>
-                <Link to="/suppliers" className="lp-link-arrow">{t('common.viewAll')}</Link>
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {suppliers.slice(0, 8).map((s) => (
-                  <Link key={s.id} to={`/suppliers/${s.id}`} className="lp-card lp-card-hover flex items-center gap-3 p-4">
-                    {s.logoUrl ? (
-                      <img src={s.logoUrl} alt={s.companyName} className="h-11 w-11 shrink-0 rounded-full object-cover" />
+                    {a.live ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+                        {t('home.ai.live')}
+                      </span>
                     ) : (
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700">
-                        <Icon name="buildings" className="h-5 w-5" />
-                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                        {t('home.ai.soon')}
+                      </span>
                     )}
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-slate-800">{s.companyName}</p>
-                      {s.verified ? (
-                        <p className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
-                          <Icon name="check" className="h-3.5 w-3.5" />
-                          {t('suppliers.verified')}
-                        </p>
-                      ) : null}
-                    </div>
-                  </Link>
-                ))}
+                  </div>
+                  <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.ai.${a.key}`)}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.ai.${a.key}.desc`)}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mx-auto mt-8 max-w-2xl text-center text-xs leading-relaxed text-slate-400">{t('home.ai.note')}</p>
+          </Container>
+        </section>
+
+        {/* ═══════════ HOW IT WORKS ═══════════ */}
+        <Container id="how-it-works" className="py-16">
+          <SectionTitle title={t('home.how.title')} sub={t('home.how.sub')} />
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {HOW_STEPS.map((s, i) => (
+              <div key={s.key} className="lp-card relative p-6">
+                <span className="absolute end-4 top-4 z-0 text-3xl font-black text-slate-100" aria-hidden>
+                  0{i + 1}
+                </span>
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
+                  <Icon name={s.icon} className="h-5 w-5" />
+                </span>
+                <h3 className="mt-4 text-base font-bold text-slate-900">{t(`home.how.${s.key}`)}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-500">{t(`home.how.${s.key}.desc`)}</p>
+              </div>
+            ))}
+          </div>
+        </Container>
+
+        {/* ═══════════ TRUST & VERIFICATION ═══════════ */}
+        <Container id="trust" className="pb-16">
+          <SectionTitle title={t('home.trust.title')} sub={t('home.trust.sub')} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {TRUST_ITEMS.map((item) => (
+              <div key={item.key} className="lp-card flex items-start gap-4 p-5">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+                  <Icon name={item.icon} className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">{t(`home.trust.${item.key}`)}</h3>
+                  <p className="mt-1 text-sm leading-relaxed text-slate-500">{t(`home.trust.${item.key}.desc`)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Container>
+
+        {/* ═══════════ RESOURCES: DISCOVERY FROM REAL DATA ═══════════ */}
+        <section id="resources" className="scroll-mt-24 border-y border-slate-200/70 bg-white py-16">
+          <Container>
+            <SectionHeader
+              title={t('home.discover.title')}
+              subtitle={t('home.discover.sub')}
+              action={<Link to="/marketplace" className="lp-link-arrow">{t('common.viewAll')}</Link>}
+            />
+            {products.length === 0 ? (
+              <Card className="text-center text-sm text-slate-500">{t('common.noData')}</Card>
+            ) : (
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+                {products.map((p) => <ProductCard key={p.id} product={p} />)}
+              </div>
+            )}
+
+            {categories.length > 0 ? (
+              <div className="mt-12">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-bold text-slate-900">{t('home.categories')}</h3>
+                  <Link to="/categories" className="lp-link-arrow">{t('common.viewAll')}</Link>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                  {categories.slice(0, 8).map((c) => (
+                    <Link key={c.id} to="/marketplace" className="lp-card lp-card-hover flex items-center gap-3 p-4">
+                      <span className="text-2xl" aria-hidden>{c.icon ?? '📦'}</span>
+                      <span className="font-medium text-slate-800">{c.nameAr ?? c.name}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {suppliers.length > 0 ? (
+              <div className="mt-12">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-bold text-slate-900">{t('home.topSuppliers')}</h3>
+                  <Link to="/suppliers" className="lp-link-arrow">{t('common.viewAll')}</Link>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {suppliers.slice(0, 8).map((s) => (
+                    <Link key={s.id} to={`/suppliers/${s.id}`} className="lp-card lp-card-hover flex items-center gap-3 p-4">
+                      {s.logoUrl ? (
+                        <img src={s.logoUrl} alt={s.companyName} className="h-11 w-11 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700">
+                          <Icon name="buildings" className="h-5 w-5" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-800">{s.companyName}</p>
+                        {s.verified ? (
+                          <p className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                            <Icon name="check" className="h-3.5 w-3.5" />
+                            {t('suppliers.verified')}
+                          </p>
+                        ) : null}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </Container>
+        </section>
+
+        {/* ═══════════ ABOUT ═══════════ */}
+        <Container id="about" className="py-16">
+          <div className="grid items-center gap-10 rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white to-brand-50/60 p-8 shadow-card sm:p-12 lg:grid-cols-2">
+            <div>
+              <span className="lp-eyebrow text-brand-600">{t('lp.about.eyebrow')}</span>
+              <h2 className="lp-h2 mt-3">{t('home.about.title')}</h2>
+              <p className="mt-2 text-sm font-semibold text-brand-700">{t('home.about.sub')}</p>
+              <p className="mt-5 text-sm leading-relaxed text-slate-600">{t('home.about.p1')}</p>
+              <p className="mt-3 text-sm leading-relaxed text-slate-600">{t('home.about.p2')}</p>
+            </div>
+            <div className="flex justify-center lg:justify-end">
+              <WMonogram size={180} className="opacity-90" />
+            </div>
+          </div>
+        </Container>
+
+        {/* ═══════════ FINAL CTA ═══════════ */}
+        <section id="contact" className="scroll-mt-24 border-t border-slate-200 bg-gradient-to-b from-white to-brand-50/60 py-16">
+          <Container className="relative">
+            <div className="flex flex-col items-center justify-between gap-8 text-center lg:flex-row lg:text-start">
+              <div>
+                <h2 className="lp-h2">{t('lp.cta.title')}</h2>
+                <p className="mt-3 text-sm text-slate-500 sm:text-base">{t('lp.cta.sub')}</p>
+              </div>
+              <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+                <Link to="/register" className="lp-btn-primary btn-lg">
+                  {t('lp.hero.ctaPrimary')}
+                </Link>
+                <Link to="/login" className="lp-btn-outline btn-lg">{t('lp.nav.login')}</Link>
               </div>
             </div>
-          ) : null}
-        </Container>
-      </section>
-
-      {/* ═══════════ ABOUT ═══════════ */}
-      <Container id="about" className="py-16">
-        <div className="grid items-center gap-10 rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white to-brand-50/60 p-8 shadow-card sm:p-12 lg:grid-cols-2">
-          <div>
-            <span className="lp-eyebrow text-brand-600">{t('lp.about.eyebrow')}</span>
-            <h2 className="lp-h2 mt-3">{t('home.about.title')}</h2>
-            <p className="mt-2 text-sm font-semibold text-brand-700">{t('home.about.sub')}</p>
-            <p className="mt-5 text-sm leading-relaxed text-slate-600">{t('home.about.p1')}</p>
-            <p className="mt-3 text-sm leading-relaxed text-slate-600">{t('home.about.p2')}</p>
-          </div>
-          <div className="flex justify-center lg:justify-end">
-            <WMonogram size={180} className="opacity-90" />
-          </div>
-        </div>
-      </Container>
-
-      {/* ═══════════ FINAL CTA ═══════════ */}
-      <section id="contact" className="scroll-mt-24 border-t border-slate-200 bg-gradient-to-b from-white to-brand-50/60 py-16">
-        <Container className="relative">
-          <div className="flex flex-col items-center justify-between gap-8 text-center lg:flex-row lg:text-start">
-            <div>
-              <h2 className="lp-h2">{t('lp.cta.title')}</h2>
-              <p className="mt-3 text-sm text-slate-500 sm:text-base">{t('lp.cta.sub')}</p>
-            </div>
-            <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
-              <Link to="/register" className="lp-btn-primary btn-lg">
-                {t('lp.hero.ctaPrimary')}
-              </Link>
-              <Link to="/login" className="lp-btn-outline btn-lg">{t('lp.nav.login')}</Link>
-            </div>
-          </div>
-        </Container>
-      </section>
+          </Container>
+        </section>
+      </div>
     </PublicLayout>
   );
 }
