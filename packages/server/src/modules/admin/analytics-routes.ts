@@ -18,6 +18,7 @@ import {
   rollupDailyKpis,
 } from '../analytics/service';
 import { getUnitEconomics, getCustomerCohorts } from '../analytics/unit-economics';
+import { reportingCurrency } from '../../lib/env';
 
 const reportSchema = z.object({
   reportCode: z.string().min(2).max(100),
@@ -37,12 +38,37 @@ const cohortsQuerySchema = z.object({
   months: z.coerce.number().int().min(1).max(36).optional(),
 });
 
+/**
+ * Currency selector for the money KPIs. Each of these endpoints aggregates in
+ * exactly one currency; the caller may name it, otherwise the configured
+ * reporting currency is used. There is no "all currencies" option: without an
+ * exchange-rate source a combined total would be a fabricated number.
+ */
+const currencyQuerySchema = z.object({
+  currency: z.string().length(3).optional(),
+});
+
+function parseCurrencyQuery(raw: Record<string, string | undefined>): string {
+  const parsed = currencyQuerySchema.safeParse(raw);
+  if (!parsed.success) {
+    throw ApiError.validation(
+      parsed.error.issues.map((i) => ({
+        field: i.path.join('.') || 'query',
+        message: i.message,
+        code: 'VALIDATION_FAILED',
+      })),
+    );
+  }
+  return parsed.data.currency ?? reportingCurrency();
+}
+
 export const adminAnalyticsRoutes = new Hono();
 adminAnalyticsRoutes.use('*', requireAuth, requirePermission(PERMISSIONS.ADMIN_ANALYTICS));
 
 adminAnalyticsRoutes.get('/overview', async (c) => {
   const ctx = getContext(c);
-  const data = await getPlatformOverview(ctx.db);
+  const currency = parseCurrencyQuery(c.req.query());
+  const data = await getPlatformOverview(ctx.db, currency);
   return c.json({ success: true, data });
 });
 
@@ -54,13 +80,15 @@ adminAnalyticsRoutes.get('/retention', async (c) => {
 
 adminAnalyticsRoutes.get('/conversion', async (c) => {
   const ctx = getContext(c);
-  const data = await getConversionSnapshot(ctx.db);
+  const currency = parseCurrencyQuery(c.req.query());
+  const data = await getConversionSnapshot(ctx.db, currency);
   return c.json({ success: true, data });
 });
 
 adminAnalyticsRoutes.get('/revenue-breakdown', async (c) => {
   const ctx = getContext(c);
-  const data = await getRevenueBreakdown(ctx.db);
+  const currency = parseCurrencyQuery(c.req.query());
+  const data = await getRevenueBreakdown(ctx.db, currency);
   return c.json({ success: true, data });
 });
 
@@ -80,7 +108,7 @@ adminAnalyticsRoutes.get('/unit-economics', async (c) => {
   const q = parsed.data;
   const data = await getUnitEconomics(
     ctx.db,
-    q.currency ?? 'TND',
+    q.currency ?? reportingCurrency(),
     q.windowDays ?? 30,
     {
       assumedRetentionMonths: q.retentionMonths ?? 12,
@@ -109,7 +137,7 @@ adminAnalyticsRoutes.get('/cohorts', async (c) => {
     );
   }
   const q = parsed.data;
-  const items = await getCustomerCohorts(ctx.db, q.currency ?? 'TND', q.months ?? 6);
+  const items = await getCustomerCohorts(ctx.db, q.currency ?? reportingCurrency(), q.months ?? 6);
   return c.json({ success: true, data: { items } });
 });
 
@@ -123,12 +151,13 @@ adminAnalyticsRoutes.get('/daily-kpis', async (c) => {
 // Compute today's rollup into daily_kpis from real data, then list recent.
 adminAnalyticsRoutes.post('/daily-kpis/rollup', async (c) => {
   const ctx = getContext(c);
-  const inserted = await rollupDailyKpis(ctx.db);
+  const currency = parseCurrencyQuery(c.req.query());
+  const inserted = await rollupDailyKpis(ctx.db, currency);
   const items = await listDailyKpis(ctx.db, 14);
   await writeAudit(ctx.db, ctx, {
     action: 'ANALYTICS.KPI_ROLLUP',
     entityType: 'DAILY_KPI',
-    metadata: { inserted },
+    metadata: { inserted, currencyCode: currency },
   });
   return c.json({ success: true, data: { inserted, items } });
 });
@@ -184,6 +213,7 @@ adminAnalyticsRoutes.get('/users/:userId/overview', async (c) => {
   const ctx = getContext(c);
   const userId = c.req.param('userId');
   if (!userId) throw ApiError.validation([{ field: 'userId', message: 'userId is required', code: 'VALIDATION_FAILED' }]);
-  const data = await getMyAnalyticsOverview(ctx.db, userId);
+  const currency = parseCurrencyQuery(c.req.query());
+  const data = await getMyAnalyticsOverview(ctx.db, userId, currency);
   return c.json({ success: true, data });
 });

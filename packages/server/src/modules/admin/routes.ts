@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { desc, eq, sql } from 'drizzle-orm';
+import { ApiError } from '@wasit/shared';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
 import { getContext } from '../../lib/request-context.js';
 import { orders, transactions, transactionLedger } from '../../db/schema/commerce.js';
@@ -9,20 +11,43 @@ import { suppliers, merchants, companies } from '../../db/schema/trade.js';
 import { users } from '../../db/schema/auth.js';
 import { auditLogs } from '../../db/schema/audit.js';
 import { writeAudit } from '../../lib/audit.js';
+import { reportingCurrency } from '../../lib/env.js';
+import { resolveCurrencyScope } from '../../lib/currency-scope.js';
 
 /** Admin-only sub-app. Every route requires ADMIN or SUPER_ADMIN role. */
 export const adminRoutes = new Hono();
 
 adminRoutes.use('*', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
 
+const statsQuerySchema = z.object({
+  currency: z.string().length(3).optional(),
+});
+
+
 // ----- KPIs ---------------------------------------------------------------
 adminRoutes.get('/stats', async (c) => {
   const ctx = getContext(c);
-  const [userCount, productCount, orderCount, txValue] = await Promise.all([
+  // The money KPI is scoped to one currency (caller-supplied, else the
+  // configured reporting currency). `transactions.total_value` is summed per
+  // currency rather than across all of them, and the excluded currencies are
+  // reported so a multi-currency deployment can see the figure is partial.
+  const parsed = statsQuerySchema.safeParse(c.req.query());
+  if (!parsed.success) {
+    throw ApiError.validation(
+      parsed.error.issues.map((i) => ({
+        field: i.path.join('.') || 'query',
+        message: i.message,
+        code: 'VALIDATION_FAILED',
+      })),
+    );
+  }
+  const currency = parsed.data.currency ?? reportingCurrency();
+  const [userCount, productCount, orderCount, txValue, ordersInCurrency] = await Promise.all([
     ctx.db.select({ v: sql<number>`count(*)` }).from(users),
     ctx.db.select({ v: sql<number>`count(*)` }).from(products),
     ctx.db.select({ v: sql<number>`count(*)` }).from(orders),
-    ctx.db.select({ v: sql<string>`coalesce(sum(total_value),0)` }).from(transactions),
+    ctx.db.select({ v: sql<string>`coalesce(sum(total_value),0)` }).from(transactions).where(eq(transactions.currencyCode, currency)),
+    ctx.db.select({ v: sql<number>`count(*)::int` }).from(transactions).where(eq(transactions.currencyCode, currency)),
   ]);
   return c.json({
     success: true,
@@ -31,6 +56,11 @@ adminRoutes.get('/stats', async (c) => {
       products: Number(productCount[0].v),
       orders: Number(orderCount[0].v),
       gmv: Number(txValue[0].v),
+      currencyCode: currency,
+      transactionsInCurrency: Number(ordersInCurrency[0].v),
+      currencyScope: await resolveCurrencyScope(ctx.db, currency, [
+        { table: transactions, column: transactions.currencyCode },
+      ]),
     },
   });
 });

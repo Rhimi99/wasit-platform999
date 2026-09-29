@@ -393,6 +393,9 @@ export interface AdminStats {
   products: number;
   orders: number;
   gmv: number;
+  currencyCode: string;
+  transactionsInCurrency: number;
+  currencyScope: CurrencyScope;
 }
 
 export interface AdminAdSummary {
@@ -414,6 +417,18 @@ export interface AdminCampaignRow extends CampaignSummary {
 
 // ---- Analytics Engine (Phase 16) ----
 
+/**
+ * How a money KPI was scoped: which single currency it is in, and which
+ * currencies were therefore excluded (never converted — no FX rate is assumed).
+ */
+export interface CurrencyScope {
+  currencyCode: string;
+  excludedCurrencies: string[];
+  multiCurrency: boolean;
+  fxApplied: false;
+  note: string;
+}
+
 export interface PlatformOverview {
   users: number;
   activeUsers30d: number;
@@ -424,6 +439,7 @@ export interface PlatformOverview {
   products: number;
   publishedProducts: number;
   orders: number;
+  ordersInCurrency: number;
   paidOrders: number;
   gmv: number;
   commission: number;
@@ -437,6 +453,7 @@ export interface PlatformOverview {
   aiRequests: number;
   dailyKpiCount: number;
   currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
 export interface RetentionSnapshot {
@@ -460,6 +477,8 @@ export interface ConversionSnapshot {
   abandonedOrders: number;
   users: number;
   ordersPerUser: number;
+  currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
 export interface RevenueBreakdown {
@@ -470,6 +489,7 @@ export interface RevenueBreakdown {
   settlement: number;
   netRevenue: number;
   currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
 export interface DailyKpiRow {
@@ -538,6 +558,8 @@ export interface MyAnalyticsOverview {
   avgOrderValue: number;
   campaigns: number;
   activeCampaigns: number;
+  currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
 export interface CommissionPolicy {

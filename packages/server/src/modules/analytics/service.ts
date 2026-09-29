@@ -3,7 +3,7 @@ import type { DB } from '../../db/client';
 import { auditLogs } from '../../db/schema/audit';
 import { users, sessions } from '../../db/schema/auth';
 import { analyticsEvents, dailyKpis, dashboardReports } from '../../db/schema/analytics';
-import { orders, transactions } from '../../db/schema/commerce';
+import { orders, transactions, transactionLedger } from '../../db/schema/commerce';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { products } from '../../db/schema/products';
 import { inventoryItems } from '../../db/schema/commerce_extras';
@@ -13,7 +13,9 @@ import { aiRequests } from '../../db/schema/ai';
 import { newId } from '../../lib/ids';
 import { roundMoney } from '../../lib/money';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
+import { reportingCurrency } from '../../lib/env';
 import { resolveOwnedSellerIds } from '../../lib/seller-ownership';
+import { resolveCurrencyScope, type CurrencyScope } from '../../lib/currency-scope';
 
 const DECIMAL_TO_NUM = (v: unknown, fallback = 0): number => {
   const n = Number(v ?? fallback);
@@ -39,6 +41,8 @@ export interface PlatformOverview {
   products: number;
   publishedProducts: number;
   orders: number;
+  /** Orders in `currencyCode` — the denominator of `avgOrderValue`. */
+  ordersInCurrency: number;
   paidOrders: number;
   gmv: number;
   commission: number;
@@ -51,16 +55,26 @@ export interface PlatformOverview {
   subscriptionsActive: number;
   aiRequests: number;
   dailyKpiCount: number;
+  /** The single currency every money KPI above is expressed in. */
   currencyCode: string;
+  /** Which currencies were excluded from the money KPIs, and why. */
+  currencyScope: CurrencyScope;
 }
 
-export async function getPlatformOverview(db: DB): Promise<PlatformOverview> {
+/**
+ * Platform KPIs. Counts are currency-agnostic, but every money figure (GMV,
+ * commission, payment fees, average order value) is scoped to exactly one
+ * currency — `currencyCode` when supplied, otherwise the configured reporting
+ * currency. Orders in other currencies are excluded rather than summed in, and
+ * the exclusion is reported through `currencyScope`.
+ */
+export async function getPlatformOverview(db: DB, currencyCode = reportingCurrency()): Promise<PlatformOverview> {
   const since = sinceDays(30);
   const [
     usersRow, activeUsersRow,
     suppliersRow, merchantsRow, companiesRow,
     productsRow, publishedRow,
-    ordersRow, paidRow, gmvRow, commRow, feeRow,
+    ordersRow, paidRow, gmvRow, commRow, feeRow, ordersInCurrencyRow,
     inventoryRow, lowRow, outRow,
     campaignRow, subRow, aiRow, dailyKpiRow, productOwnersRow,
   ] = await Promise.all([
@@ -73,9 +87,10 @@ export async function getPlatformOverview(db: DB): Promise<PlatformOverview> {
     db.select({ v: sql<number>`count(*)::int` }).from(products).where(eq(products.isPublished, true)),
     db.select({ v: sql<number>`count(*)::int` }).from(orders),
     db.select({ v: sql<number>`count(*)::int` }).from(orders).where(eq(orders.paymentStatus, 'PAID')),
-    db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders),
-    db.select({ v: sql<string>`coalesce(sum(commission),0)::text` }).from(orders),
-    db.select({ v: sql<string>`coalesce(sum(payment_fee),0)::text` }).from(orders),
+    db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(eq(orders.currencyCode, currencyCode)),
+    db.select({ v: sql<string>`coalesce(sum(commission),0)::text` }).from(orders).where(eq(orders.currencyCode, currencyCode)),
+    db.select({ v: sql<string>`coalesce(sum(payment_fee),0)::text` }).from(orders).where(eq(orders.currencyCode, currencyCode)),
+    db.select({ v: sql<number>`count(*)::int` }).from(orders).where(eq(orders.currencyCode, currencyCode)),
     db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems),
     db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems).where(sql`quantity <= low_stock_threshold and quantity > 0`),
     db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems).where(sql`quantity <= 0`),
@@ -89,7 +104,7 @@ export async function getPlatformOverview(db: DB): Promise<PlatformOverview> {
       .where(eq(products.isPublished, true)),
   ]);
 
-  const ordersCount = Number(ordersRow[0].v);
+  const ordersInCurrency = Number(ordersInCurrencyRow[0].v);
   const gmv = DECIMAL_TO_NUM(gmvRow[0].v);
   return {
     users: Number(usersRow[0].v),
@@ -100,12 +115,13 @@ export async function getPlatformOverview(db: DB): Promise<PlatformOverview> {
     companies: Number(companiesRow[0].v),
     products: Number(productsRow[0].v),
     publishedProducts: Number(publishedRow[0].v),
-    orders: ordersCount,
+    orders: Number(ordersRow[0].v),
+    ordersInCurrency,
     paidOrders: Number(paidRow[0].v),
     gmv,
     commission: DECIMAL_TO_NUM(commRow[0].v),
     paymentFees: DECIMAL_TO_NUM(feeRow[0].v),
-    avgOrderValue: ordersCount > 0 ? gmv / ordersCount : 0,
+    avgOrderValue: ordersInCurrency > 0 ? gmv / ordersInCurrency : 0,
     inventoryItems: Number(inventoryRow[0].v),
     lowStock: Number(lowRow[0].v),
     outOfStock: Number(outRow[0].v),
@@ -113,7 +129,11 @@ export async function getPlatformOverview(db: DB): Promise<PlatformOverview> {
     subscriptionsActive: Number(subRow[0].v),
     aiRequests: Number(aiRow[0].v),
     dailyKpiCount: Number(dailyKpiRow[0].v),
-    currencyCode: 'TND',
+    currencyCode,
+    currencyScope: await resolveCurrencyScope(db, currencyCode, [
+      { table: orders, column: orders.currencyCode },
+      { table: transactions, column: transactions.currencyCode },
+    ]),
   };
 }
 
@@ -163,24 +183,31 @@ export interface ConversionSnapshot {
   abandonedOrders: number; // orders with status DRAFT/CANCELLED never paid
   users: number;
   ordersPerUser: number;
+  /** The single currency `avgOrderValue` is expressed in. */
+  currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
-export async function getConversionSnapshot(db: DB): Promise<ConversionSnapshot> {
+export async function getConversionSnapshot(db: DB, currencyCode = reportingCurrency()): Promise<ConversionSnapshot> {
   const since = sinceDays(30);
-  const [ordersRow, paidRow, orders30Row, paid30Row, abandonedRow, usersRow, gmvRow] = await Promise.all([
+  const [ordersRow, paidRow, orders30Row, paid30Row, abandonedRow, usersRow, gmvRow, ordersInCurrencyRow] = await Promise.all([
     db.select({ v: sql<number>`count(*)::int` }).from(orders),
     db.select({ v: sql<number>`count(*)::int` }).from(orders).where(eq(orders.paymentStatus, 'PAID')),
     db.select({ v: sql<number>`count(*)::int` }).from(orders).where(gte(orders.createdAt, since)),
     db.select({ v: sql<number>`count(*)::int` }).from(orders).where(and(eq(orders.paymentStatus, 'PAID'), gte(orders.createdAt, since))),
     db.select({ v: sql<number>`count(*)::int` }).from(orders).where(sql`status in ('DRAFT','CANCELLED','REFUNDED','DISPUTED')`),
     db.select({ v: sql<number>`count(*)::int` }).from(users),
-    db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders),
+    // Average order value is a money figure, so it is computed from orders in a
+    // single currency — never by dividing a mixed-currency sum by a total count.
+    db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(eq(orders.currencyCode, currencyCode)),
+    db.select({ v: sql<number>`count(*)::int` }).from(orders).where(eq(orders.currencyCode, currencyCode)),
   ]);
   const ordersCount = Number(ordersRow?.[0]?.v ?? 0);
   const paid = Number(paidRow?.[0]?.v ?? 0);
   const orders30 = Number(orders30Row?.[0]?.v ?? 0);
   const paid30 = Number(paid30Row?.[0]?.v ?? 0);
   const usersCount = Number(usersRow?.[0]?.v ?? 0);
+  const ordersInCurrency = Number(ordersInCurrencyRow?.[0]?.v ?? 0);
   return {
     orders: ordersCount,
     paidOrders: paid,
@@ -188,10 +215,12 @@ export async function getConversionSnapshot(db: DB): Promise<ConversionSnapshot>
     paidOrders30d: paid30,
     conversionRate: ordersCount > 0 ? paid / ordersCount : 0,
     conversionRate30d: orders30 > 0 ? paid30 / orders30 : 0,
-    avgOrderValue: ordersCount > 0 ? DECIMAL_TO_NUM(gmvRow?.[0]?.v) / ordersCount : 0,
+    avgOrderValue: ordersInCurrency > 0 ? DECIMAL_TO_NUM(gmvRow?.[0]?.v) / ordersInCurrency : 0,
     abandonedOrders: Number(abandonedRow?.[0]?.v ?? 0),
     users: usersCount,
     ordersPerUser: usersCount > 0 ? ordersCount / usersCount : 0,
+    currencyCode,
+    currencyScope: await resolveCurrencyScope(db, currencyCode, [{ table: orders, column: orders.currencyCode }]),
   };
 }
 
@@ -203,13 +232,17 @@ export interface RevenueBreakdown {
   settlement: number;
   netRevenue: number;
   currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
 /** Aggregates ledger amounts by entry type, respecting CREDIT/DEBIT direction. */
-export async function getRevenueBreakdown(db: DB): Promise<RevenueBreakdown> {
+export async function getRevenueBreakdown(db: DB, currencyCode = reportingCurrency()): Promise<RevenueBreakdown> {
   const [txValRow, flows] = await Promise.all([
-    db.select({ v: sql<string>`coalesce(sum(total_value),0)::text` }).from(transactions),
-    ledgerFlowTotals(db, 'TND'),
+    db
+      .select({ v: sql<string>`coalesce(sum(total_value),0)::text` })
+      .from(transactions)
+      .where(eq(transactions.currencyCode, currencyCode)),
+    ledgerFlowTotals(db, currencyCode),
   ]);
   // Same accounting truth as /api/revenue/report: COMMISSION is WASIT revenue;
   // PAYMENT_FEE is collected for the payment provider (ledger beneficiary
@@ -227,7 +260,11 @@ export async function getRevenueBreakdown(db: DB): Promise<RevenueBreakdown> {
     refunds: refunds.toNumber(),
     settlement: settlement.toNumber(),
     netRevenue: netRevenue.toNumber(),
-    currencyCode: 'TND',
+    currencyCode,
+    currencyScope: await resolveCurrencyScope(db, currencyCode, [
+      { table: transactions, column: transactions.currencyCode },
+      { table: transactionLedger, column: transactionLedger.currencyCode },
+    ]),
   };
 }
 
@@ -256,25 +293,28 @@ export async function listDailyKpis(db: DB, days = 14): Promise<DailyKpiRow[]> {
 }
 
 /** Persist a computed daily snapshot into `daily_kpis` (rollup — real data, not mock). */
-export async function rollupDailyKpis(db: DB): Promise<number> {
+export async function rollupDailyKpis(db: DB, currencyCode = reportingCurrency()): Promise<number> {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1); // end of today
 
+  // The money metrics are scoped to one currency and carry it in `dimensions`,
+  // so a stored 'gmv' row is never a sum across currencies and can always be
+  // attributed to the currency it is denominated in.
   const [ordersRow, gmvRow, commRow, usersRow, productsRow] = await Promise.all([
     db.select({ v: sql<number>`count(*)::int` }).from(orders).where(and(gte(orders.createdAt, start), sql`${orders.createdAt} <= ${end}`)),
-    db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(and(gte(orders.createdAt, start), sql`${orders.createdAt} <= ${end}`)),
-    db.select({ v: sql<string>`coalesce(sum(commission),0)::text` }).from(orders).where(and(gte(orders.createdAt, start), sql`${orders.createdAt} <= ${end}`)),
+    db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(and(gte(orders.createdAt, start), sql`${orders.createdAt} <= ${end}`, eq(orders.currencyCode, currencyCode))),
+    db.select({ v: sql<string>`coalesce(sum(commission),0)::text` }).from(orders).where(and(gte(orders.createdAt, start), sql`${orders.createdAt} <= ${end}`, eq(orders.currencyCode, currencyCode))),
     db.select({ v: sql<number>`count(*)::int` }).from(users),
     db.select({ v: sql<number>`count(*)::int` }).from(products),
   ]);
 
-  const metrics: Array<{ metricName: string; value: string }> = [
-    { metricName: 'orders', value: String(Number(ordersRow?.[0]?.v ?? 0)) },
-    { metricName: 'gmv', value: String(DECIMAL_TO_NUM(gmvRow?.[0]?.v)) },
-    { metricName: 'commission', value: String(DECIMAL_TO_NUM(commRow?.[0]?.v)) },
-    { metricName: 'users', value: String(Number(usersRow?.[0]?.v ?? 0)) },
-    { metricName: 'products', value: String(Number(productsRow?.[0]?.v ?? 0)) },
+  const metrics: Array<{ metricName: string; value: string; money: boolean }> = [
+    { metricName: 'orders', value: String(Number(ordersRow?.[0]?.v ?? 0)), money: false },
+    { metricName: 'gmv', value: String(DECIMAL_TO_NUM(gmvRow?.[0]?.v)), money: true },
+    { metricName: 'commission', value: String(DECIMAL_TO_NUM(commRow?.[0]?.v)), money: true },
+    { metricName: 'users', value: String(Number(usersRow?.[0]?.v ?? 0)), money: false },
+    { metricName: 'products', value: String(Number(productsRow?.[0]?.v ?? 0)), money: false },
   ];
 
   let inserted = 0;
@@ -284,7 +324,7 @@ export async function rollupDailyKpis(db: DB): Promise<number> {
       date: start,
       metricName: m.metricName,
       metricValue: m.value,
-      dimensions: { source: 'rollup' },
+      dimensions: m.money ? { source: 'rollup', currencyCode } : { source: 'rollup' },
     });
     inserted += 1;
   }
@@ -311,6 +351,9 @@ export interface MyAnalyticsOverview {
   avgOrderValue: number;
   campaigns: number;
   activeCampaigns: number;
+  /** The single currency `gmvAsSeller`/`commissionAsSeller` are expressed in. */
+  currencyCode: string;
+  currencyScope: CurrencyScope;
 }
 
 /** Resolve the first owned business entity (supplier > merchant > company). */
@@ -326,7 +369,11 @@ async function resolveOwnedEntity(db: DB, userId: string) {
   return null;
 }
 
-export async function getMyAnalyticsOverview(db: DB, userId: string): Promise<MyAnalyticsOverview> {
+export async function getMyAnalyticsOverview(
+  db: DB,
+  userId: string,
+  currencyCode = reportingCurrency(),
+): Promise<MyAnalyticsOverview> {
   const owned = await resolveOwnedSellerIds(db, userId);
   const entity = await resolveOwnedEntity(db, userId);
 
@@ -347,6 +394,14 @@ export async function getMyAnalyticsOverview(db: DB, userId: string): Promise<My
       avgOrderValue: 0,
       campaigns: 0,
       activeCampaigns: 0,
+      currencyCode,
+      currencyScope: {
+        currencyCode,
+        excludedCurrencies: [],
+        multiCurrency: false,
+        fxApplied: false,
+        note: `Scoped to ${currencyCode}; no seller orders exist yet.`,
+      },
     };
   }
 
@@ -355,8 +410,11 @@ export async function getMyAnalyticsOverview(db: DB, userId: string): Promise<My
   const ids = Array.from(idsSet);
 
   const sellerCond = sql`${orders.sellerId} in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`;
+  // Money figures are scoped to one currency so a seller trading in several
+  // currencies never sees their GMV/commission silently summed across them.
+  const sellerMoneyCond = sql`${sellerCond} and ${orders.currencyCode} = ${currencyCode}`;
 
-  const [productsRow, publishedRow, inventoryRow, lowRow, outRow, ordersRow, gmvRow, commRow, customersRow, disputesRow, campaignRow, activeCampaignRow] =
+  const [productsRow, publishedRow, inventoryRow, lowRow, outRow, ordersRow, gmvRow, commRow, customersRow, disputesRow, campaignRow, activeCampaignRow, ordersInCurrencyRow] =
     await Promise.all([
       db.select({ v: sql<number>`count(*)::int` }).from(products).where(sql`seller_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`),
       db.select({ v: sql<number>`count(*)::int` }).from(products).where(and(sql`seller_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`, eq(products.isPublished, true))),
@@ -364,15 +422,16 @@ export async function getMyAnalyticsOverview(db: DB, userId: string): Promise<My
       db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems).where(sql`(merchant_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})) and quantity <= low_stock_threshold and quantity > 0`),
       db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems).where(sql`(merchant_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})) and quantity <= 0`),
       db.select({ v: sql<number>`count(*)::int` }).from(orders).where(sellerCond),
-      db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(sellerCond),
-      db.select({ v: sql<string>`coalesce(sum(commission - buyer_commission),0)::text` }).from(orders).where(sellerCond),
+      db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(sellerMoneyCond),
+      db.select({ v: sql<string>`coalesce(sum(commission - buyer_commission),0)::text` }).from(orders).where(sellerMoneyCond),
       db.select({ v: sql<number>`count(distinct buyer_id)::int` }).from(orders).where(sellerCond),
       db.select({ v: sql<number>`count(*)::int` }).from(auditLogs).where(and(eq(auditLogs.entityType, 'ORDER'), sql`${auditLogs.entityId} in (select id from orders where ${sellerCond})`)),
       db.select({ v: sql<number>`count(*)::int` }).from(campaigns).where(sql`advertiser_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`),
       db.select({ v: sql<number>`count(*)::int` }).from(campaigns).where(and(sql`advertiser_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`, eq(campaigns.status, 'ACTIVE'))),
+      db.select({ v: sql<number>`count(*)::int` }).from(orders).where(sellerMoneyCond),
     ]);
 
-  const ordersCount = Number(ordersRow?.[0]?.v ?? 0);
+  const ordersInCurrency = Number(ordersInCurrencyRow?.[0]?.v ?? 0);
   const gmv = DECIMAL_TO_NUM(gmvRow?.[0]?.v);
   return {
     hasBusinessEntity: true,
@@ -382,14 +441,16 @@ export async function getMyAnalyticsOverview(db: DB, userId: string): Promise<My
     inventoryItems: Number(inventoryRow?.[0]?.v ?? 0),
     lowStock: Number(lowRow?.[0]?.v ?? 0),
     outOfStock: Number(outRow?.[0]?.v ?? 0),
-    ordersAsSeller: ordersCount,
+    ordersAsSeller: Number(ordersRow?.[0]?.v ?? 0),
     gmvAsSeller: gmv,
     commissionAsSeller: DECIMAL_TO_NUM(commRow?.[0]?.v),
     customers: Number(customersRow?.[0]?.v ?? 0),
     disputesAsSeller: Number(disputesRow?.[0]?.v ?? 0),
-    avgOrderValue: ordersCount > 0 ? gmv / ordersCount : 0,
+    avgOrderValue: ordersInCurrency > 0 ? gmv / ordersInCurrency : 0,
     campaigns: Number(campaignRow?.[0]?.v ?? 0),
     activeCampaigns: Number(activeCampaignRow?.[0]?.v ?? 0),
+    currencyCode,
+    currencyScope: await resolveCurrencyScope(db, currencyCode, [{ table: orders, column: orders.currencyCode }]),
   };
 }
 

@@ -60,6 +60,14 @@ const envSchema = z.object({
   PAYOUT_PROVIDER: z.enum(['noop', 'manual', 'open-checkout', 'sandbox']).default('noop'),
   PAYOUT_API_KEY: z.string().optional(),
   PAYOUT_BASE_URL: z.string().optional(),
+  /**
+   * Currency used to aggregate platform-wide financial reporting when a caller
+   * does not name one. Reporting sums across orders must never mix currencies,
+   * so there is exactly one configured reporting currency per deployment rather
+   * than a per-query guess. Defaults to TND for continuity with existing
+   * deployments; set it to the deployment's actual booking currency.
+   */
+  REPORTING_CURRENCY: z.string().length(3).default('TND'),
   // Flouci Payment Gateway — keys are issued per application (test app is
   // available immediately after uploading the RNE; production needs KYB).
   // Amounts are sent in minor units (millimes for TND).
@@ -312,6 +320,16 @@ if (env.NODE_ENV === 'production' && env.DEMO_PAYMENT_MODE) {
 
 export function demoPaymentMode(): boolean {
   return env.NODE_ENV !== 'production' && env.DEMO_PAYMENT_MODE;
+}
+
+/**
+ * The currency platform-wide reporting aggregates are expressed in when a caller
+ * does not name one. Aggregating across orders of different currencies would sum
+ * incomparable amounts, so reporting is pinned to this single configured value
+ * instead of defaulting per query site.
+ */
+export function reportingCurrency(): string {
+  return env.REPORTING_CURRENCY;
 }
 
 /**

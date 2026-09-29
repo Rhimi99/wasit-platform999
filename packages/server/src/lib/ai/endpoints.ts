@@ -1,4 +1,4 @@
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import type { UserRole } from '@wasit/shared';
 import Decimal from 'decimal.js';
@@ -8,6 +8,7 @@ import { suppliers } from '../../db/schema/trade';
 import { orders } from '../../db/schema/commerce';
 import { campaigns, adEvents } from '../../db/schema/ads';
 import { aiRequests } from '../../db/schema/ai';
+import { reportingCurrency } from '../env';
 
 export interface AiFeatureView {
   kind: string;
@@ -44,20 +45,23 @@ export interface ProductSurvey {
 }
 
 async function productSurvey(db: DB): Promise<ProductSurvey> {
+  const currency = reportingCurrency();
   const rows = await db
     .select({
       count: sql<number>`count(*)::int`,
       published: sql<number>`coalesce(sum((is_published = true)::int),0)::int`,
       avgPrice: sql<string>`coalesce(round(avg(base_price)::numeric,2),0)::text`,
-      currencyCode: sql<string>`coalesce(max(currency_code),'TND')`,
+      currencyCode: sql<string>`coalesce(max(currency_code), ${currency})`,
     })
-    .from(products);
+    .from(products)
+    // Average price is only meaningful within one currency.
+    .where(eq(products.currencyCode, currency));
   const r = rows[0];
   return {
     count: Number(r?.count ?? 0),
     published: Number(r?.published ?? 0),
     avgPrice: r?.avgPrice ?? '0',
-    currencyCode: r?.currencyCode ?? 'TND',
+    currencyCode: r?.currencyCode ?? currency,
   };
 }
 
@@ -228,18 +232,23 @@ export async function runPriceIntelligence(
   roles: UserRole[],
   categoryId?: string,
 ): Promise<AiFeatureView> {
-  const base = db
+  // Price statistics are only meaningful within one currency, so the aggregate is
+  // scoped to the configured reporting currency and reports which one it used.
+  // Summing base prices across currencies would produce an average of
+  // incomparable amounts.
+  const currency = reportingCurrency();
+  const scope = categoryId
+    ? and(eq(products.currencyCode, currency), eq(products.categoryId, categoryId))
+    : eq(products.currencyCode, currency);
+  const rows = await db
     .select({
       min: sql<string>`coalesce(min(base_price),0)::text`,
       max: sql<string>`coalesce(max(base_price),0)::text`,
       avg: sql<string>`coalesce(round(avg(base_price)::numeric,2),0)::text`,
       count: sql<number>`count(*)::int`,
     })
-    .from(products);
-
-  const rows = categoryId
-    ? await base.where(categoryId ? eq(products.categoryId, categoryId) : undefined)
-    : await base;
+    .from(products)
+    .where(scope);
 
   const r = rows[0];
   const data = {
@@ -247,7 +256,7 @@ export async function runPriceIntelligence(
     max: r?.max ?? '0',
     avg: r?.avg ?? '0',
     count: Number(r?.count ?? 0),
-    currencyCode: 'TND',
+    currencyCode: currency,
   };
   const out = await runAIFeatureStructured(
     db,
