@@ -204,6 +204,13 @@ export async function applyPayoutEventToDb(db: DB, input: PayoutEventInput): Pro
   return next;
 }
 
+/** Reads a payout by its own id. */
+export async function getPayout(db: DB, payoutId: string): Promise<PayoutRecord> {
+  const rows = await db.select().from(payouts).where(eq(payouts.id, payoutId)).limit(1);
+  if (rows.length === 0) throw ApiError.notFound('Payout');
+  return toRecord(rows[0]);
+}
+
 /** Reads the payout for a transaction, if any (used by callers/tests). */
 export async function findPayoutByTransaction(db: DB, transactionId: string): Promise<PayoutRecord | null> {
   const rows = await db

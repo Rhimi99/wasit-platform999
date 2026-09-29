@@ -69,7 +69,7 @@ export function AdminDashboardPage() {
           <Card><p className="text-xs text-slate-500">{t('admin.users')}</p><p className="mt-1 text-3xl font-bold text-slate-900">{stats?.users ?? '—'}</p></Card>
           <Card><p className="text-xs text-slate-500">{t('admin.products')}</p><p className="mt-1 text-3xl font-bold text-slate-900">{stats?.products ?? '—'}</p></Card>
           <Card><p className="text-xs text-slate-500">{t('admin.orders')}</p><p className="mt-1 text-3xl font-bold text-slate-900">{stats?.orders ?? '—'}</p></Card>
-          <Card><p className="text-xs text-slate-500">{t('analytics.gmv')}</p><p className="mt-1 text-3xl font-bold text-wasit-700">{stats ? formatMoney(stats.gmv) : '—'}</p></Card>
+          <Card><p className="text-xs text-slate-500">{t('analytics.gmv')}</p><p className="mt-1 text-3xl font-bold text-wasit-700">{stats ? formatMoney(stats.gmv, stats.currencyCode) : '—'}</p></Card>
         </div>
       )}
     </AppLayout>
@@ -134,17 +134,26 @@ export function AdminAnalyticsPage() {
       <SectionHeader title={t('admin.analytics')} subtitle={t('analytics.adminSubtitle')} />
       {loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} /> : (
         <>
+          {overview?.currencyScope && (
+            <p
+              className="mb-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+              dir="ltr"
+              data-testid="kpi-currency-scope"
+            >
+              {overview.currencyScope.note}
+            </p>
+          )}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Card><p className="text-xs text-slate-500">{t('analytics.gmv')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.gmv)}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.gmv')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.gmv, overview?.currencyCode)}</p></Card>
             <Card><p className="text-xs text-slate-500">{t('analytics.users')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{overview?.users ?? 0}</p></Card>
             <Card><p className="text-xs text-slate-500">{t('analytics.orders')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{overview?.orders ?? 0}</p></Card>
-            <Card><p className="text-xs text-slate-500">{t('analytics.commission')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.commission)}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.commission')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.commission, overview?.currencyCode)}</p></Card>
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Card><p className="text-xs text-slate-500">{t('analytics.activeUsers30d')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{overview?.activeUsers30d ?? 0}</p></Card>
             <Card><p className="text-xs text-slate-500">{t('analytics.retentionRate30d')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{pct(retention?.retentionRate30d ?? 0)}</p></Card>
             <Card><p className="text-xs text-slate-500">{t('analytics.conversionRate')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{pct(conversion?.conversionRate ?? 0)}</p></Card>
-            <Card><p className="text-xs text-slate-500">{t('analytics.avgOrderValue')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.avgOrderValue)}</p></Card>
+            <Card><p className="text-xs text-slate-500">{t('analytics.avgOrderValue')}</p><p className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(overview?.avgOrderValue, overview?.currencyCode)}</p></Card>
           </div>
 
           <div className="mt-6 grid gap-4 lg:grid-cols-2">
@@ -153,11 +162,11 @@ export function AdminAnalyticsPage() {
                 <h3 className="text-sm font-semibold text-slate-700">{t('analytics.revenueBreakdown')}</h3>
               </div>
               <dl className="mt-3 space-y-2 text-sm">
-                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.transactionValue')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.transactionValue)}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.commission')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.commission)}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.paymentFees')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.paymentFees)}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.refunds')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.refunds)}</dd></div>
-                <div className="flex justify-between border-t border-slate-100 pt-2"><dt className="font-medium text-slate-700">{t('analytics.netRevenue')}</dt><dd className="font-bold text-slate-900">{formatMoney(revenue?.netRevenue)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.transactionValue')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.transactionValue, revenue?.currencyCode)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.commission')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.commission, revenue?.currencyCode)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.paymentFees')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.paymentFees, revenue?.currencyCode)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-500">{t('analytics.refunds')}</dt><dd className="font-semibold text-slate-800">{formatMoney(revenue?.refunds, revenue?.currencyCode)}</dd></div>
+                <div className="flex justify-between border-t border-slate-100 pt-2"><dt className="font-medium text-slate-700">{t('analytics.netRevenue')}</dt><dd className="font-bold text-slate-900">{formatMoney(revenue?.netRevenue, revenue?.currencyCode)}</dd></div>
               </dl>
             </Card>
             <Card>

@@ -8,6 +8,7 @@ import { revenueAccounts, scenarioReports } from '../../db/schema/revenue';
 import { roundMoney, toDecimal } from '../../lib/money';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { newId } from '../../lib/ids';
+import { reportingCurrency } from '../../lib/env';
 import type { RevenueProfitabilityReport, ScenarioInput, ScenarioResult } from './types';
 
 // ---------------------------------------------------------------------------
@@ -18,9 +19,9 @@ import type { RevenueProfitabilityReport, ScenarioInput, ScenarioResult } from '
 // It never executes INSERT/UPDATE/DELETE against order/ledger/payment data.
 //
 // Currency-scoping: without an Exchange Rate Engine, we never mix currencies.
-// Every aggregate is filtered to a SINGLE currency (default 'TND'). Rows in
-// other currencies are excluded, never converted, and the limitation is echoed
-// in `basedOn`.
+// Every aggregate is filtered to a SINGLE currency (default: the configured
+// reporting currency). Rows in other currencies are excluded, never converted,
+// and the limitation is echoed in `basedOn`.
 //
 // Advertising: the current `ledger_entry_type` enum has no advertising value,
 // so WASIT advertising revenue cannot be proven from the ledger today. We
@@ -84,7 +85,7 @@ async function operationalTotals(db: DB, currencyCode: string): Promise<{ revenu
   return { revenue: NUM_TO_DEC(revenue), cost: NUM_TO_DEC(cost) };
 }
 
-export async function getRevenueProfitability(db: DB, currencyCode = 'TND'): Promise<RevenueProfitabilityReport> {
+export async function getRevenueProfitability(db: DB, currencyCode = reportingCurrency()): Promise<RevenueProfitabilityReport> {
   const [flows, aiModelCosts, operational] = await Promise.all([
     ledgerFlowTotals(db, currencyCode),
     aiModelCostTotal(db, currencyCode),
@@ -181,7 +182,7 @@ export function calculateScenario(input: ScenarioInput): ScenarioResult {
     totalCosts: NUM_TO_DEC(totalCosts),
     netRevenue: NUM_TO_DEC(net),
     contributionMargin: NUM_TO_DEC(margin),
-    comment: `Scenario simulation only — does not modify any live data. Base currency: ${input.currencyCode || 'TND'}.`,
+    comment: `Scenario simulation only — does not modify any live data. Base currency: ${input.currencyCode || reportingCurrency()}.`,
   };
 }
 

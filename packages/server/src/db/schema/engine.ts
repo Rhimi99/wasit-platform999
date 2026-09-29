@@ -112,6 +112,7 @@ export const policyScopeEnum = pgEnum('policy_scope', [
   'CATEGORY',
   'TRADE',
   'PRIVACY',
+  'TAX',
 ]);
 
 export const policies = pgTable(

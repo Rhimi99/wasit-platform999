@@ -13,6 +13,10 @@
  * which are cleaned up or reversible. No DB reset/drop/push.
  *
  * Usage: node scripts/ui-functional-audit.mjs <baseURL> [roleFilter]
+ *
+ * The `admin` role needs the runtime staff credential; export
+ * `DEMO_STAFF_PASSWORD` to include it (the role is skipped otherwise):
+ *   DEMO_STAFF_PASSWORD=... node scripts/ui-functional-audit.mjs <baseURL>
  */
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -20,12 +24,18 @@ import fs from 'node:fs';
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:12000').replace(/\/+$/, '');
 const ROLE_FILTER = process.argv[3] ?? null;
 
+// The four public demo accounts share the published demo password; it is
+// documented as public (`DEMO_PUBLISHED_PASSWORD`) and is not a secret.
+// The staff account is different: its password is a live credential supplied at
+// runtime through DEMO_STAFF_PASSWORD and must never be written into source.
+const DEMO_PUBLISHED_PASSWORD = 'Passw0rd!2026';
+
 const ACCOUNTS = {
-  customer: { email: 'customer1@wasit.tn', password: 'Passw0rd!2026' },
-  supplier: { email: 'suppliera@wasit.tn', password: 'Passw0rd!2026' },
-  merchant: { email: 'merchanta@wasit.tn', password: 'Passw0rd!2026' },
-  company: { email: 'companya@wasit.tn', password: 'Passw0rd!2026' },
-  admin: { email: 'admin@wasit.tn', password: 'c4oA0i33qla0kAeaFrtXrWpZQQEDakelOd9fjrR8ph0' },
+  customer: { email: 'customer1@wasit.tn', password: DEMO_PUBLISHED_PASSWORD },
+  supplier: { email: 'suppliera@wasit.tn', password: DEMO_PUBLISHED_PASSWORD },
+  merchant: { email: 'merchanta@wasit.tn', password: DEMO_PUBLISHED_PASSWORD },
+  company: { email: 'companya@wasit.tn', password: DEMO_PUBLISHED_PASSWORD },
+  admin: { email: 'admin@wasit.tn', password: (process.env.DEMO_STAFF_PASSWORD ?? '').trim() },
 };
 
 const PAGES = [
@@ -98,6 +108,12 @@ for (const role of Object.keys(ACCOUNTS)) {
   if (ROLE_FILTER && role !== ROLE_FILTER) continue;
   const targets = PAGES.filter(([r]) => r === role);
   if (targets.length === 0) continue;
+  // Fail closed rather than reporting a false pass: without the runtime staff
+  // credential the admin pages cannot be driven at all, so skip them loudly.
+  if (!ACCOUNTS[role].password) {
+    console.log(`SKIP  ${role} — set DEMO_STAFF_PASSWORD to audit this role`);
+    continue;
+  }
   let session;
   try {
     session = await login(role);

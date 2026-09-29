@@ -15,7 +15,7 @@ export async function recordCountryPolicyGap(
   db: DB,
   input: {
     countryId: string;
-    scope: 'DISPUTE' | 'COMMISSION' | 'VERIFICATION' | 'RISK' | 'ADVERTISING' | 'SUBSCRIPTION' | 'COUNTRY' | 'CATEGORY' | 'LIMITS' | 'TRADE' | 'PRIVACY';
+    scope: 'DISPUTE' | 'COMMISSION' | 'VERIFICATION' | 'RISK' | 'ADVERTISING' | 'SUBSCRIPTION' | 'COUNTRY' | 'CATEGORY' | 'LIMITS' | 'TRADE' | 'PRIVACY' | 'TAX';
     code: string;
     reason: string;
     metadata?: Record<string, unknown>;
@@ -59,7 +59,7 @@ export async function recordCountryPolicyGap(
 /** Marks a previously recorded gap as resolved once a country rule exists. */
 export async function resolveCountryPolicyGap(
   db: DB,
-  input: { countryId: string; scope: 'DISPUTE' | 'COMMISSION' | 'VERIFICATION' | 'RISK' | 'ADVERTISING' | 'SUBSCRIPTION' | 'COUNTRY' | 'CATEGORY' | 'LIMITS' | 'TRADE' | 'PRIVACY'; code: string },
+  input: { countryId: string; scope: 'DISPUTE' | 'COMMISSION' | 'VERIFICATION' | 'RISK' | 'ADVERTISING' | 'SUBSCRIPTION' | 'COUNTRY' | 'CATEGORY' | 'LIMITS' | 'TRADE' | 'PRIVACY' | 'TAX'; code: string },
 ): Promise<void> {
   await db
     .update(countryPolicyGaps)

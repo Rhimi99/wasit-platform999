@@ -20,6 +20,8 @@ import { recordCountryPolicyGap, resolveCountryPolicyGap } from '../../lib/count
 import { writeAudit } from '../../lib/audit';
 import { createNotification } from '../../lib/notifications-service';
 import { generateDisputeNumber, newId } from '../../lib/ids';
+import { roundMoney, toDecimal } from '../../lib/money';
+import { createRefund } from '../payments/service.js';
 
 export type DisputeStatus = (typeof disputeStatusEnum.enumValues)[number];
 export type DisputeDecision = (typeof disputeDecisionEnum.enumValues)[number];
@@ -560,33 +562,164 @@ export async function updateDisputeStatus(db: DB, disputeId: string, actorId: st
   return { id: disputeId };
 }
 
+/**
+ * A dispute decision is not only a status change: it can return money. Which
+ * decision implies which financial outcome is policy-driven, not hardcoded — the
+ * effective dispute policy may declare a `decisionEffects` map. When the policy
+ * is silent for the decision being taken, the platform does NOT guess: it
+ * records a country-policy gap (Decision Required) and leaves the order
+ * untouched, because fabricating a refund or a release would be inventing a
+ * financial rule nobody agreed to.
+ *
+ * When the effect is `REFUND_BUYER`, the reversal is written through the existing
+ * refund machinery (`createRefund`), so the compensating ledger entry, the
+ * commission/fee reversal and the order's refund state all follow the same
+ * audited path a normal refund does. There is no new ledger rule and no second
+ * source of financial truth.
+ *
+ * Idempotency: the refund's `idempotencyKey` is derived from the dispute id, so
+ * re-deciding the same dispute can never refund twice. The financial step runs
+ * only on the transition into DECIDED; an already-decided dispute cannot be
+ * re-decided here (it is guarded below).
+ */
 export async function decideDispute(
   db: DB,
   disputeId: string,
   actorId: string,
-  input: { decision: Exclude<DisputeDecision, 'NONE'>; note?: string },
-): Promise<{ id: string }> {
+  input: { decision: Exclude<DisputeDecision, 'NONE'>; note?: string; partialRefundAmount?: string },
+): Promise<{ id: string; financialEffect: DisputeFinancialEffect }> {
   const d = await loadDisputeBase(db, disputeId);
   if (!d) throw ApiError.notFound('Dispute');
   if (d.status === 'CLOSED' || d.status === 'ARCHIVED') {
     throw ApiError.conflict('Dispute is already closed');
   }
+  if (d.status === 'DECIDED') {
+    throw ApiError.conflict('Dispute is already decided');
+  }
+
+  // Resolve the financial consequence BEFORE mutating state, so a policy that
+  // requires a human decision cannot half-apply a dispute.
+  const effect = await resolveDisputeFinancialEffect(db, d.orderId, d.id, input.decision, input.partialRefundAmount);
+
+  // Apply the money movement first: if the refund rail refuses (e.g. the order
+  // was never paid), the dispute is not marked decided on the strength of an
+  // outcome that did not actually happen.
+  const refund = await applyDisputeFinancialEffect(db, d, effect, actorId);
 
   await db
     .update(disputes)
     .set({ decision: input.decision, decisionNote: input.note ?? d.decisionNote, decidedBy: actorId, decidedAt: new Date(), status: 'DECIDED', updatedAt: new Date() })
     .where(eq(disputes.id, disputeId));
-  await writeDisputeEvent(db, disputeId, actorId, 'DECIDED', { decision: d.decision }, { decision: input.decision, note: input.note ?? null });
-  await writeAudit(db, { actorId }, { action: 'DISPUTE.DECIDED', entityType: 'DISPUTE', entityId: disputeId, before: { decision: d.decision }, after: { decision: input.decision } });
+  await writeDisputeEvent(db, disputeId, actorId, 'DECIDED', { decision: d.decision }, { decision: input.decision, note: input.note ?? null, financialEffect: effect, refund });
+  await writeAudit(db, { actorId }, { action: 'DISPUTE.DECIDED', entityType: 'DISPUTE', entityId: disputeId, before: { decision: d.decision }, after: { decision: input.decision, financialEffect: effect, refund } });
 
   await createNotification(db, {
     userId: d.openedById,
     type: 'DISPUTE.DECISION',
     title: 'Dispute decision',
     body: `Dispute ${d.disputeNumber} resolved: ${input.decision}${input.note ? ` — ${input.note}` : ''}`,
-    data: { disputeId, disputeNumber: d.disputeNumber, decision: input.decision },
+    data: { disputeId, disputeNumber: d.disputeNumber, decision: input.decision, financialEffect: effect.kind },
   });
-  return { id: disputeId };
+  return { id: disputeId, financialEffect: effect };
+}
+
+export type DisputeFinancialEffectKind =
+  | 'NONE' // decision has no money consequence (e.g. IN_FAVOR_OF_SELLER, REJECTED)
+  | 'REFUND_BUYER' // money returns to the buyer via the refund rail
+  | 'DECISION_REQUIRED'; // policy names no effect for this decision; do not guess
+
+export interface DisputeFinancialEffect {
+  kind: DisputeFinancialEffectKind;
+  /** Refund amount for REFUND_BUYER. */
+  amount?: string;
+  currencyCode?: string;
+  reason?: string;
+  /** Populated for DECISION_REQUIRED — why the platform refused to guess. */
+  decisionRequiredReason?: string;
+}
+
+/**
+ * Resolves the money consequence of a decision from policy. Reads
+ * `rules.decisionEffects[decision]`; absent or unrecognised ⇒ DECISION_REQUIRED.
+ * Amount is the order's grand total unless policy sets `refundRatio` (SPLIT).
+ */
+async function resolveDisputeFinancialEffect(
+  db: DB,
+  orderId: string,
+  disputeId: string,
+  decision: Exclude<DisputeDecision, 'NONE'>,
+  partialRefundAmount?: string,
+): Promise<DisputeFinancialEffect> {
+  const policy = await getDisputePolicyForOrder(db, orderId);
+  const rules = policy.rules as Record<string, unknown>;
+  const effects = (rules.decisionEffects ?? null) as Record<string, { effect?: string; refundRatio?: number }> | null;
+
+  const entry = effects?.[decision];
+  const effectName = entry?.effect;
+
+  if (effectName === 'NONE') return { kind: 'NONE' };
+
+  if (effectName === 'REFUND_BUYER') {
+    const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!order) throw ApiError.notFound('Order');
+    const ratio = Number(entry?.refundRatio);
+    const amount =
+      partialRefundAmount ??
+      (Number.isFinite(ratio) && ratio > 0 && ratio <= 1
+        ? roundMoney(toDecimal(order.grandTotal).mul(ratio)).toFixed(4)
+        : order.grandTotal);
+    return {
+      kind: 'REFUND_BUYER',
+      amount,
+      currencyCode: order.currencyCode,
+      reason: `Dispute ${disputeId} decided ${decision}`,
+    };
+  }
+
+  // No configured effect for this decision — a policy decision is required. The
+  // gap is recorded against the country when one is resolvable, so it surfaces
+  // in the admin "decision required" queue rather than being silently ignored.
+  const country = await resolveOrderCountry(db, orderId);
+  if (country?.id) {
+    await recordCountryPolicyGap(db, {
+      countryId: country.id,
+      scope: 'DISPUTE',
+      code: 'DISPUTE_RESOLUTION',
+      reason:
+        `No financial effect is configured for dispute decision '${decision}'. ` +
+        'A policy decision is required before this outcome can move money.',
+      metadata: { disputeId, decision, policySource: policy.source, policyVersion: policy.version },
+    });
+  }
+  return {
+    kind: 'DECISION_REQUIRED',
+    decisionRequiredReason: `No financial effect is configured for decision '${decision}'`,
+  };
+}
+
+/**
+ * Applies a resolved financial effect. Only REFUND_BUYER moves money, and it
+ * does so exclusively through `createRefund` (the same audited rail a manual
+ * refund uses). The dispute id is the idempotency key, so replaying a decision
+ * can never refund twice — `createRefund` returns the original refund instead.
+ */
+async function applyDisputeFinancialEffect(
+  db: DB,
+  d: typeof disputes.$inferSelect,
+  effect: DisputeFinancialEffect,
+  actorId: string,
+): Promise<{ refundId: string; amount: string; reused: boolean } | null> {
+  if (effect.kind !== 'REFUND_BUYER') return null;
+
+  const result = await createRefund(db, {
+    orderId: d.orderId,
+    amount: effect.amount,
+    reason: effect.reason,
+    idempotencyKey: `dispute:${d.id}`,
+    actorId,
+    isOperator: true,
+  });
+  return { refundId: result.refund.id, amount: result.refund.amount, reused: result.reused };
 }
 
 export async function addEvidence(

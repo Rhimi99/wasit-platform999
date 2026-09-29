@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import { roundMoney, toDecimal } from '../../lib/money';
+import { reportingCurrency } from '../../lib/env';
 
 // ---------------------------------------------------------------------------
 // Unit economics — CAC / LTV / contribution margin, computed from real tables.
@@ -144,7 +145,7 @@ function unitEconomicsSources(currencyCode: string): string[] {
 
 export async function getUnitEconomics(
   db: DB,
-  currencyCode = 'TND',
+  currencyCode = reportingCurrency(),
   windowDays = 30,
   assumptions: ProjectionAssumptions = { assumedRetentionMonths: 12, assumedOrdersPerMonth: 1 },
 ): Promise<UnitEconomics> {
@@ -210,7 +211,7 @@ export interface CohortRow {
 }
 
 /** Monthly acquisition cohorts with the GMV/margin each cohort generated. */
-export async function getCustomerCohorts(db: DB, currencyCode = 'TND', months = 6): Promise<CohortRow[]> {
+export async function getCustomerCohorts(db: DB, currencyCode = reportingCurrency(), months = 6): Promise<CohortRow[]> {
   const since = new Date();
   since.setUTCMonth(since.getUTCMonth() - months);
 

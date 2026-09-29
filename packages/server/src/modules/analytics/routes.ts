@@ -5,6 +5,7 @@ import { requireAuth, requirePermission } from '../../middleware/auth';
 import { validateBody, getValidatedBody } from '../../middleware/validate';
 import { getContext } from '../../lib/request-context';
 import { writeAudit } from '../../lib/audit';
+import { reportingCurrency } from '../../lib/env';
 import {
   getMyAnalyticsOverview,
   listAnalyticsEvents,
@@ -18,12 +19,18 @@ const captureEventSchema = z.object({
   properties: z.record(z.unknown()).optional(),
 });
 
+const overviewQuerySchema = z.object({
+  currency: z.string().length(3).optional(),
+});
+
 export const analyticsRoutes = new Hono();
 
 // Own-analytics: business user sees their entity's KPIs (owner-scoped).
 analyticsRoutes.get('/my-overview', requireAuth, requirePermission(PERMISSIONS.ANALYTICS_READ_OWN), async (c) => {
   const ctx = getContext(c);
-  const data = await getMyAnalyticsOverview(ctx.db, ctx.user!.id);
+  const parsed = overviewQuerySchema.safeParse(c.req.query());
+  const currency = parsed.success ? parsed.data.currency ?? reportingCurrency() : reportingCurrency();
+  const data = await getMyAnalyticsOverview(ctx.db, ctx.user!.id, currency);
   return c.json({ success: true, data });
 });
 

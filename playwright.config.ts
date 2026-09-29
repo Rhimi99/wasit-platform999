@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { E2E_WEBHOOK_SECRET } from './e2e/helpers';
 
 const WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
@@ -27,7 +28,7 @@ const SERVER_ENV = {
   // The offline provider is a demo harness; the E2E stack runs no real
   // money, so it opts into demo payment mode explicitly.
   DEMO_PAYMENT_MODE: 'true',
-  PAYMENT_WEBHOOK_SECRET: 'e2e-webhook-secret-0123456789',
+  PAYMENT_WEBHOOK_SECRET: E2E_WEBHOOK_SECRET,
   // Point the backup-freshness alert at a scratch heartbeat so the
   // observability spec can age it on disk and prove the alert fires.
   BACKUP_HEARTBEAT_FILE: path.resolve('.e2e/backup-heartbeat.json'),

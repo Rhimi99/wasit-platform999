@@ -389,6 +389,16 @@ async function seedPolicies(): Promise<void> {
           appealWindowDays: 7,
           maxAppeals: 1,
           autoEscalateDays: 7,
+          // Financial effect of each decision, consumed by decideDispute. This is
+          // the policy-level answer to "does a decision move money?", so the
+          // engine never invents one. A decision absent from this map is treated
+          // as DECISION_REQUIRED (no money moves until policy names the effect),
+          // which is why SPLIT — whose ratio is a negotiated figure — is left out.
+          decisionEffects: {
+            IN_FAVOR_OF_BUYER: { effect: 'REFUND_BUYER' },
+            IN_FAVOR_OF_SELLER: { effect: 'NONE' },
+            REJECTED: { effect: 'NONE' },
+          },
         },
         isActive: true,
         version: 1,
