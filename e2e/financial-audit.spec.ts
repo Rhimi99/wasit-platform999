@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { test, expect, storageFor, placeOrderViaUi } from './helpers';
+import { test, expect, storageFor, placeOrderViaUi, E2E_WEBHOOK_SECRET } from './helpers';
 
 /**
  * Financial chain audit — Order → Commission → Ledger → Payment → Refund,
@@ -10,7 +10,7 @@ import { test, expect, storageFor, placeOrderViaUi } from './helpers';
  * the order's own itemsTotal and compared against the API, the ledger and the UI.
  */
 
-const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? 'e2e-webhook-secret-0123456789';
+const WEBHOOK_SECRET = E2E_WEBHOOK_SECRET;
 
 interface LedgerRow {
   transactionId: string;

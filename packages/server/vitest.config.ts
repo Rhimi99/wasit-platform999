@@ -5,6 +5,34 @@ const TEST_DB_URL =
   process.env.TEST_DATABASE_URL ??
   'postgresql://wasit:wasit_dev_password@localhost:5432/wasit_test';
 
+/**
+ * Demo/demo-stack flags the specs assert are *absent* by default.
+ *
+ * The local demo stack exports these from `packages/server/.env` (loaded by
+ * `set -a; . ./.env`, or by the shell that started the demo server). Vitest
+ * spawns workers that inherit the parent shell, so they would flip the suite into
+ * demo mode and break the specs that pin production behaviour: mandatory email
+ * verification, no auto-login, the metrics gate, and the auth throttle limits.
+ *
+ * Deleting them here — before workers spawn — keeps the suite independent of the
+ * caller's shell, matching the intent of the `env` block below. Specs that need a
+ * flag set it at runtime via `withEnv`.
+ */
+const CALLER_SHELL_LEAKS = [
+  'DEMO_AUTO_LOGIN',
+  'DEMO_SKIP_EMAIL_VERIFICATION',
+  'DEMO_STAFF_PASSWORD',
+  'DEMO_TEST_ACCOUNT_PASSWORD',
+  'DEMO_PAYMENT_MODE',
+  'ALLOW_DEV_TOOLING',
+  'METRICS_ENABLED',
+  'RATE_LIMIT_FORGOT_MAX',
+  'RATE_LIMIT_DELETION_MAX',
+  'RATE_LIMIT_LOGIN_MAX',
+  'RATE_LIMIT_REGISTER_MAX',
+] as const;
+for (const key of CALLER_SHELL_LEAKS) delete process.env[key];
+
 export default defineConfig({
   test: {
     environment: 'node',

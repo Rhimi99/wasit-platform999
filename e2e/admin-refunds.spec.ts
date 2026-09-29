@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
-import { test, expect, storageFor, placeOrderViaUi, type Page } from './helpers';
+import { test, expect, storageFor, placeOrderViaUi, type Page, E2E_WEBHOOK_SECRET } from './helpers';
 
-const WEBHOOK_SECRET = 'e2e-webhook-secret-0123456789';
+const WEBHOOK_SECRET = E2E_WEBHOOK_SECRET;
 
 /** Places an order through the UI, pays it via the signed webhook, returns the order id. */
 async function paidOrder(page: Page): Promise<string> {

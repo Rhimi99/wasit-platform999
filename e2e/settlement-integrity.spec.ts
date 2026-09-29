@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto';
-import { test, expect, storageFor, placeOrderViaUi } from './helpers';
+import { test, expect, storageFor, placeOrderViaUi, E2E_WEBHOOK_SECRET } from './helpers';
 import type { Page } from '@playwright/test';
 
-const WEBHOOK_SECRET = 'e2e-webhook-secret-0123456789';
+const WEBHOOK_SECRET = E2E_WEBHOOK_SECRET;
 
 interface LedgerRow {
   entryType: string;

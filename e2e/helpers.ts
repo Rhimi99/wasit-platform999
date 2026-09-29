@@ -3,6 +3,17 @@ import path from 'node:path';
 
 export const DEMO_PASSWORD = 'Passw0rd!2026';
 
+/**
+ * HMAC secret the suite signs payment webhooks with.
+ *
+ * Must equal the `PAYMENT_WEBHOOK_SECRET` `playwright.config.ts` starts the API
+ * with — the server rejects a signature computed with any other value. Reading it
+ * from the shell would let a stray export (the local demo stack sets its own)
+ * sign with the wrong key and fail as though the payment kernel were broken, so
+ * the suite owns the value and the config imports it from here.
+ */
+export const E2E_WEBHOOK_SECRET = 'e2e-webhook-secret-0123456789';
+
 export const DEMO_USERS = {
   customer: 'customer1@wasit.tn',
   supplier: 'suppliera@wasit.tn',
