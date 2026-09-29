@@ -2383,3 +2383,54 @@ Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل �
 
 ### القيود المُحترمة
 Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل أزرار؛ لا تغيير لوظائف تعمل؛ Commission 4% = 2%+2% سليمة؛ Marketing Video Agent (commit 89e68d7) لم يُمس.
+
+---
+
+## Functional Audit — إصلاح سببي حقيقي (Regression من commit b318ae4)
+
+بعد تجربة يدوية من الهاتف ظهر أن وظائف لا تعمل رغم أن الـ routes تعيد HTTP 200. الفحص الوظيفي الحقيقي كشف **انحدارين سببيين حقيقيين** (لا مشاكل عرض)، وتم إصلاح السبب الجذري لكل منهما وإعادة اختباره من الواجهة.
+
+### 1) محرّر سياسة النزاع — Admin /admin/policies (422 على كل حفظ)
+| البند | التفصيل |
+|---|---|
+| الزر/المسار | `/admin/policies` → زر الحفظ في محرّر سياسة النزاع → `PUT /api/admin/policies/dispute` |
+| Frontend handler | `AdminPolicyPages.tsx::save()` كان يرسل الحقول الرقمية فقط |
+| API route | `policy-routes.ts` → `updateSchema` |
+| Service/DB | `policies.rules` يحتوي `decisionEffects` (خريطة قرار → أثر مالي) |
+| **السبب الجذري** | `disputeRulesSchema` كان `.strict()` **بدون** `decisionEffects`، بينما `b318ae4` أضاف هذا المفتاح إلى `rules` الفعلية في DB. فأي حفظ من الواجهة كان يفشل بـ `unrecognized_keys` |
+| **الإصلاح** | إضافة `decisionEffectsSchema` (enum للقرارات + `effect`/`refundRatio`) إلى `disputeRulesSchema`، وتمرير الخريطة في `save()` عبر `existingRules.decisionEffects` حتى لا يُسقطها الحفظ |
+| أثر مخفي مُصلَح | لو نُجح الحفظ دون تمرير الخريطة لكان أي تعديل نافذة زمنية **يعطّل الاسترداد** لكل قرار لصالح المشتري بصمت |
+
+### 2) بتّ النزاع — Admin /admin/disputes (409 يمنع البتّ نهائيًا)
+| البند | التفصيل |
+|---|---|
+| الزر/المسار | `/admin/disputes` → زر «بتّ النزاع» → `POST /api/admin/disputes/:id/decide` |
+| Frontend handler | `AdminEnginesPages.tsx::decide()` |
+| API route | `engines-routes.ts` → `decideDispute` |
+| Service/DB | `resolveDisputeFinancialEffect` → `createRefund` |
+| **السبب الجذري** | `b318ae4` جعل البتّ يشترط نجاح `createRefund` أولًا، و`createRefund` يرفض غير المدفوع بـ `Only paid orders can be refunded`. والـ Checkout في المنصة **ينشئ الطلب UNPAID والدفع يُؤكَّد لاحقًا**، فأي نزاع على طلب غير مدفوع (الحالة الطبيعية) كان يُرجع 409 و**لا يُسجَّل البتّ إطلاقًا** |
+| **الإصلاح** | إضافة `REFUND_UNAVAILABLE` إلى `DisputeFinancialEffect`: يُسجَّل البتّ كاملًا (decision + event + audit + إشعار) دون اختلاق استرداد، مع سبب صريح. ويظل `REFUND_BUYER` يمر عبر مسار الاسترداد الحقيقي للطلبات المدفوعة بلا تغيير |
+| إظهار النتيجة للمستخدم | بطاقة البتّ تعرض النتيجة المالية الفعلية (`disputes.admin.refunded` / `refundUnavailable` / `decisionRequired`) عبر `data-testid="admin-dispute-decide-notice"` بدل افتراض أن المال تحرّك |
+
+### إصلاحات في أداة التدقيق نفسها (كانت تُنتج نتائج كاذبة)
+- `ui-messages-check`: كان يتحقق من `threads[0]` بينما يفتح خيطًا آخر يطابقه الـ regex → فشل كاذب. الآن يُحلّ الخيط بنفس منطق المطابقة.
+- `ui-merchant-surfaces-check`: كان يعتبر `subscription: null` فشلًا، وهي حالة مشروعة (لا اشتراك بعد). الآن يتحقق من صحة الرد + توفّر كتالوج الباقات.
+
+### التحقق النهائي (على الرابط العام HTTPS — من الواجهة لا من API فقط)
+| Suite | النتيجة |
+|---|---|
+| unit tests | 761/761 |
+| E2E (Playwright، backend + PostgreSQL حقيقي، بلا Mock) | **207/207** (كان 205/207) |
+| typecheck (server + web) | PASS |
+| build / build:prod / web build | PASS |
+| ui-functional-audit | 45/45 صفحة |
+| ui-interaction-audit | 58/58 تفاعل حقيقي |
+| ui-mobile-smoke (من الهاتف) | 16/16 |
+| ui-purchase | 10/10 (العمولة 4% = 2% + 2% متحققة على الشاشة) |
+| ui-video-studio-full | 11/11 (توليد → READY → معاينة → تنزيل → حذف) |
+| ui-admin-dispute | 23/23 |
+| ui-merchant / ui-merchant-surfaces / ui-messages / ui-subscription / ui-inventory-search / ui-flows / ui-register / ui-login / ui-video | PASS |
+
+### القيود المُحترمة
+لا Mock؛ لا تعطيل أزرار؛ لا إخفاء أخطاء؛ لا DB reset/drop/push؛ لم تُحذف بيانات الاختبار؛ Commission Policy 4% = 2% seller + 2% buyer سليمة؛ Marketing Video Agent (commit 89e68d7) لم يُمس؛ لم تُغيَّر أي وظيفة كانت تعمل.
+

@@ -626,6 +626,7 @@ export async function decideDispute(
 export type DisputeFinancialEffectKind =
   | 'NONE' // decision has no money consequence (e.g. IN_FAVOR_OF_SELLER, REJECTED)
   | 'REFUND_BUYER' // money returns to the buyer via the refund rail
+  | 'REFUND_UNAVAILABLE' // policy says refund, but the order never collected money
   | 'DECISION_REQUIRED'; // policy names no effect for this decision; do not guess
 
 export interface DisputeFinancialEffect {
@@ -636,6 +637,8 @@ export interface DisputeFinancialEffect {
   reason?: string;
   /** Populated for DECISION_REQUIRED — why the platform refused to guess. */
   decisionRequiredReason?: string;
+  /** Populated for REFUND_UNAVAILABLE — why the named refund did not happen. */
+  unavailableReason?: string;
 }
 
 /**
@@ -668,6 +671,24 @@ async function resolveDisputeFinancialEffect(
       (Number.isFinite(ratio) && ratio > 0 && ratio <= 1
         ? roundMoney(toDecimal(order.grandTotal).mul(ratio)).toFixed(4)
         : order.grandTotal);
+
+    // A decision can be taken on an order that never collected money: checkout
+    // creates the order and the payment is confirmed later, so a dispute is a
+    // legitimate state for an UNPAID order. The decision still has to be
+    // recorded — refusing it would block the staff desk on an ordinary case —
+    // but no refund may be claimed, because the refund rail has nothing to
+    // reverse. That is reported as its own outcome rather than as a policy gap,
+    // since the policy did name the effect and the admin queue must not be
+    // filled with false "decision required" entries.
+    if (order.paymentStatus !== 'PAID' && order.paymentStatus !== 'PARTIALLY_REFUNDED') {
+      return {
+        kind: 'REFUND_UNAVAILABLE',
+        amount,
+        currencyCode: order.currencyCode,
+        unavailableReason: `Order ${order.orderNumber} collected no funds (payment status ${order.paymentStatus}); the decision is recorded but nothing is refunded.`,
+      };
+    }
+
     return {
       kind: 'REFUND_BUYER',
       amount,

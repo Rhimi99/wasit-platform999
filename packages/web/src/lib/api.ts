@@ -485,7 +485,7 @@ export const api = {
     countryId: string | null;
     name: string;
     description?: string | null;
-    rules: Record<string, number>;
+    rules: Record<string, unknown>;
     reason: string;
   }) {
     return request<{ id: string | null; countryId: string | null; created: boolean }>('/api/admin/policies/dispute', {

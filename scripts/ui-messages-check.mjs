@@ -25,14 +25,25 @@ await page.waitForURL(/dashboard/, { timeout: 30000 });
 const threadsRes = await page.request.get(`${BASE}/api/messages`);
 const threads = threadsRes.ok() ? (await threadsRes.json())?.data?.items ?? [] : [];
 check('customer has a real thread', threads.length > 0, `${threads.length} thread(s)`);
-const threadId = threads[0]?.id;
+
+// The thread that gets opened is the one the button regex matches, so the
+// thread verified afterwards must be resolved the same way. Taking the list's
+// first thread instead would verify a conversation the run never touched, and
+// the check would fail for a reason that has nothing to do with messaging.
+const THREAD_RE = /suppliera@wasit\.tn|استفسار|زيت/;
+const targetThread = threads.find((th) =>
+  THREAD_RE.test(
+    [th.subject ?? '', ...(th.participants ?? []).flatMap((p) => [p.email ?? '', p.displayName ?? ''])].join(' '),
+  ),
+) ?? threads[0];
+const threadId = targetThread?.id;
 
 await page.goto(`${BASE}/dashboard/messages`, { waitUntil: 'networkidle', timeout: 60000 });
 await page.waitForTimeout(2500);
 const listBody = await page.locator('body').innerText();
-check('thread is listed in the UI', /suppliera@wasit\.tn|استفسار|زيت/.test(listBody));
+check('thread is listed in the UI', THREAD_RE.test(listBody));
 
-const threadBtn = page.locator('button').filter({ hasText: /suppliera@wasit\.tn|استفسار|زيت/ }).first();
+const threadBtn = page.locator('button').filter({ hasText: THREAD_RE }).first();
 if ((await threadBtn.count()) > 0) {
   await threadBtn.click();
   await page.waitForTimeout(2500);

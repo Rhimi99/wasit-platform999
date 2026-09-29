@@ -14,6 +14,24 @@ import { resolveCountryPolicyGap } from '../../lib/country-policy-gaps';
 const DISPUTE_CODE = 'DISPUTE_RESOLUTION';
 const RETENTION_CODE = 'DATA_RETENTION';
 
+/** The decisions a policy may map to a financial effect. */
+const disputeDecisions = ['IN_FAVOR_OF_BUYER', 'IN_FAVOR_OF_SELLER', 'SPLIT', 'REJECTED'] as const;
+
+/**
+ * The money consequence of a decision. `decideDispute` reads this map to decide
+ * whether a decision refunds the buyer, and an unmapped decision is deliberately
+ * reported as DECISION_REQUIRED. The editor therefore has to round-trip it: a
+ * save that dropped the map would silently turn every buyer-favourable decision
+ * into "no money moves".
+ */
+const decisionEffectsSchema = z.record(
+  z.enum(disputeDecisions),
+  z.object({
+    effect: z.enum(['NONE', 'REFUND_BUYER']),
+    refundRatio: z.number().gt(0).lte(1).optional(),
+  }).strict(),
+);
+
 /** Numeric rule fields the admin may edit; each is a positive whole number of days/count. */
 const disputeRulesSchema = z.object({
   openWindowDays: z.number().int().positive().max(3650).optional(),
@@ -22,6 +40,7 @@ const disputeRulesSchema = z.object({
   appealWindowDays: z.number().int().positive().max(3650).optional(),
   maxAppeals: z.number().int().positive().max(10).optional(),
   autoEscalateDays: z.number().int().positive().max(3650).optional(),
+  decisionEffects: decisionEffectsSchema.optional(),
 }).strict();
 
 /** Data-retention rules. `preserves` lists extra record classes to keep. */

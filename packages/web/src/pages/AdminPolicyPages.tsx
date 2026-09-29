@@ -108,7 +108,9 @@ export function AdminPoliciesPage() {
   async function save() {
     setError(null);
     setInfo(null);
-    const rules: Record<string, number> = {};
+    const countryId = target || null;
+    const existing = policies.find((p) => p.countryId === countryId);
+    const rules: Record<string, unknown> = {};
     for (const field of NUMERIC_FIELDS) {
       const raw = draft[field]?.trim();
       if (raw) {
@@ -128,8 +130,12 @@ export function AdminPoliciesPage() {
       setError(t('policies.reasonRequired'));
       return;
     }
-    const countryId = target || null;
-    const existing = policies.find((p) => p.countryId === countryId);
+    // The editor only edits numeric windows, but the policy also carries the
+    // decision→money map that decides whether a decision refunds the buyer.
+    // Round-tripping it is what keeps "save a window" from silently disabling
+    // refunds on every buyer-favourable decision.
+    const existingRules = (existing?.rules ?? {}) as Record<string, unknown>;
+    if (existingRules.decisionEffects !== undefined) rules.decisionEffects = existingRules.decisionEffects;
     const res = await apiCall(() =>
       api.saveAdminDisputePolicy({
         countryId,

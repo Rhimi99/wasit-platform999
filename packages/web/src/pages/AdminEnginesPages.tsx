@@ -267,6 +267,7 @@ export function AdminDisputesPage() {
   const [statusNote, setStatusNote] = useState('');
   const [decisionValue, setDecisionValue] = useState('IN_FAVOR_OF_BUYER');
   const [decisionNote, setDecisionNote] = useState('');
+  const [decideNotice, setDecideNotice] = useState<string | null>(null);
   const [appealNote, setAppealNote] = useState('');
 
   const load = useCallback(async () => {
@@ -305,9 +306,21 @@ export function AdminDisputesPage() {
   }
 
   async function decide(id: string) {
+    setDecideNotice(null);
     const res = await apiCall(() => api.adminDecideDispute(id, decisionValue, decisionNote.trim() || undefined));
     if (res.error) { setError(res.error); return; }
     setDecisionNote('');
+    // A decision that names a refund is not the same as a refund: an order that
+    // never collected money is recorded as decided with nothing returned. Say
+    // which happened instead of leaving staff to assume the buyer was paid.
+    const effect = (res.data as { financialEffect?: { kind?: string } } | undefined)?.financialEffect;
+    if (effect?.kind === 'REFUND_UNAVAILABLE') {
+      setDecideNotice(t('disputes.admin.refundUnavailable'));
+    } else if (effect?.kind === 'DECISION_REQUIRED') {
+      setDecideNotice(t('disputes.admin.decisionRequired'));
+    } else if (effect?.kind === 'REFUND_BUYER') {
+      setDecideNotice(t('disputes.admin.refunded'));
+    }
     load();
     selectDetail(id);
   }
@@ -401,6 +414,9 @@ export function AdminDisputesPage() {
                   <input className="input flex-1" value={decisionNote} onChange={(e) => setDecisionNote(e.target.value)} placeholder="Note" data-testid="admin-dispute-decision-note" />
                   <button className="btn-primary" onClick={() => decide(detail.id)} data-testid="admin-dispute-decide-submit">{t('disputes.admin.decide')}</button>
                 </div>
+                {decideNotice && (
+                  <p className="mt-2 text-xs text-slate-600" role="status" data-testid="admin-dispute-decide-notice">{decideNotice}</p>
+                )}
               </Card>
 
               <Card>

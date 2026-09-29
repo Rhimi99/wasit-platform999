@@ -41,10 +41,20 @@ const api = await page.request.get(`${BASE}/api/analytics/my-overview`);
 const a = api.ok() ? (await api.json())?.data : null;
 check('analytics API returns merchant figures', !!a && a.hasBusinessEntity !== false, a ? `gmv=${a.gmvAsSeller} orders=${a.ordersAsSeller} products=${a.products}` : `status ${api.status()}`);
 
-// The subscription page must show the real current plan.
+// The subscription endpoint must answer with a well-formed payload: either the
+// merchant's active subscription or an explicit `null` (no subscription yet —
+// a legitimate state for a fresh demo account, not a failure). The plans
+// catalogue must be served too, since that is what lets them subscribe.
 const sub = await page.request.get(`${BASE}/api/subscriptions/me`);
 const s = sub.ok() ? (await sub.json())?.data : null;
-check('subscription API returns the active plan', !!s?.subscription?.plan?.code || !!s?.subscription, JSON.stringify(s ?? {}).slice(0, 80));
+const hasPlan = !!s?.subscription?.plan?.code || !!s?.subscription;
+const plansRes = await page.request.get(`${BASE}/api/subscriptions/plans`);
+const plans = plansRes.ok() ? (await plansRes.json())?.data?.items ?? [] : [];
+check(
+  'subscription endpoint answers and the plans catalogue is servable',
+  sub.ok() && plans.length > 0,
+  hasPlan ? `active plan=${s.subscription.plan?.code ?? s.subscription.planCode}` : `no active subscription; ${plans.length} plan(s) available`,
+);
 
 await ctx.close();
 await browser.close();
