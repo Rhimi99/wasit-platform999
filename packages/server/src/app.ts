@@ -42,6 +42,8 @@ import { customerLibraryRoutes } from './modules/customer-library/routes.js';
 import { seoRoutes, seoApiRoutes } from './modules/seo/routes.js';
 import { paymentsRoutes, paymentWebhookRoutes } from './modules/payments/routes.js';
 import { metricsRoutes, adminObservabilityRoutes } from './modules/observability/routes.js';
+import { taxRoutes } from './modules/tax/routes.js';
+import { financeRoutes } from './modules/finance/routes.js';
 import { catalogHeartbeat } from './lib/ai/routing.js';
 import { getDb } from './lib/request-context.js';
 
@@ -118,6 +120,8 @@ export function createApp(): Hono {
   app.route('/api/admin/ai', adminAiRoutes);
   app.route('/api/admin/analytics', adminAnalyticsRoutes);
   app.route('/api/admin/observability', adminObservabilityRoutes);
+  app.route('/api/admin/tax', taxRoutes);
+  app.route('/api/admin/finance', financeRoutes);
 
   // Prometheus scrape endpoint at the root (outside /api), so a scrape config
   // is `metrics_path: /metrics`.

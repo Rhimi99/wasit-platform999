@@ -36,7 +36,7 @@ const envSchema = z.object({
   // from taking money until an acquirer is contracted and configured.
   // `flouci` and `clictopay` are online adapters; `manual` is the offline desk
   // used for development and testing (no network, no real money).
-  PAYMENT_PROVIDER: z.enum(['noop', 'manual', 'open-checkout', 'flouci', 'clictopay']).default('noop'),
+  PAYMENT_PROVIDER: z.enum(['noop', 'manual', 'open-checkout', 'flouci', 'clictopay', 'sandbox']).default('noop'),
   PAYMENT_API_KEY: z.string().optional(),
   PAYMENT_BASE_URL: z.string().optional(),
   /** HMAC secret used to sign/verify provider webhooks (manual / open-checkout). */
@@ -52,6 +52,14 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Payouts — a separate rail from payments. `PAYOUT_PROVIDER=noop` keeps the
+  // platform from claiming a seller was paid until a payout rail is contracted
+  // and configured. `open-checkout` is a generic HTTP contract, NOT a bank or a
+  // licensed institution; `manual` is the offline desk; `sandbox` is a
+  // controllable test harness (refused outside demo mode).
+  PAYOUT_PROVIDER: z.enum(['noop', 'manual', 'open-checkout', 'sandbox']).default('noop'),
+  PAYOUT_API_KEY: z.string().optional(),
+  PAYOUT_BASE_URL: z.string().optional(),
   // Flouci Payment Gateway — keys are issued per application (test app is
   // available immediately after uploading the RNE; production needs KYB).
   // Amounts are sent in minor units (millimes for TND).

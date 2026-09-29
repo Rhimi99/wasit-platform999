@@ -7,6 +7,7 @@ import {
   OpenCheckoutPaymentProvider,
 } from './providers';
 import { resolveFlouci } from './flouci';
+import { SandboxPaymentProvider } from './sandbox-payment';
 import { resolveClicToPay } from './clictopay';
 
 /**
@@ -45,6 +46,8 @@ function selectProvider(): PaymentProvider {
       return resolveFlouci();
     case 'clictopay':
       return resolveClicToPay();
+    case 'sandbox':
+      return new SandboxPaymentProvider();
     default:
       return new NoopPaymentProvider();
   }
@@ -71,6 +74,8 @@ export function resolvePaymentProviderById(id: string): PaymentProvider {
       return resolveFlouci();
     case 'clictopay':
       return resolveClicToPay();
+    case 'sandbox':
+      return new SandboxPaymentProvider();
     default:
       throw ApiError.validation([
         { field: 'provider', message: `Unknown payment provider '${id}'`, code: 'VALIDATION_FAILED' },
@@ -103,6 +108,7 @@ export function describePaymentProviders(): {
       new OpenCheckoutPaymentProvider(env.PAYMENT_BASE_URL?.trim() ?? '', env.PAYMENT_API_KEY?.trim() ?? ''),
       resolveFlouci(),
       resolveClicToPay(),
+      new SandboxPaymentProvider(),
     ].map(describeProvider),
   };
 }

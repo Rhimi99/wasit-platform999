@@ -176,6 +176,13 @@
       "when": 1790285922597,
       "tag": "0024_remarkable_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790658302242,
+      "tag": "0025_payment_layer_tax",
+      "breakpoints": true
     }
   ]
 }
