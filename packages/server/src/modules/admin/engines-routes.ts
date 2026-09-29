@@ -36,6 +36,10 @@ const reassignStatusSchema = z.object({
 const decideSchema = z.object({
   decision: z.enum(['IN_FAVOR_OF_BUYER', 'IN_FAVOR_OF_SELLER', 'SPLIT', 'REJECTED']),
   note: z.string().max(2000).optional(),
+  // Optional explicit refund amount for a policy that maps the decision to
+  // REFUND_BUYER without a ratio (SPLIT). Validated as a money string so a
+  // malformed amount is rejected rather than silently rounded.
+  partialRefundAmount: z.string().regex(/^\d+(\.\d{1,4})?$/).optional(),
 });
 
 const assignSchema = z.object({
@@ -168,7 +172,7 @@ adminEnginesRoutes.post('/disputes/:id/status', validateBody(reassignStatusSchem
 adminEnginesRoutes.post('/disputes/:id/decide', validateBody(decideSchema), requirePermission(PERMISSIONS.DISPUTE_DECIDE), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof decideSchema>>(c);
-  const result = await decideDispute(ctx.db, c.req.param('id')!, ctx.user!.id, { decision: body.decision, note: body.note });
+  const result = await decideDispute(ctx.db, c.req.param('id')!, ctx.user!.id, { decision: body.decision, note: body.note, partialRefundAmount: body.partialRefundAmount });
   return c.json({ success: true, data: result });
 });
 

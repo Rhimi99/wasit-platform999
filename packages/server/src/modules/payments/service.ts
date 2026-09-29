@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
@@ -283,6 +283,17 @@ export async function handlePaymentWebhook(
     return { duplicate: false, applied: false, eventType: effectiveType };
   }
 
+  // Out-of-order guard: money states are monotonic, so a terminal event that
+  // would move an intent backwards is stale and must not be applied. The classic
+  // case is a delayed `payment.failed` (a provider retrying an old failure)
+  // arriving after the payment already succeeded — applying it would flip a paid
+  // order to failed. The stale event is acknowledged, recorded and never applied.
+  const stale = await isStaleTerminalEvent(db, effectiveType, effectiveRef);
+  if (stale.stale) {
+    await recordStaleEvent(db, provider.id, event.eventId, effectiveType, event.raw, stale.reason);
+    return { duplicate: false, applied: false, eventType: effectiveType, stale: true, reason: stale.reason };
+  }
+
   const inserted = await db
     .insert(paymentWebhookEvents)
     .values({
@@ -292,13 +303,34 @@ export async function handlePaymentWebhook(
       eventType: effectiveType,
       payload: event.raw as never,
       signatureValid: 'true',
+      status: 'RECEIVED',
     })
     .onConflictDoNothing()
     .returning({ id: paymentWebhookEvents.id });
 
   if (inserted.length === 0) {
-    // Already processed — idempotent no-op.
-    return { duplicate: true, applied: false, eventType: effectiveType };
+    // The claim already exists. Whether this is a no-op or a retry depends on
+    // where the previous attempt left it: a PROCESSED claim is a genuine
+    // duplicate; a DEAD_LETTERED claim is refused (the platform already gave up
+    // and an operator must intervene); a RECEIVED/FAILED claim is an incomplete
+    // attempt that this delivery may retry.
+    const [existing] = await db
+      .select({ status: paymentWebhookEvents.status })
+      .from(paymentWebhookEvents)
+      .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)))
+      .limit(1);
+
+    if (!existing) {
+      // Raced with a concurrent delete; treat as duplicate to stay idempotent.
+      return { duplicate: true, applied: false, eventType: effectiveType };
+    }
+    if (existing.status === 'PROCESSED') {
+      return { duplicate: true, applied: false, eventType: effectiveType };
+    }
+    if (existing.status === 'DEAD_LETTERED') {
+      return { duplicate: false, applied: false, eventType: effectiveType, deadLettered: true };
+    }
+    // RECEIVED / FAILED: fall through and retry the side-effect below.
   }
 
   let applied = false;
@@ -347,22 +379,146 @@ export async function handlePaymentWebhook(
       applied = result.applied;
     }
   } catch (err) {
-    // Applying the side-effect failed, so the event must NOT stay claimed: the
-    // unique (provider, eventId) row would otherwise make every provider retry a
-    // silent "duplicate" no-op and the payment would never be applied. Release
-    // the claim so the next delivery can succeed, then surface the error.
-    await db
-      .delete(paymentWebhookEvents)
-      .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)));
-    throw err;
+    // The side-effect failed. The claim is NOT deleted — deleting it was how the
+    // failure became invisible and how an unbounded retry loop stayed silent.
+    // It is now recorded: the attempt count rises, the reason is kept, and once
+    // the cap is reached the row is dead-lettered so operators can see exactly
+    // which event is stuck and why. A retry may still claim it below the cap.
+    const failure = await recordWebhookFailure(db, provider.id, event.eventId, err);
+    throw Object.assign(err instanceof Error ? err : new Error(String(err)), { webhook: failure });
   }
 
   await db
     .update(paymentWebhookEvents)
-    .set({ processedAt: new Date() })
+    .set({ processedAt: new Date(), status: 'PROCESSED' })
     .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)));
 
   return { duplicate: false, applied, eventType: effectiveType };
+}
+
+/** How many failed apply attempts a terminal event gets before it is dead-lettered. */
+export const MAX_WEBHOOK_ATTEMPTS = 5;
+
+/**
+ * A terminal event is stale when applying it would move the target backwards.
+ * Only `payment.failed` vs an already-SUCCEEDED intent is monotonically wrong;
+ * a `payment.succeeded` after a failure is a legitimate correction (the provider
+ * may have failed then recovered) and is deliberately NOT treated as stale.
+ */
+async function isStaleTerminalEvent(
+  db: DB,
+  eventType: string,
+  externalRef: string,
+): Promise<{ stale: boolean; reason?: string }> {
+  if (eventType !== 'PAYMENT_FAILED') return { stale: false };
+  const [intent] = await db
+    .select({ status: paymentIntents.status })
+    .from(paymentIntents)
+    .where(eq(paymentIntents.externalRef, externalRef))
+    .limit(1);
+  if (intent?.status === 'SUCCEEDED') {
+    return { stale: true, reason: 'payment.failed arrived after the intent already succeeded' };
+  }
+  return { stale: false };
+}
+
+/**
+ * Records a stale event for audit without applying it. Kept under the same
+ * (provider, eventId) idempotency key so a replay stays a no-op, and marked
+ * PROCESSED so it is never retried.
+ */
+async function recordStaleEvent(
+  db: DB,
+  providerId: string,
+  eventId: string,
+  eventType: string,
+  raw: unknown,
+  reason?: string,
+): Promise<void> {
+  await db
+    .insert(paymentWebhookEvents)
+    .values({
+      id: newId(),
+      provider: providerId,
+      eventId,
+      eventType,
+      payload: raw as never,
+      signatureValid: 'true',
+      status: 'PROCESSED',
+      attempts: 1,
+      lastError: reason ?? 'stale event',
+      processedAt: new Date(),
+    })
+    .onConflictDoNothing();
+}
+
+/**
+ * Records one failed apply attempt and returns the resulting retry state. Once
+ * the attempt cap is reached the event is dead-lettered and will not be retried.
+ */
+async function recordWebhookFailure(
+  db: DB,
+  providerId: string,
+  eventId: string,
+  err: unknown,
+): Promise<{ attempts: number; deadLettered: boolean; message: string }> {
+  const message = err instanceof Error ? err.message : String(err);
+  const [row] = await db
+    .select({ attempts: paymentWebhookEvents.attempts })
+    .from(paymentWebhookEvents)
+    .where(and(eq(paymentWebhookEvents.provider, providerId), eq(paymentWebhookEvents.eventId, eventId)))
+    .limit(1);
+  const attempts = (row?.attempts ?? 0) + 1;
+  const deadLettered = attempts >= MAX_WEBHOOK_ATTEMPTS;
+  await db
+    .update(paymentWebhookEvents)
+    .set({
+      attempts,
+      lastError: message.slice(0, 2000),
+      status: deadLettered ? 'DEAD_LETTERED' : 'FAILED',
+      deadLetteredAt: deadLettered ? new Date() : null,
+    })
+    .where(and(eq(paymentWebhookEvents.provider, providerId), eq(paymentWebhookEvents.eventId, eventId)));
+  return { attempts, deadLettered, message };
+}
+
+/**
+ * Lists terminal webhook events that are failing or were given up on, so an
+ * operator can see and replay them. Read-only; replay goes through the normal
+ * webhook path (a new delivery below the cap is retried automatically).
+ */
+export async function listWebhookFailures(db: DB, opts: { limit?: number } = {}) {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  return db
+    .select({
+      id: paymentWebhookEvents.id,
+      provider: paymentWebhookEvents.provider,
+      eventId: paymentWebhookEvents.eventId,
+      eventType: paymentWebhookEvents.eventType,
+      status: paymentWebhookEvents.status,
+      attempts: paymentWebhookEvents.attempts,
+      lastError: paymentWebhookEvents.lastError,
+      deadLetteredAt: paymentWebhookEvents.deadLetteredAt,
+      createdAt: paymentWebhookEvents.createdAt,
+    })
+    .from(paymentWebhookEvents)
+    .where(sql`${paymentWebhookEvents.status} in ('FAILED','DEAD_LETTERED')`)
+    .orderBy(desc(paymentWebhookEvents.createdAt))
+    .limit(limit);
+}
+
+/**
+ * Explicitly resets a DEAD_LETTERED event so the next delivery can retry it.
+ * This is an operator action, not an automatic loop: it clears the attempt
+ * counter back to zero and returns the event to RECEIVED.
+ */
+export async function replayDeadLetter(db: DB, eventRowId: string): Promise<{ replayed: boolean }> {
+  const updated = await db
+    .update(paymentWebhookEvents)
+    .set({ status: 'RECEIVED', attempts: 0, deadLetteredAt: null })
+    .where(and(eq(paymentWebhookEvents.id, eventRowId), eq(paymentWebhookEvents.status, 'DEAD_LETTERED')))
+    .returning({ id: paymentWebhookEvents.id });
+  return { replayed: updated.length > 0 };
 }
 
 /**

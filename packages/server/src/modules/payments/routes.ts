@@ -1,11 +1,20 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { PERMISSIONS, userHasAnyRole } from '@wasit/shared';
+import { ApiError, PERMISSIONS, userHasAnyRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import { describePaymentProviders } from '../../lib/payments/resolve.js';
-import { createPaymentIntent, createRefund, getOrderPayment, listOrderRefunds, handlePaymentWebhook } from './service.js';
+import { writeAudit } from '../../lib/audit.js';
+import {
+  createPaymentIntent,
+  createRefund,
+  getOrderPayment,
+  listOrderRefunds,
+  handlePaymentWebhook,
+  listWebhookFailures,
+  replayDeadLetter,
+} from './service.js';
 
 const methodSchema = z.object({
   type: z.enum(['CARD', 'MOBILE_WALLET']),
@@ -95,4 +104,27 @@ paymentsRoutes.post('/orders/:orderId/refunds', requirePermission(PERMISSIONS.RE
     isOperator: userHasAnyRole(roles, PERMISSIONS.REFUND_MANAGE),
   });
   return c.json({ success: true, data: result }, 201 as never);
+});
+
+// Webhook failure surface. Failed and dead-lettered provider events must be
+// visible so a stuck payment is an operator-observable incident, not silent.
+paymentsRoutes.get('/webhook-failures', requirePermission(PERMISSIONS.REFUND_MANAGE), async (c) => {
+  const ctx = getContext(c);
+  const { limit } = c.req.query();
+  const items = await listWebhookFailures(ctx.db, { limit: limit ? Number(limit) : undefined });
+  return c.json({ success: true, data: { items } });
+});
+
+// Explicit operator replay of a dead-lettered event: resets the attempt counter
+// so the next provider delivery is retried instead of refused as dead-lettered.
+paymentsRoutes.post('/webhook-failures/:id/replay', requirePermission(PERMISSIONS.REFUND_MANAGE), async (c) => {
+  const ctx = getContext(c);
+  const result = await replayDeadLetter(ctx.db, c.req.param('id')!);
+  if (!result.replayed) throw ApiError.notFound('Dead-lettered webhook event');
+  await writeAudit(ctx.db, ctx, {
+    action: 'PAYMENT.WEBHOOK_REPLAY',
+    entityType: 'PAYMENT_WEBHOOK_EVENT',
+    entityId: c.req.param('id')!,
+  });
+  return c.json({ success: true, data: result });
 });

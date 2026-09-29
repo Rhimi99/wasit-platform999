@@ -8,7 +8,7 @@ import { verificationDocuments, verificationRequests } from '../src/db/schema/tr
 import { disputes, disputeEvents, disputeMessages, disputeEvidence } from '../src/db/schema/disputes.js';
 import { notifications } from '../src/db/schema/messaging.js';
 import { policies } from '../src/db/schema/engine.js';
-import { orders } from '../src/db/schema/commerce.js';
+import { orders, payments } from '../src/db/schema/commerce.js';
 import { eq, sql } from 'drizzle-orm';
 
 const app = createApp();
@@ -260,6 +260,18 @@ describe('Dispute Center', () => {
       grandTotal: '100.0000',
       status: 'DELIVERED',
       paymentStatus: 'PAID',
+    });
+    // A PAID order implies a payment record; the refund rail that a
+    // buyer-favourable dispute decision drives through requires one.
+    await db.insert(payments).values({
+      id: randomUUID(),
+      transactionId: randomUUID(),
+      orderId,
+      amount: '100.0000',
+      currencyCode: 'TND',
+      provider: 'manual',
+      externalRef: `vt-ref-${stamp}`,
+      status: 'PAID',
     });
 
     const created = await buyer.req('/api/disputes', {

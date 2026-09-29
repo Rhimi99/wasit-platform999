@@ -7,6 +7,66 @@
 
 ---
 
+## 2026-09-20 — طبقة الدفع العالمية P6 + P7 (تأثير النزاع المالي + مسارات فشل الـ Webhook)
+
+**النطاق**: `packages/server` فقط. لا تغيير في Commission Policy (4% = 2% seller + 2% buyer)، ولا في Marketing Video Agent (commit 89e68d7).
+
+### P6 — دمج قرار النزاع مع الـ Ledger
+**السبب الجذري**: `decideDispute` كان يغيّر الحالة فقط (`status = DECIDED` + event + audit + notification) دون أي أثر مالي. قرار `IN_FAVOR_OF_BUYER` الذي يجب أن يعيد المال للمشتري لم يكن يحرّك أي مبلغ، ولا يكتب أي compensating entry، ولا يحدّث حالة استرداد الطلب.
+
+**الإصلاح** (بدون قاعدة ledger جديدة وبدون مصدر حقيقة مالي ثانٍ):
+- أثر القرار أصبح **policy-driven**: يُقرأ من `rules.decisionEffects[decision]` في سياسة `DISPUTE_RESOLUTION`.
+- `REFUND_BUYER` يُنفَّذ حصريًا عبر `createRefund` الموجود (`packages/server/src/modules/payments/service.ts`)، فيمرّ من نفس المسار المُدقَّق الذي يمرّ منه أي refund يدوي: entry `REFUND`، عكس relative للـ COMMISSION وPAYMENT_FEE، وتحديث `refundStatus` للطلب. لم تُخترع أي قاعدة مالية جديدة.
+- **Idempotency**: مفتاح الاسترداد مشتق من id النزاع (`dispute:<id>`)، فلا يمكن رد المبلغ مرتين. وأُضيف حاجز: نزاع بحالة `DECIDED` لا يُقرَّر مرة أخرى (409).
+- **صفر تخمين**: قرار لا تُسمّيه السياسة (مثل `SPLIT` الذي نسبتَه رقم تفاوضي) لا يحرّك أي مال ويُعاد كـ `DECISION_REQUIRED`، ويُسجَّل Country Policy Gap لمراجعة بشرية — بدل اختلاق مبلغ.
+- الترتيب fail-closed: تنفيذ الاسترداد **قبل** تحويل النزاع إلى DECIDED، فلا يُوسَم نزاع بحالة «مُقرَّر» بناءً على أثر لم يحدث (مثل طلب غير مدفوع).
+
+**Migration** `0026_p6_p7_dispute_webhook_dlq.sql`:
+- إضافة `decisionEffects` للسياسة العامة عبر `UPDATE ... || jsonb_build_object(...)` — غير مدمِّرة (merge فقط، لا تستبدل خريطة مخصّصة من الـ Admin).
+
+### P7 — ترتيب الأحداث + إعادة المحاولة + Dead-Letter Queue
+**السبب الجذري**:
+1. **لا حماية من out-of-order**: حدث `payment.failed` متأخر من المزوّد كان يمكن أن يُطبَّق بعد نجاح الدفع، فيقلب طلبًا مدفوعًا إلى فاشل.
+2. **الفشل كان غير مرئي**: عند فشل تطبيق side-effect كان الكود **يحذف** صف الـ claim. هذا يمنع الحظر الدائم، لكنه يجعل الفشل غير قابل للرصد ويسمح بحلقة retry صامتة لا نهائية بلا أي سجل.
+
+**الإصلاح**:
+- `payment_webhook_status` = `RECEIVED | PROCESSED | FAILED | DEAD_LETTERED` مع `attempts`, `last_error`, `dead_lettered_at` (migration 0026).
+- **Out-of-order guard**: `payment.failed` على intent حالته `SUCCEEDED` يُعتبر stale — يُقرّ ويُسجَّل للتدقيق ولا يُطبَّق (`stale: true`). وبالمقابل `payment.succeeded` بعد فشل يُسمح به عمدًا (تصحيح مشروع، ليس تراجعًا).
+- **Retry tracked**: كل محاولة فاشلة ترفع `attempts` وتحفظ `lastError`؛ الصف **لا يُحذف**. التكرار يبقى idempotent لأن مفتاح (provider, eventId) محفوظ: `PROCESSED` ⇒ duplicate، `RECEIVED/FAILED` ⇒ إعادة محاولة، `DEAD_LETTERED` ⇒ منع صامت.
+- **DLQ**: بعد `MAX_WEBHOOK_ATTEMPTS = 5` يُوسَم الحدث `DEAD_LETTERED` ويُحفظ ليفحصه مشغّل.
+- مسار مشغّل جديد: `GET /api/payments/webhook-failures` (قائمة FAILED/DEAD_LETTERED) و`POST /api/payments/webhook-failures/:id/replay` (تصفير العدّاد لإعادة المحاولة)، بصلاحية `REFUND_MANAGE` + audit.
+
+**التحقق (Measured)**:
+- `packages/server/tests/p6-p7-dispute-webhook.test.ts`: **10/10 PASS** (P6: 4، P7: 6).
+- Full server suite: **761/761 PASS** (68 ملف، exit 0).
+- Server typecheck: exit 0 · Web typecheck: exit 0 · Server build: exit 0 · Web build: exit 0.
+- تحديث `tests/verification-trust.test.ts`: الطلب المدفوع في الـ fixture كان بلا صف `payments` (حالة مستحيلة واقعيًا) — أُضيف الصف الحقيقي بدل إضعاف الحماية fail-closed.
+- لا تغيير في Commission Policy ولا في Marketing Video Agent. لا DB reset/drop/push.
+
+**القيود المُحترمة**: لا Mock للوظيفة الحقيقية؛ لا تعطيل أزرار؛ لا حذف بيانات اختبار ضرورية.
+
+---
+
+## 2026-09-29 — إصلاح تلوّث المخزون في التدقيق الوظيفي (self-cleaning purchase)
+
+**النطاق**: سكربت التدقيق فقط (`scripts/ui-interaction-audit.mjs`) — لا تغيير في business logic ولا production behavior.
+
+**السبب الجذري**: فحص `create order from UI` كان ينشئ order حقيقية عبر `POST /api/orders`، وهذا **يحجز stock فعليًا** (`reserveStock` ⇒ `reservedQuantity += qty`). لم يكن هناك أي cleanup، فكل تشغيل يستنزف المخزون تدريجيًا حتى يصل منتج السوق الأول إلى `available = 0` ويفشل الشراء بـ `INSUFFICIENT_STOCK` (409). لذلك كان يُظهر FAIL كاذبًا رغم سلامة الوظيفة.
+
+**الإصلاح**:
+- السكربت يلتقط id الـ order التي أنشأها هذا التشغيل (فرق قائمة `/api/orders` قبل/بعد).
+- يلغيها من نفس جلسة المشتري عبر `PATCH /api/orders/:id/status {status: CANCELLED}` — والـ service يعالج الإلغاء لِـ order بحالة PENDING عبر `releaseReservation` (يحرّر الحجز دون تغيير المخزون الفعلي).
+- تحقق صريح: الفحص `audit cleans up its own order` ينجح فقط إذا أصبحت الحالة `CANCELLED` فعلًا.
+- عند فشل الشراء يطبع الآن نص `role="alert"` من الواجهة (سبب حقيقي بدل «no breakdown»).
+
+**التحقق (Measured)**:
+- قبل: `TOTAL_AVAIL=1203` ⇒ بعد التشغيل: `1203` (بلا استنزاف).
+- تشغيلان متتاليان للتدقيق الكامل: **58/58 PASS** ثم **58/58 PASS** (exit 0 في الاثنين)، وكل تشغيل ألغى order الخاص به (`→ CANCELLED`).
+- لا تغيير في Commission 4% = 2% + 2%، ولا في Marketing Video Agent (commit 89e68d7).
+
+**القيود المُحترمة**: لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل أزرار؛ لا DB reset/drop؛ لا حذف بيانات اختبار ضرورية.
+
+
 ## 2026-09-28 — إعادة تصميم الصفحة الرئيسية: Dark Navy Premium (نهائي)
 
 **النطاق**: واجهة عامة فقط (`packages/web`). لا تغيير في Backend/API/DB/migrations/Auth/RBAC/Payments/Commission/AI/Video.
