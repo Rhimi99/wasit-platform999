@@ -7,6 +7,110 @@
 
 ---
 
+## 2026-09-30 (جلسة رابعة) — Functional Audit حقيقي من الواجهة + نشر Demo عام
+
+**النطاق**: نشر Demo عام على `wasit_demo` (قاعدة معزولة)، وتدقيق وظيفي حقيقي من الواجهة لكل الأدوار. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push، ولا تعديل على أي ملف مصدر.
+
+### بيئة الـDemo (معزولة تمامًا)
+| العنصر | القيمة |
+|---|---|
+| Public URL | `https://work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev` (و`work-2-…` على المنفذ 12001) |
+| المنافذ | `3000` API · `12000` web preview · `12001` web preview ثانٍ |
+| القاعدة | `wasit_demo` (معزولة، migrations 94 جدولًا + seeds) |
+| قواعد لم تُمسّ | `wasit_dev` · `wasit_test` (94 جدولًا لكل منهما) |
+| Docker | `wasit-verify-pg` (postgres:16) → 5432 |
+| إعدادات | `.env.demo`: `PAYMENT_PROVIDER=manual` · `DEMO_PAYMENT_MODE=true` · `MAIL_TRANSPORT=log` |
+
+### نتائج الفحوص
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| typecheck | `npm run typecheck` | PASS (server + web) |
+| اختبارات الخادم | `npm test` (على `wasit_test`) | **762/762** |
+| build | `npm run build` + `build -w @wasit/web` | PASS |
+| E2E كامل (معزول على 3100/5273) | `npm run test:e2e` | **213 passed / 2 skipped / 0 failed** |
+| Browser smoke (واجهة حقيقية) | Playwright على الـURL العام | **17/17** |
+| Marketing Video Studio (UI كامل) | اختيار→توليد→معاينة→تنزيل→حذف | **9/9** |
+| Multi-role audit (كل الصفحات) | Playwright على الـURL العام | **45/45** |
+
+### عطل حقيقي مُكتشف ومُصلح: تلوّث بيئة E2E يفتح حساب SUPER_ADMIN
+**المسار**: `playwright.config.ts` (بوابة `assertReusableApiServerMatchesSuite`) → `e2e/global-setup.ts` (تصحيح كلمة مرور الحسابات) → `POST /api/auth/login`.
+
+**السبب الجذري**: تشغيل E2E مع `E2E_ALLOW_FOREIGN_SERVER=true` جعل Playwright يُعيد استخدام خادم الـDemo (`wasit_demo`)، بينما `global-setup.ts` يستخدم `DEMO_TEST_ACCOUNT_PASSWORD` (المنشورة `Passw0rd!2026`) لإصلاح كلمات مرور كل الأدوار — بما فيها `admin@wasit.tn`/`admin2@wasit.tn` اللذان يجب أن يستخدما `DEMO_STAFF_PASSWORD`. النتيجة: فُتح حساب **SUPER_ADMIN** بكلمة المرور المنشورة للعامة — ثغرة حقيقية في بيئة Demo عامة.
+
+**الإصلاح**: تشغيل E2E معزولًا تمامًا على منافذ مستقلة (`E2E_API_URL=:3100` / `E2E_WEB_URL=:5273`) مع السماح للـ`webServer` بالبدء بنفسه (بلا `E2E_ALLOW_FOREIGN_SERVER`)، فيعمل على `wasit_test` وبسر `PAYMENT_WEBHOOK_SECRET` الخاص بالسويت. ثم أُعيدت كلمة مرور الحسابين إلى `DEMO_STAFF_PASSWORD` عبر نفس دالة التجزئة (`hashPassword`) وتحقّق أن كلمة المرور المنشورة **مرفوضة** مجددًا.
+
+### 20 فشلًا في التشغيل الأول — كلها بيئية لا عيوب منتج
+التشغيل الأول (بعد إعادة استخدام خادم الـDemo) أعطى `20 failed / 193 passed`. تحليل الأخطاء أثبت أن **المنتج سليم** والفشل ناتج عن تباين بيئة:
+| السبب | العدد | التفسير |
+|---|---|---|
+| `PAYMENT_WEBHOOK_SECRET` مختلف | 6 | السويت يوقّع بـ`e2e-webhook-secret-…`، وخادم الـDemo بسرّ آخر → `settled.ok()` فاشل |
+| `BACKUP_HEARTBEAT_FILE` مختلف | 1 | `healthy.configured` فاشل لأن المسار مختلف |
+| شريط DEMO في الواجهة | 1 | `getByRole('status')` أصبح عنصرين (strict mode) |
+| تلوّث الحالة/الترتيب | 12 | عمليات مالية سابقة على نفس القاعدة |
+
+بعد العزل الكامل: **0 failed**. أي لا يوجد عيب منتج واحد في هذه المجموعة.
+
+### تدقيق الواجهة (لا HTTP 200 وحده)
+كل فحص في `browser-smoke`/`video-studio`/`roles` يستند إلى DOM فعلي بعد نقرات حقيقية:
+- **الشراء**: إنشاء طلب من `POST /api/orders` وتحقّق أن السياسة مطبَّقة فعليًا: `commissionRate=0.04`, `commissionSellerRate=0.02`, `commissionBuyerRate=0.02` على `itemsTotal=149.9` → **السياسة سليمة**.
+- **إنشاء منتج من الواجهة**: تعبئة `#p-name`/`#p-sku`/`#p-price`/`#p-category` ثم Submit — وتحقّق لاحقًا أن المنتج **محفوظ فعلًا** في القاعدة (`status=ACTIVE`, `price=99.9000`) لا مجرد بانر نجاح.
+- **Marketing Video**: التوليد عبر ffmpeg يُنتج `video/mp4` بحجم ~104KB؛ المعاينة تُحمّل البايتات فعليًا (`200`, `video/mp4`, `104433B`)؛ التنزيل يعيد نفس البايتات؛ الحذف يُنقص الأصول فعليًا (4→3).
+- **الأخطاء في console**: كلها `401` مشروعة (استعلامات SPA غير مُصادَقة قبل الدخول، وwebhooks غير موقّعة) — لا أخطاء 5xx ولا استثناءات.
+
+### ملاحظات على الفحوص التي بدت فاشلة
+3 وظائف بدت فاشلة في أول تشغيل للـsmoke، وكلها كانت **مسارات/محدّدات خاطئة في السكربت** لا عيوب:
+`/notifications` غير موجود (الإشعارات جرس في الهيدر `NotificationsBell`)، والرسائل على `/dashboard/messages`، وحقول نموذج المنتج تُعرَّف بـ`id` لا `name`. بعد التصحيح: 17/17.
+وبالمثل فحصان في `roles` (Marketplace وAdmin KPIs) كانا بسبب نص عربي بينما الـprobe إنجليزي — الصفحتان تعملان فعليًا.
+
+### القيود المُحترمة
+لا commit/push/reset/clean على ملفات المنتج؛ لا تعديل أي ملف مصدر؛ لا DB reset/drop/push؛ Commission 4% = 2% + 2% سليمة (مُتحقَّق منها); Marketing Video Agent سليم؛ لم تُحذف بيانات اختبار ضرورية.
+
+---
+
+## 2026-09-29 (جلسة ثالثة) — تدقيق وظيفي من الواجهة: كشف وإصلاح فجوة حقيقية في طبقة الدفع
+
+**النطاق**: `packages/server` (وصف المزوّدين) + سكربتات/e2e التدقيق. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push.
+
+### العطل المُكتشف (Defect) — تباعد بين الوصف والقرار الفعلي
+**المسار**: Checkout (`packages/web/src/pages/CheckoutPage.tsx`) → `GET /api/payments/methods` → `describePaymentProviders()` في `packages/server/src/lib/payments/resolve.ts`، ثم `POST /api/payments/orders/:id/intent` → `resolvePaymentProvider()`.
+
+**السبب الجذري**: `resolvePaymentProvider()` يرفض أي مزوّد `capabilities.demo === true` عندما يكون `DEMO_PAYMENT_MODE` غير مفعّل (fail-closed، 503). لكن `describePaymentProviders()` و`describePayoutProviders()` كانا يحسبان `available` بـ`isFunctional && isAvailable()` فقط، **دون تطبيق نفس الرفض**. النتيجة: في نشر غير-demo، تُعرَض الواجهة على الدافع طرق دفع «متاحة» لمزوّد سترفضه نقطة النية لاحقًا بـ503 — طريق مسدود لا يظهر إلا بعد الإرسال.
+
+**الإصلاح** (مصدر حقيقة واحد للقرار، لا إخفاء للخطأ):
+- `describeProvider()` يحسب `refusedAsDemo = capabilities.demo && !demoPaymentMode()`، ويجعل `available = isFunctional && isAvailable() && !refusedAsDemo`.
+- عند الرفض تُوسَم كل طرق المزوّد `available: false` مع `reason` صريح للواجهة.
+- `describePayoutProviders()` طُبِّق عليه نفس المنطق (كان يعاني نفس التباعد).
+- لم يُغيَّر `resolvePaymentProvider` نفسه: هو المرجع، والوصف أصبح يتبعه.
+
+**التحقق (Measured)**:
+- اختبار regression جديد في `packages/server/tests/payment-methods.test.ts` يمرّ عبر الـroute الحقيقي: في demo الوصف متاح والنية 201؛ وبعد `DEMO_PAYMENT_MODE=false` الوصف يصبح `available: false` مع `reason`، ونقطة النية تُرجع **503** — أي أن الوصف صار صادقًا.
+- **إثبات red→green**: بإرجاع الكود الأصلي (stash) يفشل الاختبار الجديد بـ`expected true to be false`؛ ومع الإصلاح ينجح.
+- Full server suite: **762/762 PASS** (68 ملف، exit 0) — كان 761.
+- Server/Web typecheck: exit 0 · Web build: exit 0 · Server build:prod: exit 0.
+
+### العطل الثاني — تلوّث بيانات مشترك من سويتة E2E (سبب فشل الشراء من الواجهة)
+**الأثر المرصود**: `create order from UI` فشل بـ`Insufficient available stock` رغم أن المخزون الكلي 1203 وحدة.
+**السبب الجذري**: `e2e/functional-audit.spec.ts` كان يعدّل **أول صف** في كتالوج التاجر (منتج demo مُseed) ويُعيد تسميته `Edited <ts>` ويغيّر سعره، **ولا يُرجعه أبدًا**. المنتج المُشوَّه يبقى `ACTIVE` و`isPublished` فيتصدّر السوق (`ORDER BY created_at DESC`) بمخزون صغير (2–10) يحجزه كل تشغيل. اختباران آخران كانا يعتمدان على «أول صف» أيضًا، فأصبح أحدهما يفشل بعد أن أرشفت السكربتات منتجاتها.
+**الإصلاح**: الاختبارات الثلاثة (تعديل/نشر/تعليق) تنشئ منتجًا خاصًا بها، تتحقق من الهدف، ثم **تؤرشفه** في `finally`. ولم يُلمس أي كود منتج.
+**تنظيف البيانات**: أُرشِف المنتجان المُشوَّهان `Edited 1790695715601` و`Edited 1790698786961` (كانا `reserved=quantity` أي بلا مخزون متاح) عبر `PATCH /api/products/:id/status` من جلسة التاجر الحقيقية — لا حذف صفوف.
+
+### نتائج التدقيق الوظيفي من الواجهة على الرابط العام
+| الوحدة | النتيجة |
+| --- | --- |
+| `ui-interaction-audit.mjs customer` | **13/13** (بعد التنظيف؛ كان 11/12) |
+| `ui-interaction-audit.mjs merchant` | **19/19** |
+| `ui-interaction-audit.mjs admin` | **26/26** |
+| `ui-video-studio-full-check.mjs` | **11/11** (Generate → READY → Preview → Download 132,507 بايت → Delete) |
+| `ui-purchase-check.mjs` | **10/10** (عمولة 4% = 2% + 2% مؤكَّدة من الواجهة) |
+| `playwright e2e/functional-audit.spec.ts` | **57/57** (على منافذ بديلة 3100/5199) |
+
+### إصلاح تشغيلي — تشغيل E2E دون إزعاج الـdemo stack
+`playwright.config.ts` كان يثبّت المنافذ 3000/5173 في `webServer`، بينما `E2E_API_URL`/`E2E_WEB_URL` يتحكّمان في الـprobe و`baseURL` فقط. فتعذّر تشغيل السويتة محليًا لأن الـdemo stack يحتل 3000. الآن المنافذ مشتقّة من الـURLs، و`WEB_PROXY_TARGET` يُمرَّر إلى Vite ليجعل الـproxy يوجّه إلى المنفذ المُتجاوَز. الـdemo stack بقي يعمل بلا مساس.
+
+**القيود المُحترمة**: لا Mock؛ لا تعطيل أزرار؛ لا حذف بيانات اختبار ضرورية؛ Commission 4% = 2% + 2% سليمة؛ Marketing Video Agent (`89e68d7`) بلا مساس؛ لا DB reset/drop/push.
+
+---
+
 ## 2026-09-20 — طبقة الدفع العالمية P6 + P7 (تأثير النزاع المالي + مسارات فشل الـ Webhook)
 
 **النطاق**: `packages/server` فقط. لا تغيير في Commission Policy (4% = 2% seller + 2% buyer)، ولا في Marketing Video Agent (commit 89e68d7).
@@ -2434,3 +2538,65 @@ Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل �
 ### القيود المُحترمة
 لا Mock؛ لا تعطيل أزرار؛ لا إخفاء أخطاء؛ لا DB reset/drop/push؛ لم تُحذف بيانات الاختبار؛ Commission Policy 4% = 2% seller + 2% buyer سليمة؛ Marketing Video Agent (commit 89e68d7) لم يُمس؛ لم تُغيَّر أي وظيفة كانت تعمل.
 
+
+---
+
+## 2026-09-30 — اعتماد هوية LE WASSIT: الرمز A · AXIS
+
+### القرار
+الرمز المعتمد هو **A · AXIS** من المرشحات النهائية الثلاثة (A-axis / B-keystone / C-bridge) التي اختُبرت فعليًا على 16/24/32px. الرمز **مستقل تمامًا عن الحرف W** ولا يستخدم أي Monogram حرفي. لم يُعَد تصميم الرمز من الصفر؛ الهندسة مأخوذة حرفيًا من النسخة المُختبرة `/tmp/concepts/FA.svg`.
+
+### المفهوم
+طرفان (وتدان) يميلان من جهتين متقابلتين نحو **محور رأسي واحد** يرتفع فوقهما. المحور هو العنصر الوحيد الذي يمتد على كامل الارتفاع، والوحيد الذي يلمسه الوتدان معًا — أي أن إزالته تفصل الطرفين. هذا هو معنى الوسيط داخل الهندسة نفسها، لا كزخرفة مضافة.
+
+### الملفات الجديدة
+| الملف | الوصف |
+|---|---|
+| `packages/web/src/components/brand/AxisMark.tsx` | المكوّن الموحّد الوحيد للرمز. الهندسة مطابقة للمُختبر عبر `<g transform>` (الإزاحة داخل اللوحة فقط) |
+| `packages/web/public/le-wassit-icon.svg` | الرمز الكامل بالألوان (SVG قابل للتكبير) |
+| `packages/web/public/le-wassit-icon-mono.svg` | أحادي اللون للطوابع والطباعة بلون واحد |
+| `packages/web/public/le-wassit-icon-light.svg` | لخلفيات فاتحة |
+| `packages/web/public/le-wassit-icon-dark.svg` | لخلفيات داكنة (knockout) |
+| `packages/web/public/favicon-16.png` / `favicon-24.png` / `favicon-32.png` | أيقونات المتصفح بالأحجام المُختبرة |
+| `packages/web/public/icon-maskable-512.png` | أيقونة maskable بمنطقة آمنة (Android adaptive) |
+| `scripts/generate-brand-assets.mjs` | مُولّد الأصول من نفس الهندسة (مُحدَّث) |
+
+### الملفات المعدّلة
+| الملف | التغيير |
+|---|---|
+| `packages/web/src/components/brand/Brand.tsx` | يشير إلى `AxisMark` بدل `LeWassitMark` |
+| `packages/web/src/components/layouts/AppSidebar.tsx` | `AxisMark` في الشريط الجانبي والهيدر المضغوط |
+| `packages/web/src/pages/HomePage.tsx` | `AxisMark` في Hero وقسم «من نحن» |
+| `packages/web/index.html` | روابط favicon بأحجام 16/24/32 + Apple touch |
+| `packages/web/public/site.webmanifest` | maskable يشير إلى `icon-maskable-512.png` |
+| `packages/web/public/favicon.svg`, `icon-192.png`, `icon-512.png`, `apple-touch-icon.png`, `icon-512-mono.png` | أُعيد توليدها بالهندسة الجديدة |
+
+### استبدال الهوية القديمة — إثبات عدم الاستخدام قبل التغيير
+`grep` على كامل المستودع (بعد استثناء `node_modules` و`tsbuildinfo`) أعاد **صفر** مرجع لـ`LeWassitMark` و**صفر** مرجع لـ`WMonogram` خارج ملفيهما. لذلك:
+- `WMonogram.tsx` **لم يُحذف** (الملفات القديمة لا تُحذف بمجرد أنها قديمة) — بقي على القرص بلا أي مرجع.
+- `LeWassitMark.tsx` **لم يُحذف** لنفس السبب.
+- لا يوجد شعاران متنافسان داخل المنصة: كل نقطة هوية تمر عبر `AxisMark`.
+
+### التحقق
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| typecheck | `npm run typecheck` | PASS (server + web) |
+| build | `npm run build -w @wasit/web` | PASS |
+| اختبارات الخادم | `npm test` | **762/762** |
+| E2E متأثرة بالواجهة | `navigation-audit` + `auth` + `seo` + `marketplace` + `directory` + `rbac` | **40/40** |
+| Browser verification | سكربت Playwright حقيقي | **15/15** |
+
+**Browser verification (واجهة حقيقية، لا HTTP 200 فقط):** في كل صفحة تُحقَّق الهندسة الفعلية داخل DOM — يجب أن يكون العنصر SVG حقيقيًا بـ**وتدين بالضبط + مستطيل محور** وإلا يُعد فاشلًا، فلا يمر رمز فارغ أو مرجع مكسور:
+- Desktop (1440px): الرئيسية 4 رموز، الهيدر يعرض «LE WASSIT» + «BUSINESS GLOBAL»
+- Mobile (390px): الرمز يظهر كاملًا
+- Login و Register: الرمز في الهيدر
+- Merchant Dashboard و Admin: الرمز في الشريط الجانبي
+- favicon: 5 وسوم (SVG + 16/24/32 + Apple 180)، وصفر استجابة 4xx على الأيقونات والـ manifest
+
+**اختبار الوضوح 16/24/32px (قياس بكسل فعلي + ASCII bitmap):**
+- 16px: حبر 4.7%، تباين المحور 181 مقابل 89 للوحة → **المحور مميّز** ولم يتحول إلى blob
+- 24px و32px: الوتدان والمحور مقروءان بوضوح في الـbitmap
+- النسخة الفاتحة والداكنة تُنتجان صورًا مختلفة فعليًا (تحقق مقارنة bytes)
+
+### القيود المُحترمة
+لا Backend/API؛ لا Database (لم يُنفَّذ reset/drop/push — تمّت migrations عادية + seed فقط)؛ لا Payments؛ لا Commission (4% = 2% + 2% سليمة)؛ لا Auth/RBAC؛ لا redesign؛ لم تُحذف أي تعديلات موجودة مسبقًا؛ **لا commit ولا push**.
