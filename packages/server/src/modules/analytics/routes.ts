@@ -6,6 +6,7 @@ import { validateBody, getValidatedBody } from '../../middleware/validate';
 import { getContext } from '../../lib/request-context';
 import { writeAudit } from '../../lib/audit';
 import { reportingCurrency } from '../../lib/env';
+import { parsePositiveIntParam } from '../../lib/query';
 import {
   getMyAnalyticsOverview,
   listAnalyticsEvents,
@@ -39,7 +40,7 @@ analyticsRoutes.get('/events', requireAuth, requirePermission(PERMISSIONS.ANALYT
   const ctx = getContext(c);
   const { limit, eventName } = c.req.query();
   const data = await listAnalyticsEvents(ctx.db, ctx.user!.id, {
-    limit: limit ? Number(limit) : undefined,
+    limit: parsePositiveIntParam(limit),
     eventName,
   });
   return c.json({ success: true, data: { items: data } });

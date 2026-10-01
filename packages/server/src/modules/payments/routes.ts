@@ -6,6 +6,7 @@ import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import { describePaymentProviders } from '../../lib/payments/resolve.js';
 import { writeAudit } from '../../lib/audit.js';
+import { parsePositiveIntParam } from '../../lib/query.js';
 import {
   createPaymentIntent,
   createRefund,
@@ -111,7 +112,7 @@ paymentsRoutes.post('/orders/:orderId/refunds', requirePermission(PERMISSIONS.RE
 paymentsRoutes.get('/webhook-failures', requirePermission(PERMISSIONS.REFUND_MANAGE), async (c) => {
   const ctx = getContext(c);
   const { limit } = c.req.query();
-  const items = await listWebhookFailures(ctx.db, { limit: limit ? Number(limit) : undefined });
+  const items = await listWebhookFailures(ctx.db, { limit: parsePositiveIntParam(limit) });
   return c.json({ success: true, data: { items } });
 });
 

@@ -19,6 +19,7 @@ import {
 import { listRiskEvents } from '../risk/service';
 import { writeAudit } from '../../lib/audit';
 import { resolveRateLimitStore } from '../../lib/rate-limit/resolve';
+import { parsePositiveIntParam } from '../../lib/query';
 
 const statusRegex = /^(PENDING|SUBMITTED|IN_REVIEW|APPROVED|REJECTED|EXPIRED|REVOKED)$/;
 const levelRegex = /^(BASIC|VERIFIED|BUSINESS_VERIFIED|INTERNATIONAL_VERIFIED)$/;
@@ -68,8 +69,8 @@ adminEnginesRoutes.get('/verification/requests', async (c) => {
     status: statusRegex.test(queries.status ?? '') ? (queries.status as never) : undefined,
     level: levelRegex.test(queries.level ?? '') ? (queries.level as never) : undefined,
     q: queries.q,
-    page: queries.page ? Number(queries.page) : undefined,
-    pageSize: queries.pageSize ? Number(queries.pageSize) : undefined,
+    page: parsePositiveIntParam(queries.page),
+    pageSize: parsePositiveIntParam(queries.pageSize),
   });
   return c.json({ success: true, data: result });
 });
@@ -129,8 +130,8 @@ adminEnginesRoutes.get('/risk/events', async (c) => {
   const result = await listRiskEvents(ctx.db, {
     userId: queries.userId,
     level: queries.level as never,
-    page: queries.page ? Number(queries.page) : undefined,
-    pageSize: queries.pageSize ? Number(queries.pageSize) : undefined,
+    page: parsePositiveIntParam(queries.page),
+    pageSize: parsePositiveIntParam(queries.pageSize),
   });
   return c.json({ success: true, data: result });
 });
@@ -143,8 +144,8 @@ adminEnginesRoutes.get('/disputes', async (c) => {
     status: queries.status as never,
     decision: queries.decision as never,
     q: queries.q,
-    page: queries.page ? Number(queries.page) : undefined,
-    pageSize: queries.pageSize ? Number(queries.pageSize) : undefined,
+    page: parsePositiveIntParam(queries.page),
+    pageSize: parsePositiveIntParam(queries.pageSize),
   });
   return c.json({ success: true, data: result });
 });

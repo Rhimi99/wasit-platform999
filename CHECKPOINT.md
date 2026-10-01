@@ -1,11 +1,68 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-09-26 — **تدقيق وظيفي حقيقي (UI) + تغليف الإصدار التجاري**
+> **التاريخ**: 2026-10-01 — **إصلاح أخطاء تحليل الاستعلامات الرقمية (NaN/Infinity) + تحقق وظيفي حقيقي من الواجهة**
 > **الفرع**: `master`
-> **HEAD**: `f3a730c` (test/audit: سويتات الفحص الوظيفي) على `921693a` على `6f7a029` على `d9edeb8`
-> **commit التدقيق (الكود)**: `f3a730c` · **commit التغليف (وثائق فقط)**: أعلى `f3a730c`، بلا تغيير كود منتج
+> **HEAD قبل الإصلاح**: `3bb682b`
+> **commit الإصلاح**: أدناه، مستقل، على `3bb682b`
 
 ---
+
+## 2026-10-01 (جلسة خامسة) — Functional Audit حقيقي + إصلاح تحليل الاستعلامات الرقمية
+
+**النطاق**: تدقيق وظيفي حقيقي من الواجهة (لا HTTP 200 وحده)، وإصلاح الأخطاء الحقيقية المكتشفة في تحليل الاستعلامات الرقمية عبر الوحدات. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent، ولا DB reset/drop/push، ولا تعطيل أي زر، ولا Mock.
+
+### الأخطاء الحقيقية المُثبتة والمُصلَحة (4 أخطاء من فئة واحدة)
+| # | المسار | العَرَض قبل الإصلاح | السبب الجذري | الإصلاح |
+|---|---|---|---|---|
+| 1 | `GET /api/admin/analytics/daily-kpis?days=abc` | **500** `RangeError: Invalid time value` | `Number('abc')` = NaN → `new Date(NaN)` → `toISOString()` يرمي | `parsePositiveIntParam` مع fallback إلى 14 |
+| 2 | `GET /api/admin/analytics/daily-kpis?days=1e999` | **500** | `Infinity` نفس المسار | نفس الإصلاح |
+| 3 | `GET /api/admin/verification/requests?page=abc` | 200 لكن meta `{page: null, pageSize: null}` | NaN يصل إلى LIMIT/OFFSET | `parsePositiveIntParam` |
+| 4 | `GET /api/admin/risk/events?page=Infinity` | **500** `22P02 invalid input syntax for bigint: "Infinity"` | Infinity يصل إلى bigint | `parsePositiveIntParam` |
+| 5 | `GET /api/analytics/events?limit=abc` | 200 لكن يُرجع **كل** الصفوف (تجاوز الحد) | NaN يمرّ عبر `Math.min(NaN, 100)` = NaN → Postgres يقرأه كـ LIMIT غير محدود | `parsePositiveIntParam` |
+| 6 | `GET /api/payments/webhook-failures?limit=abc` | نفس تجاوز الحد | نفس السبب | `parsePositiveIntParam` |
+| 7 | `GET /api/admin/disputes?page=abc` | meta غير صالحة | نفس السبب | `parsePositiveIntParam` |
+
+**لماذا فئة واحدة خطيرة**: `Number('abc')` = `NaN`، و`NaN` ينجو من `Math.max`/`Math.min` دون تغيير، فيصل إلى `LIMIT`/`OFFSET` كـ`NaN` — وPostgreSQL يقبله كـ**حد غير محدود**، فيعيد الاستعلام كل الصفوف التي طلب المستخدم تقييدها. هذا تجاوز صامت للحد (لا خطأ ظاهر)، وهو أخطر من الـ500.
+
+### ملف جديد
+`packages/server/src/lib/query.ts` — `parsePositiveIntParam(value)`: تُرجع `undefined` لأي قيمة ليست عددًا صحيحًا موجبًا (غائبة، فراغ، `"abc"`، `"Infinity"`، صفر، سالب، كسر). المتصل يقرأ `undefined` كـ«لم تُمرَّر» ويعود لافتراضه — نفس اصطلاح فلاتر الـenum في هذه المسارات.
+
+### الاختبارات (3 جديدة، مُثبت أنها تلتقط الخطأ)
+| الاختبار | الملف | يُثبت |
+|---|---|---|
+| `ignores a non-numeric limit instead of letting NaN uncap the query` | `tests/analytics.test.ts` | 25 صفًا + `limit=abc/Infinity/-1/0/1.5` → تبقى 20 (الحد الافتراضي)، لا 25 |
+| `ignores a non-numeric days param on daily-kpis (no 500)` | `tests/analytics.test.ts` | 5 قيم سيئة → 200 لا 500 |
+| `ignores malformed page/pageSize on the admin engine desks` | `tests/verification-trust.test.ts` | 3 مكاتب × 7 قيم → 200 + `Number.isInteger(page/pageSize)`، و`pageSize=1` يُحترم |
+
+**إثبات أن الاختبارات تلتقط الخطأ فعليًا**: أُعيد الكود المعطوب مؤقتًا، فسقطت الاختبارات بالضبط:
+`limit=abc must stay capped: expected 25 to be 20` · `days=abc must not 500: expected 500 to be 200` · `verification/requests?page=abc page: expected false to be true`. ثم أُعيد الإصلاح.
+
+### التحقق النهائي
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| unit tests | `npx vitest run` (wasit_test) | **765/765** (762 + 3 جديدة) |
+| typecheck | `npm run typecheck` | PASS (server + web) |
+| build | `npm run build` | PASS |
+| E2E كامل | `npx playwright test` | **207 passed / 8 skipped / 0 failed** (مطابق للأساس) |
+| Browser smoke (Functional + Video Studio) | `npx playwright test e2e/functional-audit.spec.ts e2e/video-studio.spec.ts` | **60/60** |
+
+**تحقق حي بعد إعادة تشغيل الخادم** (الكود المُصلَح فعليًا في العملية):
+- `daily-kpis?days=abc` → 200 (كان 500) · `days=Infinity` → 200 · `days=14` → 200
+- `risk/events?page=Infinity` → 200 (كان 500)
+- `verification/requests?page=abc&pageSize=abc` → meta `page=1 pageSize=50` (كانت null)
+- `analytics/events` مع 31 صفًا: `limit=abc/Infinity/-1/0/1.5` → **20** صفًا (الحد الافتراضي)، `limit=100` → 31 — القيمة الصالحة تعمل، والسيئة لا تتجاوز الحد
+
+### Marketing Video — تحقق وظيفي كامل من الواجهة (60/60)
+اختيار المنتج ✓ اللغة ✓ الجمهور ✓ النمط ✓ المدة ✓ Generate ✓ حالة generation ✓ ظهور الفيديو ✓ Preview (206 partial content) ✓ Download ✓ Delete ✓ (DELETE 200). النافذة 35–120 ثانية مُحترمة في الواجهة وفي API، ورفض التوليد بلا منتج، ورفض وصول CUSTOMER (403).
+
+### القيود المُحترمة
+- Commission Policy: `WASIT Base Commission 4% (2% seller + 2% buyer)` — مُتحقَّق في القاعدة: `rate=0.040000, seller_rate=0.020000, buyer_rate=0.020000`
+- Marketing Video Agent: صفر تعديل (`git status` نظيف على `lib/media/` و`modules/media/`)
+- لا DB reset/drop/push · لا حذف بيانات ضرورية · لا تعطيل أزرار · لا Mock · لم تُغيَّر وظائف تعمل
+- بيانات الاختبار المُضافة (31 حدث probe) **حُذفت** بعد التحقق
+
+---
+
 
 ## 2026-09-30 (جلسة رابعة) — Functional Audit حقيقي من الواجهة + نشر Demo عام
 

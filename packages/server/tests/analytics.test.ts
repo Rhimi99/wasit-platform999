@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { transactionLedger } from '../src/db/schema/commerce.js';
+import { analyticsEvents } from '../src/db/schema/analytics.js';
 import { eq } from 'drizzle-orm';
 
 const app = createApp();
@@ -380,5 +381,51 @@ describe('Analytics Engine (Phase 16) — real DB-backed', () => {
     await registerLogin(c, `an-deny-${Date.now()}@wasit.tn`, 'CUSTOMER');
     const r = await c.req('/api/admin/analytics/daily-kpis/rollup', { method: 'POST' });
     expect(r.status).toBe(403);
+  });
+
+  // A malformed numeric query must not reach the DB as NaN. `Number('abc')` is
+  // NaN, and NaN survives Math.max/Math.min, so before the guard it became
+  // `LIMIT NaN` (Postgres reads as unbounded) or an Invalid Date for the KPI
+  // window. Both are covered here because they failed differently: one silently
+  // returned every row, the other a 500.
+  it('ignores a non-numeric limit instead of letting NaN uncap the query', async () => {
+    const c = makeClient();
+    const user = await registerLogin(c, `an-nan-${Date.now()}@wasit.tn`, 'MERCHANT');
+
+    // More rows than the endpoint's default cap (20), so an uncapped query is
+    // distinguishable from a capped one by the number of rows it returns.
+    await db.insert(analyticsEvents).values(
+      Array.from({ length: 25 }, () => ({
+        id: randomUUID(),
+        eventName: 'nan.probe',
+        userId: user.id,
+      })),
+    );
+
+    const capped = await c.req('/api/analytics/events?limit=5');
+    expect(capped.status).toBe(200);
+    expect((capped.data.data.items as unknown[]).length).toBe(5);
+
+    // Falls back to the default cap of 20. NaN would have returned all 25.
+    for (const qs of ['limit=abc', 'limit=Infinity', 'limit=-1', 'limit=0', 'limit=1.5']) {
+      const r = await c.req(`/api/analytics/events?${qs}`);
+      expect(r.status, `${qs} must not 500`).toBe(200);
+      expect((r.data.data.items as unknown[]).length, `${qs} must stay capped`).toBe(20);
+    }
+  });
+
+  it('ignores a non-numeric days param on daily-kpis (no 500)', async () => {
+    const admin = makeClient();
+    await insertAndLoginAdmin(admin);
+
+    for (const qs of ['days=abc', 'days=Infinity', 'days=-5', 'days=0', 'days=1.5']) {
+      const r = await admin.req(`/api/admin/analytics/daily-kpis?${qs}`);
+      expect(r.status, `${qs} must not 500`).toBe(200);
+      expect(Array.isArray(r.data.data.items)).toBe(true);
+    }
+
+    // The valid value still narrows the window and is honoured.
+    const ok = await admin.req('/api/admin/analytics/daily-kpis?days=14');
+    expect(ok.status).toBe(200);
   });
 });

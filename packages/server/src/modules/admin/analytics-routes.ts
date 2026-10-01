@@ -19,6 +19,7 @@ import {
 } from '../analytics/service';
 import { getUnitEconomics, getCustomerCohorts } from '../analytics/unit-economics';
 import { reportingCurrency } from '../../lib/env';
+import { parsePositiveIntParam } from '../../lib/query';
 
 const reportSchema = z.object({
   reportCode: z.string().min(2).max(100),
@@ -143,8 +144,8 @@ adminAnalyticsRoutes.get('/cohorts', async (c) => {
 
 adminAnalyticsRoutes.get('/daily-kpis', async (c) => {
   const ctx = getContext(c);
-  const days = c.req.query('days');
-  const data = await listDailyKpis(ctx.db, days ? Number(days) : 14);
+  const days = parsePositiveIntParam(c.req.query('days'));
+  const data = await listDailyKpis(ctx.db, days ?? 14);
   return c.json({ success: true, data: { items: data } });
 });
 

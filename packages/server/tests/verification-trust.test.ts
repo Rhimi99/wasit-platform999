@@ -377,6 +377,34 @@ describe('Dispute Center', () => {
     });
     expect(r.status).toBe(403);
   });
+
+  // The admin engine desks share a pagination parser. `Number('abc')` is NaN,
+  // which survives Math.max/Math.min and reaches LIMIT/OFFSET as NaN — a value
+  // Postgres accepts as an unbounded limit — while 'Infinity' raises a driver
+  // error and 500s. Both must degrade to the endpoint's own default instead.
+  it('ignores malformed page/pageSize on the admin engine desks', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const desks = [
+      '/api/admin/verification/requests',
+      '/api/admin/risk/events',
+      '/api/admin/disputes',
+    ];
+    for (const desk of desks) {
+      for (const qs of ['page=abc', 'pageSize=abc', 'page=Infinity', 'pageSize=Infinity', 'page=-1', 'page=0', 'pageSize=1.5']) {
+        const r = await admin.client.req(`${desk}?${qs}`);
+        expect(r.status, `${desk}?${qs} must not 500`).toBe(200);
+        // The reported page/pageSize must be real numbers, never NaN — a NaN
+        // here means the guard let the value through to the query.
+        expect(Number.isInteger(r.data.data.page), `${desk}?${qs} page`).toBe(true);
+        expect(Number.isInteger(r.data.data.pageSize), `${desk}?${qs} pageSize`).toBe(true);
+      }
+      // A valid pageSize is still honoured rather than clamped to the default.
+      const ok = await admin.client.req(`${desk}?pageSize=1`);
+      expect(ok.status).toBe(200);
+      expect(ok.data.data.pageSize).toBe(1);
+      expect((ok.data.data.items as unknown[]).length).toBeLessThanOrEqual(1);
+    }
+  });
 });
 
 afterAll(() => {
