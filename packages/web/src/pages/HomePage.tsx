@@ -5,7 +5,7 @@ import { useI18n } from '@/lib/i18n-context';
 import { SearchBar } from '@/components/SearchBar';
 import { ProductCard } from '@/components/ProductCard';
 import { Card, SectionHeader, Spinner } from '@/components/ui';
-import { WMonogram } from '@/components/brand/WMonogram';
+import { AxisMark } from '@/components/brand/AxisMark';
 import { Brand } from '@/components/brand/Brand';
 import { CorporateHero } from '@/components/brand/CorporateHero';
 import { PublicLayout } from '@/components/layouts/PublicLayout';
@@ -517,7 +517,7 @@ export function HomePage() {
               <p className="mt-3 text-sm leading-relaxed text-slate-600">{t('home.about.p2')}</p>
             </div>
             <div className="flex justify-center lg:justify-end">
-              <WMonogram size={180} className="opacity-90" />
+              <AxisMark size={180} title="" className="opacity-95" />
             </div>
           </div>
         </Container>

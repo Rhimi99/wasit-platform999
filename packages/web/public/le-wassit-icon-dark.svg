@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="LE WASSIT">
+  <defs>
+    <linearGradient id="lw-axis-dark" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#e2e8f0"/>
+    </linearGradient></defs>
+  <rect x="3" y="3" width="58" height="58" rx="15.75" fill="url(#lw-axis-dark)"/>
+<g transform="translate(32 32) scale(0.62) translate(-32 -32)">
+      <path d="M3 13 L25 32 L3 51 Z" fill="#081335"/>
+      <path d="M61 13 L39 32 L61 51 Z" fill="#081335"/>
+      <rect x="26" y="3" width="12" height="58" rx="6" fill="#2563eb"/></g>
+</svg>

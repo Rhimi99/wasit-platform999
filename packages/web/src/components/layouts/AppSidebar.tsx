@@ -3,6 +3,8 @@ import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import type { Feature } from '@/lib/rbac';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
+import { Brand } from '@/components/brand/Brand';
+import { AxisMark } from '@/components/brand/AxisMark';
 import { NotificationsBell } from '@/components/layouts/NotificationsBell';
 
 export interface NavItem {
@@ -139,6 +141,9 @@ export function AppSidebar() {
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-e border-slate-200 bg-white">
+      <div className="flex items-center justify-center border-b border-slate-100 px-3 py-3">
+        <Brand compact />
+      </div>
       <div className="px-4 py-4 text-center">
         <p className="text-xs font-medium text-slate-400">{t(`role.${role}`)}</p>
         <p className="truncate text-sm font-semibold text-slate-700">{user?.email}</p>
@@ -171,8 +176,11 @@ export function TopHeader() {
   const { user } = useAuth();
   return (
     <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
-      <div className="text-sm">
-        <span className="font-semibold text-slate-700">{user?.email}</span>
+      <div className="flex min-w-0 items-center gap-3">
+        {/* The mark alone: the sidebar already carries the full lockup, and the
+            compact header has no room for the wordmark on phones. */}
+        <AxisMark size={28} title="" className="h-7 w-7 shrink-0 lg:hidden" />
+        <span className="truncate text-sm font-semibold text-slate-700">{user?.email}</span>
       </div>
       <div className="flex items-center gap-3">
         <NotificationsBell />

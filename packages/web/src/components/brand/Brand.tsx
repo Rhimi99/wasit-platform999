@@ -1,10 +1,14 @@
 import { Link } from 'react-router-dom';
 import { useI18n } from '@/lib/i18n-context';
-import { WMonogram } from './WMonogram';
+import { AxisMark, type MarkTone } from './AxisMark';
 
 /**
  * Official identity: LE WASSIT / BUSINESS GLOBAL.
- * `presentation` renders the oversized hero lockup — large W, serif wordmark,
+ *
+ * The symbol comes from `AxisMark` only — this file never draws its own SVG, so
+ * every lockup in the platform stays on one source of truth.
+ *
+ * `presentation` renders the oversized hero lockup — large mark, serif wordmark,
  * a thin rule and the spaced-out baseline. The compact form is used in the
  * header and footer.
  */
@@ -26,12 +30,13 @@ export function Brand({
   const name = light ? 'text-white' : 'text-brand-900';
   const sub = light ? 'text-slate-300' : 'text-brand-700';
   const rule = light ? 'bg-white/30' : 'bg-brand-200';
+  const tone: MarkTone = light ? 'inverse' : 'brand';
 
   if (presentation) {
     const Tag = as ?? 'div';
     return (
       <Tag className={`flex items-center gap-5 sm:gap-6 ${className}`} aria-label={t('app.name')}>
-        <WMonogram size={148} variant="hero" className="shrink-0" />
+        <AxisMark size={148} tone={tone} title="" className="shrink-0" />
         <span className="flex min-w-0 flex-col">
           <span className={`font-serif text-4xl font-bold uppercase leading-none tracking-[0.02em] ${name} sm:text-5xl`}>
             {t('brand.name')}
@@ -47,8 +52,10 @@ export function Brand({
 
   return (
     <Link to="/" className={`group flex min-w-0 items-center gap-2.5 sm:gap-3 ${className}`} aria-label={t('app.name')}>
-      <WMonogram
+      <AxisMark
         size={compact ? 44 : 54}
+        tone={tone}
+        title=""
         className="h-9 w-9 shrink-0 transition-transform duration-300 group-hover:scale-[1.03] sm:h-11 sm:w-11"
       />
       <span className="flex min-w-0 flex-col leading-tight">

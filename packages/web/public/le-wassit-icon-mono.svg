@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="LE WASSIT">
+<g transform="translate(32 32) scale(0.62) translate(-32 -32)">
+      <path d="M3 13 L25 32 L3 51 Z" fill="#081335"/>
+      <path d="M61 13 L39 32 L61 51 Z" fill="#081335"/>
+      <rect x="26" y="3" width="12" height="58" rx="6" fill="#081335"/></g>
+</svg>
