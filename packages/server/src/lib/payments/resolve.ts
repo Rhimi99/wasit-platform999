@@ -114,11 +114,23 @@ export function describePaymentProviders(): {
 }
 
 function describeProvider(p: PaymentProvider) {
+  // A demo harness is refused by `resolvePaymentProvider` outside demo mode, so
+  // describing it as usable would hand the checkout a rail the intent endpoint
+  // then rejects with 503. Report it as unavailable and say why, so the UI offers
+  // only rails that can actually complete — mirroring the resolver, not diverging
+  // from it.
+  const refusedAsDemo = (p.capabilities?.demo ?? false) && !demoPaymentMode();
   return {
     id: p.id,
     functional: p.isFunctional,
-    available: p.isFunctional && p.isAvailable(),
-    methods: p.supportedMethods(),
+    available: p.isFunctional && p.isAvailable() && !refusedAsDemo,
+    methods: refusedAsDemo
+      ? p.supportedMethods().map((m) => ({
+          ...m,
+          available: false,
+          reason: m.reason ?? 'Demonstration harness — refused outside demo payment mode',
+        }))
+      : p.supportedMethods(),
     // What this provider can *prove*, so an operator can see why a rail cannot
     // settle funds even though it can take a payment.
     settlementEvidence: p.capabilities?.settlementEvidence ?? false,

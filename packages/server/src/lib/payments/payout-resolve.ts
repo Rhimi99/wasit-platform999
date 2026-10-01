@@ -70,12 +70,18 @@ export function describePayoutProviders(): {
       new ManualPayoutProvider(),
       new OpenCheckoutPayoutProvider(env.PAYOUT_BASE_URL?.trim() ?? '', env.PAYOUT_API_KEY?.trim() ?? ''),
       new SandboxPayoutProvider(),
-    ].map((p) => ({
-      id: p.id,
-      functional: p.isFunctional,
-      available: p.isFunctional && p.isAvailable(),
-      demo: p.capabilities.demo,
-      transferReference: p.capabilities.transferReference,
-    })),
+    ].map((p) => {
+      // Same rule as `describePaymentProviders`: a demo harness is refused by
+      // `resolvePayoutProvider` outside demo mode, so it must not be described as
+      // a usable rail.
+      const refusedAsDemo = p.capabilities.demo && !demoPaymentMode();
+      return {
+        id: p.id,
+        functional: p.isFunctional,
+        available: p.isFunctional && p.isAvailable() && !refusedAsDemo,
+        demo: p.capabilities.demo,
+        transferReference: p.capabilities.transferReference,
+      };
+    }),
   };
 }

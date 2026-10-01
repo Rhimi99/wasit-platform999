@@ -9,6 +9,7 @@ import { db, closeDb } from '../src/db/client.js';
 import { roles, userRoles, users } from '../src/db/schema/auth.js';
 import { orders, paymentIntents, payments, transactionLedger } from '../src/db/schema/index.js';
 import { FlouciPaymentProvider } from '../src/lib/payments/flouci.js';
+import { env } from '../src/lib/env.js';
 import { createPaymentIntent, handlePaymentWebhook } from '../src/modules/payments/service.js';
 
 /**
@@ -272,5 +273,58 @@ describe('Unsigned provider (status recheck) end-to-end', () => {
   it('a valid callback for an unknown reference fails safely (no side-effect)', async () => {
     handlers = { '/api/v2/verify_payment/pay_unknown': { status: 200, body: { result: { amount: 1000, status: 'SUCCESS' } } } };
     await expect(handlePaymentWebhook(db, { rawBody: JSON.stringify({ payment_id: 'pay_unknown' }) }, flouci())).rejects.toThrow();
+  });
+});
+
+/**
+ * The checkout UI reads `/api/payments/methods` and offers only the methods it
+ * marks `available`. If the descriptor claimed a demo harness was usable outside
+ * demo mode, the payer would pick a rail the intent endpoint then refuses with
+ * 503 — a dead end reached only after submitting. These tests pin the descriptor
+ * to the resolver's actual decision, through the real route, so the two cannot
+ * drift apart again.
+ */
+async function withEnv<T>(overrides: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+  const target = env as unknown as Record<string, unknown>;
+  const previous = Object.fromEntries(Object.keys(overrides).map((k) => [k, target[k]]));
+  Object.assign(target, overrides);
+  try {
+    return await fn();
+  } finally {
+    Object.assign(target, previous);
+  }
+}
+
+describe('Payment method availability matches the resolver', () => {
+  it('advertises the offline harness only while demo payment mode is on', async () => {
+    const s = await setupOrder();
+
+    const inDemo = await s.buyer.req('/api/payments/methods');
+    expect(inDemo.status).toBe(200);
+    const demoData = inDemo.data.data as {
+      providers: { id: string; available: boolean; methods: { available: boolean }[] }[];
+    };
+    const demoManual = demoData.providers.find((p) => p.id === 'manual')!;
+    expect(demoManual.available).toBe(true);
+    expect(demoManual.methods.some((m) => m.available)).toBe(true);
+
+    await withEnv({ DEMO_PAYMENT_MODE: false }, async () => {
+      const res = await s.buyer.req('/api/payments/methods');
+      expect(res.status).toBe(200);
+      const data = res.data.data as {
+        providers: { id: string; available: boolean; methods: { available: boolean; reason?: string }[] }[];
+      };
+      const manual = data.providers.find((p) => p.id === 'manual')!;
+      // Described unavailable — the UI will not offer it …
+      expect(manual.available).toBe(false);
+      expect(manual.methods.every((m) => !m.available)).toBe(true);
+      expect(manual.methods.every((m) => typeof m.reason === 'string' && m.reason.length > 0)).toBe(true);
+      // … and the intent endpoint agrees, so the description was truthful.
+      const intent = await s.buyer.req(`/api/payments/orders/${s.orderId}/intent`, {
+        method: 'POST',
+        body: { idempotencyKey: `descriptor-${s.orderId}` },
+      });
+      expect(intent.status).toBe(503);
+    });
   });
 });
