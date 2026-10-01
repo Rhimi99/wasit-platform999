@@ -30,6 +30,10 @@ export function CheckoutPage() {
   const [paying, setPaying] = useState(false);
   const [method, setMethod] = useState<{ type: 'CARD' | 'MOBILE_WALLET'; scheme?: string }>({ type: 'CARD' });
   const [methods, setMethods] = useState<{ type: 'CARD' | 'MOBILE_WALLET'; scheme?: string; label: string }[]>([]);
+  // Set when the active provider is configured but every rail it offers is
+  // unavailable. Without this the payer sees a payment box with a "start" button
+  // and no method selector, and only learns why after the server refuses.
+  const [providerUnavailable, setProviderUnavailable] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -55,6 +59,7 @@ export function CheckoutPage() {
         }
       }
       setMethods(options);
+      setProviderUnavailable(options.length === 0);
       if (options.length > 0 && !options.some((o) => o.type === method.type && o.scheme === method.scheme)) {
         setMethod({ type: options[0].type, scheme: options[0].scheme });
       }
@@ -220,7 +225,12 @@ export function CheckoutPage() {
                         </select>
                       </div>
                     )}
-                    <button onClick={startPayment} disabled={paying} className="btn-primary mt-3 w-full" data-testid="start-payment">
+                    {providerUnavailable && (
+                      <p className="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-700" data-testid="payment-unavailable">
+                        {t('payment.unavailable')}
+                      </p>
+                    )}
+                    <button onClick={startPayment} disabled={paying || providerUnavailable} className="btn-primary mt-3 w-full" data-testid="start-payment">
                       {paying ? t('common.loading') : t('payment.start')}
                     </button>
                   </>
