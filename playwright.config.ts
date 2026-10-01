@@ -7,6 +7,16 @@ const WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
 
 /**
+ * Ports the suite's own servers bind. Derived from the URLs above rather than
+ * hardcoded, so a run that overrides `E2E_API_URL`/`E2E_WEB_URL` to dodge a
+ * port already in use (a demo stack on 3000, say) also starts its servers on the
+ * matching port. Hardcoding 3000/5173 here would leave the suite listening on the
+ * occupied port while the proxy and health probe target the overridden one.
+ */
+const API_PORT = new URL(API_URL).port || '80';
+const WEB_PORT = new URL(WEB_URL).port || '80';
+
+/**
  * Environment the suite requires of the backend it talks to. Declared once here so
  * the `webServer` below and the reuse guard can never drift apart.
  */
@@ -178,16 +188,20 @@ export default defineConfig({
       timeout: 120_000,
       stdout: 'pipe',
       stderr: 'pipe',
-      env: { ...SERVER_ENV },
+      env: { ...SERVER_ENV, PORT: API_PORT },
     },
     {
-      command: 'npx vite --port 5173 --strictPort',
+      command: `npx vite --port ${WEB_PORT} --strictPort`,
       cwd: 'packages/web',
       url: WEB_URL,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       stdout: 'pipe',
       stderr: 'pipe',
+      // The SPA proxies `/api` to the backend, so it must be told where that is:
+      // the default target is `localhost:3000`, which is the occupied port this
+      // override exists to avoid.
+      env: { WEB_PROXY_TARGET: API_URL },
     },
   ],
 });
