@@ -274,78 +274,145 @@ test.describe('MERCHANT — full seller surface', () => {
     // The new product must be visible to the user on the products page.
     await page.goto('/dashboard/products');
     await expect(page.getByText(name).first()).toBeVisible();
+
+    // Archive it: an unarchived product stays ACTIVE in the storefront and the
+    // suite runs repeatedly, so leaving it would slowly fill the demo catalog.
+    const mine = await page.request.get('/api/products/mine?pageSize=100');
+    const created = (await mine.json()).data.items.find((p: { sku: string }) => p.sku === sku) as
+      | { id: string }
+      | undefined;
+    if (created) {
+      await page.request.patch(`/api/products/${created.id}/status`, { data: { status: 'ARCHIVED' } });
+    }
   });
 
   test('edits a product from the list and the change is persisted', async ({ page }) => {
     const name = `Edited ${UNIQUE}`;
+    // Edit a product this spec owns, not the first row of the merchant catalog.
+    // The merchant's list is not ordered for this test, so the first row can be a
+    // seeded demo product: renaming and re-pricing it is a destructive edit of
+    // shared demo data that nothing reverts. Create a disposable product, prove
+    // the edit persists, then archive it so the storefront keeps its stock and the
+    // catalog keeps its real listings.
+    const sku = `EDIT-${UNIQUE}`;
+    await page.goto('/dashboard/products/new');
+    await page.locator('#p-name').fill(`Editable ${UNIQUE}`);
+    await page.locator('#p-sku').fill(sku);
+    await page.locator('#p-category').selectOption({ index: 1 });
+    await page.locator('#p-price').fill('11.5');
+    await page.getByRole('button', { name: /حفظ|Save/i }).click();
+    await expect(page.getByText(/تم إنشاء المنتج بنجاح|Product created successfully/i).first()).toBeVisible();
 
-    await page.goto('/dashboard/products');
-    const row = page.locator('table.table-base tbody tr').first();
-    await expect(row).toBeVisible();
-    const productId = (await row.locator('[data-testid^="product-edit-"]').getAttribute('data-testid'))!.replace('product-edit-', '');
+    const mine = await page.request.get('/api/products/mine?pageSize=100');
+    const created = (await mine.json()).data.items.find((p: { sku: string }) => p.sku === sku) as
+      | { id: string }
+      | undefined;
+    expect(created, 'the disposable product was created').toBeTruthy();
+    const productId = created!.id;
 
-    await page.getByTestId(`product-edit-${productId}`).click();
-    const form = page.getByTestId('product-edit-form');
-    await expect(form).toBeVisible();
-    // The form is prefilled from the real product, not blank.
-    await expect(page.locator('#ep-name')).not.toHaveValue('');
+    try {
+      await page.goto('/dashboard/products');
+      await page.getByTestId(`product-edit-${productId}`).click();
+      const form = page.getByTestId('product-edit-form');
+      await expect(form).toBeVisible();
+      // The form is prefilled from the real product, not blank.
+      await expect(page.locator('#ep-name')).toHaveValue(`Editable ${UNIQUE}`);
 
-    await page.locator('#ep-name').fill(name);
-    await page.locator('#ep-price').fill('33.25');
-    await form.getByRole('button', { name: /حفظ|Save/i }).click();
+      await page.locator('#ep-name').fill(name);
+      await page.locator('#ep-price').fill('33.25');
+      await form.getByRole('button', { name: /حفظ|Save/i }).click();
 
-    // The modal closes and the new values render in the list.
-    await expect(form).not.toBeVisible();
-    const editedRow = page.locator('table.table-base tbody tr', { hasText: name }).first();
-    await expect(editedRow).toBeVisible();
-    // The row renders the persisted price (locale formats the decimal separator).
-    await expect(editedRow).toContainText(/33[.,]25/);
+      // The modal closes and the new values render in the list.
+      await expect(form).not.toBeVisible();
+      const editedRow = page.locator('table.table-base tbody tr', { hasText: name }).first();
+      await expect(editedRow).toBeVisible();
+      // The row renders the persisted price (locale formats the decimal separator).
+      await expect(editedRow).toContainText(/33[.,]25/);
 
-    // And the storefront detail page shows the persisted edit, not just the table.
-    await page.goto(`/products/${productId}`);
-    await expect(page.getByText(name).first()).toBeVisible();
+      // And the storefront detail page shows the persisted edit, not just the table.
+      await page.goto(`/products/${productId}`);
+      await expect(page.getByText(name).first()).toBeVisible();
+    } finally {
+      await page.request.patch(`/api/products/${productId}/status`, { data: { status: 'ARCHIVED' } });
+    }
   });
 
   test('can unpublish and republish a product from the list', async ({ page }) => {
-    await page.goto('/dashboard/products');
-    const row = page.locator('table.table-base tbody tr').first();
-    await expect(row).toBeVisible();
-    const name = (await row.locator('td').first().innerText()).trim();
+    // Toggle a product this spec owns rather than the first row of the catalog.
+    // The first row is whatever the merchant list happens to order first — an
+    // archived or already-unpublished product has no control to click, and a
+    // seeded demo product's publish state is shared data the suite should not be
+    // flipping. A disposable product makes the assertion independent of both.
+    const sku = `TOGGLE-${UNIQUE}`;
+    const name = `Togglable ${UNIQUE}`;
+    await page.goto('/dashboard/products/new');
+    await page.locator('#p-name').fill(name);
+    await page.locator('#p-sku').fill(sku);
+    await page.locator('#p-category').selectOption({ index: 1 });
+    await page.locator('#p-price').fill('9.5');
+    await page.getByRole('button', { name: /حفظ|Save/i }).click();
+    await expect(page.getByText(/تم إنشاء المنتج بنجاح|Product created successfully/i).first()).toBeVisible();
 
-    await row.getByRole('button', { name: /إلغاء النشر|Unpublish/i }).click();
-    await expect(page.locator('table.table-base tbody tr', { hasText: name }).first().getByText('INACTIVE')).toBeVisible();
+    const mine = await page.request.get('/api/products/mine?pageSize=100');
+    const created = (await mine.json()).data.items.find((p: { sku: string }) => p.sku === sku) as
+      | { id: string; status: string }
+      | undefined;
+    expect(created, 'the disposable product was created').toBeTruthy();
 
-    await page.locator('table.table-base tbody tr', { hasText: name }).first()
-      .getByRole('button', { name: /نشر|Publish/i }).click();
-    await expect(page.locator('table.table-base tbody tr', { hasText: name }).first().getByText('ACTIVE')).toBeVisible();
+    try {
+      await page.goto('/dashboard/products');
+      const row = page.locator('table.table-base tbody tr', { hasText: name }).first();
+      await expect(row).toBeVisible();
+
+      await row.getByRole('button', { name: /إلغاء النشر|Unpublish/i }).click();
+      await expect(page.locator('table.table-base tbody tr', { hasText: name }).first().getByText('INACTIVE')).toBeVisible();
+
+      await page.locator('table.table-base tbody tr', { hasText: name }).first()
+        .getByRole('button', { name: /نشر|Publish/i }).click();
+      await expect(page.locator('table.table-base tbody tr', { hasText: name }).first().getByText('ACTIVE')).toBeVisible();
+    } finally {
+      await page.request.patch(`/api/products/${created!.id}/status`, { data: { status: 'ARCHIVED' } });
+    }
   });
 
   test('a suspended product shows a notice instead of a publish control', async ({ page, playwright }) => {
-    // Suspend a real product of this merchant through the admin API, then prove
-    // the seller page reflects enforcement rather than offering a control the
-    // server would reject. Suspension is an admin action, so it runs on a
-    // separate admin-authenticated request context (the browser keeps the
-    // merchant session).
+    // Suspend a product this spec owns, then prove the seller page reflects
+    // enforcement rather than offering a control the server would reject.
+    // Suspension is an admin action, so it runs on a separate admin-authenticated
+    // request context (the browser keeps the merchant session). A disposable
+    // product is used because the list may not render an archived one, so picking
+    // "the first product that is not suspended" can select a row with no control.
+    const sku = `SUSPEND-${UNIQUE}`;
+    const name = `Suspendable ${UNIQUE}`;
+    await page.goto('/dashboard/products/new');
+    await page.locator('#p-name').fill(name);
+    await page.locator('#p-sku').fill(sku);
+    await page.locator('#p-category').selectOption({ index: 1 });
+    await page.locator('#p-price').fill('7.5');
+    await page.getByRole('button', { name: /حفظ|Save/i }).click();
+    await expect(page.getByText(/تم إنشاء المنتج بنجاح|Product created successfully/i).first()).toBeVisible();
+
     const mine = await page.request.get('/api/products/mine?pageSize=100');
-    const items = (await mine.json()).data.items as Array<{ id: string; status: string }>;
-    const target = items.find((p) => p.status !== 'SUSPENDED');
-    expect(target).toBeTruthy();
+    const created = (await mine.json()).data.items.find((p: { sku: string }) => p.sku === sku) as
+      | { id: string }
+      | undefined;
+    expect(created, 'the disposable product was created').toBeTruthy();
 
     const adminCtx = await playwright.request.newContext({
       baseURL: process.env.E2E_API_URL ?? 'http://localhost:3000',
       storageState: storageFor('admin'),
     });
     try {
-      const adminRes = await adminCtx.patch(`/api/products/${target!.id}/suspend`);
+      const adminRes = await adminCtx.patch(`/api/products/${created!.id}/suspend`);
       expect(adminRes.ok()).toBeTruthy();
 
       await page.goto('/dashboard/products');
-      await expect(page.getByTestId(`product-suspended-${target!.id}`)).toBeVisible();
-      const row = page.locator('table.table-base tbody tr').filter({ has: page.getByTestId(`product-suspended-${target!.id}`) });
+      await expect(page.getByTestId(`product-suspended-${created!.id}`)).toBeVisible();
+      const row = page.locator('table.table-base tbody tr').filter({ has: page.getByTestId(`product-suspended-${created!.id}`) });
       await expect(row.getByRole('button')).toHaveCount(0);
     } finally {
-      // Restore the fixture so later specs start from a known state.
-      await adminCtx.patch(`/api/products/${target!.id}/status`, { data: { status: target!.status } });
+      // Archive the fixture so it leaves no ACTIVE test listing behind.
+      await adminCtx.patch(`/api/products/${created!.id}/status`, { data: { status: 'ARCHIVED' } });
       await adminCtx.dispose();
     }
   });
