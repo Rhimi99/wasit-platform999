@@ -958,7 +958,7 @@ test.describe('ONBOARDING — entity creation from the UI', () => {
     await page.locator('form input[type="password"]').fill(DEMO_PASSWORD);
     await page.locator('form select').selectOption('MERCHANT');
     await page.locator('form button[type="submit"]').click();
-    await expect(page.getByRole('status')).toBeVisible();
+    await expect(page.getByText(/تم إنشاء الحساب|Account created/i)).toBeVisible();
 
     // Where verification is required, complete it through the real token path;
     // the public demo already has the account verified and skips it.
@@ -983,9 +983,12 @@ test.describe('ONBOARDING — entity creation from the UI', () => {
     await page.locator('form input[required]').fill(name);
     await page.locator('form button[type="submit"]').click();
 
-    // The created entity id is rendered back to the user.
-    await expect(page.getByRole('status')).toBeVisible();
-    await expect(page.getByRole('status')).toContainText(/[0-9a-f]{8}-/);
+    // The created entity id is rendered back to the user. Scope to the success
+    // paragraph: the public-demo banner is also a role="status" element, and an
+    // unscoped locator resolves to both under strict mode.
+    const entityStatus = page.locator('p[role="status"]');
+    await expect(entityStatus).toBeVisible();
+    await expect(entityStatus).toContainText(/[0-9a-f]{8}-/);
   });
 });
 

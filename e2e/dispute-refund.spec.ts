@@ -35,11 +35,25 @@ async function openDispute(buyerPage: Page, orderId: string, note: string): Prom
   await buyerPage.getByTestId('dispute-order').selectOption(orderId);
   await buyerPage.getByTestId('dispute-reason').selectOption('NOT_AS_DESCRIBED');
   await buyerPage.getByTestId('dispute-description').fill(note);
-  await buyerPage.getByTestId('dispute-create-submit').click();
-  const mine = await (await buyerPage.request.get('/api/disputes')).json();
-  const dispute = (mine.data.items as { id: string; orderId: string }[]).find((d) => d.orderId === orderId);
-  expect(dispute, 'the dispute the buyer just opened must be listed').toBeTruthy();
-  return dispute!.id;
+  // Capture the creation response rather than polling the list afterwards: the
+  // submit handler is async, and the note text is not unique across runs (the
+  // list already holds earlier disputes with the same wording), so neither an
+  // immediate read nor a text wait reliably identifies *this* dispute.
+  const [createRes] = await Promise.all([
+    buyerPage.waitForResponse(
+      (r) => r.url().includes('/api/disputes') && r.request().method() === 'POST',
+    ),
+    buyerPage.getByTestId('dispute-create-submit').click(),
+  ]);
+  expect(createRes.ok(), 'creating the dispute must succeed').toBeTruthy();
+  const created = ((await createRes.json()) as { data: { id: string } }).data;
+  // The create response carries only the id; read the dispute back to prove it is
+  // the one opened for this order.
+  const detail = (await (await buyerPage.request.get(`/api/disputes/${created.id}`)).json()) as {
+    data: { orderId: string };
+  };
+  expect(detail.data.orderId).toBe(orderId);
+  return created.id;
 }
 
 async function decide(adminPage: Page, disputeId: string, decision: string, note: string): Promise<void> {

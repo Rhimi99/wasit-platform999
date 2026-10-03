@@ -1,10 +1,22 @@
-import { test, expect, storageFor } from './helpers';
+import { test, expect, storageFor, type Page } from './helpers';
 
 /**
  * Navigation audit: every sidebar link a role can see must lead to a real page,
  * not the NotFound route. Catches dead links that an HTTP-200 check would miss
  * (the SPA shell returns 200 for unknown paths too).
  */
+
+/**
+ * Asserts the NotFound route did not render.
+ *
+ * Matches the route's own heading element rather than any "404" text on the
+ * page: identifiers in the data tables (an order or entity UUID) can legitimately
+ * contain the substring "404", which a bare text match would misread as the
+ * NotFound page.
+ */
+async function expectNotFoundPage(page: Page): Promise<void> {
+  await expect(page.locator('p.text-6xl')).toHaveCount(0);
+}
 
 test.describe('Sidebar navigation audit', () => {
   test.use({ storageState: storageFor('merchant') });
@@ -21,7 +33,7 @@ test.describe('Sidebar navigation audit', () => {
 
     for (const href of hrefs) {
       await page.goto(href);
-      await expect(page.getByText(/404|غير موجود|Not found/i)).toHaveCount(0);
+      await expectNotFoundPage(page);
       await expect(page.locator('main, .card, table').first()).toBeVisible();
     }
   });
@@ -40,7 +52,7 @@ test.describe('Admin sidebar navigation audit', () => {
     }
     for (const href of hrefs) {
       await page.goto(href);
-      await expect(page.getByText(/404|غير موجود|Not found/i)).toHaveCount(0);
+      await expectNotFoundPage(page);
       await expect(page.locator('main, .card, table').first()).toBeVisible();
     }
   });

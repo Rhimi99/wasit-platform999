@@ -28,8 +28,10 @@ test.describe('Registration → immediate login', () => {
     await page.locator('form select').selectOption('CUSTOMER');
     await page.locator('form button[type="submit"]').click();
 
-    // The success banner is the user-visible outcome of registration.
-    const banner = page.getByRole('status');
+    // The success banner is the user-visible outcome of registration. Exclude the
+    // public-demo banner, which is also a role="status" element and would
+    // otherwise be matched here instead of the form's own message.
+    const banner = page.getByRole('status').filter({ hasText: /تم إنشاء الحساب|Account created/i });
     await expect(banner).toBeVisible();
     const message = (await banner.innerText()).trim();
     expect(message).toMatch(/تم إنشاء الحساب|Account created/i);
@@ -67,7 +69,7 @@ test.describe('Registration → immediate login', () => {
     await page.locator('form select').selectOption('CUSTOMER');
     await page.locator('form button[type="submit"]').click();
 
-    const banner = page.getByRole('status');
+    const banner = page.getByRole('status').filter({ hasText: /تم إنشاء الحساب|Account created/i });
     await expect(banner).toBeVisible();
     const skipVerified = /يمكنك تسجيل الدخول الآن|You can sign in now/i.test((await banner.innerText()).trim());
 

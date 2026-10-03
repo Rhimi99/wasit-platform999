@@ -86,9 +86,11 @@ test.describe('Admin advertising desk', () => {
     await expect(page.getByTestId(`admin-ads-active-${campaignId}`)).toBeVisible();
     await expect(page.getByTestId(`admin-ads-paused-${campaignId}`)).toHaveCount(0);
 
-    // Activate from the UI.
+    // Activate from the UI. Scope to the page's own confirmation: the public-demo
+    // banner is also a role="status" element, so an unscoped locator would match
+    // global chrome instead of the campaign result.
     await page.getByTestId(`admin-ads-active-${campaignId}`).click();
-    await expect(page.getByRole('status')).toContainText(/تنشيط|activated/i);
+    await expect(page.getByRole('status').filter({ hasText: /تنشيط|activated/i })).toBeVisible();
     await expect(row).toContainText('ACTIVE');
 
     // Pause from the UI.

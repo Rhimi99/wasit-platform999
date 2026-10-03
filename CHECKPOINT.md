@@ -1,9 +1,50 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-10-01 — **إصلاح أخطاء تحليل الاستعلامات الرقمية (NaN/Infinity) + تحقق وظيفي حقيقي من الواجهة**
+> **التاريخ**: 2026-10-03 — **Functional Audit حقيقي من الواجهة عبر الجوال + إصلاح سببي لآخر فشل E2E**
 > **الفرع**: `master`
-> **HEAD قبل الإصلاح**: `3bb682b`
-> **commit الإصلاح**: أدناه، مستقل، على `3bb682b`
+> **النطاق**: تدقيق وظيفي حقيقي (CUSTOMER / MERCHANT / ADMIN / SUBSCRIPTIONS / MARKETING VIDEO) من الواجهة نفسها على viewport جوال حقيقي، وإصلاح السبب الجذري لآخر اختبار فاشل. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push، ولا تعطيل أي زر، ولا Mock.
+
+---
+
+## 2026-10-03 — Functional Audit من الواجهة (Mobile-first) + إصلاح سببي
+
+### النتيجة الإجمالية
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| Unit + Integration | `npm test` | **765/765** ✅ |
+| Typecheck | `npm run typecheck` | PASS (server + web) ✅ |
+| Build | `npm run build` + `npm run build -w @wasit/web` | PASS ✅ |
+| E2E كامل على الـPreview العام | `npx playwright test` | **213 passed / 2 skipped / 0 failed** ✅ |
+| Browser Functional Smoke (iPhone 13 viewport) | سكربت Playwright حقيقي | **31/31** ✅ |
+
+### الفشل الحقيقي المُصلَح (سبب جذري في الـharness، لا في المنتج)
+| # | الاختبار | العَرَض | السبب الجذري | الإصلاح |
+|---|---|---|---|---|
+| 1 | `e2e/dispute-refund.spec.ts` — `P6` (ثلاثة اختبارات) | `expect(dispute).toBeTruthy()` → `undefined` | الـhelper `openDispute` كان يقرأ `GET /api/disputes` فورًا بعد الضغط على زر الإنشاء: (أ) الطلب غير متزامن فتسبق القراءة الـPOST، (ب) نص الملاحظة غير فريد عبر التشغيلات فتطابق الانتظار بالنص نزاعًا قديمًا، (ج) الـ`POST` يُعيد `{data:{id}}` فقط بلا `orderId` | انتظار استجابة `POST /api/disputes` الحقيقية عبر `waitForResponse`، ثم إثبات الملكية بقراءة `GET /api/disputes/:id` ومقارنة `orderId` |
+
+### تدقيق وظيفي من الواجهة (لم يُعتبر HTTP 200 نجاحًا)
+كل بند أدناه نُفِّذ من الواجهة على viewport جوال (iPhone 13) مع تسجيل دخول حقيقي، وتم التحقق من الأثر عبر API الحقيقي:
+
+**CUSTOMER (7/7)**: تسجيل الدخول → `/dashboard`؛ تصفح المنتجات (12 رابط منتج)؛ تفاصيل المنتج (فتح فعلي)؛ البحث (`/search?q=olive`)؛ الطلبات؛ الرسائل؛ جرس الإشعارات.
+**MERCHANT (10/10)**: تسجيل الدخول؛ Dashboard؛ المنتجات؛ المخزون؛ الطلبات؛ الإعلانات؛ AI؛ Analytics؛ الاشتراك؛ Video Studio.
+**ADMIN (14/14)**: تسجيل الدخول (تحويل إلى `/admin`)؛ KPIs؛ Users؛ Products؛ Orders؛ Ledger؛ Audit؛ Verification؛ Trust؛ Risk؛ Disputes؛ Ads؛ AI؛ Subscriptions.
+**SUBSCRIPTIONS (من الواجهة)**: عرض الكتالوج بأسعار الـbackend، تبديل شهري/سنوي، اشتراك → `ACTIVE`، تغيير خطة، إلغاء → `null`. تحقق متقاطع بين الواجهة و`GET /api/subscriptions/me`.
+
+### ملاحظة تشخيصية (لا خطأ منتج)
+ظهر في قاعدة البيانات صف اشتراك `ACTIVE` لحساب `subui-*@wasit.tn` (حسابات E2E مؤقتة)، لا لحساب `merchanta@wasit.tn`. تحقق الواجهة الفعلي أثبت أن `merchanta@wasit.tn` بلا اشتراك (`null`) وأن تدفق الاشتراك/الإلغاء يعمل من الواجهة بشكل صحيح — فلم يُعدَّل المنتج.
+
+### الملفات المعدّلة (E2E harness فقط — لا كود منتج)
+| الملف | التغيير |
+|---|---|
+| `e2e/dispute-refund.spec.ts` | إصلاح race في `openDispute` (انتظار استجابة POST + تحقق من الملكية) |
+| `e2e/admin-ads.spec.ts` | تحديد `role="status"` برسالة التأكيد الخاصة بالصفحة (تفادي شعار الديمو) |
+| `e2e/demo-registration.spec.ts` | فلترة الحالة العامة بنص النجاح |
+| `e2e/functional-audit.spec.ts` | تحديد حالة نجاح إنشاء الكيان بـ`p[role="status"]` |
+| `e2e/mfa.spec.ts` | انتظار رسالة نجاح النموذج لا شعار الديمو |
+| `e2e/navigation-audit.spec.ts` | استبدال regex `/404/` بكشف دقيق لصفحة NotFound (تفادي UUID يحوي 404) |
+
+### القيود المُحترمة
+لا تغيير في Commission Policy (4% = 2% + 2%)؛ لا تغيير في Marketing Video Agent (`89e68d7`)؛ لا DB reset/drop/push (أُنشئت قاعدة `wasit_test` منفصلة للاختبارات فقط)؛ لا حذف بيانات اختبار ضرورية؛ `LeWassitMark.tsx` بقي **untracked** ولم يُحذف؛ لا تعطيل أي زر؛ لا Mock.
 
 ---
 

@@ -22,7 +22,10 @@ async function registerAndLogin(page: Page, email: string): Promise<void> {
   await page.locator('form input[type="email"]').fill(email);
   await page.locator('form input[type="password"]').first().fill(PASSWORD);
   await page.locator('form button[type="submit"]').click();
-  await expect(page.getByRole('status')).toBeVisible();
+  // Wait for the form's own success message. The public-demo banner is also a
+  // role="status" element and is already visible on load, so an unscoped
+  // assertion would pass before registration ever completed.
+  await expect(page.getByRole('status').filter({ hasText: /تم إنشاء الحساب|Account created/i })).toBeVisible();
 
   // Complete verification through the real token path where the environment
   // still requires it (the public demo stores the account already verified).
