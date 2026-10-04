@@ -4,7 +4,7 @@ import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { ComparisonGroup, InventoryItem, InventoryMovement } from '@/lib/types';
+import type { ComparisonGroup, InventoryItem, InventoryMovement, MyAnalyticsOverview } from '@/lib/types';
 
 type StockFilter = 'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'IN_STOCK';
 
@@ -437,14 +437,53 @@ export function DashboardComparisonPage() {
 
 export function DashboardSalesPage() {
   const { t } = useI18n();
+  const [data, setData] = useState<MyAnalyticsOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    setLoading(true);
+    apiCall(() => api.myAnalyticsOverview()).then((res) => {
+      setData(res.data);
+      setError(res.error);
+      setLoading(false);
+    });
+  }, [reloadKey]);
+
   return (
     <AppLayout>
-      <SectionHeader title={t('dashboard.sales')} />
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card><p className="text-xs text-slate-500">{t('dashboard.sales')}</p><p className="text-2xl font-bold text-slate-800">—</p></Card>
-        <Card><p className="text-xs text-slate-500">{t('dashboard.expenses')}</p><p className="text-2xl font-bold text-slate-800">—</p></Card>
-        <Card><p className="text-xs text-slate-500">{t('dashboard.profit')}</p><p className="text-2xl font-bold text-wasit-700">—</p></Card>
-      </div>
+      <SectionHeader title={t('dashboard.sales')} subtitle={t('analytics.ownSubtitle')} />
+      {loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} /> : !data?.hasBusinessEntity ? (
+        <EmptyState title={t('analytics.noBusiness')} hint={t('analytics.noBusinessHint')} />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <p className="text-xs text-slate-500">{t('analytics.gmv')}</p>
+            <p className="text-2xl font-bold text-slate-800">{formatMoney(data.gmvAsSeller, data.currencyCode)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-slate-500">{t('analytics.orders')}</p>
+            <p className="text-2xl font-bold text-slate-800">{data.ordersAsSeller}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-slate-500">{t('analytics.avgOrderValue')}</p>
+            <p className="text-2xl font-bold text-slate-800">{formatMoney(data.avgOrderValue, data.currencyCode)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-slate-500">{t('order.sellerCommission')}</p>
+            <p className="text-2xl font-bold text-slate-800">{formatMoney(data.commissionAsSeller, data.currencyCode)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-slate-500">{t('analytics.customers')}</p>
+            <p className="text-2xl font-bold text-slate-800">{data.customers}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-slate-500">{t('analytics.publishedProducts')}</p>
+            <p className="text-2xl font-bold text-slate-800">{data.publishedProducts}</p>
+          </Card>
+        </div>
+      )}
     </AppLayout>
   );
 }

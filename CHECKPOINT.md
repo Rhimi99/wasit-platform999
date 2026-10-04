@@ -1,5 +1,58 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
+> **التاريخ**: 2026-10-04 — **Functional Audit حقيقي من الواجهة على المنصة المشغّلة + إعداد حزمة شراكة (توثيق فقط)**
+> **الفرع**: `master` — **الإصدار**: `b03d17b`
+> **النطاق**: إعادة تشغيل المنصة كاملة (PostgreSQL + API + Web) واختبار وظيفي حقيقي من الواجهة (لا HTTP 200 وحده)، ثم إعداد حزمة شراكة (Dossier + Presentation) بصيغ PDF/DOCX/PPTX/MD. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push، ولا تعطيل أي زر، ولا Mock.
+
+---
+
+## 2026-10-04 — Functional Audit من الواجهة (إعادة تشغيل وتحقق) + حزمة شراكة
+
+### النتيجة الإجمالية
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| Unit + Integration | `npm test` | **765/765** ✅ (68 ملفًا) |
+| Typecheck | `npm run typecheck` | PASS (server + web، 0 أخطاء) ✅ |
+| Build (Web) | `npm run build -w @wasit/web` | PASS ✅ (~1.36 MB / ~280 kB مضغوطة) |
+| E2E كامل | `npx playwright test` | **213 passed / 2 skipped / 0 failed** ✅ |
+| Browser Functional Audit (مسارات) | `node scripts/ui-functional-audit.mjs` | **45/45** ✅ (Customer/Supplier/Merchant/Admin) |
+| Browser Interaction Audit (أزرار ونماذج) | `node scripts/ui-interaction-audit.mjs` | **58/58** ✅ |
+| Mobile Smoke (390×844 touch) | `node scripts/ui-mobile-smoke.mjs` | **16/16** ✅ |
+| Marketing Video Studio (تدفق كامل) | `node scripts/ui-video-studio-full-check.mjs` | **11/11** ✅ (MP4 حقيقي 128,461 بايت) |
+| Purchase + Commission | `node scripts/ui-purchase-check.mjs` | **10/10** ✅ |
+| Subscriptions | `node scripts/ui-subscription-check.mjs` | **6/6** ✅ |
+| Login / Register / Messages / Merchant | `ui-{login,register,messages,merchant-surfaces}-check.mjs` | **1 + 6 + 7 + 10** ✅ |
+| Disputes / Verification / Inventory+Search / Merchant / Video | `ui-{admin-dispute,verification,inventory-search,merchant,video}-check.mjs` | **23 + 10 + 7 + 11 + 14** ✅ |
+
+### التحقق من الوظائف من الواجهة (لا HTTP 200 وحده)
+- **CUSTOMER**: تسجيل الدخول من النموذج؛ تصفح السوق (12 منتجًا)؛ تفاصيل منتج؛ بحث فعلي؛ إنشاء طلب من `/checkout` والطلب يظهر للمشتري (6 صفوف)؛ الطلبات؛ الرسائل (إرسال + ظهور + استمرار على الخادم)؛ الإشعارات (فتح اللوحة + mark-all-read).
+- **MERCHANT/SUPPLIER**: Dashboard بأرقام حقيقية؛ إنشاء منتج من الواجهة (status=ACTIVE)؛ تعديل منتج واستمراره؛ نشر/إلغاء نشر (`ACTIVE → INACTIVE`)؛ المخزون (تعديل `500 → 503`)؛ الطلبات؛ الإعلانات (إنشاء حملة + إجراء حالة)؛ AI (تشغيل أداة وظهور نتيجة)؛ Analytics؛ الاشتراك؛ استوديو الفيديو.
+- **ADMIN**: KPIs (`users,products,orders,gmv,currencyCode`)؛ Users (إيقاف/إعادة تنشيط مستخدم واستمراره)؛ Products (تعليق/إعادة تفعيل)؛ Orders؛ Transactions؛ Ledger؛ Audit (100 مدخل)؛ Verification (قرار إداري يصل للـbackend)؛ Trust (إعادة احتساب تُخزّن درجة)؛ Risk؛ Disputes (إنشاء من العميل → قرار إداري)؛ Ads؛ AI؛ Subscriptions (تبديل تفعيل خطة)؛ Reports (إنشاء تقرير محفوظ)؛ Observability (تقييم)؛ Privacy (sweep).
+- **MARKETING VIDEO**: اختيار منتج/لغة/جمهور/نمط/مدة → Generate → حالة `READY` (provider=structural) → ظهور البطاقة → معاينة → تنزيل MP4 حقيقي (128,461 بايت) → حذف (`DELETED`). نافذة 35–120 ثانية مفروضة في الواجهة والـAPI.
+- **Commission (محفوظة)**: طلب حقيقي 210.0000 → عمولة إجمالية 8.4000 (4%)، حصة بائع 4.2000 (2%)، حصة مشتري 4.2000 (2%)، إجمالي 214.2000.
+
+### الخطأ الحقيقي المُكتشَف والمُصلَح (من الواجهة)
+| # | الزر/المسار | العَرَض قبل الإصلاح | السبب الجذري | الإصلاح |
+|---|---|---|---|---|
+| 1 | رابط `💰 المبيعات` في الشريط الجانبي للمورّد → `/dashboard/sales` | الصفحة تُفتح لكن تعرض ثلاث بطاقات فارغة بقيمة `—` فقط (المبيعات/المصروفات/الأرباح) — لا وظيفة فعلية | `DashboardSalesPage` كانت مكوّنًا ثابتًا بلا أي جلب بيانات، بينما نفس الأرقام الحقيقية متاحة للمورّد عبر `GET /api/analytics/my-overview` (وتُعرض فعليًا في `/dashboard/analytics`). الصفحة كانت مُدرجة كموديول حقيقي في شريط المورّد وفي مركز تدقيق المالك (`demo-owner-catalog.ts`)، فيظهر للمستخدم كأن الوظيفة معطّلة | ربط الصفحة بـ`api.myAnalyticsOverview()` وعرض أرقام حقيقية (GMV، عدد الطلبات، متوسط قيمة الطلب، حصة البائع من العمولة، العملاء، المنتجات المنشورة) مع حالات تحميل/خطأ/لا كيان تجاري |
+
+**التحقق بعد الإصلاح**: `node scripts/ui-sales-page-check.mjs` → **9/9** ✅ (تسجيل دخول المورّد من النموذج، الوصول للصفحة عبر رابط الشريط الجانبي، اختفاء كل قيم `—`، ومطابقة الأرقام المعروضة لـ`/api/analytics/my-overview`: GMV 16,510.000 DT، 4 طلبات، متوسط 4,127.500 DT).
+
+### فجوات مُوثَّقة (لا تُحسب نجاحًا)
+- `/dashboard/finance`، `/dashboard/reports`: شاشتان **للعرض فقط** (قيم `—` / نص «ضمن خارطة الطريق»)، ولا تُفتحان من أي شريط جانبي — تُدرجان فقط في مركز تدقيق المالك، ولا يوجد كيان خلفي للمالية/التقارير بعد. `reports` تُعلن صراحةً أنها على خارطة الطريق، لذا لا تُعرض كوظيفة مكتملة.
+- **لا وثائق قانونية** في المشروع (شروط/خصوصية/استرداد/اتفاقية بائع/DPA).
+- **لا كود مخصص** لـ KYC/KYB/AML.
+- مزوّدو الدفع/الصرف/البريد/الرسائل/AI الإنتاجيون يحتاجون تكوينًا (مفاتيح وأسرار).
+- **WASIT AI Copilot** مواصفة فقط (غير منفَّذ) — `docs/AI_ARCHITECTURE.md` §6.5.
+
+### حزمة الشراكة (توثيق فقط — لا كود)
+أُعدّت في `docs/partnership/`: Dossier كامل (21 قسمًا + ملحقا Fact Check/Evidence، 27 صفحة PDF) وPresentation مختصر (10 أقسام، 8 صفحات PDF)، بصيغ PDF + DOCX + PPTX + Markdown، مع 27 لقطة شاشة حقيقية من المنصة و`SHA256SUMS.txt`. المبادئ: لا اختلاق، لا أرقام سوقية/توقعات GMV، الفجوات معلنة، لا شروط مالية محددة.
+
+### القيود المُحترمة
+لا تغيير في Commission Policy (4% = 2% + 2%)؛ لا تغيير في Marketing Video Agent (`89e68d7`)؛ لا DB reset/drop/push (استُخدمت `wasit_dev` للاختبارات فقط و`wasit_demo` للعرض دون مساس)؛ لا حذف بيانات عرض ضرورية؛ `LeWassitMark.tsx` بقي **untracked**؛ لا تعطيل أي زر؛ لا Mock.
+
+---
+
 > **التاريخ**: 2026-10-03 — **Functional Audit حقيقي من الواجهة عبر الجوال + إصلاح سببي لآخر فشل E2E**
 > **الفرع**: `master`
 > **النطاق**: تدقيق وظيفي حقيقي (CUSTOMER / MERCHANT / ADMIN / SUBSCRIPTIONS / MARKETING VIDEO) من الواجهة نفسها على viewport جوال حقيقي، وإصلاح السبب الجذري لآخر اختبار فاشل. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push، ولا تعطيل أي زر، ولا Mock.
