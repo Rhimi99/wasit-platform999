@@ -1,7 +1,7 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-10-04 — **Functional Audit حقيقي من الواجهة على المنصة المشغّلة + إعداد حزمة شراكة (توثيق فقط)**
-> **الفرع**: `master` — **الإصدار**: `b03d17b`
+> **التاريخ**: 2026-10-04 — **Functional Audit حقيقي من الواجهة على المنصة المشغّلة + إصلاح خطأ `/dashboard/sales` + حزمة شراكة (توثيق فقط)**
+> **الفرع**: `master` — **الإصدار**: `ad41cbe`
 > **النطاق**: إعادة تشغيل المنصة كاملة (PostgreSQL + API + Web) واختبار وظيفي حقيقي من الواجهة (لا HTTP 200 وحده)، ثم إعداد حزمة شراكة (Dossier + Presentation) بصيغ PDF/DOCX/PPTX/MD. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push، ولا تعطيل أي زر، ولا Mock.
 
 ---
@@ -14,13 +14,14 @@
 | Unit + Integration | `npm test` | **765/765** ✅ (68 ملفًا) |
 | Typecheck | `npm run typecheck` | PASS (server + web، 0 أخطاء) ✅ |
 | Build (Web) | `npm run build -w @wasit/web` | PASS ✅ (~1.36 MB / ~280 kB مضغوطة) |
-| E2E كامل | `npx playwright test` | **213 passed / 2 skipped / 0 failed** ✅ |
+| E2E كامل | `npx playwright test` (E2E_API_URL=:3100 / E2E_WEB_URL=:5199 ضد `wasit_dev`) | **213 passed / 0 failed** ✅ |
 | Browser Functional Audit (مسارات) | `node scripts/ui-functional-audit.mjs` | **45/45** ✅ (Customer/Supplier/Merchant/Admin) |
 | Browser Interaction Audit (أزرار ونماذج) | `node scripts/ui-interaction-audit.mjs` | **58/58** ✅ |
 | Mobile Smoke (390×844 touch) | `node scripts/ui-mobile-smoke.mjs` | **16/16** ✅ |
 | Marketing Video Studio (تدفق كامل) | `node scripts/ui-video-studio-full-check.mjs` | **11/11** ✅ (MP4 حقيقي 128,461 بايت) |
 | Purchase + Commission | `node scripts/ui-purchase-check.mjs` | **10/10** ✅ |
-| Subscriptions | `node scripts/ui-subscription-check.mjs` | **6/6** ✅ |
+| Subscriptions | `node scripts/ui-subscription-check.mjs` | **7/7** ✅ |
+| Sales Page (بعد الإصلاح) | `node scripts/ui-sales-page-check.mjs` | **9/9** ✅ |
 | Login / Register / Messages / Merchant | `ui-{login,register,messages,merchant-surfaces}-check.mjs` | **1 + 6 + 7 + 10** ✅ |
 | Disputes / Verification / Inventory+Search / Merchant / Video | `ui-{admin-dispute,verification,inventory-search,merchant,video}-check.mjs` | **23 + 10 + 7 + 11 + 14** ✅ |
 
