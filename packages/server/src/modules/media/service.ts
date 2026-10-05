@@ -423,7 +423,11 @@ export async function openAssetForDownload(
   }
 
   const storage = resolveMediaStorage();
-  const size = (await storage.size(storageKey)) ?? 0;
+  const size = await storage.size(storageKey);
+  // A READY row whose object is gone (store wiped, or a deployment pointed at a
+  // different MEDIA_STORAGE_DIR) is missing content, not a server fault. Report
+  // it as such so the client sees a clean 404 instead of an unhandled ENOENT 500.
+  if (size === null) throw ApiError.notFound('Media asset not available');
   const start = range?.start && range.start >= 0 ? Math.min(range.start, Math.max(size - 1, 0)) : 0;
   const end = range?.end !== undefined ? Math.min(range.end, size - 1) : size - 1;
   const body = range ? await storage.getRange(storageKey, start, end) : await storage.get(storageKey);

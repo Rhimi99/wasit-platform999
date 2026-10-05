@@ -5,7 +5,7 @@ import { createApp } from '../src/app.js';
 import { db } from '../src/db/client.js';
 import { mediaAssets } from '../src/db/schema/media.js';
 import { eq } from 'drizzle-orm';
-import { resolveVideoProvider } from '../src/lib/media/resolve.js';
+import { resolveMediaStorage, resolveVideoProvider } from '../src/lib/media/resolve.js';
 import { StructuralVideoProvider } from '../src/lib/media/video-provider.js';
 import { measureMp4DurationSeconds } from '../src/lib/media/mp4.js';
 
@@ -264,6 +264,25 @@ describe('Marketing Video Generation Agent', () => {
     const c = makeClient();
     const r = await c.req('/api/media/assets/does-not-exist/content?token=garbage.sig');
     expect(r.status).toBe(401);
+  });
+
+  it('answers 404, not 500, when a READY asset binary is missing from the store', async () => {
+    const { client, productId } = await setupSellerWithProduct();
+    const gen = await client.req('/api/media/marketing-videos', {
+      method: 'POST',
+      body: { productId, durationSeconds: 35 },
+    });
+    const asset = gen.data.data as { id: string; previewUrl: string };
+
+    // Simulate the deployment failure this guards: the row is READY but the
+    // object it points at is gone (store wiped, or MEDIA_STORAGE_DIR moved).
+    const rows = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));
+    const storageKey = rows[0].storageKey!;
+    await resolveMediaStorage().delete(storageKey);
+
+    const preview = new URL(asset.previewUrl, 'http://localhost');
+    const content = await client.req(`${preview.pathname}${preview.search}`);
+    expect(content.status).toBe(404);
   });
 
   it('soft-deletes an owned asset and removes it from the library', async () => {

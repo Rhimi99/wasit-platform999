@@ -2816,3 +2816,56 @@ Frontend فقط؛ لا Backend/API/DB/migrations؛ لا Mock؛ لا تعطيل �
 
 ### القيود المُحترمة
 لا Backend/API؛ لا Database (لم يُنفَّذ reset/drop/push — تمّت migrations عادية + seed فقط)؛ لا Payments؛ لا Commission (4% = 2% + 2% سليمة)؛ لا Auth/RBAC؛ لا redesign؛ لم تُحذف أي تعديلات موجودة مسبقًا؛ **لا commit ولا push**.
+
+---
+
+## 2026-10-05 — Functional Audit حقيقي + إصلاح سببي: الـAPI كان يقرأ قاعدة البيانات الخطأ
+
+### السبب الجذري الحقيقي (وليس إخفاء الخطأ)
+
+الـPreview كان يفتح والصفحات تُرجع 200، لكن **الوظائف الفعلية كانت تعمل على قاعدة بيانات غير المقصودة**:
+
+`packages/server/src/db/client.ts` كان يُنشئ `pg.Pool` **عند الاستيراد** (`import`)، أي قبل أن يُحمِّل `lib/env.ts` ملف `.env.demo` عبر `dotenv`. النتيجة:
+- `process.env.DATABASE_URL` كان **غير معرَّف** لحظة إنشاء الـPool.
+- فيسقط الكود على القيمة الافتراضية المكتوبة داخل الملف: `wasit_dev`.
+- أي أن `DOTENV_CONFIG_PATH=/workspace/project/.env.demo` و`DATABASE_URL=...wasit_demo` كانا **مُتجاهَلين تمامًا**، والـAPI يخدم `wasit_dev`.
+
+إثباتان:
+1. **اختبار ترتيب الاستيراد**: `APP PATH -> db client connected to: wasit_demo` بعد الإصلاح (كان `wasit_dev` قبله)، بينما `process.env.DATABASE_URL` يعرض `wasit_demo` في الحالتين.
+2. **اختبار Marker**: كتابة عبر الـAPI كانت تستقر في `wasit_dev` و`wasit_demo` = 0.
+
+### الإصلاح
+
+`packages/server/src/db/client.ts`: استيراد `../lib/env.js` لأثره الجانبي **قبل** قراءة `DATABASE_URL`، مع تعليق يشرح القيد. هذا يجعل أي نقطة دخول (سكربتات، اختبارات، bootstrap) تحترم البيئة المُهيَّأة بدل الاعتماد على ترتيب استيراد هش.
+
+`packages/server/src/modules/media/service.ts`: عند وجود صف `READY` وبايناري مفقود من المخزن، يُعاد **404** بدل **500** غير مُعالَج. (كان الـlog يمتلئ بـ`ENOENT ... .wasit-media-demo/videos/...mp4` مع `status:500`.)
+
+### تحقق حقيقي من الواجهة (Playwright حقيقي — لا HTTP 200 وحده)
+
+| الحزمة | النتيجة |
+|---|---|
+| `ui-functional-audit` (45 صفحة عبر 4 أدوار) | **45/45** |
+| `ui-purchase-check` (شراء فعلي + عمولة) | **10/10** |
+| `ui-video-studio-full-check` | **11/11** |
+| `ui-merchant-check` (إنشاء/تعديل/نشر منتج) | **11/11** |
+| `ui-mobile-smoke` (جوال 390px) | **16/16** |
+| `ui-messages-check` | **7/7** |
+| `ui-inventory-search-check` | **7/7** |
+| `ui-register-check` | **6/6** |
+| `ui-subscription-check` | **7/7** |
+| `ui-admin-dispute-check` | **23/23** |
+| `ui-verification-check` | **10/10** |
+| `ui-merchant-surfaces-check` | **10/10** |
+| `ui-flows-check` | **6/6** |
+| `ui-interaction-audit` | **58/58** |
+
+### التحقق النهائي
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| اختبارات الخادم | `npm test` | **780/780** |
+| اختبار الانحدار الجديد | `vitest run tests/marketing-video.test.ts` | **17/17** (منها 404 عند بايناري مفقود) |
+| typecheck | `npm run typecheck` | PASS (server + web) |
+| build | `npm run build` + `npm run build -w @wasit/web` | PASS |
+
+### القيود المُحترمة
+لا DB reset/drop/push؛ لا حذف بيانات Demo؛ Commission 4% = 2% + 2% محفوظة (مُتحقَّق منها من الواجهة: `seller=0.15 buyer=0.15` على 7.5 DT)؛ Marketing Video Agent (خط أساس `89e68d7`) محفوظ ولم يُغيَّر سوى تصلّب 404 الحقيقي؛ لم تُعطَّل أي أزرار ولم تُخفَ أي أخطاء.
