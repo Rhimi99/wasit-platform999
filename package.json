@@ -17,6 +17,7 @@
     "db:generate": "npm run db:generate -w @wasit/server",
     "db:migrate": "npm run db:migrate -w @wasit/server",
     "db:seed": "npm run db:seed -w @wasit/server",
+    "bootstrap:super-admin": "npm run bootstrap:super-admin -w @wasit/server",
     "web": "npm run dev -w @wasit/web"
   },
   "engines": {

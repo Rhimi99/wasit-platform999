@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
-    "build:prod": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/index.cjs && esbuild src/scripts/seed.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/seed.cjs && esbuild src/scripts/seed-demo.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/seed-demo.cjs",
+    "build:prod": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/index.cjs && esbuild src/scripts/seed.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/seed.cjs && esbuild src/scripts/seed-demo.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/seed-demo.cjs && esbuild src/scripts/bootstrap-super-admin.ts --bundle --platform=node --format=cjs --target=node20 --external:argon2 --outfile=dist-bundle/bootstrap-super-admin.cjs",
     "seed:prod": "node dist-bundle/seed.cjs",
+    "bootstrap:super-admin:prod": "node dist-bundle/bootstrap-super-admin.cjs",
     "start:prod": "node dist-bundle/index.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -16,6 +17,7 @@
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/scripts/seed.ts",
     "db:seed:demo": "tsx src/scripts/seed-demo.ts",
+    "bootstrap:super-admin": "tsx src/scripts/bootstrap-super-admin.ts",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
     "load:smoke": "tsx src/scripts/load-smoke.ts"

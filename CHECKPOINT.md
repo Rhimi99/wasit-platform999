@@ -1,8 +1,72 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-> **التاريخ**: 2026-10-04 — **Functional Audit حقيقي من الواجهة على المنصة المشغّلة + إصلاح خطأ `/dashboard/sales` + حزمة شراكة (توثيق فقط)**
-> **الفرع**: `master` — **الإصدار**: `ad41cbe`
-> **النطاق**: إعادة تشغيل المنصة كاملة (PostgreSQL + API + Web) واختبار وظيفي حقيقي من الواجهة (لا HTTP 200 وحده)، ثم إعداد حزمة شراكة (Dossier + Presentation) بصيغ PDF/DOCX/PPTX/MD. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push، ولا تعطيل أي زر، ولا Mock.
+> **التاريخ**: 2026-10-05 — **Goal 3: إنشاء أول `SUPER_ADMIN` في الإنتاج بطريقة آمنة + إغلاق ثغرة قبول الأدوار المميّزة في التسجيل العام**
+> **الفرع**: `master` — **الإصدار**: `ad41cbe` (آخر commit موثّق؛ تعديلات هذه الجلسة غير مدفوعة)
+> **النطاق**: تدقيق Auth/RBAC/Roles/Seed/Audit وإصلاح السبب الجذري، وإضافة مسار bootstrap تشغيلي لمرة واحدة لأول مالك منصة، وإصلاح ثغرة التسجيل العام التي كانت تقبل `ADMIN/SUPPORT/RISK/DISPUTE`. **لا تغيير** في Commission Policy (4% = 2% + 2%)، ولا في Marketing Video Agent (commit `89e68d7`)، ولا DB reset/drop/push على قاعدة العرض، ولا تعطيل أي زر، ولا Mock.
+
+---
+
+## 2026-10-05 — Goal 3: إنشاء أول `SUPER_ADMIN` في الإنتاج بطريقة آمنة (بدون فتح تسجيل عام)
+
+### الهدف
+توفير طريقة رسمية وآمنة لإنشاء أول حساب `SUPER_ADMIN` في الإنتاج، **دون** فتح تسجيل عام لهذا الدور، ودون إضعاف RBAC، ودون المساس بأي وظيفة تعمل.
+
+### نتيجة التدقيق (Auth / RBAC / Roles / Seed / Audit)
+| البند | النتيجة |
+|---|---|
+| `SUPER_ADMIN` في الثوابت | موجود: `ROLE_HIERARCHY.SUPER_ADMIN = 100` (أعلى دور) |
+| دور أعلى منه | **غير موجود** — لا `PLATFORM_OWNER` ولا `OWNER`؛ `SUPER_ADMIN` هو مالك المنصة فعليًا |
+| `ROLE_PERMISSIONS.SUPER_ADMIN` | يمنح **كل** الصلاحيات |
+| تسجيل عام لدور مميّز | `registerSchema` كان يقبل `ADMIN/SUPPORT/RISK/DISPUTE` (كان يمنع `SUPER_ADMIN` فقط) — **ثغرة حقيقية** |
+| `registerUser` (service) | كان يفرض `SUPER_ADMIN` فقط، ويقبل أدوارًا مميّزة أخرى من أي caller مباشر |
+| نقطة لتغيير الأدوار | **لا توجد** — لا يوجد API لترقية دور ذاتيًا |
+| مسار إنشاء أول `SUPER_ADMIN` | **لم يكن موجودًا** |
+| Audit | `writeAudit` موجود؛ لا تسجيل لعمليات bootstrap |
+
+### السبب الجذري
+1. **قائمة منع لا قائمة سماح:** منطق التسجيل كان يستثني `SUPER_ADMIN` صراحةً بدل حصر الأدوار القابلة للاختيار الذاتي، فأي دور مميّز جديد يُقبل تلقائيًا.
+2. **غياب مسار تشغيلي:** لا توجد آلية رسمية لإنشاء أول مالك منصة، مما يدفع عمليًا إلى إدخال مباشر في قاعدة البيانات (كما يفعل `seed-demo.ts`) — وهو تجاوز لطبقة التحقق.
+
+### الإصلاح (السبب، لا إخفاء الخطأ)
+| الملف | التغيير |
+|---|---|
+| `packages/shared/src/constants/roles.ts` | إضافة `SELF_SELECTABLE_ROLES` (قائمة **سماح**) + `isSelfSelectableRole()` |
+| `packages/server/src/modules/auth/routes.ts` | مخطط التسجيل يشتق من قائمة السماح → الأدوار المميّزة تُرفض بـ422 |
+| `packages/server/src/modules/auth/service.ts` | `registerUser` يفرض نفس قائمة السماح (دفاع في العمق لأي caller مباشر) |
+| `packages/server/src/lib/super-admin-bootstrap.ts` | **جديد**: خدمة bootstrap بقفل advisory، فحص «موجود مسبقًا»، تدقيق للنجاح والرفض، وعدم تغيير كلمة مرور حساب قائم |
+| `packages/server/src/scripts/bootstrap-super-admin.ts` | **جديد**: CLI لمرة واحدة (كلمة المرور تُطلب مخفية أو تُمرّر عبر stdin) + وضع `status` |
+| `package.json` / `packages/server/package.json` | `bootstrap:super-admin` + إضافة الـbundle إلى `build:prod` |
+| `packages/server/tests/super-admin-bootstrap.test.ts` | **جديد**: 14 اختبارًا |
+| `docs/SUPER_ADMIN_BOOTSTRAP.md` | **جديد**: دليل تشغيلي كامل |
+
+### آلية الاستخدام
+```bash
+SUPER_ADMIN_ACTION=status npm run bootstrap:super-admin          # فحص (قراءة فقط)
+SUPER_ADMIN_EMAIL=owner@example.com npm run bootstrap:super-admin # إنشاء (كلمة المرور تُطلب مخفية)
+```
+سياسة كلمة المرور: ≥ 12 حرفًا مع حرف كبير + صغير + رقم + رمز (أصرم من تسجيل العامة). الإنتاج: `node dist-bundle/bootstrap-super-admin.cjs`.
+
+### التحقق (Functional — لا HTTP 200 وحده)
+| الفحص | الأمر | النتيجة |
+|---|---|---|
+| Unit + Integration | `npm test` | **779/779** ✅ (69 ملفًا؛ الفشل الوحيد الأول كان flake تزامن سابق، ونجح كامل عند الإعادة) |
+| اختبارات Goal 3 | `npx vitest run tests/super-admin-bootstrap.test.ts` | **14/14** ✅ |
+| Typecheck | `npm run typecheck` | PASS (server + web، 0 أخطاء) ✅ |
+| Build | `npm run build:prod` | PASS ✅ (+ `bootstrap-super-admin.cjs` 637 kB) |
+| Bootstrap عبر bundle الإنتاجي | `node dist-bundle/bootstrap-super-admin.cjs` | PASS ✅ (إنشاء + status) |
+| تسجيل الدخول بـHTTP فعلي | `POST /api/auth/login` | 200 + `roles:["SUPER_ADMIN"]` ✅ |
+| لوحات Admin | `stats/users/products/orders/transactions/ledger/audit-logs` | 7/7 = 200 ✅ |
+| رفض التسجيل العام | `role=SUPER_ADMIN` / `ADMIN` / `SUPPORT` / `RISK` / `DISPUTE` | 5/5 = **422** ✅ |
+| تسجيل CUSTOMER عادي | `POST /api/auth/register` | 201 ✅ (لم يتأثر) |
+| منع العميل من Admin | 3 مسارات بـcookie CUSTOMER | 3/3 = **403** ✅ |
+| منع الترقية الذاتية | `PATCH /api/auth/role` وغيرها | 404 ✅ |
+| رفض ثاني SUPER_ADMIN | إعادة التشغيل بدون opt-in | exit **2** + صف تدقيق ✅ |
+| كلمة مرور ضعيفة | `password=short` | مرفوض ✅ |
+| عدم تسرّب كلمة المرور | grep في سجل الخادم + صفوف التدقيق | 0 ✅ |
+| تجزئة كلمة المرور | فحص `password_hash` | `$argon2id$` ✅ |
+
+### القيود المُحترمة
+لا DB reset/drop/push على قاعدة العرض (تم استخدام قاعدة اختبار مؤقتة `wasit_test` فقط، وهي الوجهة التي يسمح بها `tests/setup.ts`)؛ Commission Policy 4% = 2% + 2% لم تُمس؛ Marketing Video Agent (commit `89e68d7`) لم يُمس؛ لم تُعطَّل أزرار؛ لا Mock؛ لا تغيير في الوظائف التي تعمل؛ **لا push**.
 
 ---
 

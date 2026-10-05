@@ -33,7 +33,7 @@ import {
   verifyPhoneCode,
   devPhoneCode,
 } from './service';
-import { ApiError } from '@wasit/shared';
+import { ApiError, SELF_SELECTABLE_ROLES } from '@wasit/shared';
 import { env, devToolingActive, cookieSecure } from '../../lib/env';
 import { hashToken } from '../../lib/security';
 
@@ -54,7 +54,11 @@ const registerSchema = z.object({
   lastName: z.string().max(100).optional(),
   phone: z.string().max(32).optional(),
   locale: z.enum(['ar', 'fr', 'en']).default('ar'),
-  role: z.enum(['CUSTOMER', 'MERCHANT', 'SUPPLIER', 'COMPANY', 'MARKETER']).optional(),
+  // Only the roles a visitor may self-select. A privileged role (ADMIN,
+  // SUPER_ADMIN, SUPPORT, RISK, DISPUTE) is rejected here as a validation
+  // error, so it never reaches the service — the service enforces the same
+  // allow-list independently for direct callers.
+  role: z.enum(SELF_SELECTABLE_ROLES).optional(),
 });
 
 const loginSchema = z.object({

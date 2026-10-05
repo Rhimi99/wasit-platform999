@@ -1,5 +1,5 @@
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
-import { ApiError, type UserRole } from '@wasit/shared';
+import { ApiError, isSelfSelectableRole, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
   emailVerificationTokens,
@@ -129,7 +129,14 @@ export async function registerUser(
 
   // Resolve the role BEFORE writing any user row so a missing/unseeded role
   // fails before a partial (orphaned) user can be created.
-  const roleName: UserRole = input.role && input.role !== 'SUPER_ADMIN' ? input.role : 'CUSTOMER';
+  //
+  // Self-service registration may only ever grant a role from the shared
+  // allow-list. Anything else — a privileged role (ADMIN/SUPER_ADMIN/SUPPORT/…),
+  // an unknown string, or a missing value — falls back to CUSTOMER. The rule
+  // lives here as well as in the route schema so a direct service caller cannot
+  // bypass the HTTP validation to mint a staff account.
+  const requestedRole = input.role;
+  const roleName: UserRole = isSelfSelectableRole(requestedRole) ? requestedRole : 'CUSTOMER';
   const roleId = await getRoleIdByName(db, roleName, 'CUSTOMER');
 
   const userId = newId();
