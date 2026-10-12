@@ -15,7 +15,8 @@ import {
   getTask,
   listAgents,
   listMyTasks,
-} from './agents.js';
+} from './runner.js';
+import { routeEvents, summarizeRun, copilotSpec } from './copilot.js';
 import {
   runMarketAnalysis,
   runRecommendations,
@@ -59,6 +60,16 @@ const analyzeProductSchema = z.object({
 const createTaskSchema = z.object({
   input: z.record(z.unknown()).default({}),
   requestedModel: z.string().max(100).optional(),
+  taskType: z.string().max(64).optional(),
+  dedupeKey: z.string().max(200).optional(),
+  priority: z.number().int().min(0).max(1000).optional(),
+});
+
+const routeEventsSchema = z.object({
+  events: z
+    .array(z.object({ event: z.string().min(1).max(64), payload: z.record(z.unknown()).optional() }))
+    .min(1)
+    .max(20),
 });
 
 const decideSchema = z.object({
@@ -229,10 +240,42 @@ aiRoutes.post('/agents/:agentKey/tasks', requirePermission(PERMISSIONS.AI_USE), 
     ctx.db,
     ctx.user!.roles as UserRole[],
     ctx.user!.id,
-    { agentKey, requestedBy: ctx.user!.id, input: body.input, requestedModel: body.requestedModel },
+    {
+      agentKey,
+      requestedBy: ctx.user!.id,
+      taskType: body.taskType,
+      input: body.input,
+      requestedModel: body.requestedModel,
+      dedupeKey: body.dedupeKey,
+      priority: body.priority,
+    },
     { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
   );
   return c.json({ success: true, data: result }, 201);
+});
+
+// ----- Copilot (central coordinator) ---------------------------------------
+aiRoutes.get('/copilot', requirePermission(PERMISSIONS.AI_USE), async (c) => {
+  return c.json({ success: true, data: copilotSpec() });
+});
+
+aiRoutes.post('/copilot/route', requirePermission(PERMISSIONS.AI_USE), validateBody(routeEventsSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof routeEventsSchema>>(c);
+  const result = await routeEvents(
+    ctx.db,
+    body.events,
+    ctx.user!.id,
+    ctx.user!.roles as UserRole[],
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: result }, 201);
+});
+
+aiRoutes.get('/copilot/runs/:correlationId', requirePermission(PERMISSIONS.AI_USE), async (c) => {
+  const ctx = getContext(c);
+  const result = await summarizeRun(ctx.db, c.req.param('correlationId')!);
+  return c.json({ success: true, data: result });
 });
 
 aiRoutes.get('/agents/:agentKey/tasks', requirePermission(PERMISSIONS.AI_USE), async (c) => {

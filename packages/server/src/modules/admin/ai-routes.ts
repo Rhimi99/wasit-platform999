@@ -10,7 +10,9 @@ import { newId } from '../../lib/ids.js';
 import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
 import { agentTasks } from '../../db/schema/agents.js';
 import { adminUsageSummary } from '../ai/service.js';
-import { listRegistryAgents } from '../ai/agents.js';
+import { listRegistryAgents, setAgentStatus, agentTaskSummary, getRegistryAgent } from '../ai/runner.js';
+import { listSchedules, setScheduleEnabled, pendingApprovalsCount, listRecentTasks } from '../ai/copilot.js';
+import { supervisorSnapshot, supervisorStatus, listContainedTasks } from '../ai/supervisor.js';
 
 const budgetSchema = z
   .object({
@@ -194,6 +196,52 @@ adminAiRoutes.get('/agents', async (c) => {
   return c.json({ success: true, data: { items: rows } });
 });
 
+/** Aggregate status counts + the manager's action queue, for the agents desk. */
+adminAiRoutes.get('/agents/summary', async (c) => {
+  const ctx = getContext(c);
+  const [summary, pending] = await Promise.all([
+    agentTaskSummary(ctx.db),
+    pendingApprovalsCount(ctx.db),
+  ]);
+  return c.json({ success: true, data: { ...summary, pendingApprovals: pending } });
+});
+
+const agentStatusSchema = z.object({
+  status: z.enum(['ACTIVE', 'PAUSED', 'DISABLED']),
+  reason: z.string().max(500).optional().nullable(),
+});
+
+/** Kill switch: pause/resume/disable an agent. Blocked runs report `blocked`. */
+adminAiRoutes.post('/agents/:agentKey/status', validateBody(agentStatusSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof agentStatusSchema>>(c);
+  const agentKey = c.req.param('agentKey')!;
+  await setAgentStatus(ctx.db, agentKey, body.status, body.reason ?? null, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  const updated = await getRegistryAgent(ctx.db, agentKey);
+  return c.json({ success: true, data: updated });
+});
+
+/** Periodic agent schedules owned by the existing in-process scheduler. */
+adminAiRoutes.get('/schedules', async (c) => {
+  const ctx = getContext(c);
+  const rows = await listSchedules(ctx.db);
+  return c.json({ success: true, data: { items: rows } });
+});
+
+const scheduleToggleSchema = z.object({ enabled: z.boolean() });
+
+adminAiRoutes.post('/schedules/:scheduleId/enabled', validateBody(scheduleToggleSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof scheduleToggleSchema>>(c);
+  await setScheduleEnabled(ctx.db, c.req.param('scheduleId')!, body.enabled, { actorId: ctx.user!.id });
+  const rows = await listSchedules(ctx.db);
+  return c.json({ success: true, data: { items: rows } });
+});
+
 adminAiRoutes.get('/tasks', async (c) => {
   const ctx = getContext(c);
   const qs = taskStatusQuerySchema.safeParse(c.req.query());
@@ -209,4 +257,22 @@ adminAiRoutes.get('/tasks', async (c) => {
     .orderBy(desc(agentTasks.createdAt))
     .limit(query.limit ?? 50);
   return c.json({ success: true, data: { items: rows } });
+});
+
+// ----- Agent Supervisor (agent #20) ----------------------------------------
+/** Read-only supervisor health snapshot: task counts, halted agents, open alerts. */
+adminAiRoutes.get('/supervisor', async (c) => {
+  const ctx = getContext(c);
+  const data = await supervisorSnapshot(ctx.db);
+  return c.json({ success: true, data });
+});
+
+/** Full supervisor report incl. contained-task queue (read-only). */
+adminAiRoutes.get('/supervisor/report', async (c) => {
+  const ctx = getContext(c);
+  const [report, contained] = await Promise.all([
+    supervisorStatus(ctx.db),
+    listContainedTasks(ctx.db),
+  ]);
+  return c.json({ success: true, data: { ...report, contained } });
 });

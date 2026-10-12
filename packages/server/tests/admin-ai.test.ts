@@ -131,16 +131,32 @@ describe('Admin AI governance desk (contract + RBAC)', () => {
   });
 
   it('seeds and returns the full catalogue even when no user has invoked an agent', async () => {
-    // Regression: the admin route must not depend on a prior user-facing
-    // /api/ai/agents call to populate the registry.
+    // Regression: the registry read must not depend on a prior user-facing
+    // /api/ai/agents call to populate it.
+    //
+    // The registry is a single shared table, and vitest runs test *files* in
+    // parallel against one database. Emptying it with an unqualified
+    // `delete(agentRegistry)` makes the table globally empty for a few
+    // milliseconds, which a parallel file (e.g. phase19) can observe as a
+    // missing agent — a cross-file race. Instead, empty and re-read the table
+    // inside a transaction that always rolls back: the emptied state is visible
+    // only to this transaction, so no other file can observe it.
     const { agentRegistry } = await import('../src/db/schema/agents.js');
-    await db.delete(agentRegistry);
-    const { client } = await createStaffUser('ADMIN');
-    const r = await client.req('/api/admin/ai/agents');
-    expect(r.status).toBe(200);
-    const items = r.data.data.items as Array<{ key: string }>;
-    expect(items.length).toBeGreaterThanOrEqual(11);
-    expect(items.map((a) => a.key)).toContain('sales-agent');
+    const { listRegistryAgents } = await import('../src/modules/ai/runner.js');
+    class RollbackAfterAssert extends Error {}
+    await db
+      .transaction(async (tx) => {
+        await tx.delete(agentRegistry);
+        // `listRegistryAgents` is exactly what GET /api/admin/ai/agents reads;
+        // it must lazily (re)seed the full catalogue from an empty table.
+        const items = await listRegistryAgents(tx as unknown as typeof db);
+        expect(items.length).toBeGreaterThanOrEqual(11);
+        expect(items.map((a) => a.key)).toContain('sales-agent');
+        throw new RollbackAfterAssert('rollback-after-assert');
+      })
+      .catch((err) => {
+        if (!(err instanceof RollbackAfterAssert)) throw err;
+      });
   });
 
   it('returns the requests feed and the tasks feed as { items: [] } collections', async () => {

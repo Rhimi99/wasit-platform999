@@ -755,9 +755,30 @@ export interface AgentRegistryRow {
   id: string;
   key: string;
   name: string;
+  nameAr: string | null;
+  mission: string | null;
+  category: string;
   description: string | null;
+  allowedTools: string[];
+  approvalActions: string[];
+  limits: Record<string, number | string | boolean>;
+  taskTypes: string[];
   requiresHumanApproval: boolean;
+  status: 'ACTIVE' | 'PAUSED' | 'DISABLED';
+  isCopilot: boolean;
   isActive: boolean;
+  createdAt: string;
+}
+
+export interface AgentScheduleRow {
+  id: string;
+  agentKey: string;
+  taskType: string;
+  intervalSeconds: number;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastTaskId: string | null;
   createdAt: string;
 }
 
@@ -765,14 +786,23 @@ export interface AgentTaskRow {
   id: string;
   agentKey: string;
   requestedBy: string;
+  taskType: string | null;
   input: Record<string, unknown>;
   status: AgentTaskStatus;
   result: unknown;
   error: { message?: string } | null;
   requiresApproval: boolean;
+  approvalAction: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   rejectionReason: string | null;
+  dedupeKey: string | null;
+  correlationId: string | null;
+  triggeredBy: string;
+  priority: number;
+  attempts: number;
+  maxAttempts: number;
+  scheduledFor: string | null;
   cost: string;
   model: string;
   latencyMs: number;
