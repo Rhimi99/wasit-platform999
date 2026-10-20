@@ -90,12 +90,15 @@ jobs:
       - name: Assert repair sandbox image exists
         run: docker image inspect wasit-repair-sandbox:local >/dev/null
       # Run the DB-free self-repair suite from the repo root so no server vitest
-      # config (which requires TEST_DATABASE_URL) is picked up, emitting a JSON
-      # report the next step asserts against.
-      - name: Run self-repair suite (JSON report)
+      # config (which requires TEST_DATABASE_URL) is picked up. Emit BOTH the
+      # default console reporter (so a failure, incl. H, is visible in the job
+      # log) and the JSON reporter (dot-notation outputFile) the next step
+      # asserts against.
+      - name: Run self-repair suite (console + JSON report)
         run: >-
           npx vitest run packages/server/tests/self-repair-tool.test.ts
-          --reporter=json --outputFile=/tmp/repair-sandbox-report.json
+          --reporter=default --reporter=json
+          --outputFile.json=/tmp/repair-sandbox-report.json
       # (3) Fail unless G1, G2 and H each ran and passed. Vitest exits 0 when a
       # whole describe block is skipped, so this assertion is what makes a missing
       # Docker daemon (or a skipped/failed test) a hard CI failure instead of a
