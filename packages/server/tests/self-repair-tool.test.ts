@@ -973,8 +973,15 @@ describe.skipIf(!RUNTIME_AVAILABLE)('self-repair tool — real container isolati
     await chmod(ws.workspaceDir, 0o777);
 
     const run = await granted(() => runRepairTests(ws));
-    expect(run.passed).toBe(true);
-    expect(run.exitCode).toBe(0);
+    // DIAGNOSTIC (temporary): surface the container's output/exit code/sandbox
+    // reason so a failure inside CI is visible. `output` is the container's
+    // stdout+stderr (no host secrets are added by this test). Remove after H's
+    // root cause is identified.
+    if (!run.passed) {
+      console.error(`[H diagnostic] exitCode=${run.exitCode} sandbox=${JSON.stringify(run.sandbox)}\n${run.output}`);
+    }
+    expect(run.passed, run.output).toBe(true);
+    expect(run.exitCode, run.output).toBe(0);
   });
 });
 
