@@ -910,6 +910,43 @@ describe.skipIf(!RUNTIME_AVAILABLE)('self-repair tool — real container isolati
     return d;
   }
 
+  /**
+   * Removes artifacts the repair container wrote into the mounted workspace.
+   * The container runs as the image's `node` user (uid 1000) while the vitest
+   * process runs as the CI user (a different uid), so those files are not
+   * removable by this process (`rm` fails with EACCES). They are deleted by a
+   * short-lived container running as the SAME user that created them (the image
+   * default) — no extra privileges, no chmod, and the production container flags
+   * are unchanged. The cleanup container is additionally hardened (no network,
+   * all capabilities dropped, no privilege escalation) and bounded by a timeout,
+   * so a hung or failing cleanup fails H instead of passing silently. A no-op
+   * when the container wrote nothing (e.g. the image was unavailable, so nothing
+   * was mounted).
+   */
+  async function removeContainerArtifacts(workspaceDir: string): Promise<void> {
+    const cacheDir = path.join(workspaceDir, '.repair-vite-cache');
+    try {
+      await lstat(cacheDir);
+    } catch {
+      return; // Nothing the container wrote — nothing to clean.
+    }
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    await promisify(execFile)(
+      'docker',
+      [
+        'run', '--rm',
+        '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+        '-v', `${workspaceDir}:${REPAIR_WORKSPACE_MOUNT}`,
+        REPAIR_IMAGE,
+        'sh', '-c', `rm -rf ${REPAIR_WORKSPACE_MOUNT}/.repair-vite-cache`,
+      ],
+      // Bounded like the other docker probe in this file; a hung cleanup fails H
+      // (execFile rejects on timeout) rather than silently passing.
+      { timeout: 10_000 },
+    );
+  }
+
   it('G1. a write attempt to a decoy outside the workspace fails (read-only root, only ws is rw)', async () => {
     const ws = await makeTemp('wasit-2u-ws-');
     const decoyDir = await makeTemp('wasit-2u-decoy-');
@@ -982,6 +1019,14 @@ describe.skipIf(!RUNTIME_AVAILABLE)('self-repair tool — real container isolati
     }
     expect(run.passed, run.output).toBe(true);
     expect(run.exitCode, run.output).toBe(0);
+
+    // The run wrote its vitest cache inside the workspace as the image's `node`
+    // user. Remove those files as the same user, then prove the workspace is
+    // fully disposable by this (different-uid) process — the exact cleanup that
+    // used to fail with EACCES in afterEach.
+    await removeContainerArtifacts(ws.workspaceDir);
+    await expect(rm(ws.workspaceDir, { recursive: true, force: true })).resolves.toBeUndefined();
+    expect(await lstat(ws.workspaceDir).then(() => true, () => false)).toBe(false);
   });
 });
 
