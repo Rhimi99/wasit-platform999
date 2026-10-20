@@ -60,6 +60,52 @@ jobs:
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
+  # Development Agent repair sandbox. Builds the `repair` image (full dependency
+  # closure, incl. vitest) and runs the container-isolation acceptance tests with
+  # a REAL Docker daemon. The job is FAIL-CLOSED: it asserts a working daemon, a
+  # present image, and that G1/G2/H each actually ran and passed, so a missing
+  # daemon (which would skip the tests and let vitest exit 0) fails the job rather
+  # than passing green. It does not touch the database.
+  repair-sandbox:
+    name: Repair sandbox isolation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild argon2
+      # (1) Fail loudly if the runner has no usable Docker daemon. Without this,
+      # the container-isolation tests below are skipped and vitest still exits 0.
+      - name: Require a working Docker daemon
+        run: docker info
+      # Build only the repair stage; the production `runtime` image is untouched.
+      - name: Build repair sandbox image
+        run: docker build --target repair -t wasit-repair-sandbox:local .
+      # (2) Fail if the image is not actually present (a no-op or failed build).
+      - name: Assert repair sandbox image exists
+        run: docker image inspect wasit-repair-sandbox:local >/dev/null
+      # Run the DB-free self-repair suite from the repo root so no server vitest
+      # config (which requires TEST_DATABASE_URL) is picked up, emitting a JSON
+      # report the next step asserts against.
+      - name: Run self-repair suite (JSON report)
+        run: >-
+          npx vitest run packages/server/tests/self-repair-tool.test.ts
+          --reporter=json --outputFile=/tmp/repair-sandbox-report.json
+      # (3) Fail unless G1, G2 and H each ran and passed. Vitest exits 0 when a
+      # whole describe block is skipped, so this assertion is what makes a missing
+      # Docker daemon (or a skipped/failed test) a hard CI failure instead of a
+      # silent green. Titles are matched by the exact prefixes "G1. ", "G2. " and
+      # "H. " (a space follows the number), so a different test cannot satisfy the
+      # check by partial match.
+      - name: Assert G1/G2/H ran and passed
+        run: |
+          node -e 'const fs=require("node:fs");const p="/tmp/repair-sandbox-report.json";if(!fs.existsSync(p)){console.error("FATAL: vitest JSON report not found at "+p);process.exit(1);}const r=JSON.parse(fs.readFileSync(p,"utf8"));const a=(r.testResults||[]).flatMap(function(f){return f.assertionResults||[];});const req=["G1. ","G2. ","H. "];let bad=false;for(const pre of req){const m=a.find(function(x){return typeof x.title==="string"&&x.title.startsWith(pre);});if(!m){console.error("FATAL: required test "+pre+"* was not executed");bad=true;}else if(m.status!=="passed"){console.error("FATAL: required test "+m.title+" has status "+m.status+" (expected passed)");bad=true;}else{console.log("OK: "+m.title);}}if(bad){console.error("Container-isolation proofs G1/G2/H did not all pass; failing the job.");process.exit(1);}console.log("G1/G2/H all executed and passed.");'
+
   # Backup/restore drill: proves a dump can actually be restored and that the
   # safety rails refuse a corrupt archive or a live target. Real PostgreSQL, no mocks.
   backup-drill:
