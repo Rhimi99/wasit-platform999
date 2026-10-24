@@ -16,6 +16,7 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
+  AgentScheduleRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
@@ -993,6 +994,26 @@ export const api = {
   },
   async adminAiAgents() {
     return request<{ items: AgentRegistryRow[] }>('/api/admin/ai/agents');
+  },
+  async adminAiAgentSummary() {
+    return request<{ total: number; byStatus: Record<string, number>; pendingApprovals: number }>(
+      '/api/admin/ai/agents/summary',
+    );
+  },
+  async adminSetAgentStatus(agentKey: string, status: 'ACTIVE' | 'PAUSED' | 'DISABLED', reason?: string) {
+    return request<AgentRegistryRow>(`/api/admin/ai/agents/${agentKey}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason: reason ?? null }),
+    });
+  },
+  async adminAiSchedules() {
+    return request<{ items: AgentScheduleRow[] }>('/api/admin/ai/schedules');
+  },
+  async adminSetScheduleEnabled(scheduleId: string, enabled: boolean) {
+    return request<{ items: AgentScheduleRow[] }>(`/api/admin/ai/schedules/${scheduleId}/enabled`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
   },
   async adminAiTasks(params: { status?: string; agentKey?: string; limit?: number } = {}) {
     const qs = new URLSearchParams();
