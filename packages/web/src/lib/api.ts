@@ -355,6 +355,14 @@ export const api = {
       { method: 'POST', body: JSON.stringify(data) },
     );
   },
+  // Operator completion of an offline/`manual` payment. Only the offline
+  // rail qualifies; the server refuses anything else.
+  async completeManualPayment(orderId: string) {
+    return request<{ orderId: string; paymentStatus: string; provider: string }>(
+      `/api/payments/orders/${orderId}/complete-manual`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+  },
   async listMyOrders() {
     return request<Order[]>('/api/orders');
   },

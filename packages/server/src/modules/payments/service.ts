@@ -913,3 +913,105 @@ export async function getOrderPayment(
   const payment = await db.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
   return { intent: intent[0] ?? null, payment: payment[0] ?? null };
 }
+
+/**
+ * Operator completion of an offline/`manual` payment.
+ *
+ * A `manual` rail (bank transfer, cash, or an out-of-band wallet) has no signed
+ * provider callback, so nothing would ever move the order past PENDING — every
+ * offline transaction was stuck with no way out of the UI. This is the
+ * "settlement desk" entry point: an operator who has confirmed the money arrived
+ * out of band records that fact here.
+ *
+ * It is a privileged money-path action (`REFUND_MANAGE`, the same permission the
+ * refund and webhook-replay paths already use). It is deliberately limited:
+ *
+ *  - only the offline `manual` rail qualifies — a real acquirer (Flouci,
+ *    ClicToPay, open-checkout) must confirm through its signed webhook, never a
+ *    human assertion;
+ *  - the provider must actually be the active rail, and it must still be refused
+ *    outside demo mode by `resolvePaymentProvider()`, so this can never fabricate
+ *    a payment on a live stack;
+ *  - a real intent with a real externalRef must exist (the operator cannot
+ *    conjure a payment out of nothing).
+ *
+ * The state transition itself is delegated to `applyPaymentSucceeded`, so the
+ * manual path and the webhook path can never diverge. Critically, that means
+ * completion records the *payment* only: it does NOT write SETTLED and does NOT
+ * move the ledger — settlement stays a separate, evidence-gated step.
+ *
+ * The whole operation runs in one transaction behind a `SELECT … FOR UPDATE` on
+ * the order row. Without that lock the "is it still PENDING?" check and the
+ * update are a check-then-act race: concurrent completions all read PENDING and
+ * each applies the transition, writing duplicate PAYMENT.SUCCEEDED audit entries
+ * (observed under load before the lock was added). The lock makes the second and
+ * later callers see PAID and fail closed with 409.
+ */
+export async function completeManualPayment(
+  db: DB,
+  input: { orderId: string; actorId: string; ipAddress?: string | null },
+) {
+  return db.transaction(async (tx) => {
+    // Serialise concurrent completions for the same order.
+    const locked = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, input.orderId))
+      .limit(1)
+      .for('update');
+    if (locked.length === 0) throw ApiError.notFound('Order not found');
+    const order = locked[0];
+
+    if (order.paymentStatus === 'PAID') throw ApiError.conflict('Order is already paid');
+    if (order.paymentStatus !== 'PENDING') {
+      throw ApiError.conflict('Order has no payment in progress to complete');
+    }
+
+    const intentRows = await tx
+      .select()
+      .from(paymentIntents)
+      .where(eq(paymentIntents.orderId, input.orderId))
+      .limit(1);
+    const intent = intentRows[0];
+    if (!intent) throw ApiError.notFound('Payment intent');
+    if (intent.status === 'SUCCEEDED') throw ApiError.conflict('Payment intent is already succeeded');
+    if (intent.status === 'FAILED') throw ApiError.conflict('Payment intent has failed and cannot be completed');
+    if (!intent.externalRef) throw ApiError.conflict('Payment intent has no provider reference');
+
+    // Only the offline rail has no callback to confirm it; a real acquirer must go
+    // through its signed webhook.
+    if (intent.provider !== 'manual') {
+      throw ApiError.validation([
+        {
+          field: 'provider',
+          message: `Provider '${intent.provider}' is confirmed by its signed webhook, not manually`,
+          code: 'VALIDATION_FAILED',
+        },
+      ]);
+    }
+
+    // Refuses the manual harness outside demo mode (503) and confirms the intent's
+    // provider is the rail this deployment is actually running.
+    const provider = resolvePaymentProvider();
+    if (provider.id !== intent.provider) {
+      throw ApiError.serviceUnavailable(
+        `The active payment provider is '${provider.id}', not '${intent.provider}'`,
+      );
+    }
+
+    await applyPaymentSucceeded(tx as unknown as DB, intent.provider, intent.externalRef, input.ipAddress ?? null);
+
+    // A separate, operator-attributed audit line on top of the PAYMENT.SUCCEEDED
+    // entry `applyPaymentSucceeded` writes (which is attributed to the buyer), so
+    // "who completed this offline payment" is answerable.
+    await writeAudit(tx as unknown as DB, { actorId: input.actorId, ipAddress: input.ipAddress ?? null }, {
+      action: 'PAYMENT.MANUAL_COMPLETE',
+      entityType: 'ORDER',
+      entityId: input.orderId,
+      before: { paymentStatus: 'PENDING' },
+      after: { paymentStatus: 'PAID', provider: intent.provider, intentId: intent.id, externalRef: intent.externalRef },
+    });
+
+    return { orderId: input.orderId, paymentStatus: 'PAID' as const, provider: intent.provider };
+  });
+}

@@ -49,6 +49,18 @@ payment/settlement specs) that assert reconciliation **never fabricates** a
 `SETTLED`, `RECEIVED` or completed payout, and that a demo/offline provider
 **cannot** assert settlement.
 
+- **Payment may be confirmed by an operator, settlement may not.** An offline
+  (`manual`) rail has no signed callback, so an operator with `REFUND_MANAGE` may
+  record that the money arrived out of band
+  (`POST /api/payments/orders/:orderId/complete-manual`, `/admin/orders`). That
+  path moves the **Payment** axis only — it reuses the webhook's own transition
+  and never writes `SETTLED` or a ledger movement. It is **not a production
+  payment integration**: the `manual` rail is a demonstration harness, so the
+  path is refused outside demo mode (`503`) and only ever applies to `manual`
+  intents (a real acquirer is refused `422`). Concurrent completions are
+  serialised by a row lock, so a burst yields exactly one transition. Settlement
+  remains gated on real settlement evidence, never on a human assertion.
+
 ## 3. Marketing video duration: 35–120 seconds inclusive
 
 Defined once in `packages/shared/src/constants/media.ts`

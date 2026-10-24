@@ -307,3 +307,21 @@ empty state now renders a user picker and a recompute control that call the same
 as a row action, so the first score can be created from the desk. Covered by the
 E2E test "trust desk creates the first score from an empty table (picker path)"
 in `e2e/functional-audit.spec.ts`; recorded in `FINAL-AUDIT.md`.
+
+---
+
+## 12. Manual/offline payment completion — resolved
+
+The `manual` (offline desk) rail produces no signed provider callback, so an
+offline order could never leave `PENDING`: only the webhook handler set
+`paymentStatus = PAID`. The desk now has an operator-only completion path,
+`POST /api/payments/orders/:orderId/complete-manual`, surfaced on `/admin/orders`
+when the active rail is `manual` and the order is `PENDING`. It reuses the same
+internal `applyPaymentSucceeded` transition as the webhook, inside a transaction
+with a row lock so concurrent completions yield exactly one transition. It is
+refused server-side for anyone without `REFUND_MANAGE`, for a non-offline rail,
+for an order with no payment in progress, and outside demo mode (the `manual`
+harness is a demo provider, so this is a demonstration path, not a production
+payment integration). It records the **payment only** — never a settlement.
+Covered by `packages/server/tests/manual-payment-completion.test.ts` and the E2E
+`e2e/manual-payment.spec.ts`; recorded in `FINAL-AUDIT.md`.

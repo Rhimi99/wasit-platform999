@@ -15,6 +15,7 @@ import {
   handlePaymentWebhook,
   listWebhookFailures,
   replayDeadLetter,
+  completeManualPayment,
 } from './service.js';
 
 const methodSchema = z.object({
@@ -68,6 +69,23 @@ paymentsRoutes.post('/orders/:orderId/intent', validateBody(intentSchema), async
   });
   return c.json({ success: true, data: result }, 201 as never);
 });
+
+// Operator completion of an offline/`manual` payment. Only the offline rail
+// qualifies (a real acquirer confirms via its signed webhook); the service
+// refuses anything else. Same privileged permission as refunds/webhook replay.
+paymentsRoutes.post(
+  '/orders/:orderId/complete-manual',
+  requirePermission(PERMISSIONS.REFUND_MANAGE),
+  async (c) => {
+    const ctx = getContext(c);
+    const result = await completeManualPayment(ctx.db, {
+      orderId: c.req.param('orderId')!,
+      actorId: ctx.user!.id,
+      ipAddress: ctx.ipAddress,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
 
 // Read access is ownership-scoped inside the service (getOrderPayment /
 // listOrderRefunds call assertOrderAccess): an order party may read its own

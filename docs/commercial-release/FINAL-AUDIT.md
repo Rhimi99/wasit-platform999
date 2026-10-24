@@ -46,6 +46,49 @@ table (picker path)" in `e2e/functional-audit.spec.ts`, which empties the table,
 drives the picker through the UI, and confirms the new snapshot is real server
 state (and restores the table afterwards).
 
+### Manual/offline payment completion — resolved
+
+The `manual` (offline desk) rail has no signed provider callback, so nothing ever
+moved an offline order past `PENDING`: `paymentStatus` could only be set to `PAID`
+by the webhook handler, and a manual intent produces no webhook. Every offline
+transaction was therefore stuck with no way out of the UI.
+
+The fix adds an operator-only completion path,
+`POST /api/payments/orders/:orderId/complete-manual`, surfaced on `/admin/orders`
+as a per-row action shown only when the active rail is `manual` and the order is
+`PENDING`. The state transition is delegated to the same internal
+`applyPaymentSucceeded` the webhook path uses, so the two paths cannot diverge.
+
+The boundaries are enforced server-side, not just hidden in the UI:
+
+- **Privileged only.** `requirePermission(REFUND_MANAGE)` — the same permission
+  the refund and webhook-replay paths already use. The buyer/seller who own the
+  order, and SUPPORT staff, get `403`; unauthenticated callers get `401`.
+- **Offline rail only.** An intent on a real acquirer (Flouci, ClicToPay,
+  open-checkout) is refused with `422` — those must confirm through their signed
+  webhook, never a human assertion.
+- **Never on a live stack.** The `manual` provider is a demo harness, so
+  `resolvePaymentProvider()` refuses it outside demo mode: on `NODE_ENV=production`
+  completion returns `503` and nothing moves.
+- **Real intent required.** A missing intent, a `FAILED` intent, an order with no
+  payment in progress, and a double completion are all refused (`404`/`409`).
+- **Concurrency-safe.** The whole operation runs in one transaction behind a
+  `SELECT … FOR UPDATE` on the order row. Without that lock the "still PENDING?"
+  check and the update are a check-then-act race: a burst of concurrent
+  completions all read `PENDING` and each applies the transition, writing
+  duplicate `PAYMENT.SUCCEEDED` entries (reproduced before the lock was added).
+  With the lock exactly one succeeds and the rest fail closed with `409`.
+
+Crucially this records the **payment only**: it does not write `SETTLED` and does
+not move the ledger. `persistence-invariants.test.ts` still asserts a single
+writer per money-path transition, so no emergency path can settle, receipt or pay
+out. Covered by `packages/server/tests/manual-payment-completion.test.ts`
+(7 tests: success + ledger-stays-PENDING, permission refusals, double-completion,
+missing/unknown order, non-offline rail, demo-mode refusal, and a 24-way
+concurrent burst asserting exactly one success) and the E2E
+`e2e/manual-payment.spec.ts` (the operator completes a pending offline payment
+from `/admin/orders` and the row shows `PAID`).
+
 ---
 
 ## 1. Why this audit exists
