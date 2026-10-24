@@ -33,6 +33,7 @@ import { AdminAiPage } from './pages/AdminAiPage';
 import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
+import { AdminTradePage } from './pages/AdminTradePage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
@@ -124,6 +125,7 @@ export default function App() {
       <Route path="/admin/reports" element={<RequireAuth><AdminOnly><AdminReportsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/users" element={<RequireAuth><AdminOnly><AdminUsersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/products" element={<RequireAuth><AdminOnly><AdminProductsPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/trade" element={<RequireAuth><AdminOnly><AdminTradePage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ledger" element={<RequireAuth><AdminOnly><AdminLedgerPage /></AdminOnly></RequireAuth>} />

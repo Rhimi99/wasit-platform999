@@ -21,6 +21,7 @@ import type {
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
   PrivacyConsentState,
+  AdminTradeRow, AdminTradeListResponse, TradeKind,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -437,6 +438,22 @@ export const api = {
   },
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
+  },
+  async adminTradeList(kind: TradeKind, params: { q?: string; verified?: boolean; isActive?: boolean; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.verified !== undefined) qs.set('verified', String(params.verified));
+    if (params.isActive !== undefined) qs.set('isActive', String(params.isActive));
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<AdminTradeListResponse>(`/api/admin/trade/${kind}${suffix}`);
+  },
+  async adminTradeUpdate(kind: TradeKind, id: string, patch: { verified?: boolean; isActive?: boolean }) {
+    return request<{ id: string; verified: boolean; isActive: boolean }>(`/api/admin/trade/${kind}/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
   },
 
   // ---- Phase 9: Verification ----

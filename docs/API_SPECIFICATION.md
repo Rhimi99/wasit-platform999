@@ -131,6 +131,9 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `GET /ledger` — سجل الحركات
 - `GET /products` — قائمة منتجات
 - `GET /audit-logs` — سجل المراجعة
+- Trade vetting (`/api/admin/trade`) — `ADMIN/SUPER_ADMIN` + صلاحية لكل نوع (`SUPPLIER|MERCHANT|COMPANY` `_LIST`/`_UPDATE`):
+  - `GET /trade/{suppliers,merchants,companies}?q=&verified=&isActive=&page=&pageSize=` — قائمة كيانات البيع (تشمل غير النشطة، بخلاف الدليل العام) مع `kind` موحّد واسم مُطبَّع
+  - `PATCH /trade/{suppliers,merchants,companies}/:id` — `{verified?, isActive?}` (واحد على الأقل؛ 422 خلاف ذلك، 404 لغير الموجود)؛ يُدقَّق `TRADE.VERIFIED|UNVERIFIED|SUSPENDED|REACTIVATED|STATUS_UNCHANGED` مع before/after وينعكس على `directory`/`search`/`sitemap`
 - Policies (`admin:policies`):
   - `GET /policies/dispute` + `PUT /policies/dispute` + `GET /policies/dispute/resolved` — قواعد النزاع العامة/لكل دولة
   - `GET /policies/retention` + `PUT /policies/retention` + `GET /policies/retention/resolved` — قواعد الاحتفاظ بالبيانات (`PRIVACY/DATA_RETENTION`): `defaultRetentionDays`, `legalHoldFinanciallyRequired`, `preserves`. التجاهز لكل دولة؛ غياب صف الدولة يُسجَّل `DECISION_REQUIRED` ويُحلّ عند الإضافة. كل تعديل Audit (who/what/old/new/when/reason) ويرفع `version`.

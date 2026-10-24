@@ -30,6 +30,7 @@ import { adminAiRoutes } from './modules/admin/ai-routes.js';
 import { adminAnalyticsRoutes } from './modules/admin/analytics-routes.js';
 import { adminPolicyRoutes } from './modules/admin/policy-routes.js';
 import { adminCountryRoutes } from './modules/admin/country-routes.js';
+import { adminTradeRoutes } from './modules/admin/trade-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import { aiRoutes } from './modules/ai/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
@@ -115,6 +116,7 @@ export function createApp(): Hono {
   app.route('/api/admin/privacy', adminPrivacyRoutes);
   app.route('/api/admin/policies', adminPolicyRoutes);
   app.route('/api/admin/countries', adminCountryRoutes);
+  app.route('/api/admin/trade', adminTradeRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);

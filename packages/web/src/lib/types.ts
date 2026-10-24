@@ -1350,3 +1350,30 @@ export interface PrivacyConsentState {
     deviceTracking: boolean;
   } | null;
 }
+
+// ---- Admin trade desk (server: modules/admin/trade-routes) ----
+export type TradeKind = 'suppliers' | 'merchants' | 'companies';
+
+/**
+ * One seller entity on the admin vetting desk. Unlike the public directory rows,
+ * `name` is normalised server-side across the three tables (companyName /
+ * storeName / legalName) and inactive entities are included so they can be
+ * reactivated.
+ */
+export interface AdminTradeRow {
+  id: string;
+  kind: TradeKind;
+  name: string;
+  slug: string;
+  userId: string;
+  countryId: string | null;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminTradeListResponse {
+  items: AdminTradeRow[];
+  pagination: PaginationInfo;
+}

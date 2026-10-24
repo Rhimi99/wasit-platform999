@@ -107,6 +107,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/reports', key: 'admin.reports', icon: '📄' },
   { to: '/admin/users', key: 'admin.users', icon: '👥' },
   { to: '/admin/products', key: 'admin.products', icon: '📦' },
+  { to: '/admin/trade', key: 'admin.trade', icon: '🏷️' },
   { to: '/admin/orders', key: 'admin.orders', icon: '🧾' },
   { to: '/admin/transactions', key: 'admin.transactions', icon: '💳' },
   { to: '/admin/ledger', key: 'admin.ledger', icon: '📒' },
