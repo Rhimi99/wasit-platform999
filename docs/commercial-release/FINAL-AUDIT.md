@@ -33,15 +33,18 @@
 The 8 E2E skips are conditional on `DEMO_AUTO_LOGIN`; each skipped branch has a
 working counterpart that runs. They are not failures.
 
-### Known non-blocker — Admin Trust empty state
+### Admin Trust empty state — resolved
 
-When the Trust table is empty, the page shows a message instructing the operator
-to recompute scores, but the recompute button is not rendered, so the instruction
-cannot be followed from that screen. This is a real UX/functional gap. It was
-**not** fixed in this session because it falls outside the scope of the current
-final audit, and it does not block any commercial requirement: the self-service
-recompute path (merchant `/dashboard/trust`) and the admin console
-`/admin/trust` both work on non-empty data, as the admin smoke suite proves.
+When the Trust table is empty, the desk used to show a message instructing the
+operator to recompute scores, but the recompute button was only rendered inside
+existing rows, so the instruction could not be followed from that screen. The
+empty state now renders a user picker and a recompute control that call the same
+`POST /api/admin/trust/:userId/recompute` endpoint (permission `TRUST_READ_ALL`)
+as a row action, so the operator can create the first score without leaving the
+desk. Covered by the E2E test "trust desk creates the first score from an empty
+table (picker path)" in `e2e/functional-audit.spec.ts`, which empties the table,
+drives the picker through the UI, and confirms the new snapshot is real server
+state (and restores the table afterwards).
 
 ---
 
