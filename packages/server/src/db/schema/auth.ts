@@ -37,7 +37,20 @@ export const users = pgTable(
     emailVerified: boolean('email_verified').notNull().default(false),
     phoneVerified: boolean('phone_verified').notNull().default(false),
     isActive: boolean('is_active').notNull().default(true),
+    /**
+     * Permanent administrative/legal lock (set by anonymisation and staff tooling).
+     * Distinct from the temporary brute-force lock below: this one has no expiry
+     * and is never written by the login flow.
+     */
     isLocked: boolean('is_locked').notNull().default(false),
+    /**
+     * Temporary brute-force lockout. `failedLoginAttempts` is the current streak
+     * of wrong-password attempts, and `lockedUntil` is when the lock lapses (NULL
+     * when not locked). Kept separate from `isLocked` so a temporary lock can
+     * expire on its own without ever clearing a permanent one.
+     */
+    failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
     locale: varchar('locale', { length: 10 }).notNull().default('ar'),
     mfaEnabled: boolean('mfa_enabled').notNull().default(false),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),

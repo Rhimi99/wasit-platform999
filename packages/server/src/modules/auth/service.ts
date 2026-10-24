@@ -402,6 +402,10 @@ export async function loginUser(
   }
 
   const user = row[0];
+  // Permanent administrative/legal lock: no expiry, never cleared by a login.
+  // Only the disabled/locked account states get their own message; the temporary
+  // brute-force lock below deliberately does not, so it cannot be used to probe
+  // whether an address exists.
   if (user.isLocked) {
     throw ApiError.forbidden('Account locked. Please reset your password or contact support.');
   }
@@ -409,9 +413,54 @@ export async function loginUser(
     throw ApiError.forbidden('Account disabled');
   }
 
+  // Temporary brute-force lock: refuse before the password is even checked, so a
+  // correct password cannot be used to ride out an active lock. Reads the live
+  // row each call, so an expired lock (locked_until in the past) simply falls
+  // through and the attempt is evaluated normally.
+  if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+    await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+      action: 'AUTH.LOGIN_BLOCKED_LOCKED',
+      entityType: 'USER',
+      entityId: user.id,
+    });
+    throw ApiError.unauthorized('Invalid credentials');
+  }
+
   const valid = await verifyPassword(input.password, user.passwordHash);
   if (!valid) {
+    // Record the failure with one atomic UPDATE that also raises the lock at the
+    // threshold. Doing the increment and the lock decision in the database — not
+    // as a read-then-write in application code — is what keeps concurrent wrong
+    // passwords from slipping past the cap: each row lock serialises the streak.
+    const [after] = await db
+      .update(users)
+      .set({
+        failedLoginAttempts: sql`${users.failedLoginAttempts} + 1`,
+        lockedUntil: sql`CASE WHEN ${users.failedLoginAttempts} + 1 >= ${env.MAX_LOGIN_ATTEMPTS}
+                             THEN ${new Date(Date.now() + env.LOCKOUT_MINUTES * 60_000)}
+                             ELSE ${users.lockedUntil} END`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id))
+      .returning({ failedLoginAttempts: users.failedLoginAttempts, lockedUntil: users.lockedUntil });
+
+    const justLocked = Boolean(after?.lockedUntil && after.lockedUntil.getTime() > Date.now());
+    await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+      action: justLocked ? 'AUTH.LOGIN_LOCKED' : 'AUTH.LOGIN_FAILED',
+      entityType: 'USER',
+      entityId: user.id,
+      metadata: { failedLoginAttempts: after?.failedLoginAttempts ?? null },
+    });
     throw ApiError.unauthorized('Invalid credentials');
+  }
+
+  // Correct password: clear the brute-force streak (and any lock that has already
+  // lapsed). A still-active lock was refused above, so this never releases one.
+  if (user.failedLoginAttempts > 0 || user.lockedUntil) {
+    await db
+      .update(users)
+      .set({ failedLoginAttempts: 0, lockedUntil: null })
+      .where(eq(users.id, user.id));
   }
 
   if (!user.emailVerified && !ctx.allowUnverifiedEmail) {
