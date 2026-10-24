@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import { randomUUID } from 'node:crypto';
 import { db } from '../src/db/client.js';
@@ -6,8 +6,9 @@ import { agentTasks } from '../src/db/schema/agents.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import argon2 from 'argon2';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { aiBudgets, aiModels } from '../src/db/schema/ai.js';
+import { setAgentStatus, syncAgentRegistry } from '../src/modules/ai/runner.js';
 
 /**
  * Admin AI governance — contract + RBAC for the surfaces the new `/admin/ai`
@@ -67,6 +68,13 @@ async function createStaffUser(roleName: 'ADMIN' | 'SUPER_ADMIN' | 'MERCHANT' | 
   expect(login.status).toBe(200);
   return { client, id, email };
 }
+
+/** Task ids created by the on-demand run suite, removed after the file finishes. */
+const runSuiteTaskIds: string[] = [];
+
+afterAll(async () => {
+  if (runSuiteTaskIds.length) await db.delete(agentTasks).where(inArray(agentTasks.id, runSuiteTaskIds));
+});
 
 describe('Admin AI governance desk (contract + RBAC)', () => {
   it('rejects unauthenticated access to every admin AI surface', async () => {
@@ -353,5 +361,140 @@ describe('Admin AI governance desk (contract + RBAC)', () => {
     expect(again.status).toBe(409);
 
     await db.delete(agentTasks).where(eq(agentTasks.id, taskId));
+  });
+});
+
+/**
+ * On-demand execution of an approved task (`POST /api/ai/tasks/:id/run`).
+ *
+ * Approval records the decision only; this route is the explicit trigger an
+ * `AI_MANAGE` holder uses to execute one approved task without enabling the
+ * global scheduler. These tests pin the authorisation, the state guard, the
+ * single-flight claim (repeat + concurrent), the audit trail, and that a blocked
+ * agent is refused exactly as on the scheduled path.
+ */
+describe('On-demand run of an approved agent task', () => {
+  /** Creates a gated sales-agent task and returns its id (in awaiting_approval). */
+  async function createGatedTask(client: ReturnType<typeof makeClient>): Promise<string> {
+    const created = await client.req('/api/ai/agents/sales-agent/tasks', {
+      method: 'POST',
+      body: { input: {} },
+    });
+    expect(created.status).toBe(201);
+    const id = created.data.data.id as string;
+    runSuiteTaskIds.push(id);
+    return id;
+  }
+
+  it('rejects an unauthenticated run (401)', async () => {
+    const c = makeClient();
+    expect((await c.req('/api/ai/tasks/does-not-matter/run', { method: 'POST' })).status).toBe(401);
+  });
+
+  it('forbids a MERCHANT from running a task (403) — AI_MANAGE is admin-only', async () => {
+    const merchant = await createStaffUser('MERCHANT');
+    const taskId = await createGatedTask(merchant.client);
+    expect((await merchant.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' })).status).toBe(403);
+  });
+
+  it('refuses to run a task that is not yet approved (409) and never executes it', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const taskId = await createGatedTask(admin.client);
+
+    const res = await admin.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' });
+    expect(res.status).toBe(409);
+
+    // Still awaiting approval, with no result written.
+    const after = await admin.client.req(`/api/ai/tasks/${taskId}`);
+    expect(after.data.data.status).toBe('awaiting_approval');
+    expect(after.data.data.result).toBeNull();
+  });
+
+  it('approves then runs a gated task to completion, and records both audit entries', async () => {
+    const requester = await createStaffUser('ADMIN');
+    const operator = await createStaffUser('ADMIN');
+    const taskId = await createGatedTask(requester.client);
+
+    const approved = await operator.client.req(`/api/ai/tasks/${taskId}/approve`, {
+      method: 'POST',
+      body: { decision: 'APPROVE' },
+    });
+    expect(approved.status).toBe(200);
+    expect(approved.data.data.status).toBe('approved');
+    // Approval alone must not have executed anything.
+    expect(approved.data.data.result).toBeNull();
+
+    const run = await operator.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' });
+    expect(run.status).toBe(200);
+    expect(run.data.data.status).toBe('succeeded');
+    expect(run.data.data.result).toBeTruthy();
+    expect((run.data.data.result as { readOnly?: boolean }).readOnly).toBe(true);
+
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, taskId), inArray(auditLogs.action, ['AI.AGENT_TASK_RUN_REQUESTED', 'AI.AGENT_TASK_SUCCEEDED'])));
+    const actions = audit.map((a) => a.action).sort();
+    expect(actions).toEqual(['AI.AGENT_TASK_RUN_REQUESTED', 'AI.AGENT_TASK_SUCCEEDED']);
+    expect(audit.find((a) => a.action === 'AI.AGENT_TASK_RUN_REQUESTED')?.actorId).toBe(operator.id);
+  });
+
+  it('rejects a repeat run of an already-terminal task (409) — no double execution', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const taskId = await createGatedTask(admin.client);
+    await admin.client.req(`/api/ai/tasks/${taskId}/approve`, { method: 'POST', body: { decision: 'APPROVE' } });
+
+    const first = await admin.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' });
+    expect(first.status).toBe(200);
+    expect(first.data.data.status).toBe('succeeded');
+
+    const second = await admin.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' });
+    expect(second.status).toBe(409);
+  });
+
+  it('serialises concurrent runs: exactly one 200 and the rest 409, one execution', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const taskId = await createGatedTask(admin.client);
+    await admin.client.req(`/api/ai/tasks/${taskId}/approve`, { method: 'POST', body: { decision: 'APPROVE' } });
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => admin.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' })),
+    );
+    const ok = results.filter((r) => r.status === 200);
+    const conflict = results.filter((r) => r.status === 409);
+    expect(ok.length).toBe(1);
+    expect(conflict.length).toBe(4);
+
+    // Exactly one execution: one run-requested audit entry, one success.
+    const runRequested = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, taskId), eq(auditLogs.action, 'AI.AGENT_TASK_RUN_REQUESTED')));
+    expect(runRequested.length).toBe(1);
+
+    const done = await admin.client.req(`/api/ai/tasks/${taskId}`);
+    expect(done.data.data.status).toBe('succeeded');
+  });
+
+  it('honours the kill switch: a paused agent blocks an approved on-demand run', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const taskId = await createGatedTask(admin.client);
+    await admin.client.req(`/api/ai/tasks/${taskId}/approve`, { method: 'POST', body: { decision: 'APPROVE' } });
+
+    await syncAgentRegistry(db);
+    await setAgentStatus(db, 'sales-agent', 'PAUSED', 'test kill switch', { actorId: 'test' });
+    try {
+      const run = await admin.client.req(`/api/ai/tasks/${taskId}/run`, { method: 'POST' });
+      expect(run.status).toBe(200);
+      expect(run.data.data.status).toBe('blocked');
+
+      const audit = await db
+        .select()
+        .from(auditLogs)
+        .where(and(eq(auditLogs.entityId, taskId), eq(auditLogs.action, 'AI.AGENT_TASK_BLOCKED')));
+      expect(audit.length).toBeGreaterThan(0);
+    } finally {
+      await setAgentStatus(db, 'sales-agent', 'ACTIVE', 'test cleanup', { actorId: 'test' });
+    }
   });
 });

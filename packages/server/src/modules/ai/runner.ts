@@ -158,10 +158,13 @@ async function blockIfAgentStopped(
 ): Promise<ResolvedAgentTask | null> {
   const registry = await getRegistryAgent(db, agentKey);
   if (registry.status !== 'DISABLED' && registry.status !== 'PAUSED') return null;
-  await db
+  const blocked = await db
     .update(agentTasks)
     .set({ status: 'blocked', error: { message: `agent ${registry.status.toLowerCase()}` } as never })
-    .where(eq(agentTasks.id, taskId));
+    .where(runningClaimGuard(taskId))
+    .returning({ id: agentTasks.id });
+  // The watchdog may have already failed the task; then it is not ours to block.
+  if (blocked.length === 0) return getTask(db, taskId);
   await writeAudit(db, audit, {
     action: 'AI.AGENT_TASK_BLOCKED',
     entityType: 'AGENT_TASK',
@@ -403,7 +406,12 @@ async function runSupervisorTask(
   audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
 ): Promise<ResolvedAgentTask> {
   const started = Date.now();
-  await db.update(agentTasks).set({ status: 'running', attempts: sql`${agentTasks.attempts} + 1`, startedAt: new Date() }).where(eq(agentTasks.id, taskId));
+  const held = await db
+    .update(agentTasks)
+    .set({ status: 'running', attempts: sql`${agentTasks.attempts} + 1`, startedAt: new Date() })
+    .where(runningClaimGuard(taskId))
+    .returning({ id: agentTasks.id });
+  if (held.length === 0) return getTask(db, taskId); // claim lost (e.g. reaped)
   try {
     const report = await supervise(db);
     const result = {
@@ -411,10 +419,12 @@ async function runSupervisorTask(
       advice: JSON.stringify({ agentKey: SUPERVISOR_KEY, action: 'supervisor.observe', report, readOnly: true, deterministic: true }),
       readOnly: true,
     };
-    await db
+    const finished = await db
       .update(agentTasks)
       .set({ status: 'succeeded', result: result as never, model: 'deterministic', completedAt: new Date(), latencyMs: Date.now() - started })
-      .where(eq(agentTasks.id, taskId));
+      .where(runningClaimGuard(taskId))
+      .returning({ id: agentTasks.id });
+    if (finished.length === 0) return getTask(db, taskId);
     await writeAudit(db, audit, {
       action: 'AI.SUPERVISOR_OBSERVED',
       entityType: 'AGENT_TASK',
@@ -423,23 +433,89 @@ async function runSupervisorTask(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    await db
+    const finished = await db
       .update(agentTasks)
       .set({ status: 'failed', error: { message } as never, errorAt: new Date(), latencyMs: Date.now() - started })
-      .where(eq(agentTasks.id, taskId));
+      .where(runningClaimGuard(taskId))
+      .returning({ id: agentTasks.id });
+    if (finished.length === 0) return getTask(db, taskId);
     await writeAudit(db, audit, { action: 'AI.SUPERVISOR_FAILED', entityType: 'AGENT_TASK', entityId: taskId, metadata: { error: message } });
   }
   return getTask(db, taskId);
 }
 
 /**
+ * Atomically claims a task for execution by transitioning it to `running`.
+ *
+ * The single conditional UPDATE is the lock: only a caller that observes the
+ * task in one of `from` transitions it, so of any number of concurrent callers
+ * exactly one wins and the rest receive `null`. A task already `running`
+ * (another caller or a scheduler tick holds it) can never be claimed again,
+ * which is what makes execution single-flight across every path — the scheduler
+ * (`executeDueTasks`), the on-demand admin run (`runApprovedTask`) and a direct
+ * `runTask` call all go through here. This replaces the previous blind
+ * `status = 'running'` write, which let a second caller execute a row that had
+ * already been claimed.
+ */
+async function claimTaskForRun(
+  db: DB,
+  taskId: string,
+  from: AgentTaskStatus[],
+): Promise<boolean> {
+  const claimed = await db
+    .update(agentTasks)
+    .set({ status: 'running', startedAt: new Date() })
+    .where(and(eq(agentTasks.id, taskId), inArray(agentTasks.status, from)))
+    .returning({ id: agentTasks.id });
+  return claimed.length > 0;
+}
+
+/**
+ * WHERE guard for every write that finalises a run: it matches only the row this
+ * caller still owns (`running`). The watchdog (`reapStaleTasks`) may fail a task
+ * once its execution exceeds the timeout, so a late write from the original
+ * (still in-flight) runner would otherwise resurrect a terminal task and record a
+ * second, contradictory outcome. A guarded update that matches zero rows means the
+ * claim was lost — the caller must then skip its audit entry and leave the
+ * watchdog's terminal state in place.
+ */
+function runningClaimGuard(taskId: string) {
+  return and(eq(agentTasks.id, taskId), eq(agentTasks.status, 'running'));
+}
+
+/**
  * Executes one task with timeout + retry/backoff and full audit.
  *
- * A task already terminal is a no-op (idempotent replay). A failure below the
- * attempt ceiling is rescheduled with exponential backoff rather than looping
- * immediately, and the loop guard (kill switch) is checked before every run.
+ * Single-flight: the task is claimed before any work starts, so a task that is
+ * terminal or already `running` is a no-op (idempotent replay) and never runs a
+ * second time — whether the second caller is the scheduler, the on-demand admin
+ * route, or a direct call. A failure below the attempt ceiling is rescheduled
+ * with exponential backoff rather than looping immediately, and the loop guard
+ * (kill switch) is checked before every run.
  */
 export async function runTask(
+  db: DB,
+  taskId: string,
+  audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  opts: { timeoutMs?: number } = {},
+): Promise<ResolvedAgentTask> {
+  const current = await getTask(db, taskId);
+  if (TERMINAL.includes(current.status) || current.status === 'running') return current;
+
+  // Only a `queued` (auto-runnable) or `approved` (human-gated, cleared) task may
+  // start. `awaiting_approval` is deliberately absent: approval must never be
+  // bypassed by calling the runner directly.
+  const claimed = await claimTaskForRun(db, taskId, ['queued', 'approved']);
+  if (!claimed) return getTask(db, taskId);
+  return executeClaimedTask(db, taskId, audit, opts);
+}
+
+/**
+ * Runs a task whose `running` claim this caller already holds. Policy (permission
+ * re-check, kill switch, supervisor boundary, refusal handling, retry) lives here
+ * and is unchanged; only the claim moved out to {@link claimTaskForRun}.
+ */
+async function executeClaimedTask(
   db: DB,
   taskId: string,
   audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
@@ -479,10 +555,12 @@ export async function runTask(
     await assertAgentScope(db, requesterRoles, agent);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'permission denied';
-    await db
+    const blocked = await db
       .update(agentTasks)
       .set({ status: 'blocked', error: { message: `permission revoked: ${message}` } as never, errorAt: new Date() })
-      .where(eq(agentTasks.id, taskId));
+      .where(runningClaimGuard(taskId))
+      .returning({ id: agentTasks.id });
+    if (blocked.length === 0) return getTask(db, taskId);
     await writeAudit(db, audit, {
       action: 'AI.AGENT_TASK_BLOCKED',
       entityType: 'AGENT_TASK',
@@ -501,10 +579,12 @@ export async function runTask(
   try {
     const unhealthy = await unhealthyAgentKeys(db, DEFAULT_SUPERVISOR_LIMITS);
     if (unhealthy.has(agent.key)) {
-      await db
+      const blocked = await db
         .update(agentTasks)
         .set({ status: 'blocked', error: { message: `supervisor: agent ${agent.key} flagged unhealthy (failure rate over limit)` } as never, errorAt: new Date() })
-        .where(eq(agentTasks.id, taskId));
+        .where(runningClaimGuard(taskId))
+        .returning({ id: agentTasks.id });
+      if (blocked.length === 0) return getTask(db, taskId);
       await writeAudit(db, audit, {
         action: 'AI.SUPERVISOR_BLOCKED',
         entityType: 'AGENT_TASK',
@@ -519,10 +599,15 @@ export async function runTask(
 
   const attempts = current.attempts + 1;
   const started = Date.now();
-  await db
+  // The `running` status is already held by this caller's claim; only record the
+  // attempt and the real execution start time here. Guarded so a run the watchdog
+  // has already failed cannot have its attempt count rewritten.
+  const recording = await db
     .update(agentTasks)
-    .set({ status: 'running', attempts, startedAt: new Date() })
-    .where(eq(agentTasks.id, taskId));
+    .set({ attempts, startedAt: new Date() })
+    .where(runningClaimGuard(taskId))
+    .returning({ id: agentTasks.id });
+  if (recording.length === 0) return getTask(db, taskId);
 
   const timeoutMs = opts.timeoutMs ?? 30_000;
   try {
@@ -539,7 +624,7 @@ export async function runTask(
       // schedule look healthy and hide the failure from operators, so it is
       // persisted as a failure with a clear reason and raised as a warning.
       const message = refusal.message || `agent refused to run (${refusal.code})`;
-      await db
+      const recorded = await db
         .update(agentTasks)
         .set({
           status: 'failed',
@@ -552,7 +637,10 @@ export async function runTask(
           completedAt: new Date(),
           latencyMs,
         })
-        .where(eq(agentTasks.id, taskId));
+        .where(runningClaimGuard(taskId))
+        .returning({ id: agentTasks.id });
+      // The watchdog failed the task first: keep its terminal state, skip the audit.
+      if (recorded.length === 0) return getTask(db, taskId);
       await writeAudit(db, audit, {
         action: 'AI.AGENT_TASK_REFUSED',
         entityType: 'AGENT_TASK',
@@ -568,7 +656,7 @@ export async function runTask(
       });
       return getTask(db, taskId);
     }
-    await db
+    const recorded = await db
       .update(agentTasks)
       .set({
         status: 'succeeded',
@@ -579,7 +667,10 @@ export async function runTask(
         completedAt: new Date(),
         latencyMs,
       })
-      .where(eq(agentTasks.id, taskId));
+      .where(runningClaimGuard(taskId))
+      .returning({ id: agentTasks.id });
+    // The watchdog failed the task first: keep its terminal state, skip the audit.
+    if (recorded.length === 0) return getTask(db, taskId);
     await writeAudit(db, audit, {
       action: 'AI.AGENT_TASK_SUCCEEDED',
       entityType: 'AGENT_TASK',
@@ -591,7 +682,7 @@ export async function runTask(
     const message = err instanceof Error ? err.message : 'Unknown error';
     const willRetry = attempts < current.maxAttempts;
     const backoffMs = Math.min(2 ** attempts * 1000, 60_000);
-    await db
+    const recorded = await db
       .update(agentTasks)
       .set({
         status: willRetry ? 'queued' : 'failed',
@@ -600,7 +691,11 @@ export async function runTask(
         scheduledFor: willRetry ? new Date(Date.now() + backoffMs) : null,
         latencyMs: Date.now() - started,
       })
-      .where(eq(agentTasks.id, taskId));
+      .where(runningClaimGuard(taskId))
+      .returning({ id: agentTasks.id });
+    // The watchdog failed the task first: do not reschedule it or record a
+    // contradictory outcome — the timeout stands.
+    if (recorded.length === 0) return getTask(db, taskId);
     await writeAudit(db, audit, {
       action: willRetry ? 'AI.AGENT_TASK_RETRY_SCHEDULED' : 'AI.AGENT_TASK_FAILED',
       entityType: 'AGENT_TASK',
@@ -665,8 +760,62 @@ export async function decideAgentTask(
 }
 
 /**
- * Runs every due queued task in priority order. Used by the scheduler and the
- * Copilot so periodic agent work happens inside the existing job loop.
+ * Runs a single task that has already been approved, on demand.
+ *
+ * Approval alone never executes a task (see {@link decideAgentTask}); the
+ * scheduler dispatches approved tasks on its interval. This is the explicit,
+ * operator-driven counterpart: an `AI_MANAGE` holder triggers one approved task
+ * without waiting for a scheduler tick or enabling the scheduler globally.
+ *
+ * Only an `approved` task may be run — never `awaiting_approval` (not yet
+ * approved), `queued` (the scheduler's to run), `running` (already claimed), or
+ * a terminal one. The claim reuses {@link claimTaskForRun}, the same atomic
+ * transition the scheduler path uses, so a manual run and a scheduler tick
+ * racing for the same task cannot both execute it: exactly one claims the row
+ * and the other is rejected with a 409.
+ *
+ * Execution itself is delegated to {@link executeClaimedTask} under the claim
+ * already taken here, so the kill switch, the execution-time permission/scope
+ * re-check, the supervisor boundary guard, the retry/backoff policy, and every
+ * `AI.AGENT_TASK_*` audit entry stay in one place — this is a trigger, not a
+ * second executor.
+ */
+export async function runApprovedTask(
+  db: DB,
+  taskId: string,
+  audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+): Promise<ResolvedAgentTask> {
+  const task = await getTask(db, taskId);
+  if (task.status !== 'approved') {
+    throw ApiError.conflict('Task is not approved for execution');
+  }
+
+  // Single-flight claim: the transition out of `approved` is the lock. A second
+  // caller (or a scheduler tick that grabbed the row first) matches zero rows and
+  // is rejected instead of running the task a second time.
+  const claimed = await claimTaskForRun(db, taskId, ['approved']);
+  if (!claimed) {
+    throw ApiError.conflict('Task is already running or no longer approved');
+  }
+
+  await writeAudit(db, audit, {
+    action: 'AI.AGENT_TASK_RUN_REQUESTED',
+    entityType: 'AGENT_TASK',
+    entityId: taskId,
+    metadata: { agentKey: task.agentKey, approvedBy: task.approvedBy },
+  });
+
+  return executeClaimedTask(db, taskId, audit);
+}
+
+/**
+ * Runs every due queued/approved task in priority order. Used by the scheduler
+ * and the Copilot so periodic agent work happens inside the existing job loop.
+ *
+ * Each due task is claimed with the shared {@link claimTaskForRun} transition
+ * before it runs, so a task a concurrent scheduler tick — or an on-demand admin
+ * run — already picked up is skipped instead of executed twice. Only tasks this
+ * call actually claims are counted.
  */
 export async function executeDueTasks(
   db: DB,
@@ -687,7 +836,9 @@ export async function executeDueTasks(
   let ran = 0;
   let failed = 0;
   for (const t of due) {
-    const out = await runTask(db, t.id, audit);
+    const claimed = await claimTaskForRun(db, t.id, ['queued', 'approved']);
+    if (!claimed) continue; // already claimed by a concurrent path
+    const out = await executeClaimedTask(db, t.id, audit);
     ran += 1;
     if (out.status === 'failed') failed += 1;
   }

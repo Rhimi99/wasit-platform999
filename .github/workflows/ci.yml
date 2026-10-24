@@ -57,6 +57,24 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm rebuild argon2
+      # `--ignore-scripts` skips ffmpeg-static's own `install` script, so the
+      # bundled binary is never downloaded and the marketing-video tests fail
+      # ("bundled ffmpeg must be installed for video tests"). Rebuild that ONE
+      # package — it runs only ffmpeg-static's install.js — instead of dropping
+      # `--ignore-scripts` (which would run every dependency's install scripts).
+      - name: Install bundled ffmpeg binary
+        run: npm rebuild ffmpeg-static
+      # `npm test` includes the DB-free self-repair container-isolation tests
+      # (G1/G2/H). They run whenever a Docker daemon is reachable — as it is on
+      # ubuntu-latest — and require the `repair` image to be present, failing with
+      # "Unable to find image 'wasit-repair-sandbox:local' locally" otherwise. The
+      # separate `repair-sandbox` job builds the same image on its OWN runner, so
+      # that image is never visible here; build it in this job to make it
+      # self-sufficient instead of depending on an unordered sibling job.
+      - name: Build repair sandbox image
+        run: docker build --target repair -t wasit-repair-sandbox:local .
+      - name: Assert repair sandbox image exists
+        run: docker image inspect wasit-repair-sandbox:local >/dev/null
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
@@ -165,6 +183,13 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm rebuild argon2
+      # `--ignore-scripts` skips ffmpeg-static's install script; the E2E video
+      # specs (video-studio + the MARKETING VIDEO flow) drive the real
+      # `structural` renderer, so the bundled binary must be present or the
+      # render returns 502 and the studio notice never appears. Rebuild only that
+      # package rather than enabling every dependency's install scripts.
+      - name: Install bundled ffmpeg binary
+        run: npm rebuild ffmpeg-static
       # Prepare the dev database the webServer/globalSetup run against.
       - run: npm run db:migrate
       - run: npm run db:seed

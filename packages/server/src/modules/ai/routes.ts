@@ -15,6 +15,7 @@ import {
   getTask,
   listAgents,
   listMyTasks,
+  runApprovedTask,
 } from './runner.js';
 import { routeEvents, summarizeRun, copilotSpec } from './copilot.js';
 import {
@@ -326,5 +327,24 @@ aiRoutes.post('/tasks/:taskId/reject', requirePermission(PERMISSIONS.AI_MANAGE),
     body.reason ?? null,
     { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
   );
+  return c.json({ success: true, data: result });
+});
+
+/**
+ * Runs one already-approved task on demand, without enabling the global
+ * scheduler or waiting for its interval. Approval (`…/approve`) records the
+ * decision only; this is the explicit execution trigger for an `AI_MANAGE`
+ * holder. The task must be in `approved` state, and the conditional claim in
+ * `runApprovedTask` makes repeated or concurrent runs a 409 rather than a
+ * double execution. Execution reuses the single runner, so the kill switch,
+ * permission re-check and audit trail are identical to a scheduled dispatch.
+ */
+aiRoutes.post('/tasks/:taskId/run', requirePermission(PERMISSIONS.AI_MANAGE), async (c) => {
+  const ctx = getContext(c);
+  const result = await runApprovedTask(ctx.db, c.req.param('taskId')!, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
   return c.json({ success: true, data: result });
 });
