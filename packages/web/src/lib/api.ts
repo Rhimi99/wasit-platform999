@@ -20,6 +20,7 @@ import type {
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
+  PrivacyConsentState,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -1100,6 +1101,22 @@ export const api = {
   },
   async directoryMerchants(params: { q?: string; page?: number; pageSize?: number } = {}) {
     return request<DirectoryListResponse<DirectoryMerchantRow>>(`/api/directory/merchants?${directoryQuery(params)}`);
+  },
+
+  // ---- Own-data privacy consent (server enforces authentication) ----
+  /**
+   * Reads the caller's consent state. Both this and `setConsent` require a
+   * session: the server has no anonymous consent endpoint, so the cookie banner
+   * only persists a decision for a signed-in account.
+   */
+  async privacyMe() {
+    return request<PrivacyConsentState>('/api/privacy/me');
+  },
+  async setConsent(consentType: string, granted: boolean) {
+    return request<{ success: boolean }>('/api/privacy/consents', {
+      method: 'PUT',
+      body: JSON.stringify({ consentType, granted }),
+    });
   },
 };
 

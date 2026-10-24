@@ -1321,3 +1321,32 @@ export interface DirectoryListResponse<T> {
   items: T[];
   pagination: PaginationInfo;
 }
+
+// ---- Own-data privacy consent (server: modules/privacy) ----
+export interface ConsentItem {
+  type: string;
+  label: string;
+  granted: boolean;
+}
+
+export interface ConsentDefault {
+  type: string;
+  label: string;
+  grantedByDefault: boolean;
+}
+
+/**
+ * Shape of `GET /api/privacy/me`. `consents` is normalised server-side: every
+ * `CONSENT_TYPES` entry is present, so a missing row and an explicit `false`
+ * both surface as `granted: false` — the client cannot tell "never decided"
+ * from "declined". `defaults` marks the types the server treats as baseline.
+ */
+export interface PrivacyConsentState {
+  consents: ConsentItem[];
+  defaults: ConsentDefault[];
+  settings: {
+    require2FA: boolean;
+    loginNotifications: boolean;
+    deviceTracking: boolean;
+  } | null;
+}

@@ -3,6 +3,7 @@ import { api, apiCall, ApiClientError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
+import { CookieConsentSettingsCard } from '@/components/CookieConsent';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 
 export function DashboardProfilePage() {
@@ -274,6 +275,9 @@ export function DashboardSettingsPage() {
       <Card>
         <p className="text-sm text-slate-600">{t('settings.description')}</p>
       </Card>
+      <div className="mt-4">
+        <CookieConsentSettingsCard />
+      </div>
     </AppLayout>
   );
 }

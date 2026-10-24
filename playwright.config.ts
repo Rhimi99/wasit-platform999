@@ -28,6 +28,10 @@ const SERVER_ENV = {
   // The privacy-deletion limiter keys on IP before auth (production default
   // 2/5min); the privacy desk spec files several real deletion requests.
   RATE_LIMIT_DELETION_MAX: '500',
+  // The consent limiter counts one request per consent type written (production
+  // default 20/min per subject); the consent spec drives several decisions from
+  // one account, each writing multiple types.
+  RATE_LIMIT_CONSENTS_MAX: '500',
   // The password-recovery spec and global-setup repair both call
   // POST /forgot-password; the production default (5/5min) is exhausted
   // across repeated local runs, which would leave a demo account on a

@@ -46,6 +46,49 @@ table (picker path)" in `e2e/functional-audit.spec.ts`, which empties the table,
 drives the picker through the UI, and confirms the new snapshot is real server
 state (and restores the table afterwards).
 
+### Cookie/GDPR consent from the UI — resolved
+
+The consent API existed (`PUT /api/privacy/consents`, `GET /api/privacy/me`) but
+nothing in the web app ever called it, so no user could record a cookie/GDPR
+decision. The platform now ships a first-visit consent notice plus a permanent
+consent card on `/dashboard/settings`.
+
+Two server-side facts shape the design, and the implementation is honest about
+both rather than papering over them:
+
+- **There is no anonymous consent endpoint.** Both consent routes sit behind
+  `requireAuth`; an anonymous caller gets `401` (asserted in
+  `security-privacy.test.ts`). A signed-out visitor therefore has nowhere to
+  record a decision, so the notice is scoped to a signed-in account. That is not
+  a practical gap: the only cookie the platform sets is the essential session
+  cookie (`wasit_session`, issued on login) and the SPA ships no tracker, so
+  nothing non-essential runs before a decision can be taken.
+- **The read model normalises every type.** `getConsentState` returns
+  `granted: current.get(type) ?? false` for all `CONSENT_TYPES`, so "never
+  decided" and "declined" are indistinguishable through the API. The notice
+  therefore keeps its own device-local marker (`wasit.cookieConsent.decided`) to
+  know it has already run; the decision itself always lives in the server's
+  consent rows.
+
+Because of that normalisation, the UI persists **only the optional types** — the
+actual cookie/GDPR decision. The baseline types (`TERMS`, `PRIVACY_POLICY`,
+`DATA_PROCESSING`) are shown as always-required, because the application's
+`grantedByDefault` policy treats them as the legal basis for using the platform,
+not as a cookie choice; the UI does not write them as granted consents. Their
+read-back state therefore follows the application policy rather than a stored
+consent row, and the notice does not claim to have recorded them. This closes the
+UI capture gap only; it is not a claim of full GDPR compliance, and LC-01 (legal
+policy text) remains open.
+
+The controls offer accept-all, reject-non-essential, and a granular per-type
+selection, each written through the real endpoint. A failed write is never
+reported as success: the notice stays open with the server's own reason. Covered
+by two new server tests (anonymous refusal on both endpoints; normalisation and
+single-type flip), the E2E `e2e/cookie-consent.spec.ts` (first-visit appearance
+and absence when anonymous, accept-all, reject, granular save, and the Settings
+card — each verified against `GET /api/privacy/me`), and recorded in
+`COMMERCIAL-RELEASE-MANIFEST.md`.
+
 ### Manual/offline payment completion — resolved
 
 The `manual` (offline desk) rail has no signed provider callback, so nothing ever

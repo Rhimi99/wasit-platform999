@@ -397,6 +397,50 @@ describe('PHASE 17 — Privacy (Consent + History + Export + Deletion)', () => {
     expect(events[1].fromGranted).toBe(true);
   });
 
+  it('rejects an anonymous caller on both consent endpoints (no anonymous consent exists)', async () => {
+    // The banner must not promise a decision it cannot record: the platform has
+    // no anonymous consent endpoint, so a signed-out visitor is refused outright
+    // rather than silently accepted.
+    const anon = makeClient();
+    const read = await anon.req('/api/privacy/me');
+    expect(read.status).toBe(401);
+
+    const write = await anon.req('/api/privacy/consents', {
+      method: 'PUT',
+      body: { consentType: 'ANALYTICS', granted: true },
+    });
+    expect(write.status).toBe(401);
+  });
+
+  it('normalises every consent type so an undecided type reads as not granted', async () => {
+    const user = await createUser('privacy-normalise');
+    const client = makeClient();
+    await client.req('/api/auth/login', {
+      method: 'POST',
+      body: { email: user.email, password: user.password, allowUnverifiedEmail: true },
+    });
+
+    // Nothing recorded yet: the read model still lists every known type, all false.
+    const before = await client.req('/api/privacy/me');
+    expect(before.status).toBe(200);
+    const state = before.data.data as { consents: Array<{ type: string; granted: boolean }> };
+    expect(state.consents.length).toBeGreaterThan(0);
+    expect(state.consents.every((c) => c.granted === false)).toBe(true);
+
+    // Granting one optional type flips only that one.
+    const grant = await client.req('/api/privacy/consents', {
+      method: 'PUT',
+      body: { consentType: 'ANALYTICS', granted: true },
+    });
+    expect(grant.status).toBe(200);
+
+    const after = await client.req('/api/privacy/me');
+    const stateAfter = after.data.data as { consents: Array<{ type: string; granted: boolean }> };
+    const analytics = stateAfter.consents.find((c) => c.type === 'ANALYTICS');
+    expect(analytics?.granted).toBe(true);
+    expect(stateAfter.consents.filter((c) => c.granted).length).toBe(1);
+  });
+
   it('builds a full ownership-bound user export without secrets', async () => {
     const user = await createUser('privacy-export');
     await setConsent(

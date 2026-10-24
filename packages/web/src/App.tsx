@@ -36,6 +36,7 @@ import { AdminAdsPage } from './pages/AdminAdsPage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
+import { CookieConsentBanner } from './components/CookieConsent';
 import { DemoCustomerEntryPage } from './pages/DemoCustomerEntryPage';
 import { DemoOwnerAuditPage } from './pages/DemoOwnerAuditPage';
 
@@ -140,6 +141,7 @@ export default function App() {
 
       <Route path="*" element={<NotFoundPage />} />
       </Routes>
+      <CookieConsentBanner />
     </>
   );
 }

@@ -51,6 +51,13 @@ const listDeletionQuery = z.object({
 // only. The production default is unchanged.
 const deletionRateMax = Number(process.env.RATE_LIMIT_DELETION_MAX ?? 2);
 
+// Consent is written one type per call, so a single "accept all" from the UI
+// costs several requests against the same authenticated subject. The E2E consent
+// spec drives multiple decisions from one account and would trip the production
+// default (20/min), so — like the other limits — it is overridable for the E2E
+// process only. The production default is unchanged.
+const consentRateMax = Number(process.env.RATE_LIMIT_CONSENTS_MAX ?? 20);
+
 // GET /api/privacy/me — current consent state + privacy preferences
 privacyRoutes.get('/me', requireAuth, async (c) => {
   const ctx = getContext(c);
@@ -68,7 +75,7 @@ privacyRoutes.get('/consents', requireAuth, async (c) => {
 // PUT /api/privacy/consents — upsert consent (grant/revoke)
 privacyRoutes.put(
   '/consents',
-  rateLimit({ windowSeconds: 60, max: 20, keyPrefix: 'privacy-consents' }),
+  rateLimit({ windowSeconds: 60, max: consentRateMax, keyPrefix: 'privacy-consents' }),
   requireAuth,
   validateBody(consentSchema),
   async (c) => {

@@ -325,3 +325,31 @@ harness is a demo provider, so this is a demonstration path, not a production
 payment integration). It records the **payment only** — never a settlement.
 Covered by `packages/server/tests/manual-payment-completion.test.ts` and the E2E
 `e2e/manual-payment.spec.ts`; recorded in `FINAL-AUDIT.md`.
+
+---
+
+## 13. Cookie/GDPR consent from the UI — resolved
+
+`PUT /api/privacy/consents` and `GET /api/privacy/me` existed, but the web app
+never called them, so a user could not record a cookie/GDPR decision. The app now
+renders a first-visit consent notice (`CookieConsentBanner`) and a permanent card
+on `/dashboard/settings` (`CookieConsentSettingsCard`), both writing through the
+real endpoint.
+
+The notice is scoped to a signed-in account because the platform exposes no
+anonymous consent endpoint (both routes are behind `requireAuth`). That is not a
+practical gap: the only cookie set is the essential session cookie
+(`wasit_session`) and the SPA ships no tracker. The read model normalises every
+`CONSENT_TYPES` entry to `granted: current.get(type) ?? false`, so "undecided"
+and "declined" are indistinguishable through the API; the notice therefore keeps
+its own device-local marker (`wasit.cookieConsent.decided`) to know it has run,
+while the decision itself lives in the server's consent rows. The UI persists
+only the optional types — the actual cookie/GDPR decision. The baseline types
+(`TERMS`, `PRIVACY_POLICY`, `DATA_PROCESSING`) are shown as always-required under
+the application's `grantedByDefault` policy and are not written as granted
+consents; their read-back state follows that policy, not a stored row. Controls:
+accept-all, reject-non-essential, granular per-type save; a failed write surfaces
+the server's reason rather than a false success. This closes the UI capture gap
+only — it is not a claim of full GDPR compliance, and LC-01 (legal policy text)
+remains open. Covered by two new server tests in `security-privacy.test.ts` and
+the E2E `e2e/cookie-consent.spec.ts`; recorded in `FINAL-AUDIT.md`.

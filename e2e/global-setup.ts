@@ -2,8 +2,10 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { request } from '@playwright/test';
+import { COOKIE_CONSENT_DECIDED_KEY } from './helpers';
 
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
+const WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
 const PASSWORD = 'Passw0rd!2026';
 
 const ROLES = {
@@ -61,5 +63,19 @@ export default async function globalSetup(): Promise<void> {
     }
     await ctx.storageState({ path: path.join(authDir, `${role}.json`) });
     await ctx.dispose();
+
+    // The shared role sessions are returning accounts, so record the
+    // cookie-consent notice as already answered in their stored localStorage.
+    // Specs that build a context from `storageFor(role)` directly bypass the
+    // `suppressCookieConsent` fixture, so the marker has to live in the state
+    // file itself; without it the bottom-fixed notice would cover page furniture
+    // in those specs. First-visit behaviour is asserted by cookie-consent.spec.ts.
+    const statePath = path.join(authDir, `${role}.json`);
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    state.origins = [
+      ...(state.origins ?? []).filter((o: { origin: string }) => o.origin !== WEB_URL),
+      { origin: WEB_URL, localStorage: [{ name: COOKIE_CONSENT_DECIDED_KEY, value: '1' }] },
+    ];
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
   }
 }

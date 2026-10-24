@@ -33,6 +33,13 @@ export const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_TEST_ACCOUNT_PASSWORD
 
 export type DemoRole = keyof typeof DEMO_USERS;
 
+/**
+ * localStorage marker the SPA reads to decide whether to show the cookie-consent
+ * notice. Kept in sync with `DECIDED_KEY` in
+ * `packages/web/src/components/CookieConsent.tsx`.
+ */
+export const COOKIE_CONSENT_DECIDED_KEY = 'wasit.cookieConsent.decided';
+
 /** Path to the storage state created by global-setup (real API session per role). */
 export function storageFor(role: DemoRole): string {
   return path.resolve(process.cwd(), 'e2e/.auth', `${role}.json`);
@@ -49,7 +56,30 @@ export async function loginViaUi(page: Page, email: string, password = DEMO_PASS
   await page.locator('form button[type="submit"]').click();
 }
 
-export const test = base;
+export const test = base.extend<{ suppressCookieConsent: boolean }>({
+  /**
+   * Whether the first-visit cookie-consent notice is pre-answered for this test.
+   *
+   * Defaults to true: the suite's role sessions and API logins are returning
+   * accounts, and a bottom-fixed notice would otherwise cover page furniture and
+   * make unrelated specs fail for the wrong reason. The notice's own first-visit
+   * behaviour is asserted by `cookie-consent.spec.ts`, which drives the real UI
+   * from a fresh context and opts out here.
+   */
+  suppressCookieConsent: [true, { option: true }],
+  context: async ({ context, suppressCookieConsent }, use) => {
+    if (suppressCookieConsent) {
+      await context.addInitScript((key: string) => {
+        try {
+          window.localStorage.setItem(key, '1');
+        } catch {
+          // Storage blocked: the notice stays up, which is the honest fallback.
+        }
+      }, COOKIE_CONSENT_DECIDED_KEY);
+    }
+    await use(context);
+  },
+});
 export { expect };
 
 /**

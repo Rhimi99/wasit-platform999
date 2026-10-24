@@ -54,7 +54,7 @@ AI/Automation · Documentation · Test/Harness
 | PS-06 | Refunds غير مدعومة في ClicToPay | Payment/Settlement | `refund()` يرمي 503 | `lib/payments/clictopay.ts:121-122` («not exposed via the documented REST API») | High | Yes | No |
 | PS-07 | لا Credentials إنتاجية لمزوّد الدفع | Production/Infra | الكل يمرّ عبر `PaymentProviderPort`؛ لا مفاتيح حيّة | `.env.demo`: `PAYMENT_PROVIDER=manual`؛ `docs/PROJECT_BASELINE.md` §6 بند 3 | Critical | Yes | Yes |
 | LC-01 | لا ToS / Privacy Policy / Cookie Policy (محتوى أو صفحات) | Security/Compliance | لا Route ولا نصّ قانوني في المستودع | `grep web "terms\|privacy policy\|cookie"` = ∅ · لا ملفات قانونية في `docs/` | Critical | Yes | Yes |
-| LC-02 | لا التقاط موافقة الكوكيز/GDPR من الواجهة (API موجود) | Security/Compliance | `PUT /api/privacy/consents` موجود، لكن لا banner/UI | `modules/privacy/routes.ts:70` مقابل `grep web "cookie"` = ∅ | High | Yes | Yes |
+| LC-02 | التقاط موافقة الكوكيز/GDPR من الواجهة (API موجود) — **مُغلق تقنيًا** | Security/Compliance | `PUT /api/privacy/consents` + `GET /api/privacy/me` خلف `requireAuth`؛ الواجهة تعرض banner للزيارة الأولى + بطاقة إعدادات وتكتب عبر الـendpoint الحقيقي | `packages/web/src/components/CookieConsent.tsx` · `e2e/cookie-consent.spec.ts` · `security-privacy.test.ts` (رفض الزائر المجهول + التطبيع). لا يوجد endpoint موافقة مجهول، والكوكي الوحيد هو جلسة أساسية — موثَّق في `FINAL-AUDIT.md` | High | Yes | Yes |
 | LC-03 | لا سياسة سلع محظورة (محتوى/إنفاذ) | Security/Compliance | لا قائمة ولا فلترة | `grep -rniE "prohibit\|banned\|restricted goods" src` = ∅ | High | Yes | Yes |
 | LC-04 | لا Refund/Dispute Policy ولا Merchant/Buyer Terms (محتوى عام) | Security/Compliance | سياسات النزاع/الاستبقاء موجودة كـ**بيانات داخلية**، لا كنصوص تعاقدية عامة | `admin/policy-routes.ts` (داخلي) مقابل لا صفحات عامة | High | Yes | Yes |
 | LC-05 | لا تكامل KYC/KYB/AML/sanctions — التحقق مراجعة وثائق بشرية | Security/Compliance | حقول `documentType/documentRef` + موافقة أدمن؛ لا مزوّد هوية | `modules/verification/service.ts:76,121` · `seed.ts:320` (requirements) · لا مزوّد | High | Yes | Yes |
@@ -120,7 +120,7 @@ AI/Automation · Documentation · Test/Harness
 - **BU-01 / BU-02 / BU-03 / BU-04 / BU-06** (تجارية): لا عقد مزوّد، لا حساب تسوية، لا مزوّد KYC، لا موردين/مشترين، لا سياسة بلد.
 
 ### 2) PRE-LAUNCH GAPS — تُغلق قبل إطلاق تجاري حقيقي
-- **LC-02** موافقة كوكيز/GDPR من الواجهة.
+- **LC-02** موافقة كوكيز/GDPR من الواجهة — **مُغلق تقنيًا** (banner + بطاقة إعدادات؛ انظر `FINAL-AUDIT.md`). يبقى الاعتماد القانوني لنصوص السياسات (LC-01).
 - **LC-03** سياسة سلع محظورة.
 - **LC-04** Refund/Dispute Policy + Merchant/Buyer Terms.
 - **LC-06** إلزام MFA للـstaff/admin.
