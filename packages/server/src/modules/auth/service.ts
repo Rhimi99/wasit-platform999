@@ -680,30 +680,37 @@ export async function logoutUser(db: DB, token: string): Promise<void> {
 
 export async function verifyEmail(db: DB, token: string): Promise<void> {
   const tokenHash = hashToken(token);
-  const rows = await db
-    .select()
-    .from(emailVerificationTokens)
-    .where(and(eq(emailVerificationTokens.tokenHash, tokenHash), gt(emailVerificationTokens.expiresAt, new Date())))
-    .limit(1);
 
-  if (rows.length === 0) {
-    throw ApiError.unauthorized('Invalid or expired verification token');
-  }
+  await db.transaction(async (tx) => {
+    // Claim the token with one conditional UPDATE. `used_at IS NULL` and the expiry
+    // predicate are part of the statement, so Postgres locks the row and serialises
+    // concurrent callers: exactly one sees a returned row, and a replay — or the
+    // loser of a race — matches nothing and is refused. A separate SELECT followed
+    // by an UPDATE would let two requests both pass the check before either write.
+    // The claim and the confirmation share a transaction, so a later failure rolls
+    // the claim back and leaves the link usable instead of burning it.
+    const claimed = await tx
+      .update(emailVerificationTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(emailVerificationTokens.tokenHash, tokenHash),
+        isNull(emailVerificationTokens.usedAt),
+        gt(emailVerificationTokens.expiresAt, new Date()),
+      ))
+      .returning({ userId: emailVerificationTokens.userId });
 
-  await db
-    .update(users)
-    .set({ emailVerified: true })
-    .where(eq(users.id, rows[0].userId));
+    if (claimed.length === 0) {
+      throw ApiError.unauthorized('Invalid or expired verification token');
+    }
+    const { userId } = claimed[0];
 
-  await db
-    .update(emailVerificationTokens)
-    .set({ usedAt: new Date() })
-    .where(eq(emailVerificationTokens.id, rows[0].id));
+    await tx.update(users).set({ emailVerified: true }).where(eq(users.id, userId));
 
-  await writeAudit(db, { actorId: rows[0].userId }, {
-    action: 'AUTH.EMAIL_VERIFIED',
-    entityType: 'USER',
-    entityId: rows[0].userId,
+    await writeAudit(tx as unknown as DB, { actorId: userId }, {
+      action: 'AUTH.EMAIL_VERIFIED',
+      entityType: 'USER',
+      entityId: userId,
+    });
   });
 }
 
@@ -741,25 +748,43 @@ export async function requestPasswordReset(
 
 export async function resetPassword(db: DB, token: string, newPassword: string): Promise<void> {
   const tokenHash = hashToken(token);
-  const rows = await db
-    .select()
-    .from(passwordResetTokens)
-    .where(and(eq(passwordResetTokens.tokenHash, tokenHash), gt(passwordResetTokens.expiresAt, new Date())))
-    .limit(1);
-  if (rows.length === 0) {
-    throw ApiError.unauthorized('Invalid or expired reset token');
-  }
-  if (newPassword.length < 8) {
-    throw ApiError.validation([{ field: 'password', message: 'Password must be at least 8 characters', code: 'VALIDATION_FAILED' }]);
-  }
-  const passwordHash = await hashPassword(newPassword);
-  await db.update(users).set({ passwordHash }).where(eq(users.id, rows[0].userId));
-  await db.update(passwordResetTokens).set({ usedAt: new Date() }).where(eq(passwordResetTokens.id, rows[0].id));
-  await db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.userId, rows[0].userId));
-  await writeAudit(db, { actorId: rows[0].userId }, {
-    action: 'AUTH.PASSWORD_RESET',
-    entityType: 'USER',
-    entityId: rows[0].userId,
+
+  await db.transaction(async (tx) => {
+    // Atomic single-use claim: `used_at IS NULL` and the expiry check are part of the
+    // UPDATE, so Postgres serialises concurrent callers on the row lock. Exactly one
+    // request returns a row; a replay, an expired token, or the loser of a race
+    // matches nothing and is refused. Doing this before the password write is what
+    // makes the whole flow one-time — a prior SELECT could be interleaved so two
+    // requests both changed the password.
+    const claimed = await tx
+      .update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(passwordResetTokens.tokenHash, tokenHash),
+        isNull(passwordResetTokens.usedAt),
+        gt(passwordResetTokens.expiresAt, new Date()),
+      ))
+      .returning({ userId: passwordResetTokens.userId });
+
+    if (claimed.length === 0) {
+      throw ApiError.unauthorized('Invalid or expired reset token');
+    }
+    const { userId } = claimed[0];
+
+    if (newPassword.length < 8) {
+      // Thrown inside the transaction, so the claim above is rolled back and the
+      // token stays usable — an invalid request must not consume it.
+      throw ApiError.validation([{ field: 'password', message: 'Password must be at least 8 characters', code: 'VALIDATION_FAILED' }]);
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    await tx.update(users).set({ passwordHash }).where(eq(users.id, userId));
+    await tx.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.userId, userId));
+    await writeAudit(tx as unknown as DB, { actorId: userId }, {
+      action: 'AUTH.PASSWORD_RESET',
+      entityType: 'USER',
+      entityId: userId,
+    });
   });
 }
 

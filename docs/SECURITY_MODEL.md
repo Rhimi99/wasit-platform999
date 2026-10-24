@@ -5,7 +5,7 @@
 - كلمات مرور مشفرة عبر **argon2** (dummy-timing للتحقق).
 - جلسات عبر **HttpOnly Cookie** (توقيع/تشفير) مع دعم **Bearer** للتطبيقات (PWA/Android/iOS).
 - `MAX_LOGIN_ATTEMPTS` (5) → lockout مؤقت بعد `LOCKOUT_MINUTES` (15) ضد Hashing Brute-Force.
-- Tokens للتحقق من البريد وإعادة التعيين مؤقتة (TTL) وذات استخدام واحد.
+- Tokens للتحقق من البريد وإعادة التعيين مؤقتة (TTL) و**أحادية الاستخدام فعليًا**: يُنفَّذ الاستهلاك عبر `UPDATE` شرطي واحد يحمل `used_at IS NULL` وشرط الانتهاء في جملة `WHERE` مع `.returning()`، داخل معاملة (`db.transaction`) — فتتسلسل الطلبات المتزامنة على قفل الصف ولا ينجح منها إلا طلب واحد، وإعادة الاستخدام أو الطلب الخاسر في السباق لا يطابق شيئًا ويُرفض 401. لأن إعلان الاستخدام والتأثير (تأكيد البريد أو تحديث كلمة المرور وإبطال الجلسات) في معاملة واحدة، فأي فشل لاحق يُرجع إعلان الاستخدام ويُبقي الرابط صالحًا.
 - `mfaEnabled` + `authenticatorApp` (سر TOTP + أكواد استرداد salted) — تفعيل MFA عبر Setting أمان. **عند التفعيل، كلمة المرور وحدها لا تكفي**: `/api/auth/login` يعيد `mfaRequired:true` + `challengeToken` بلا أي جلسة، والجلسة تُصدر فقط من `/api/auth/mfa/challenge` بعد TOTP أو رمز استرداد.
 - `mfaChallenges` — تحديات الدخول: `tokenHash` فقط (لا التوكن الخام)، أحادية الاستخدام (`consumedAt`)، TTL قصير وعدّاد محاولات (`MFA_CHALLENGE_TTL_MINUTES` / `MFA_CHALLENGE_MAX_ATTEMPTS`) يُبطل التحدي عند بلوغه.
 
