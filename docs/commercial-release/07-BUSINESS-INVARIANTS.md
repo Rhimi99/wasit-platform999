@@ -16,6 +16,12 @@ The platform's base commission is **4% of the transaction value**, split
 - The engine (`packages/server/src/lib/commission.ts`) reads the policy and
   **has no fallback rate**. If no active policy matches, it **fails closed**
   with `COMMISSION_POLICY_MISSING` (HTTP 422) rather than inventing a number.
+- **Resolution order is priority ascending** — the lowest number wins, so the
+  most specific policy an Admin writes (a lower number) overrides a broader one.
+  Policies sharing a priority are broken by `id` so the choice is deterministic
+  on every run. Covered by `commission-policy-priority.test.ts`, which adds
+  several active policies at once (the base-only seed never reaches that state)
+  and asserts the lowest number is selected regardless of insertion order.
 - Migration `0021_commission_split_data.sql` upgrades the legacy 3%
   seller-only policy to the 4% split, and only when it still has the old shape —
   an Admin-customised policy is left untouched. Historical orders keep their
@@ -27,13 +33,6 @@ The platform's base commission is **4% of the transaction value**, split
 produced `commission = 16.8000`, `buyer_commission = 8.4000`,
 `grand_total = 428.4000` — i.e. 420 × 4% = 16.80, buyer 420 × 2% = 8.40. See
 [`06-VERIFICATION-EVIDENCE.md`](./06-VERIFICATION-EVIDENCE.md).
-
-> **Latent inconsistency to review (not fixed).** The doc comment above
-> `resolveCommission` says policies are evaluated "in priority order (lowest
-> number first)", but the query sorts with `desc(commissionPolicies.priority)`
-> — **highest first**. Only one policy (the base, `priority = 1000`) exists
-> today, and there is no Admin UI or test for ordering, so behaviour is
-> currently unaffected. Resolve the intent before adding a second policy.
 
 ## 2. Payment ≠ Settlement ≠ Commission Earned ≠ Commission Received
 

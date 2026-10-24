@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../db/client';
 import { commissionPolicies } from '../db/schema/engine';
@@ -73,8 +73,8 @@ function matchPolicy(
 
 /**
  * The Commission Engine resolves the effective commission for a transaction by
- * evaluating configured policies in priority order (lowest number first) and
- * applying the first match.
+ * evaluating configured policies in priority order (lowest number first, so the
+ * most specific policy wins) and applying the first match.
  *
  * When no active policy matches, the engine fails closed with
  * COMMISSION_POLICY_MISSING (422). It never invents a rate: the only place a
@@ -94,7 +94,9 @@ export async function resolveCommission(
     .select()
     .from(commissionPolicies)
     .where(eq(commissionPolicies.isActive, true))
-    .orderBy(desc(commissionPolicies.priority));
+    // `id` is the deterministic tie-break so two policies sharing a priority
+    // resolve to the same one on every run (an ambiguous money path is a bug).
+    .orderBy(asc(commissionPolicies.priority), asc(commissionPolicies.id));
 
   const selected = allPolicies.find((p) => matchPolicy(p, ctx, value)) ?? null;
   if (!selected) {
