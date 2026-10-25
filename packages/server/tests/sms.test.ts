@@ -9,6 +9,9 @@ import { LogSmsTransport, maskPhone } from '../src/lib/sms/log.js';
 import { HttpSmsTransport } from '../src/lib/sms/http.js';
 import { buildPhoneVerificationSms } from '../src/lib/sms/templates.js';
 import { resetRateLimitStore } from '../src/middleware/rate-limit.js';
+import { hashToken } from '../src/lib/security.js';
+import { newId } from '../src/lib/ids.js';
+import { verifyPhoneCode } from '../src/modules/auth/service.js';
 
 const app = createApp();
 
@@ -61,6 +64,23 @@ async function registerAndLogin(phone: string, locale = 'ar') {
   expect(login.status).toBe(200);
   const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   return { c, email, userId: row.id };
+}
+
+/**
+ * Registers a user and inserts a known, unexpired phone code directly, so the
+ * concurrency and replay cases can drive the same code without depending on the
+ * random one the send path generates.
+ */
+async function registerWithKnownCode(phone: string) {
+  const { c, email, userId } = await registerAndLogin(phone);
+  const code = '654321';
+  await db.insert(phoneVerificationTokens).values({
+    id: newId(),
+    userId,
+    tokenHash: hashToken(code),
+    expiresAt: new Date(Date.now() + 600_000),
+  });
+  return { c, email, userId, code };
 }
 
 beforeAll(async () => {
@@ -272,5 +292,124 @@ describe('SMS — phone verification end to end (real DB, no mocks)', () => {
     expect(res.data.mail.transport).toBe('log');
     expect(res.data.sms.transport).toBe('log');
     expect(JSON.stringify(res.data)).not.toMatch(/password|token/i);
+  });
+});
+
+describe('SMS — phone code is single-use under concurrency', () => {
+  it('rejects a replayed code after it has been consumed', async () => {
+    const { c, userId, code } = await registerWithKnownCode('+21620999010');
+
+    const first = await c.req('/api/auth/phone/verify', { method: 'POST', body: { code } });
+    expect(first.status).toBe(200);
+
+    const replay = await c.req('/api/auth/phone/verify', { method: 'POST', body: { code } });
+    expect(replay.status).toBe(401);
+
+    // Exactly one verification was recorded, and the phone stayed verified.
+    const verifiedAudits = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, userId), eq(auditLogs.action, 'AUTH.PHONE_VERIFIED')));
+    expect(verifiedAudits.length).toBe(1);
+  });
+
+  it('lets only one of many concurrent requests consume the same code', async () => {
+    const { userId, code } = await registerWithKnownCode('+21620999011');
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 12 }, () => verifyPhoneCode(db, userId, code)),
+    );
+    const winners = results.filter((r) => r.status === 'fulfilled').length;
+    const losers = results.filter((r) => r.status === 'rejected').length;
+    expect(winners).toBe(1);
+    expect(losers).toBe(11);
+
+    // One claim, one audit row, one consumed token — no partial duplicates.
+    const verifiedAudits = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, userId), eq(auditLogs.action, 'AUTH.PHONE_VERIFIED')));
+    expect(verifiedAudits.length).toBe(1);
+
+    const [token] = await db
+      .select()
+      .from(phoneVerificationTokens)
+      .where(eq(phoneVerificationTokens.userId, userId))
+      .limit(1);
+    expect(token.usedAt).not.toBeNull();
+
+    const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    expect(row.phoneVerified).toBe(true);
+  });
+
+  it('does not leave the phone verified or burn the code when the transaction fails', async () => {
+    const { userId, code } = await registerWithKnownCode('+21620999012');
+
+    // A failure that rolls the whole verification back: the claim and the
+    // phone-verified effect must not survive it.
+    await expect(
+      db.transaction(async (outer) => {
+        await verifyPhoneCode(outer as unknown as typeof db, userId, code);
+        throw new Error('forced-rollback');
+      }),
+    ).rejects.toThrow('forced-rollback');
+
+    const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    expect(row.phoneVerified).toBe(false);
+
+    // The code was not consumed, so a legitimate retry still works.
+    const [token] = await db
+      .select()
+      .from(phoneVerificationTokens)
+      .where(and(eq(phoneVerificationTokens.userId, userId), isNull(phoneVerificationTokens.usedAt)))
+      .limit(1);
+    expect(token).toBeTruthy();
+
+    const retry = await verifyPhoneCode(db, userId, code);
+    expect(retry).toBeUndefined();
+    const [after] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    expect(after.phoneVerified).toBe(true);
+  });
+
+  it('still counts a wrong code toward the attempt cap and never verifies', async () => {
+    const { userId } = await registerWithKnownCode('+21620999013');
+
+    // Five wrong attempts are rejected and each increments the counter.
+    for (let i = 0; i < 5; i += 1) {
+      await expect(verifyPhoneCode(db, userId, '000000')).rejects.toThrow(/Invalid or expired/);
+    }
+    const [token] = await db
+      .select()
+      .from(phoneVerificationTokens)
+      .where(and(eq(phoneVerificationTokens.userId, userId), isNull(phoneVerificationTokens.usedAt)))
+      .limit(1);
+    expect(token.attempts).toBeGreaterThanOrEqual(5);
+    expect(token.usedAt).toBeNull();
+
+    const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    expect(row.phoneVerified).toBe(false);
+  });
+
+  it('rejects an expired code without consuming it', async () => {
+    const { userId } = await registerAndLogin('+21620999014');
+    const code = '111222';
+    await db.insert(phoneVerificationTokens).values({
+      id: newId(),
+      userId,
+      tokenHash: hashToken(code),
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+
+    await expect(verifyPhoneCode(db, userId, code)).rejects.toThrow(/Invalid or expired/);
+
+    const [token] = await db
+      .select()
+      .from(phoneVerificationTokens)
+      .where(eq(phoneVerificationTokens.userId, userId))
+      .limit(1);
+    expect(token.usedAt).toBeNull();
+
+    const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    expect(row.phoneVerified).toBe(false);
   });
 });

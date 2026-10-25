@@ -28,6 +28,15 @@ import { buildPasswordResetEmail, buildVerificationEmail } from '../../lib/mail/
 import { sendSms } from '../../lib/sms/send';
 import { buildPhoneVerificationSms } from '../../lib/sms/templates';
 
+/**
+ * Advisory-lock namespaces for token issuance, keyed per user. The two-int
+ * `pg_advisory_xact_lock(ns, key)` form lives in its own lock space, so these do
+ * not collide with the single-key bootstrap lock. Distinct namespaces keep the
+ * email and phone issuance paths from contending with each other.
+ */
+const EMAIL_ISSUE_LOCK_NS = 0x57415349; // "WASI"
+const PHONE_ISSUE_LOCK_NS = 0x57415350; // "WASP"
+
 export interface RegisterInput {
   email: string;
   password: string;
@@ -202,18 +211,33 @@ export async function registerUser(
  * only the newest link works. Shared by registration and the resend/dev paths.
  */
 export async function issueEmailVerificationToken(db: DB, userId: string): Promise<string> {
-  await db
-    .update(emailVerificationTokens)
-    .set({ usedAt: new Date() })
-    .where(and(eq(emailVerificationTokens.userId, userId), isNull(emailVerificationTokens.usedAt)));
-
   const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-  await db.insert(emailVerificationTokens).values({
-    id: newId(),
-    userId,
-    tokenHash: hashToken(token),
-    expiresAt: new Date(Date.now() + env.EMAIL_VERIFY_TTL_HOURS * 3600_000),
+  const tokenHash = hashToken(token);
+
+  await db.transaction(async (tx) => {
+    // Serialise issuance for this user with a transaction-scoped advisory lock.
+    // The obvious alternative — `users ... FOR UPDATE` — would invert the lock
+    // order used by verification (token row first, then the user row) and
+    // deadlock. An advisory lock is orthogonal to row locks, so it orders
+    // concurrent issuers without touching the consumption path.
+    await tx.execute(sql`select pg_advisory_xact_lock(${EMAIL_ISSUE_LOCK_NS}, hashtext(${userId}))`);
+
+    // A fresh link supersedes any outstanding one, so only the newest stays
+    // usable. Invalidation and insert share the transaction: a failure leaves no
+    // partial state and never invalidates the old link without issuing a new one.
+    await tx
+      .update(emailVerificationTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(emailVerificationTokens.userId, userId), isNull(emailVerificationTokens.usedAt)));
+
+    await tx.insert(emailVerificationTokens).values({
+      id: newId(),
+      userId,
+      tokenHash,
+      expiresAt: new Date(Date.now() + env.EMAIL_VERIFY_TTL_HOURS * 3600_000),
+    });
   });
+
   return token;
 }
 
@@ -277,17 +301,26 @@ async function createPhoneCode(
     ]);
   }
 
-  await db
-    .update(phoneVerificationTokens)
-    .set({ usedAt: new Date() })
-    .where(and(eq(phoneVerificationTokens.userId, userId), isNull(phoneVerificationTokens.usedAt)));
-
   const code = generateOtpCode();
-  await db.insert(phoneVerificationTokens).values({
-    id: newId(),
-    userId,
-    tokenHash: hashToken(code),
-    expiresAt: new Date(Date.now() + env.PHONE_VERIFY_TTL_MINUTES * 60_000),
+
+  await db.transaction(async (tx) => {
+    // Serialise issuance per user with a transaction-scoped advisory lock, so two
+    // concurrent sends cannot both invalidate the outstanding set and each insert
+    // a code — which would leave two active codes. Same namespace scheme as email
+    // issuance but a distinct namespace, so the two token kinds never contend.
+    await tx.execute(sql`select pg_advisory_xact_lock(${PHONE_ISSUE_LOCK_NS}, hashtext(${userId}))`);
+
+    await tx
+      .update(phoneVerificationTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(phoneVerificationTokens.userId, userId), isNull(phoneVerificationTokens.usedAt)));
+
+    await tx.insert(phoneVerificationTokens).values({
+      id: newId(),
+      userId,
+      tokenHash: hashToken(code),
+      expiresAt: new Date(Date.now() + env.PHONE_VERIFY_TTL_MINUTES * 60_000),
+    });
   });
 
   await sendSms(
@@ -326,48 +359,75 @@ export async function issuePhoneVerificationCode(
  */
 export async function verifyPhoneCode(db: DB, userId: string, code: string): Promise<void> {
   const tokenHash = hashToken(code);
-  const rows = await db
-    .select()
-    .from(phoneVerificationTokens)
-    .where(and(
-      eq(phoneVerificationTokens.userId, userId),
-      eq(phoneVerificationTokens.tokenHash, tokenHash),
-      isNull(phoneVerificationTokens.usedAt),
-      gt(phoneVerificationTokens.expiresAt, new Date()),
-    ))
-    .limit(1);
 
-  if (rows.length === 0) {
-    await db
-      .update(phoneVerificationTokens)
-      .set({ attempts: sql`${phoneVerificationTokens.attempts} + 1` })
+  // The whole verification runs in one transaction that always COMMITS (it
+  // returns an outcome instead of throwing), so the failure bookkeeping — the
+  // attempt counter — is never rolled back. A throw inside would undo the
+  // increment and let a wrong code be retried past the cap.
+  const outcome = await db.transaction(async (tx) => {
+    // Lock the caller's outstanding code row for the rest of the transaction.
+    // `FOR UPDATE` serialises concurrent verifications of the same code: the
+    // second request blocks until the first commits, then sees `used_at` set and
+    // matches nothing. Without the row lock the check-then-consume below is a
+    // read-then-write race — two requests both pass the check before either
+    // marks the code used, so one code verifies the phone more than once.
+    const [token] = await tx
+      .select()
+      .from(phoneVerificationTokens)
       .where(and(
         eq(phoneVerificationTokens.userId, userId),
         isNull(phoneVerificationTokens.usedAt),
+      ))
+      .limit(1)
+      .for('update');
+
+    if (!token) return 'invalid' as const;
+
+    // Wrong or expired code: count the attempt so the cap still applies, then
+    // reject. The same generic error is returned in every failure case so the
+    // response cannot reveal whether a code exists or has expired.
+    if (token.tokenHash !== tokenHash || token.expiresAt.getTime() <= Date.now()) {
+      await tx
+        .update(phoneVerificationTokens)
+        .set({ attempts: sql`${phoneVerificationTokens.attempts} + 1` })
+        .where(eq(phoneVerificationTokens.id, token.id));
+      return 'invalid' as const;
+    }
+
+    if (token.attempts >= env.PHONE_VERIFY_MAX_ATTEMPTS) {
+      return 'too_many_attempts' as const;
+    }
+
+    // Consume the code and apply its effect in the same transaction, so a later
+    // failure rolls both back and never burns the code without verifying.
+    await tx
+      .update(phoneVerificationTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(phoneVerificationTokens.id, token.id),
+        isNull(phoneVerificationTokens.usedAt),
       ));
+
+    await tx
+      .update(users)
+      .set({ phoneVerified: true, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+
+    await writeAudit(tx as unknown as DB, { actorId: userId }, {
+      action: 'AUTH.PHONE_VERIFIED',
+      entityType: 'USER',
+      entityId: userId,
+    });
+
+    return 'verified' as const;
+  });
+
+  if (outcome === 'invalid') {
     throw ApiError.unauthorized('Invalid or expired verification code');
   }
-
-  const token = rows[0];
-  if (token.attempts >= env.PHONE_VERIFY_MAX_ATTEMPTS) {
+  if (outcome === 'too_many_attempts') {
     throw ApiError.unauthorized('Too many attempts. Request a new code.');
   }
-
-  await db
-    .update(phoneVerificationTokens)
-    .set({ usedAt: new Date() })
-    .where(eq(phoneVerificationTokens.id, token.id));
-
-  await db
-    .update(users)
-    .set({ phoneVerified: true, updatedAt: new Date() })
-    .where(eq(users.id, userId));
-
-  await writeAudit(db, { actorId: userId }, {
-    action: 'AUTH.PHONE_VERIFIED',
-    entityType: 'USER',
-    entityId: userId,
-  });
 }
 
 /**
@@ -772,13 +832,37 @@ export async function requestPasswordReset(
   if (row.length === 0) {
     return { resetToken: '', userExists: false };
   }
+  const userId = row[0].id;
   const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
   const tokenHash = hashToken(token);
-  await db.insert(passwordResetTokens).values({
-    id: newId(),
-    userId: row[0].id,
-    tokenHash,
-    expiresAt: new Date(Date.now() + env.PASSWORD_RESET_TTL_HOURS * 3600_000),
+
+  await db.transaction(async (tx) => {
+    // Lock the user row to serialise concurrent issuances for the same account.
+    // Without it, two simultaneous requests both invalidate the (empty) set of
+    // outstanding tokens and both insert, leaving two active links — a violation
+    // of the one-active-token policy. The lock makes the second wait for the
+    // first to commit, so it supersedes the token the first just issued.
+    await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+      .for('update');
+
+    // A fresh reset link supersedes any outstanding one, mirroring email
+    // verification and phone codes: only the newest token stays usable. Done in
+    // the same transaction as the insert so a failure leaves no partial state.
+    await tx
+      .update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(passwordResetTokens.userId, userId), isNull(passwordResetTokens.usedAt)));
+
+    await tx.insert(passwordResetTokens).values({
+      id: newId(),
+      userId,
+      tokenHash,
+      expiresAt: new Date(Date.now() + env.PASSWORD_RESET_TTL_HOURS * 3600_000),
+    });
   });
 
   const resetLink = `${env.APP_URL}/reset-password?token=${token}`;
