@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, ApiClientError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
@@ -56,6 +56,11 @@ export function VerifyEmailPage() {
   const token = params.get('token') ?? '';
   const [state, setState] = useState<'pending' | 'done' | 'error'>('pending');
   const [error, setError] = useState<string | null>(null);
+  // The server consumes a verification token on first use, and React StrictMode
+  // runs effects twice in development. A second submission would be refused with
+  // 401 and replace the success state with an error, so each token is submitted
+  // exactly once and the in-flight promise is reused when the effect re-runs.
+  const submission = useRef<{ token: string; promise: Promise<unknown> } | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -63,17 +68,20 @@ export function VerifyEmailPage() {
       setError(t('auth.verifyMissingToken'));
       return;
     }
+    if (submission.current?.token !== token) {
+      submission.current = { token, promise: api.verifyEmail(token) };
+    }
+    const { promise } = submission.current;
     let active = true;
-    (async () => {
-      try {
-        await api.verifyEmail(token);
+    promise
+      .then(() => {
         if (active) setState('done');
-      } catch (err) {
+      })
+      .catch((err) => {
         if (!active) return;
         setError(err instanceof ApiClientError ? err.message : String(err));
         setState('error');
-      }
-    })();
+      });
     return () => { active = false; };
   }, [token, t]);
 

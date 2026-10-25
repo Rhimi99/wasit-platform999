@@ -200,19 +200,42 @@ describe('Login lockout — threshold and temporary lock', () => {
 });
 
 describe('Login lockout — concurrency', () => {
-  it('counts every concurrent wrong password (no lost updates) and locks', async () => {
-    const email = `lock-race-${Date.now()}@wasit.tn`;
+  it('counts every concurrent wrong password exactly once below the cap (no lost updates)', async () => {
+    const email = `lock-race-count-${Date.now()}@wasit.tn`;
     const { userId } = await registerUser(email);
 
-    const burst = 10;
+    // Stay below MAX_LOGIN_ATTEMPTS so no lock is raised: every request reaches
+    // the password check, so the streak must equal the burst exactly. A
+    // read-then-write would drop concurrent updates and land below the burst.
+    const burst = env.MAX_LOGIN_ATTEMPTS - 1;
     const results = await Promise.all(
       Array.from({ length: burst }, () => loginWrong(email)),
     );
     expect(results.every((r) => r.status === 401)).toBe(true);
 
-    // Every attempt was counted: a read-then-write would have lost some.
     const row = await userRow(userId);
     expect(row.failedLoginAttempts).toBe(burst);
+    expect(row.lockedUntil).toBeNull();
+  });
+
+  it('locks on a concurrent burst without losing the cap-reaching attempts', async () => {
+    const email = `lock-race-${Date.now()}@wasit.tn`;
+    const { userId } = await registerUser(email);
+
+    const burst = env.MAX_LOGIN_ATTEMPTS * 2;
+    const results = await Promise.all(
+      Array.from({ length: burst }, () => loginWrong(email)),
+    );
+    expect(results.every((r) => r.status === 401)).toBe(true);
+
+    const row = await userRow(userId);
+    // A request arriving once the lock is active is refused before the password
+    // check (that is the point of the early return), so it is deliberately not
+    // counted. Under a concurrent burst the streak therefore lands between the
+    // cap and the burst: >= cap means no update was lost before the lock was
+    // raised; <= burst means no attempt was counted twice.
+    expect(row.failedLoginAttempts).toBeGreaterThanOrEqual(env.MAX_LOGIN_ATTEMPTS);
+    expect(row.failedLoginAttempts).toBeLessThanOrEqual(burst);
     expect(row.lockedUntil).not.toBeNull();
   });
 
