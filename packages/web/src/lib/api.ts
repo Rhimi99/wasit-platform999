@@ -22,6 +22,7 @@ import type {
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
   PrivacyConsentState,
   AdminTradeRow, AdminTradeListResponse, TradeKind,
+  PayoutRails, PayoutRecord, SettlementResult,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -331,6 +332,7 @@ export const api = {
         id: string;
         functional: boolean;
         available: boolean;
+        payout: boolean;
         methods: { method: { type: 'CARD' | 'MOBILE_WALLET'; scheme?: string }; available: boolean; reason?: string }[];
       }[];
     }>('/api/payments/methods');
@@ -423,6 +425,48 @@ export const api = {
   },
   async adminLedger() {
     return request<{ items: LedgerEntry[] }>('/api/admin/ledger');
+  },
+  // ---- Admin finance (money movement: settlement / payout) ----
+  // These wrap the existing `/api/admin/finance/*` routes. The server keeps every
+  // invariant (evidence-gated settlement, derived payout amount, no forced
+  // COMPLETED); the UI only exposes the operations the routes actually support.
+  async adminPayoutRails() {
+    return request<PayoutRails>('/api/admin/finance/payout-providers');
+  },
+  async adminConfirmSettlement(data: {
+    externalRef: string;
+    amount: string;
+    currencyCode: string;
+    providerId: string;
+    settlementRef: string;
+    providerRef?: string;
+    occurredAt?: string;
+  }) {
+    return request<SettlementResult>('/api/admin/finance/settlements/confirm', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminCreatePayout(data: { transactionId: string; providerId: string; idempotencyKey?: string }) {
+    return request<PayoutRecord>('/api/admin/finance/payouts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminGetPayout(id: string) {
+    return request<PayoutRecord>(`/api/admin/finance/payouts/${id}`);
+  },
+  async adminDispatchPayout(id: string, beneficiaryRef: string) {
+    return request<{ payout: PayoutRecord; providerRef: string }>(`/api/admin/finance/payouts/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify({ beneficiaryRef }),
+    });
+  },
+  async adminSyncPayout(id: string) {
+    return request<{ payout: PayoutRecord; providerStatus: string }>(`/api/admin/finance/payouts/${id}/sync`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
   },
   async adminAuditLogs() {
     return request<{ items: Array<Record<string, unknown>> }>('/api/admin/audit-logs');

@@ -35,6 +35,7 @@ import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
 import { AdminTradePage } from './pages/AdminTradePage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
+import { AdminFinancePage } from './pages/AdminFinancePage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
 import { CookieConsentBanner } from './components/CookieConsent';
@@ -129,6 +130,7 @@ export default function App() {
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ledger" element={<RequireAuth><AdminOnly><AdminLedgerPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/finance" element={<RequireAuth><AdminOnly><AdminFinancePage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/audit" element={<RequireAuth><AdminOnly><AdminAuditPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/verification" element={<RequireAuth><StaffOnly><AdminVerificationPage /></StaffOnly></RequireAuth>} />
       <Route path="/admin/trust" element={<RequireAuth><StaffOnly><AdminTrustPage /></StaffOnly></RequireAuth>} />

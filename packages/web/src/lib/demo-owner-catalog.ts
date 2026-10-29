@@ -69,6 +69,7 @@ export const AUDIT_MODULE_GROUPS: { id: string; labelKey: string; modules: Audit
       { id: 'admin-orders', labelKey: 'admin.orders', path: '/admin/orders', probe: { method: 'GET', path: '/api/admin/orders' }, roles: ADMIN_ROLES },
       { id: 'admin-transactions', labelKey: 'admin.transactions', path: '/admin/transactions', probe: { method: 'GET', path: '/api/admin/transactions' }, roles: ADMIN_ROLES },
       { id: 'admin-ledger', labelKey: 'admin.ledger', path: '/admin/ledger', probe: { method: 'GET', path: '/api/admin/ledger' }, roles: ADMIN_ROLES },
+      { id: 'admin-finance', labelKey: 'admin.finance', path: '/admin/finance', probe: { method: 'GET', path: '/api/admin/finance/payout-providers' }, roles: ADMIN_ROLES },
     ],
   },
   {

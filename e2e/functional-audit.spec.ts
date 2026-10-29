@@ -679,6 +679,7 @@ test.describe('ADMIN — every admin surface', () => {
     ['/admin/orders', /الطلبات|Orders/i],
     ['/admin/transactions', /المعاملات|Transactions/i],
     ['/admin/ledger', /دفتر الحسابات|Ledger/i],
+    ['/admin/finance', /الإدارة المالية|Finance administration/i],
     ['/admin/audit', /سجل التدقيق|Audit/i],
     ['/admin/verification', /التحقق|Verification/i],
     ['/admin/trust', /الثقة|Trust/i],

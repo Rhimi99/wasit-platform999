@@ -1377,3 +1377,45 @@ export interface AdminTradeListResponse {
   items: AdminTradeRow[];
   pagination: PaginationInfo;
 }
+
+// ---- Admin finance (settlement / payout money-movement surface) ----
+// Mirrors the shapes returned by `/api/admin/finance/*`; the server stays the
+// only writer of SETTLED/COMPLETED, so these are read/action views, not state.
+
+export type PayoutStatus = 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'HELD';
+
+/** One configured payout rail and what it can prove. Never carries credentials. */
+export interface PayoutRail {
+  id: string;
+  functional: boolean;
+  available: boolean;
+  demo: boolean;
+  transferReference: boolean;
+}
+
+export interface PayoutRails {
+  active: string;
+  providers: PayoutRail[];
+}
+
+/** The seller payout record as persisted (net amount is derived, never supplied). */
+export interface PayoutRecord {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+}
+
+/** Result of `POST /settlements/confirm`: whether it applied, or was a replay. */
+export interface SettlementResult {
+  applied: boolean;
+  duplicate: boolean;
+  settlementEntryId: string | null;
+}
