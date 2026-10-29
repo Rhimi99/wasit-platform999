@@ -3,18 +3,20 @@ import { api, apiCall, apiErrorMessage, formatDate, formatMoney } from '@/lib/ap
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { LedgerEntry, PayoutRail, PayoutRecord, PayoutRails } from '@/lib/types';
+import type { LedgerEntry, PayoutRail, PayoutRecord, PayoutRails, ReconciliationDecision, ReconciliationImportResult, ReceiptSource } from '@/lib/types';
 
 /**
  * `/admin/finance` — the operator surface for the money-movement routes under
- * `/api/admin/finance/*` (settlement confirm + seller payouts).
+ * `/api/admin/finance/*` (settlement confirm, seller payouts, reconciliation
+ * import and WASIT receipt).
  *
  * Scope is deliberately narrow: this page only calls endpoints that already
  * exist and only renders actions the server actually supports. It does not
- * derive money state — settlement is evidence-gated and a payout's amount is
- * computed server-side. Access is guarded in the SPA (AdminOnly) *and* on the
- * server (the `/api/admin` mount requires ADMIN/SUPER_ADMIN), so hiding a
- * control here is never the only protection.
+ * derive money state — settlement is evidence-gated, a payout's amount is
+ * computed server-side, reconciliation is classified by the engine, and a
+ * receipt is proven by independent statement evidence. Access is guarded in the
+ * SPA (AdminOnly) *and* on the server (the `/api/admin` mount requires
+ * ADMIN/SUPER_ADMIN), so hiding a control here is never the only protection.
  */
 
 const PAYOUT_STATUS_COLOR: Record<string, 'green' | 'amber' | 'slate' | 'red' | 'teal'> = {
@@ -71,6 +73,26 @@ export function AdminFinancePage() {
   const [lookupId, setLookupId] = useState('');
   const [beneficiaryRef, setBeneficiaryRef] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
+
+  // Reconciliation import (PS-04) — provider/bank feed -> three-way report.
+  const [reconSource, setReconSource] = useState<'PROVIDER' | 'BANK'>('PROVIDER');
+  const [reconCurrency, setReconCurrency] = useState('TND');
+  const [reconProviderId, setReconProviderId] = useState('');
+  const [reconLines, setReconLines] = useState('');
+  const [reconBusy, setReconBusy] = useState(false);
+  const [reconNotice, setReconNotice] = useState<string | null>(null);
+  const [reconError, setReconError] = useState<string | null>(null);
+  const [reconResult, setReconResult] = useState<ReconciliationImportResult | null>(null);
+
+  // WASIT receipt — independent proof that commission funds landed.
+  const [receiptTransactionId, setReceiptTransactionId] = useState('');
+  const [receiptSource, setReceiptSource] = useState<ReceiptSource>('BANK_STATEMENT');
+  const [receiptReference, setReceiptReference] = useState('');
+  const [receiptAmount, setReceiptAmount] = useState('');
+  const [receiptCurrency, setReceiptCurrency] = useState('TND');
+  const [receiptBusy, setReceiptBusy] = useState(false);
+  const [receiptNotice, setReceiptNotice] = useState<string | null>(null);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
 
   const loadRails = useCallback(async () => {
     const res = await apiCall(() => api.adminPayoutRails());
@@ -202,6 +224,60 @@ export function AdminFinancePage() {
       setPayoutError(apiErrorMessage(e));
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function importReconciliation() {
+    let lines: unknown;
+    try {
+      lines = reconLines.trim() ? JSON.parse(reconLines) : [];
+    } catch {
+      setReconError(t('adminFinance.reconRequired'));
+      return;
+    }
+    if (!Array.isArray(lines) || reconCurrency.trim().length !== 3) {
+      setReconError(t('adminFinance.reconRequired'));
+      return;
+    }
+    setReconBusy(true);
+    setReconError(null);
+    setReconNotice(null);
+    try {
+      const result = await api.adminImportReconciliation({
+        source: reconSource,
+        currencyCode: reconCurrency.trim().toUpperCase(),
+        importKey: `admin-finance-ui-${Date.now()}`,
+        ...(reconProviderId.trim() ? { providerId: reconProviderId.trim() } : {}),
+        ...(reconSource === 'PROVIDER' ? { provider: lines } : { bank: lines }),
+      });
+      setReconResult(result);
+      setReconNotice(result.duplicate ? t('adminFinance.reconDuplicate') : t('adminFinance.reconImported'));
+    } catch (e) {
+      setReconError(apiErrorMessage(e));
+    } finally {
+      setReconBusy(false);
+    }
+  }
+
+  async function recordReceipt() {
+    setReceiptBusy(true);
+    setReceiptError(null);
+    setReceiptNotice(null);
+    try {
+      const result = await api.adminRecordReceipt({
+        transactionId: receiptTransactionId.trim(),
+        evidence: {
+          source: receiptSource,
+          reference: receiptReference.trim(),
+          amount: receiptAmount.trim(),
+          currencyCode: receiptCurrency.trim().toUpperCase(),
+        },
+      });
+      setReceiptNotice(result.duplicate ? t('adminFinance.receiptDuplicate') : t('adminFinance.receiptRecorded'));
+    } catch (e) {
+      setReceiptError(apiErrorMessage(e));
+    } finally {
+      setReceiptBusy(false);
     }
   }
 
@@ -479,6 +555,191 @@ export function AdminFinancePage() {
               )}
             </div>
           )}
+        </Card>
+      </div>
+
+      {/* Reconciliation + WASIT receipt — the two money-movement stages beyond
+          settlement. Both are evidence-driven; the UI renders the server's
+          classification and never reinterprets a MISMATCH as a match. */}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <Card testId="admin-finance-reconciliation">
+          <h3 className="mb-1 text-sm font-semibold text-slate-800">{t('adminFinance.reconciliation')}</h3>
+          <p className="mb-3 text-xs text-slate-500">{t('adminFinance.reconciliationHint')}</p>
+
+          {reconNotice && (
+            <p className="mb-2 text-sm text-green-700" role="status" data-testid="admin-finance-recon-notice">{reconNotice}</p>
+          )}
+          {reconError && (
+            <p className="mb-2 text-sm text-red-600" role="alert" data-testid="admin-finance-recon-error">{reconError}</p>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.reconSource')}
+              <select
+                className="input mt-1"
+                data-testid="admin-finance-recon-source"
+                value={reconSource}
+                onChange={(e) => setReconSource(e.target.value as 'PROVIDER' | 'BANK')}
+              >
+                <option value="PROVIDER">PROVIDER</option>
+                <option value="BANK">BANK</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.reconCurrency')}
+              <input
+                className="input mt-1"
+                maxLength={3}
+                data-testid="admin-finance-recon-currency"
+                value={reconCurrency}
+                onChange={(e) => setReconCurrency(e.target.value.toUpperCase())}
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+              {t('adminFinance.reconProviderId')}
+              <input
+                className="input mt-1"
+                data-testid="admin-finance-recon-provider-id"
+                value={reconProviderId}
+                onChange={(e) => setReconProviderId(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+              {t('adminFinance.reconLines')}
+              <textarea
+                className="input mt-1 font-mono text-xs"
+                rows={4}
+                data-testid="admin-finance-recon-lines"
+                value={reconLines}
+                onChange={(e) => setReconLines(e.target.value)}
+              />
+            </label>
+          </div>
+          <p className="mt-1 text-xs text-slate-400">{t('adminFinance.reconLinesHint')}</p>
+          <button
+            type="button"
+            className="btn-primary mt-3"
+            data-testid="admin-finance-recon-import"
+            disabled={reconBusy || reconCurrency.trim().length !== 3}
+            onClick={() => void importReconciliation()}
+          >
+            {reconBusy ? '…' : t('adminFinance.reconImport')}
+          </button>
+
+          {reconResult && (
+            <div className="mt-4 border-t border-slate-100 pt-3" data-testid="admin-finance-recon-report">
+              <div className="mb-2 flex items-center gap-3">
+                <h4 className="text-sm font-semibold text-slate-800">{t('adminFinance.reconReport')}</h4>
+                <Badge color="green" testId="admin-finance-recon-matched">{t('adminFinance.reconMatched')}: {reconResult.report.matched}</Badge>
+                <Badge color="red" testId="admin-finance-recon-mismatched">{t('adminFinance.reconMismatched')}: {reconResult.report.mismatched}</Badge>
+              </div>
+              {reconResult.report.decisions.length === 0 ? (
+                <EmptyState title={t('adminFinance.reconNoDecisions')} />
+              ) : (
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th>{t('adminFinance.reconReference')}</th>
+                      <th>{t('adminFinance.reconStatus')}</th>
+                      <th>{t('adminFinance.reconMismatches')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reconResult.report.decisions.map((d: ReconciliationDecision) => (
+                      <tr key={d.reference} data-testid={`admin-finance-recon-decision-${d.reference}`}>
+                        <td className="font-medium">{d.reference}</td>
+                        <td>{d.status === 'MATCHED' ? <Badge color="green">{d.status}</Badge> : <Badge color="red">{d.status}</Badge>}</td>
+                        <td className="text-xs text-slate-500">{d.mismatches.join(', ') || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card testId="admin-finance-receipt">
+          <h3 className="mb-1 text-sm font-semibold text-slate-800">{t('adminFinance.receipt')}</h3>
+          <p className="mb-3 text-xs text-slate-500">{t('adminFinance.receiptHint')}</p>
+
+          {receiptNotice && (
+            <p className="mb-2 text-sm text-green-700" role="status" data-testid="admin-finance-receipt-notice">{receiptNotice}</p>
+          )}
+          {receiptError && (
+            <p className="mb-2 text-sm text-red-600" role="alert" data-testid="admin-finance-receipt-error">{receiptError}</p>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+              {t('adminFinance.receiptTransactionId')}
+              <input
+                className="input mt-1"
+                data-testid="admin-finance-receipt-transaction-id"
+                value={receiptTransactionId}
+                onChange={(e) => setReceiptTransactionId(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.receiptSource')}
+              <select
+                className="input mt-1"
+                data-testid="admin-finance-receipt-source"
+                value={receiptSource}
+                onChange={(e) => setReceiptSource(e.target.value as ReceiptSource)}
+              >
+                <option value="BANK_STATEMENT">BANK_STATEMENT</option>
+                <option value="ACQUIRER">ACQUIRER</option>
+                <option value="PROVIDER">PROVIDER</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.receiptReference')}
+              <input
+                className="input mt-1"
+                data-testid="admin-finance-receipt-reference"
+                value={receiptReference}
+                onChange={(e) => setReceiptReference(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.receiptAmount')}
+              <input
+                className="input mt-1"
+                inputMode="decimal"
+                data-testid="admin-finance-receipt-amount"
+                value={receiptAmount}
+                onChange={(e) => setReceiptAmount(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.receiptCurrency')}
+              <input
+                className="input mt-1"
+                maxLength={3}
+                data-testid="admin-finance-receipt-currency"
+                value={receiptCurrency}
+                onChange={(e) => setReceiptCurrency(e.target.value.toUpperCase())}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="btn-primary mt-3"
+            data-testid="admin-finance-receipt-record"
+            disabled={
+              receiptBusy ||
+              !receiptTransactionId.trim() ||
+              !receiptReference.trim() ||
+              !(Number(receiptAmount) > 0) ||
+              receiptCurrency.trim().length !== 3
+            }
+            onClick={() => void recordReceipt()}
+          >
+            {receiptBusy ? '…' : t('adminFinance.receiptRecord')}
+          </button>
+          <p className="mt-1 text-xs text-slate-400">{t('adminFinance.receiptNote')}</p>
         </Card>
       </div>
 

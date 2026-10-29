@@ -23,6 +23,7 @@ import type {
   PrivacyConsentState,
   AdminTradeRow, AdminTradeListResponse, TradeKind,
   PayoutRails, PayoutRecord, SettlementResult,
+  ReconciliationImportResult, ProviderFeedLine, BankFeedLine, LedgerFeedLine, ReceiptResult, ReceiptSource,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -466,6 +467,32 @@ export const api = {
     return request<{ payout: PayoutRecord; providerStatus: string }>(`/api/admin/finance/payouts/${id}/sync`, {
       method: 'POST',
       body: JSON.stringify({}),
+    });
+  },
+  // Reconciliation import (PS-04). The engine classifies each reference; the UI
+  // only renders the report it returns and never reinterprets a MISMATCH.
+  async adminImportReconciliation(data: {
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+    importKey?: string;
+    providerId?: string;
+    provider?: ProviderFeedLine[];
+    bank?: BankFeedLine[];
+    ledger?: LedgerFeedLine[];
+  }) {
+    return request<ReconciliationImportResult>('/api/admin/finance/reconciliation/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  // WASIT receipt (commission funds actually received). Independent of settlement.
+  async adminRecordReceipt(data: {
+    transactionId: string;
+    evidence: { source: ReceiptSource; reference: string; amount: string; currencyCode: string };
+  }) {
+    return request<ReceiptResult>('/api/admin/finance/receipts', {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   },
   async adminAuditLogs() {

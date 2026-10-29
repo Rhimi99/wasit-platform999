@@ -1419,3 +1419,85 @@ export interface SettlementResult {
   duplicate: boolean;
   settlementEntryId: string | null;
 }
+
+// ---- Reconciliation (PS-04 three-way matching) ----
+
+export type ReconciliationStatus = 'MATCHED' | 'MISMATCH';
+
+/** Why a reference did not reconcile; the engine classifies, never guesses. */
+export type MismatchKind =
+  | 'MISSING_IN_LEDGER'
+  | 'MISSING_IN_PROVIDER'
+  | 'MISSING_IN_BANK'
+  | 'AMOUNT_MISMATCH'
+  | 'FEE_MISMATCH'
+  | 'NET_MISMATCH'
+  | 'CURRENCY_MISMATCH'
+  | 'NOT_SETTLED_IN_LEDGER'
+  | 'DUPLICATE_REFERENCE';
+
+export interface ProviderFeedLine {
+  reference: string;
+  settlementRef?: string | null;
+  payoutRef?: string | null;
+  grossAmount: string;
+  providerFee: string;
+  netAmount: string;
+  currencyCode: string;
+  occurredAt?: string | null;
+}
+
+export interface BankFeedLine {
+  reference: string;
+  settlementRef?: string | null;
+  payoutRef?: string | null;
+  amount: string;
+  currencyCode: string;
+  occurredAt?: string | null;
+}
+
+export interface LedgerFeedLine {
+  reference: string;
+  grossAmount: string;
+  providerFee: string;
+  netAmount: string;
+  currencyCode: string;
+  settled: boolean;
+}
+
+export interface ReconciliationDecision {
+  reference: string;
+  status: ReconciliationStatus;
+  mismatches: MismatchKind[];
+  provider: ProviderFeedLine | null;
+  bank: BankFeedLine | null;
+  ledger: LedgerFeedLine | null;
+}
+
+export interface ReconciliationReport {
+  currencyCode: string;
+  decisions: ReconciliationDecision[];
+  matched: number;
+  mismatched: number;
+}
+
+/** Result of `POST /reconciliation/import`: the persisted report, or a replay. */
+export interface ReconciliationImportResult {
+  importId: string;
+  duplicate: boolean;
+  insertedLines: number;
+  report: ReconciliationReport;
+}
+
+export type ReceiptSource = 'BANK_STATEMENT' | 'ACQUIRER' | 'PROVIDER';
+
+/** Result of `POST /receipts`: WASIT's commission funds proven received. */
+export interface ReceiptResult {
+  id: string;
+  status: 'RECEIVED';
+  reference: string;
+  amount: string;
+  currencyCode: string;
+  source: ReceiptSource;
+  duplicate: boolean;
+}

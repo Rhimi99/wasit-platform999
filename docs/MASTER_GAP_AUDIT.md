@@ -96,7 +96,7 @@ AI/Automation · Documentation · Test/Harness
 | DO-01 | `PAYMENT_SETTLEMENT_AUDIT.md` stale (يعرض RC-1/3/4/5 كمفتوحة وهي مُصلَحة) | Documentation | خطر قرارات خاطئة | §1 أعلاه (الأدلة من الكود) | Medium | Yes | No |
 | DO-02 | `DEVELOPMENT_ROADMAP.md` drift (أعداد اختبارات، ادعاء غياب اختبار geo) | Documentation | أرقام قديمة | Roadmap vs `geo.test.ts`/الواقع | Low | No | Yes |
 | DO-03 | تقرير 2026-09-14 يقول Marketing Video «contract only» | Documentation | متجاوَز | §1 أعلاه | Low | No | No |
-| TH-01 | اختبارات Settlement/Payout/Reconciliation: **مغلقة** (كانت: لا شيء يُختبر لعدم وجود الوحدات) | Test/Harness | الاختبارات موجودة ومحصورة: `settlement-ledger.test.ts` (9) · `payout-engine.test.ts` (11) · `payout-provider.test.ts` (20) · `reconciliation-engine.test.ts` (17) · `finance-routes.test.ts` (16) · `persistence-invariants.test.ts` · `money-path-invariants.test.ts` (9) · `e2e/settlement-integrity.spec.ts` (4) · `e2e/admin-finance.spec.ts` (15) | تغطية خادمية كاملة للوحدات + **E2E لمسارات `/api/admin/finance/*` مُغلقة** (`e2e/admin-finance.spec.ts`، 15 حالة: settlements/confirm + payouts) و**واجهة `/admin/finance` مُضافة ومُغطّاة** (`e2e/admin-finance-ui.spec.ts`، 4 حالات)؛ يبقى **Reconciliation UI** مفتوحًا (المسار الخادمي موجود لكن غير معروض في الواجهة) — الملحق أ.5-1 | ~~Medium~~ → **Closed (unit/integration/E2E)** | No | Yes |
+| TH-01 | اختبارات Settlement/Payout/Reconciliation: **مغلقة** (كانت: لا شيء يُختبر لعدم وجود الوحدات) | Test/Harness | الاختبارات موجودة ومحصورة: `settlement-ledger.test.ts` (9) · `payout-engine.test.ts` (11) · `payout-provider.test.ts` (20) · `reconciliation-engine.test.ts` (17) · `finance-routes.test.ts` (16) · `persistence-invariants.test.ts` · `money-path-invariants.test.ts` (9) · `e2e/settlement-integrity.spec.ts` (4) · `e2e/admin-finance.spec.ts` (15) | تغطية خادمية كاملة للوحدات + **E2E لمسارات `/api/admin/finance/*` مُغلقة** (`e2e/admin-finance.spec.ts`، 15 حالة: settlements/confirm + payouts) و**واجهة `/admin/finance` مُضافة ومُغطّاة** (`e2e/admin-finance-ui.spec.ts`، 4 حالات + `e2e/admin-finance-recon-ui.spec.ts`، 5 حالات لـReconciliation/Receipt)؛ يبقى **قائمة Payout واستيراد ملفات المطابقة** مفتوحًا — الملحق أ.5-1 | ~~Medium~~ → **Closed (unit/integration/E2E)** | No | Yes |
 | TH-02 | أسطح Placeholder غير مغطّاة بـE2E | Test/Harness | لا تغطية للأسطح «—» | PR-03/04 | Low | No | Yes |
 | TH-03 | 8 اختبارات demo-gated تُتخطّى في E2E العادي | Test/Harness | SKIP ما لم يُفعّل auto-login | `functional-audit.spec.ts` (8 skipped) | Low | No | Yes |
 | BU-01 | لا عقد مزوّد دفع حقيقي (تأكيد split/settlement من iPay) | Business | None (تجاري خارجي) | `PAYMENT_PROVIDER_IPAY_COMPATIBILITY_AUDIT.md` §A/§M/§O | Critical | Yes | Yes |
@@ -149,7 +149,7 @@ AI/Automation · Documentation · Test/Harness
 - **PR-10** تفضيلات الإشعارات.
 - **PR-11 / BU-08** Support Desk/التصعيد.
 - **DO-01** تحديث وثيقة التسوية (تجنّب قرارات خاطئة).
-- ~~**TH-01** اختبارات Settlement/Payout~~ → **مُغلقة** (اختبارات الوحدات + E2E لمسارات `/api/admin/finance/*` في `e2e/admin-finance.spec.ts`)؛ فجوة **الواجهة (UI)** لمسارات المالية **مُغلقة للمسارات الموجودة (N3: `/admin/finance` + `e2e/admin-finance-ui.spec.ts`)**؛ Reconciliation/قائمة Payout تبقى مفتوحة (الملحق أ.5-1).
+- ~~**TH-01** اختبارات Settlement/Payout~~ → **مُغلقة** (اختبارات الوحدات + E2E لمسارات `/api/admin/finance/*` في `e2e/admin-finance.spec.ts`)؛ فجوة **الواجهة (UI)** لمسارات المالية **مُغلقة للمسارات الموجودة (N3: `/admin/finance` + `e2e/admin-finance-ui.spec.ts`؛ N4: Reconciliation/Receipt + `e2e/admin-finance-recon-ui.spec.ts`)**؛ قائمة Payout واستيراد ملفات المطابقة تبقى مفتوحة (الملحق أ.5-1).
 
 ### 3) POST-LAUNCH / SCALE — قابلة للتأجيل
 - **PR-01** Cart/دفع متعدد البنود.
@@ -267,8 +267,10 @@ AI/Automation · Documentation · Test/Harness
    `POST /payouts/:id/dispatch`، `POST /payouts/:id/sync`) مع دالة لكلٍّ في `packages/web/src/lib/api.ts`، ومدخل في `ADMIN_NAV` (Sidebar)،
    ومسار `AdminOnly` في `App.tsx`، ومفاتيح i18n في `ar/en/fr/zh`، واختبار E2E `e2e/admin-finance-ui.spec.ts` (4 حالات: عرض حقيقي، حارس الخادم 403،
    تأكيد تسوية + idempotency، دورة Payout لا تصل COMPLETED بلا دليل). الصفحة لا تشتق حالة مالية ولا ترسل مبلغ Payout — الخادم هو المرجع.
-   **يبقى مفتوحًا**: مسارا **Reconciliation/Receipt** موجودان فعلًا على نفس المثبَّت (`POST /api/admin/finance/reconciliation/import` سطر 213 و`POST /api/admin/finance/receipts` سطر 236 في `finance/routes.ts`)، لكنهما يقبلان تغذيات كبيرة (provider/bank/ledger) ولم تُعرَض واجهتهما في N3؛
-   كذلك عرض Payout مقصور على البحث بالمعرّف (لا يوجد endpoint قائمة). → **مغلق للمسارات المعروضة (تسوية/Payout)، مفتوح لواجهة المطابقة/الإيصال وقائمة Payout**.
+   **N4 استكمل السطح**: أُضيفت بطاقتا **Reconciliation** و**WASIT Receipt** إلى نفس الصفحة (`AdminFinancePage.tsx`)، مربوطتين بمسارَي الخادم الموجودين
+   (`POST /api/admin/finance/reconciliation/import` سطر 213 و`POST /api/admin/finance/receipts` سطر 236) مع دالّتين في `api.ts` وأنواع في `types.ts` ومفاتيح i18n في `ar/en/fr/zh`.
+   الواجهة تعرض تصنيف المحرّك كما هو (MISMATCH يظهر MISMATCH ولا يُحوَّل إلى نجاح)، والإيصال يُسجَّل من دليل كشف مستقل فقط. مُغطّاة بـ`e2e/admin-finance-recon-ui.spec.ts` (5 حالات).
+   **يبقى مفتوحًا**: عرض Payout مقصور على البحث بالمعرّف (لا يوجد endpoint قائمة)، وتغذيات المطابقة تُدخَل يدويًا كـJSON (لا استيراد ملف). → **مغلق للمسارات المعروضة (تسوية/Payout/مطابقة/إيصال)، مفتوح لقائمة Payout واستيراد ملفات المطابقة**.
 2. **E2E لمسارات `/api/admin/finance/*`** — **مُغلقة الآن**: `e2e/admin-finance.spec.ts` (15 حالة، HTTP حقيقي + جلسات حقيقية) يغطي
    `POST /settlements/confirm` (رفض 422 بلا مرجع/بعملة مشوّهة، 404 لنية غير موجودة، 409 لنية غير مدفوعة، تأكيد + idempotency + رفض مرجع مختلف 409،
    ترقية `orders.settlementStatus='SETTLED'`) و`/payouts` (`CREATED` بمبلغ مشتق من سياسة 4%، 409 لمعاملة غير مسوّاة، 422 لمزوّد بلا صلاحية payout،
