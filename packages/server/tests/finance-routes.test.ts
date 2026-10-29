@@ -410,3 +410,124 @@ describe('P3 finance routes — settlement and reconciliation over HTTP', () => 
     expect(r.status).toBe(422);
   });
 });
+
+describe('P3 finance routes — admin payout list', () => {
+  it('lists payouts for an authorised admin, newest first with a stable order', async () => {
+    const admin = await staffClient('ADMIN');
+    const created: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const { transactionId } = await paidAndSettledOrder();
+      const r = await admin.req('/api/admin/finance/payouts', {
+        method: 'POST',
+        body: { transactionId, providerId: 'sandbox' },
+      });
+      expect(r.status).toBe(200);
+      created.push(r.data.data.id as string);
+    }
+
+    const list = await admin.req('/api/admin/finance/payouts?page=1&pageSize=100');
+    expect(list.status).toBe(200);
+    const items = list.data.data.items as Array<{ id: string; status: string; amount: string; currencyCode: string; createdAt: string }>;
+    expect(Array.isArray(items)).toBe(true);
+    expect(items.length).toBeGreaterThan(0);
+
+    // Every payout this test created is present with its persisted fields.
+    for (const id of created) {
+      const row = items.find((i) => i.id === id);
+      expect(row).toBeTruthy();
+      expect(row!.status).toBe('CREATED');
+      expect(row!.amount).toBe('303.8000');
+      expect(row!.currencyCode).toBe('TND');
+    }
+
+    // The order is total and stable: createdAt desc, tie-broken by id desc.
+    for (let i = 1; i < items.length; i++) {
+      const a = items[i - 1];
+      const b = items[i];
+      const at = new Date(a.createdAt).getTime();
+      const bt = new Date(b.createdAt).getTime();
+      expect(at >= bt).toBe(true);
+      if (at === bt) expect(a.id >= b.id).toBe(true);
+    }
+
+    // pagination echoes the validated request and a real total.
+    expect(list.data.data.pagination.page).toBe(1);
+    expect(list.data.data.pagination.pageSize).toBe(100);
+    expect(list.data.data.pagination.total).toBeGreaterThanOrEqual(items.length);
+  });
+
+  it('pages without overlap and rejects out-of-range pagination parameters', async () => {
+    const admin = await staffClient('ADMIN');
+    const { transactionId } = await paidAndSettledOrder();
+    await admin.req('/api/admin/finance/payouts', { method: 'POST', body: { transactionId, providerId: 'sandbox' } });
+
+    const p1 = await admin.req('/api/admin/finance/payouts?page=1&pageSize=1');
+    const p2 = await admin.req('/api/admin/finance/payouts?page=2&pageSize=1');
+    expect(p1.status).toBe(200);
+    expect(p2.status).toBe(200);
+    const first = (p1.data.data.items as Array<{ id: string }>)[0];
+    const second = (p2.data.data.items as Array<{ id: string }>)[0];
+    expect(first).toBeTruthy();
+    if (second) expect(second.id).not.toBe(first.id);
+
+    // Invalid pagination is refused, never silently clamped.
+    expect((await admin.req('/api/admin/finance/payouts?page=0')).status).toBe(422);
+    expect((await admin.req('/api/admin/finance/payouts?pageSize=101')).status).toBe(422);
+    expect((await admin.req('/api/admin/finance/payouts?pageSize=-5')).status).toBe(422);
+    expect((await admin.req('/api/admin/finance/payouts?status=BOGUS')).status).toBe(422);
+    expect((await admin.req('/api/admin/finance/payouts?page=abc')).status).toBe(422);
+  });
+
+  it('filters by status and returns an empty page when nothing matches', async () => {
+    const admin = await staffClient('ADMIN');
+    const { transactionId } = await paidAndSettledOrder();
+    await admin.req('/api/admin/finance/payouts', { method: 'POST', body: { transactionId, providerId: 'sandbox' } });
+
+    const created = await admin.req('/api/admin/finance/payouts?status=CREATED&pageSize=100');
+    expect(created.status).toBe(200);
+    const rows = created.data.data.items as Array<{ status: string }>;
+    expect(rows.every((r) => r.status === 'CREATED')).toBe(true);
+
+    // A status that is valid but matches nothing still returns a well-formed page.
+    const completed = await admin.req('/api/admin/finance/payouts?status=COMPLETED&page=1&pageSize=100');
+    expect(completed.status).toBe(200);
+    expect((completed.data.data.items as Array<{ status: string }>).every((r) => r.status === 'COMPLETED')).toBe(true);
+  });
+
+  it('is read-only: listing never changes a payout status', async () => {
+    const admin = await staffClient('ADMIN');
+    const { transactionId } = await paidAndSettledOrder();
+    const made = await admin.req('/api/admin/finance/payouts', { method: 'POST', body: { transactionId, providerId: 'sandbox' } });
+    const payoutId = made.data.data.id as string;
+    expect(made.data.data.status).toBe('CREATED');
+
+    // Listing repeatedly must not advance CREATED -> PROCESSING -> COMPLETED.
+    for (let i = 0; i < 3; i++) {
+      const list = await admin.req(`/api/admin/finance/payouts?pageSize=100`);
+      expect(list.status).toBe(200);
+      const row = (list.data.data.items as Array<{ id: string; status: string }>).find((r) => r.id === payoutId);
+      expect(row?.status).toBe('CREATED');
+    }
+
+    const after = await admin.req(`/api/admin/finance/payouts/${payoutId}`);
+    expect(after.data.data.status).toBe('CREATED');
+    expect(after.data.data.completedAt ?? null).toBeNull();
+  });
+
+  it('refuses unauthenticated and unauthorised callers', async () => {
+    const anon = makeClient();
+    expect((await anon.req('/api/admin/finance/payouts')).status).toBe(401);
+
+    const merchant = await staffClient('MERCHANT');
+    expect((await merchant.req('/api/admin/finance/payouts')).status).toBe(403);
+
+    const customer = makeClient();
+    const customerEmail = `fin-list-cust-${Date.now()}@wasit.tn`;
+    await registerUser(customer, customerEmail, 'CUSTOMER');
+    await customer.req('/api/auth/login', {
+      method: 'POST',
+      body: { email: customerEmail, password: 'StrongPass123!', allowUnverifiedEmail: true },
+    });
+    expect((await customer.req('/api/admin/finance/payouts')).status).toBe(403);
+  });
+});

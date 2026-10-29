@@ -22,7 +22,7 @@ import type {
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
   PrivacyConsentState,
   AdminTradeRow, AdminTradeListResponse, TradeKind,
-  PayoutRails, PayoutRecord, SettlementResult,
+  PayoutRails, PayoutRecord, SettlementResult, PayoutStatus, PayoutListResult,
   ReconciliationImportResult, ProviderFeedLine, BankFeedLine, LedgerFeedLine, ReceiptResult, ReceiptSource,
 } from './types';
 
@@ -433,6 +433,16 @@ export const api = {
   // COMPLETED); the UI only exposes the operations the routes actually support.
   async adminPayoutRails() {
     return request<PayoutRails>('/api/admin/finance/payout-providers');
+  },
+  // Paginated payout list (read-only). Only whitelisted, validated params are
+  // forwarded; the server re-validates and bounds the page size.
+  async adminListPayouts(params: { status?: PayoutStatus; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString();
+    return request<PayoutListResult>(`/api/admin/finance/payouts${suffix ? `?${suffix}` : ''}`);
   },
   async adminConfirmSettlement(data: {
     externalRef: string;

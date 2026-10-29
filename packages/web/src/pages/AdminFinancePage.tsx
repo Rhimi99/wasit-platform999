@@ -3,7 +3,7 @@ import { api, apiCall, apiErrorMessage, formatDate, formatMoney } from '@/lib/ap
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { LedgerEntry, PayoutRail, PayoutRecord, PayoutRails, ReconciliationDecision, ReconciliationImportResult, ReceiptSource } from '@/lib/types';
+import type { LedgerEntry, PayoutRail, PayoutRecord, PayoutRails, PayoutStatus, PayoutListResult, ReconciliationDecision, ReconciliationImportResult, ReceiptSource } from '@/lib/types';
 
 /**
  * `/admin/finance` — the operator surface for the money-movement routes under
@@ -26,6 +26,10 @@ const PAYOUT_STATUS_COLOR: Record<string, 'green' | 'amber' | 'slate' | 'red' | 
   FAILED: 'red',
   HELD: 'teal',
 };
+
+const PAYOUT_LIST_PAGE_SIZE = 10;
+
+const PAYOUT_STATUSES: PayoutStatus[] = ['CREATED', 'PROCESSING', 'COMPLETED', 'FAILED', 'HELD'];
 
 /** A rail can be dispatched only while the payout is not terminal. */
 function isDispatchable(status: string): boolean {
@@ -74,6 +78,13 @@ export function AdminFinancePage() {
   const [beneficiaryRef, setBeneficiaryRef] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
 
+  // Payout list (read-only desk): filter + pagination + its own load/error state.
+  const [listStatus, setListStatus] = useState<'' | PayoutStatus>('');
+  const [listPage, setListPage] = useState(1);
+  const [payoutList, setPayoutList] = useState<PayoutListResult | null>(null);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+
   // Reconciliation import (PS-04) — provider/bank feed -> three-way report.
   const [reconSource, setReconSource] = useState<'PROVIDER' | 'BANK'>('PROVIDER');
   const [reconCurrency, setReconCurrency] = useState('TND');
@@ -104,6 +115,25 @@ export function AdminFinancePage() {
     const res = await apiCall(() => api.adminLedger());
     setSettlementEntries((res.data?.items ?? []).filter((e) => e.entryType === 'SETTLEMENT'));
   }, []);
+
+  const loadPayoutList = useCallback(async (page: number, status: '' | PayoutStatus) => {
+    setListLoading(true);
+    setListError(null);
+    const res = await apiCall(() =>
+      api.adminListPayouts({ page, pageSize: PAYOUT_LIST_PAGE_SIZE, ...(status ? { status } : {}) }),
+    );
+    if (res.error) {
+      setListError(res.error);
+      setPayoutList(null);
+    } else {
+      setPayoutList(res.data ?? null);
+    }
+    setListLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void loadPayoutList(listPage, listStatus);
+  }, [loadPayoutList, listPage, listStatus]);
 
   useEffect(() => {
     void (async () => {
@@ -175,6 +205,9 @@ export function AdminFinancePage() {
       setPayout(created);
       setLookupId(created.id);
       setPayoutNotice(t('adminFinance.payoutCreated'));
+      // Surface the new payout in the list without changing its state.
+      await loadPayoutList(1, listStatus);
+      setListPage(1);
     } catch (e) {
       setPayoutError(apiErrorMessage(e));
     } finally {
@@ -742,6 +775,103 @@ export function AdminFinancePage() {
           <p className="mt-1 text-xs text-slate-400">{t('adminFinance.receiptNote')}</p>
         </Card>
       </div>
+
+      {/* Payout list — read-only desk over the existing payouts table. It renders
+          exactly what the server stores; it never dispatches, syncs or advances a
+          status, so PROCESSING cannot become COMPLETED from here. */}
+      <Card className="mt-6 overflow-x-auto" testId="admin-finance-payout-list">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-800">{t('adminFinance.payoutList')}</h3>
+            <p className="text-xs text-slate-500">{t('adminFinance.payoutListHint')}</p>
+          </div>
+          <label className="text-xs font-medium text-slate-600">
+            {t('adminFinance.payoutListFilter')}
+            <select
+              className="input mt-1"
+              data-testid="admin-finance-payout-list-status"
+              value={listStatus}
+              onChange={(e) => {
+                setListStatus(e.target.value as '' | PayoutStatus);
+                setListPage(1);
+              }}
+            >
+              <option value="">{t('adminFinance.payoutListAll')}</option>
+              {PAYOUT_STATUSES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {listLoading ? (
+          <Spinner />
+        ) : listError ? (
+          <ErrorState message={listError} onRetry={() => void loadPayoutList(listPage, listStatus)} />
+        ) : !payoutList || payoutList.items.length === 0 ? (
+          <EmptyState title={t('adminFinance.payoutListEmpty')} />
+        ) : (
+          <>
+            <table className="table-base">
+              <thead>
+                <tr>
+                  <th>{t('field.id')}</th>
+                  <th>{t('common.status')}</th>
+                  <th>{t('field.amount')}</th>
+                  <th>{t('adminFinance.payoutProvider')}</th>
+                  <th>{t('adminFinance.transactionId')}</th>
+                  <th>{t('common.date')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payoutList.items.map((p) => (
+                  <tr key={p.id} data-testid={`admin-finance-payout-row-${p.id}`}>
+                    <td className="truncate font-medium" data-testid="admin-finance-payout-row-id">{p.id}</td>
+                    <td>
+                      <Badge color={PAYOUT_STATUS_COLOR[p.status] ?? 'slate'} testId="admin-finance-payout-row-status">{p.status}</Badge>
+                    </td>
+                    <td data-testid="admin-finance-payout-row-amount">{formatMoney(p.amount, p.currencyCode)}</td>
+                    <td>{p.providerId}</td>
+                    <td className="truncate text-xs text-slate-500">{p.transactionId}</td>
+                    <td>{formatDate(p.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-3 flex items-center justify-between gap-2 text-xs text-slate-500">
+              <span data-testid="admin-finance-payout-list-total">
+                {t('adminFinance.payoutListTotal')}: {payoutList.pagination.total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  data-testid="admin-finance-payout-list-prev"
+                  disabled={listPage <= 1 || listLoading}
+                  onClick={() => setListPage((n) => Math.max(1, n - 1))}
+                >
+                  {t('adminFinance.payoutListPrev')}
+                </button>
+                <span data-testid="admin-finance-payout-list-page">
+                  {payoutList.pagination.page} / {Math.max(1, Math.ceil(payoutList.pagination.total / payoutList.pagination.pageSize))}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  data-testid="admin-finance-payout-list-next"
+                  disabled={
+                    listLoading ||
+                    listPage >= Math.max(1, Math.ceil(payoutList.pagination.total / payoutList.pagination.pageSize))
+                  }
+                  onClick={() => setListPage((n) => n + 1)}
+                >
+                  {t('adminFinance.payoutListNext')}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </Card>
 
       {/* Settlement ledger entries — read-only proof that a settlement landed. */}
       <Card className="mt-6 overflow-x-auto" testId="admin-finance-settlement-history">

@@ -1420,6 +1420,30 @@ export interface SettlementResult {
   settlementEntryId: string | null;
 }
 
+/** One row of the admin payout list (`GET /payouts`). Read-only projection. */
+export interface PayoutListRow {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+/** Paginated payout list as returned by `GET /payouts`. */
+export interface PayoutListResult {
+  items: PayoutListRow[];
+  pagination: { page: number; pageSize: number; total: number };
+}
+
 // ---- Reconciliation (PS-04 three-way matching) ----
 
 export type ReconciliationStatus = 'MATCHED' | 'MISMATCH';

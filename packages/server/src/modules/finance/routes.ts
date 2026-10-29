@@ -2,10 +2,10 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { PERMISSIONS } from '@wasit/shared';
 import { requirePermission } from '../../middleware/auth';
-import { validateBody, getValidatedBody } from '../../middleware/validate';
+import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate';
 import { getContext } from '../../lib/request-context';
 import { confirmSettlement } from '../settlements/service';
-import { createPayout, getPayout } from '../payouts/service';
+import { createPayout, getPayout, listPayouts } from '../payouts/service';
 import { dispatchPayoutToProvider, syncPayoutFromProvider } from '../payouts/provider-service';
 import { describePayoutProviders } from '../../lib/payments/payout-resolve';
 import { importReconciliationFeed } from '../reconciliation/service';
@@ -39,6 +39,12 @@ const payoutSchema = z.object({
   transactionId: z.string().min(1),
   providerId: z.string().min(1),
   idempotencyKey: z.string().nullish(),
+});
+
+const listPayoutsQuerySchema = z.object({
+  status: z.enum(['CREATED', 'PROCESSING', 'COMPLETED', 'FAILED', 'HELD']).optional(),
+  page: z.coerce.number().int().positive().optional(),
+  pageSize: z.coerce.number().int().positive().max(100).optional(),
 });
 
 const dispatchSchema = z.object({
@@ -158,6 +164,27 @@ financeRoutes.post(
       ipAddress: ctx.ipAddress ?? null,
     });
     return c.json({ success: true, data: payout });
+  },
+);
+
+/**
+ * Lists payouts for the admin desk (newest first, bounded page size). Read-only:
+ * it projects the stored rows and never advances a payout's status.
+ * Declared before `/payouts/:id` so the collection path is never read as an id.
+ */
+financeRoutes.get(
+  '/payouts',
+  requirePermission(PERMISSIONS.PAYMENT_READ, PERMISSIONS.COMMISSION_MANAGE),
+  validateQuery(listPayoutsQuerySchema),
+  async (c) => {
+    const query = getValidatedQuery<z.infer<typeof listPayoutsQuerySchema>>(c);
+    const ctx = getContext(c);
+    const result = await listPayouts(ctx.db, {
+      status: query.status,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+    return c.json({ success: true, data: result });
   },
 );
 
