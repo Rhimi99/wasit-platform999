@@ -4,8 +4,40 @@ import { db } from '../src/db/client.js';
 import { inventoryItems, inventoryMovements } from '../src/db/schema/commerce_extras.js';
 import { notifications } from '../src/db/schema/messaging.js';
 import { eq, sql, and } from 'drizzle-orm';
+import { handlePaymentWebhook } from '../src/modules/payments/service.js';
+import { computeWebhookSignature, ManualPaymentProvider } from '../src/lib/payments/providers.js';
 
 const app = createApp();
+const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET!;
+
+/**
+ * Confirms an order's payment through the real payment kernel (intent + signed
+ * webhook) so the order reaches `paymentStatus = 'PAID'`. Confirmation is a
+ * money-gated transition (PS-08A): the stock-commitment path exercised below is
+ * only reachable once payment is proven, exactly as in production.
+ */
+async function payOrder(
+  buyer: ReturnType<typeof makeClient>,
+  orderId: string,
+  grandTotal: string,
+): Promise<void> {
+  const intentRes = await buyer.req(`/api/payments/orders/${orderId}/intent`, { method: 'POST', body: {} });
+  expect(intentRes.status).toBe(201);
+  const externalRef = (intentRes.data.data.intent as { externalRef: string }).externalRef;
+  const rawBody = JSON.stringify({
+    eventId: `inv-evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    type: 'payment.succeeded',
+    externalRef,
+    amount: grandTotal,
+    currencyCode: 'TND',
+  });
+  const applied = await handlePaymentWebhook(
+    db,
+    { rawBody, signature: computeWebhookSignature(rawBody, WEBHOOK_SECRET) },
+    new ManualPaymentProvider(),
+  );
+  expect(applied.applied).toBe(true);
+}
 
 function makeClient() {
   let cookie = '';
@@ -230,6 +262,10 @@ describe('Inventory Engine', () => {
       body: { buyerId: buyerUserId, buyerType: 'CUSTOMER', items: [{ productId, quantity: 10 }] },
     });
     const order2Id = (order2.data.data as { orderId: string }).orderId;
+    const order2Total = (order2.data.data as { grandTotal: string }).grandTotal;
+
+    // Confirmation is money-gated: the order must be paid first (PS-08A).
+    await payOrder(buyer, order2Id, order2Total);
 
     // Confirm -> decrement to 90
     const confirm = await supplier.req(`/api/orders/${order2Id}/status`, {

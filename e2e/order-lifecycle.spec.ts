@@ -71,6 +71,24 @@ async function placeOrderViaApi(
   return (await res.json()).data.orderId as string;
 }
 
+/**
+ * Confirms an order's payment through the real offline rail so it can be
+ * CONFIRMED. Confirmation is money-gated (PS-08A): the seller's "Confirmed"
+ * button is refused until `paymentStatus = 'PAID'`. The suite runs
+ * `PAYMENT_PROVIDER=manual` with `DEMO_PAYMENT_MODE=true`, so an operator
+ * completing the real intent is the documented way the money is proven.
+ */
+async function payOrderViaApi(
+  buyerPage: import('@playwright/test').Page,
+  adminPage: import('@playwright/test').Page,
+  orderId: string,
+): Promise<void> {
+  const intentRes = await buyerPage.request.post(`/api/payments/orders/${orderId}/intent`, { data: {} });
+  expect(intentRes.ok(), `intent failed: HTTP ${intentRes.status()} ${await intentRes.text()}`).toBeTruthy();
+  const done = await adminPage.request.post(`/api/payments/orders/${orderId}/complete-manual`, { data: {} });
+  expect(done.ok(), `manual completion failed: HTTP ${done.status()} ${await done.text()}`).toBeTruthy();
+}
+
 test.describe('ORDER LIFECYCLE — seller fulfils and buyer cancels from the UI', () => {
   test('seller advances a real order PENDING → COMPLETED through the order page buttons', async ({ browser }) => {
     const merchantCtx = await browser.newContext({ storageState: storageFor('merchant') });
@@ -80,6 +98,14 @@ test.describe('ORDER LIFECYCLE — seller fulfils and buyer cancels from the UI'
     const buyerCtx = await browser.newContext({ storageState: storageFor('customer') });
     const buyerPage = await buyerCtx.newPage();
     const orderId = await placeOrderViaApi(buyerPage, productId, 2);
+
+    // Confirmation is money-gated: prove the payment first through the offline
+    // rail (intent as the buyer, completion as the operator), then close the
+    // buyer context — the seller must be able to drive the rest of the lifecycle.
+    const adminCtx = await browser.newContext({ storageState: storageFor('admin') });
+    const adminPage = await adminCtx.newPage();
+    await payOrderViaApi(buyerPage, adminPage, orderId);
+    await adminCtx.close();
     await buyerCtx.close();
 
     await merchantPage.goto(`/dashboard/orders/${orderId}`);
@@ -126,6 +152,35 @@ test.describe('ORDER LIFECYCLE — seller fulfils and buyer cancels from the UI'
 
     const res = await buyerPage.request.get(`/api/orders/${orderId}`);
     expect((await res.json()).data.status).toBe('CANCELLED');
+    await archiveProduct(merchantPage, productId);
+    await buyerCtx.close();
+    await merchantCtx.close();
+  });
+
+  test('a seller cannot confirm an unpaid order — the money gate refuses it (409)', async ({ browser }) => {
+    const merchantCtx = await browser.newContext({ storageState: storageFor('merchant') });
+    const merchantPage = await merchantCtx.newPage();
+    const productId = await createSellerProductWithStock(merchantPage, 100);
+
+    const buyerCtx = await browser.newContext({ storageState: storageFor('customer') });
+    const buyerPage = await buyerCtx.newPage();
+    const orderId = await placeOrderViaApi(buyerPage, productId, 1);
+
+    // The order is UNPAID. Confirmation is money-gated (PS-08A): the seller's
+    // direct request is refused, and the order stays PENDING rather than being
+    // committed to a sale for money that never arrived.
+    const refused = await merchantPage.request.patch(`/api/orders/${orderId}/status`, {
+      data: { status: 'CONFIRMED' },
+    });
+    expect(refused.status()).toBe(409);
+
+    const order = (await (await merchantPage.request.get(`/api/orders/${orderId}`)).json()).data as {
+      status: string;
+      paymentStatus: string;
+    };
+    expect(order.status).toBe('PENDING');
+    expect(order.paymentStatus).toBe('UNPAID');
+
     await archiveProduct(merchantPage, productId);
     await buyerCtx.close();
     await merchantCtx.close();

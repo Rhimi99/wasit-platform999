@@ -2,6 +2,14 @@
 
 آخر تحديث: **2026-10-29**
 
+## Milestone PS-08A — منع تأكيد الطلب قبل إثبات الدفع (مغلق)
+
+- **الفجوة**: كان `PATCH /api/orders/:id/status` يقبل `status='CONFIRMED'` دون أي فحص على `paymentStatus`. أي طلب غير مدفوع (حتى قبل إنشاء نيّة دفع) كان يمكن تأكيده، ما **يحوّل الحجز إلى بيع** ويخصم المخزون مقابل مالٍ لم يصل. (كانت التسوية `confirmSettlement` مُقادة بالدفع، أمّا التأكيد فلم يكن.)
+- **الإصلاح**: بوابة مال في `modules/orders/service.ts:updateOrderStatus` — يُرفض `CONFIRMED` بـ**409 `CONFLICT`** ما لم يكن `orders.payment_status = 'PAID'`. و`PAID` لا يُكتب إلا من نواة الدفع (`applyPaymentSucceeded`) عن دليل موثَّق (webhook موقَّع، أو إتمام المكتب اليدوي لنيّة حقيقية — وهو نفسه مرفوض خارج الوضع التجريبي). لا يُشترط `paymentStatus` لأي انتقال آخر (`PROCESSING/SHIPPED/DELIVERED/COMPLETED/CANCELLED` تبقى كما هي).
+- **الحماية**: الفحص **قبل** أي أثر جانبي على المخزون، فالتأكيد المرفوض لا يخصم كمية ولا يحرّر حجزًا ولا يكتب تدقيق تغيير حالة.
+- **الاختبارات**: `packages/server/tests/order-confirmation-gate.test.ts` — **7 حالات** (رفض غير المدفوع بلا نيّة، رفض النيّة `PENDING`، نجاح المؤكَّد المدفوع + خصم المخزون، لا حركة مخزون/تدقيق عند الرفض، عدم تجاوز البوابة بأي دور، بقاء مسار العرض التوضيحي `complete-manual → PAID → CONFIRMED`، وبقاء `CANCELLED` بلا قيد دفع). حُدِّث `inventory.test.ts` (يدفع الطلب قبل التأكيد عبر النواة الحقيقية) و`e2e/order-lifecycle.spec.ts` (+حالة رفض 409، ودفع الطلب قبل تقدّم البائع).
+- **التحقق**: حزمة الخادم **1074/1077** (3 متخطّاة)، `typecheck` (server+web) نظيف، و`e2e/order-lifecycle.spec.ts` (3/3) و`e2e/manual-payment.spec.ts` + `e2e/dispute-refund.spec.ts` (5/5) خضراء.
+
 ## Milestone N7 — استيراد ملفات المطابقة المالية (الملحق أ.5-1 — مغلق)
 
 - **الفجوة**: تغذيات المطابقة كانت تُدخَل يدويًا كـJSON فقط (`POST /api/admin/finance/reconciliation/import`)؛ لا استيراد ملف. (كانت آخر بنود أ.5-1 المفتوحة.)

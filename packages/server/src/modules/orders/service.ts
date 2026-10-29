@@ -379,6 +379,19 @@ export async function updateOrderStatus(
     throw ApiError.validation([{ field: 'status', message: `Invalid status: ${status}`, code: 'VALIDATION_FAILED' }]);
   }
 
+  // Confirmation is a money-gated transition. `paymentStatus = PAID` is written
+  // only by the payment kernel (`applyPaymentSucceeded`), which runs off
+  // provider-verified evidence — a signed webhook, or the offline desk's
+  // completion of a real intent, itself refused outside demo mode. Selecting a
+  // rail, creating an intent, or requesting payment are not payment: they leave
+  // the order PENDING/UNPAID. Without this gate a buyer or seller could confirm
+  // an unpaid order, which commits the reservation to a sale (see below) and
+  // hands over stock for money that never arrived. Mirrors the settlement layer,
+  // which already refuses to settle a payment that is not confirmed.
+  if (status === 'CONFIRMED' && order[0].paymentStatus !== 'PAID') {
+    throw ApiError.conflict('Cannot confirm an order whose payment has not been confirmed');
+  }
+
   // Inventory side-effects are applied atomically on confirmation/cancellation.
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
   const productRows = items.length

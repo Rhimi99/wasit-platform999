@@ -115,7 +115,7 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `GET /` — طلباتي (browser)
 - `GET /:id` — تفاصيل (مالك/بائع)
 - `POST /` — إنشاء (buyerId, buyerType, items[{productId, quantity}]) — يتحقق من: وجود المنتج، الحالة ACTIVE، MOQ، المخزون؛ يحسب العمولة من السياسة ورسوم الدفع، ينشئ transaction + ledger + audit
-- `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر)
+- `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر). **`CONFIRMED` يتطلّب `paymentStatus='PAID'`** وإلا **409 `CONFLICT`** — التأكيد يحوّل الحجز إلى بيع، فلا يُسمح به قبل إثبات الدفع (webhook موقَّع أو إتمام `manual` لنيّة حقيقية). بقية الانتقالات بلا قيد دفع.
 
 ## المعاملات (`/api/transactions`)
 
