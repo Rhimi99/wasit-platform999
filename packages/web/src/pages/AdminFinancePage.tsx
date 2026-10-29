@@ -3,7 +3,7 @@ import { api, apiCall, apiErrorMessage, formatDate, formatMoney } from '@/lib/ap
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { LedgerEntry, PayoutRail, PayoutRecord, PayoutRails, PayoutStatus, PayoutListResult, ReconciliationDecision, ReconciliationImportResult, ReceiptSource } from '@/lib/types';
+import type { LedgerEntry, PayoutRail, PayoutRecord, PayoutRails, PayoutStatus, PayoutListResult, ReconciliationDecision, ReconciliationImportResult, ReconciliationPreviewResult, ReceiptSource } from '@/lib/types';
 
 /**
  * `/admin/finance` — the operator surface for the money-movement routes under
@@ -94,6 +94,10 @@ export function AdminFinancePage() {
   const [reconNotice, setReconNotice] = useState<string | null>(null);
   const [reconError, setReconError] = useState<string | null>(null);
   const [reconResult, setReconResult] = useState<ReconciliationImportResult | null>(null);
+  // File-based ingestion (appendix a.5-1). Preview writes nothing; import records.
+  const [reconFile, setReconFile] = useState<File | null>(null);
+  const [reconPreview, setReconPreview] = useState<ReconciliationPreviewResult | null>(null);
+  const [reconFileBusy, setReconFileBusy] = useState(false);
 
   // WASIT receipt — independent proof that commission funds landed.
   const [receiptTransactionId, setReceiptTransactionId] = useState('');
@@ -289,6 +293,55 @@ export function AdminFinancePage() {
       setReconError(apiErrorMessage(e));
     } finally {
       setReconBusy(false);
+    }
+  }
+
+  async function previewReconFile() {
+    if (!reconFile) {
+      setReconError(t('adminFinance.reconFileRequired'));
+      return;
+    }
+    setReconFileBusy(true);
+    setReconError(null);
+    setReconNotice(null);
+    setReconPreview(null);
+    try {
+      const result = await api.adminPreviewReconciliationFile({
+        file: reconFile,
+        source: reconSource,
+        currencyCode: reconCurrency.trim().toUpperCase(),
+      });
+      setReconPreview(result);
+      setReconNotice(t('adminFinance.reconFilePreviewed'));
+    } catch (e) {
+      setReconError(apiErrorMessage(e));
+    } finally {
+      setReconFileBusy(false);
+    }
+  }
+
+  async function importReconFile() {
+    if (!reconFile) {
+      setReconError(t('adminFinance.reconFileRequired'));
+      return;
+    }
+    setReconFileBusy(true);
+    setReconError(null);
+    setReconNotice(null);
+    try {
+      const result = await api.adminImportReconciliationFile({
+        file: reconFile,
+        source: reconSource,
+        currencyCode: reconCurrency.trim().toUpperCase(),
+        importKey: `admin-finance-file-${Date.now()}`,
+        ...(reconProviderId.trim() ? { providerId: reconProviderId.trim() } : {}),
+      });
+      setReconResult(result);
+      setReconNotice(result.duplicate ? t('adminFinance.reconDuplicate') : t('adminFinance.reconImported'));
+    } catch (e) {
+      setReconError(apiErrorMessage(e));
+    } finally {
+      setReconFileBusy(false);
     }
   }
 
@@ -659,6 +712,56 @@ export function AdminFinancePage() {
           >
             {reconBusy ? '…' : t('adminFinance.reconImport')}
           </button>
+
+          {/* File-based ingestion (appendix a.5-1). Preview first — it writes
+              nothing — then import. The server validates type/size/encoding. */}
+          <div className="mt-4 border-t border-slate-100 pt-3">
+            <label className="text-xs font-medium text-slate-600">
+              {t('adminFinance.reconFile')}
+              <input
+                type="file"
+                accept=".csv,.tsv,.json,text/csv,text/tab-separated-values,application/json"
+                className="input mt-1"
+                data-testid="admin-finance-recon-file"
+                onChange={(e) => {
+                  setReconFile(e.target.files?.[0] ?? null);
+                  setReconPreview(null);
+                }}
+              />
+            </label>
+            <p className="mt-1 text-xs text-slate-400">{t('adminFinance.reconFileHint')}</p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                data-testid="admin-finance-recon-preview"
+                disabled={reconFileBusy || !reconFile || reconCurrency.trim().length !== 3}
+                onClick={() => void previewReconFile()}
+              >
+                {reconFileBusy ? '…' : t('adminFinance.reconPreview')}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                data-testid="admin-finance-recon-import-file"
+                disabled={reconFileBusy || !reconFile || reconCurrency.trim().length !== 3}
+                onClick={() => void importReconFile()}
+              >
+                {reconFileBusy ? '…' : t('adminFinance.reconImportFile')}
+              </button>
+            </div>
+
+            {reconPreview && (
+              <div className="mt-3" data-testid="admin-finance-recon-preview-result">
+                <p className="text-xs text-slate-500" data-testid="admin-finance-recon-preview-summary">
+                  {reconPreview.format.toUpperCase()} · {t('adminFinance.reconRows')}: {reconPreview.rowCount} ·{' '}
+                  {t('adminFinance.reconMatched')}: {reconPreview.report.matched} ·{' '}
+                  {t('adminFinance.reconMismatched')}: {reconPreview.report.mismatched}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">{t('adminFinance.reconPreviewNote')}</p>
+              </div>
+            )}
+          </div>
 
           {reconResult && (
             <div className="mt-4 border-t border-slate-100 pt-3" data-testid="admin-finance-recon-report">

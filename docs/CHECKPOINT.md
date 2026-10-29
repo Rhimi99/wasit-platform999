@@ -1,6 +1,22 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-23**
+آخر تحديث: **2026-10-29**
+
+## Milestone N7 — استيراد ملفات المطابقة المالية (الملحق أ.5-1 — مغلق)
+
+- **الفجوة**: تغذيات المطابقة كانت تُدخَل يدويًا كـJSON فقط (`POST /api/admin/finance/reconciliation/import`)؛ لا استيراد ملف. (كانت آخر بنود أ.5-1 المفتوحة.)
+- **المحلّل النقي**: `packages/server/src/modules/reconciliation/file-import.ts` — `parseReconciliationFile()` يقبل **`.csv`/`.tsv`/`.json`** (UTF-8، ≤1 ميجابايت، ≤5000 صف)، مع RFC-4180 (اقتباس/`CRLF`/`BOM`)، تحقّق ترويسة/أعمدة (مطلوب/مجهول/مكرّر)، أرقام غير سالبة، مراجع فريدة غير صيغية، وعملة ISO. **أي سطر مخالف يرفض الملف بالكامل**.
+- **الخدمة**: `previewReconciliationFile()` (لا يكتب) و`importReconciliationFile()` — كلاهما يمرّ بـ`importReconciliationFeed` نفسه (نفس checksum/idempotency ونفس حفظ `MISMATCH`). الجانب الدفتري **لا يُقبل من ملف**.
+- **المسارات**: `POST /reconciliation/preview-file` و`POST /reconciliation/import-file` (multipart، حقل `file`؛ `source`/`currencyCode` في query)، بصلاحية `commission:manage`/`payment:read`.
+- **الواجهة**: `AdminFinancePage.tsx` — منتقي ملف + معاينة + استيراد وملخّص، ومفاتيح `adminFinance.reconFile*` في ar/en/fr/zh.
+- **التوثيق**: `docs/RECONCILIATION_FILE_IMPORT.md` (الصيغ/الحدود/الأعمدة/الرفض/Idempotency/الأثر)، وتحديث `API_SPECIFICATION.md` و`MASTER_GAP_AUDIT.md` (إغلاق أ.5-1).
+- **التحقق**: `reconciliation-file-import.test.ts` — **33 حالة** (محلّل نقي + مسارات حقيقية: 401/403، معاينة بلا كتابة، idempotency، `MISMATCH` محفوظ، رفض التكرار/تهريب عمود). الخادم **1067/1070** (87 ملفًا، 3 متخطّاة) و`typecheck` نظيف.
+
+## Milestone N6 — إصلاح مفتاح i18n المفقود `common.date` (zh)
+
+- **الفجوة**: قاموس `zh` في `packages/web/src/lib/i18n.ts` كان ينقصه `'common.date'` الموجود في ar/en/fr.
+- **الإصلاح**: أُضيف `'common.date': '日期'` بين `common.search`/`common.status` مطابقًا لبقية اللغات، مع اختبار **`packages/server/tests/i18n-locale-parity.test.ts`** (3 حالات؛ يفشل 3/3 عند غياب المفتاح ويمرّ عند وجوده).
+- **التحقق**: `typecheck` = 0، وحزمة الخادم كاملة نظيفة. Commit `b48372e`.
 
 ## Milestone M8 — Role-scoped Customer/Partner Directories (6 أسطح) + إصلاح أعطال الواجهة الحقيقية
 
@@ -837,7 +853,7 @@
 
 ### النتائج
 - ✅ **208/208** اختبار خادم (`packages/server`) — 24 ملفًا.
-- ✅ **32/32** E2E (Playwright) — دورتان متتاليتان متطابقتان بعد إصلاح الـ fixture.
+- ✅ **33/33** E2E (Playwright) — دورتان متتاليتان متطابقتان بعد إصلاح الـ fixture.
 - ✅ `npm run build` (server + web) ناجح؛ `tsc --noEmit` نظيف.
 - ✅ Docs محدّثة: `PRODUCTION_GAP_LIST.md` (A1/A2/A3 → ✅).
 

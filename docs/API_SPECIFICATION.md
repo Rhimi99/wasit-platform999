@@ -235,6 +235,24 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `GET /assets/:id/content?token=…` — بث/تنزيل الأصل برابط موقّع قصير العمر + دعم Range
   (`MEDIA_DOWNLOAD_TTL_SECONDS`). لا ملفات ثابتة عامة.
 
+## المالية الإدارية (`/api/admin/finance`) — `commission:manage` أو `payment:read`
+
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/api/admin/finance/payout-providers` | كتالوج مسارات Payout المتاحة |
+| POST | `/api/admin/finance/settlements/confirm` | تأكيد تسوية من دليل المزوّد (idempotent) |
+| POST | `/api/admin/finance/payouts` | إنشاء Payout (يبدأ `CREATED`) |
+| GET | `/api/admin/finance/payouts` | قائمة Payout بترقيم صفحات (افتراضي 20، سقف 100) |
+| GET | `/api/admin/finance/payouts/:id` | قراءة Payout |
+| POST | `/api/admin/finance/payouts/:id/dispatch` | إرسال Payout للمسار (يصل `PROCESSING` فقط) |
+| POST | `/api/admin/finance/payouts/:id/sync` | إعادة فحص Payout مع المسار |
+| POST | `/api/admin/finance/reconciliation/import` | استيراد تغذية مطابقة كـJSON (provider/bank/ledger) |
+| POST | `/api/admin/finance/reconciliation/preview-file` | **معاينة** ملف مطابقة (لا تكتب شيئًا) |
+| POST | `/api/admin/finance/reconciliation/import-file` | استيراد ملف مطابقة (CSV/TSV/JSON) |
+| POST | `/api/admin/finance/receipts` | تسجيل وصول عمولة WASIT من دليل مستقل |
+
+**استيراد ملفات المطابقة** (الملحق أ.5-1): يُرسل الملف كـ`multipart/form-data` تحت الحقل `file`، مع `source=PROVIDER|BANK` و`currencyCode` في سلسلة الاستعلام (`importKey`/`providerId` اختياريان للاستيراد). التفاصيل الكاملة في `docs/RECONCILIATION_FILE_IMPORT.md`.
+
 ## بقية الوحدات (Routes تحت التطوير)
 
 `/users`, `/ads`, `/ai`, `/analytics`, `/geo`, `/policies`, `/subscriptions`, `/subscriptions/plans`, `/refunds`, `/commissions`

@@ -1513,6 +1513,15 @@ export interface ReconciliationImportResult {
   report: ReconciliationReport;
 }
 
+/** Result of `POST /reconciliation/preview-file`: the report, nothing written. */
+export interface ReconciliationPreviewResult {
+  format: 'csv' | 'tsv' | 'json';
+  source: 'PROVIDER' | 'BANK';
+  currencyCode: string;
+  rowCount: number;
+  report: ReconciliationReport;
+}
+
 export type ReceiptSource = 'BANK_STATEMENT' | 'ACQUIRER' | 'PROVIDER';
 
 /** Result of `POST /receipts`: WASIT's commission funds proven received. */

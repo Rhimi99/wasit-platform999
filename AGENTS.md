@@ -75,6 +75,14 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - **`src/modules/geo/service.ts`**: أُصلحت 3 أخطاء — `conditions: (SQL | undefined)[]` صريحة في `listCountries/listCurrencies/listLanguages` + `import type { SQL }` — سلوك الاستعلامات لم يتغير.
 - **أمر التحقق**: `cd packages/server && npx tsc --noEmit` → **exit 0**. لا توجد أخطاء متبقية في Geo/Revenue/Subscriptions.
 
+## الحالة الحالية (2026-10-29) — استيراد ملفات المطابقة (N7) + i18n parity (N6) — 1067/1070 Tests
+
+- ✅ **N7 — استيراد ملفات المطابقة المالية (الملحق أ.5-1، مغلق)**: مساران جديدان `POST /api/admin/finance/reconciliation/preview-file` (لا يكتب) و`/import-file`، يستقبلان `multipart/form-data` (حقل `file`) بصيغ `.csv`/`.tsv`/`.json` (UTF-8، ≤1 ميجابايت، ≤5000 صف)، ويحوّلانها عبر `modules/reconciliation/file-import.ts` إلى نفس `ProviderFeedLine`/`BankFeedLine` ثم بنفس `importReconciliationFeed` (نفس checksum/idempotency ونفس حفظ `MISMATCH`). الجانب الدفتري **لا يُقبل من ملف**، والمعاينة **لا تكتب شيئًا**. الواجهة في `AdminFinancePage.tsx`، والتوثيق في `docs/RECONCILIATION_FILE_IMPORT.md`.
+- ✅ **اختبارات N7**: `tests/reconciliation-file-import.test.ts` — **33/33** (محلّل نقي + مسارات حقيقية: 401/403، معاينة بلا كتابة، idempotency، `MISMATCH` محفوظ، رفض التكرار/تهريب عمود).
+- ✅ **N6 — إصلاح `common.date` المفقود في zh**: أُضيف المفتاح + `tests/i18n-locale-parity.test.ts` (3 حالات).
+- ✅ **المجموعة الكاملة**: **87 Test Files · 1067/1070 Tests (3 متخطّاة) · Exit 0** — لا كسر في أي module سابق.
+- ⚠️ **الحالة الإنتاجية**: الإغلاق **منطقي برمجي**؛ لا يُثبت حركة أموال حقيقية في الإنتاج (يتطلّب مزوّدًا فعليًا + حساب تسوية).
+
 ## الحالة الحالية(2026-09-17) — Revenue & Profitability — 139/139 Tests
 
 - ✅ **Revenue module مكتمل ومدمج في createApp() الحقيقي**: `app.route('/api/revenue', revenueRoutes)` في `packages/server/src/app.ts` (بين analytics وprivacy.

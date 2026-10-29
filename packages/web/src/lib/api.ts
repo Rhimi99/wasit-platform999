@@ -23,7 +23,7 @@ import type {
   PrivacyConsentState,
   AdminTradeRow, AdminTradeListResponse, TradeKind,
   PayoutRails, PayoutRecord, SettlementResult, PayoutStatus, PayoutListResult,
-  ReconciliationImportResult, ProviderFeedLine, BankFeedLine, LedgerFeedLine, ReceiptResult, ReceiptSource,
+  ReconciliationImportResult, ReconciliationPreviewResult, ProviderFeedLine, BankFeedLine, LedgerFeedLine, ReceiptResult, ReceiptSource,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -82,6 +82,32 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     );
   }
 
+  return body.data as T;
+}
+
+/**
+ * Same envelope/error handling as `request`, but for a FormData body. The
+ * browser sets the multipart Content-Type (with boundary) itself, so we must not
+ * set it by hand.
+ */
+async function multipart<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, { method: 'POST', body: form, credentials: 'include' });
+  let body: ApiResponse<T> | null = null;
+  try {
+    body = (await res.json()) as ApiResponse<T>;
+  } catch {
+    // no JSON
+  }
+  if (!res.ok || !body?.success) {
+    const err = body?.error;
+    throw new ApiClientError(
+      err?.message ?? 'Request failed',
+      err?.code ?? 'UNKNOWN',
+      err?.statusCode ?? res.status,
+      err?.fieldErrors,
+      err?.traceId,
+    );
+  }
   return body.data as T;
 }
 
@@ -494,6 +520,41 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  },
+  /**
+   * File-based reconciliation ingestion (appendix a.5-1). The server validates
+   * the file (type/size/encoding/columns) and returns the match report. Preview
+   * writes nothing; import records evidence + decisions and never moves money.
+   */
+  async adminPreviewReconciliationFile(params: {
+    file: File;
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+  }) {
+    const fd = new FormData();
+    fd.set('file', params.file);
+    const qs = new URLSearchParams({ source: params.source, currencyCode: params.currencyCode });
+    return multipart<ReconciliationPreviewResult>(
+      `/api/admin/finance/reconciliation/preview-file?${qs.toString()}`,
+      fd,
+    );
+  },
+  async adminImportReconciliationFile(params: {
+    file: File;
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+    importKey?: string;
+    providerId?: string;
+  }) {
+    const fd = new FormData();
+    fd.set('file', params.file);
+    const qs = new URLSearchParams({ source: params.source, currencyCode: params.currencyCode });
+    if (params.importKey) qs.set('importKey', params.importKey);
+    if (params.providerId) qs.set('providerId', params.providerId);
+    return multipart<ReconciliationImportResult>(
+      `/api/admin/finance/reconciliation/import-file?${qs.toString()}`,
+      fd,
+    );
   },
   // WASIT receipt (commission funds actually received). Independent of settlement.
   async adminRecordReceipt(data: {
