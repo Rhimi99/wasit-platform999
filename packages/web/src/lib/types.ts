@@ -755,9 +755,30 @@ export interface AgentRegistryRow {
   id: string;
   key: string;
   name: string;
+  nameAr: string | null;
+  mission: string | null;
+  category: string;
   description: string | null;
+  allowedTools: string[];
+  approvalActions: string[];
+  limits: Record<string, number | string | boolean>;
+  taskTypes: string[];
   requiresHumanApproval: boolean;
+  status: 'ACTIVE' | 'PAUSED' | 'DISABLED';
+  isCopilot: boolean;
   isActive: boolean;
+  createdAt: string;
+}
+
+export interface AgentScheduleRow {
+  id: string;
+  agentKey: string;
+  taskType: string;
+  intervalSeconds: number;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastTaskId: string | null;
   createdAt: string;
 }
 
@@ -765,14 +786,23 @@ export interface AgentTaskRow {
   id: string;
   agentKey: string;
   requestedBy: string;
+  taskType: string | null;
   input: Record<string, unknown>;
   status: AgentTaskStatus;
   result: unknown;
   error: { message?: string } | null;
   requiresApproval: boolean;
+  approvalAction: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   rejectionReason: string | null;
+  dedupeKey: string | null;
+  correlationId: string | null;
+  triggeredBy: string;
+  priority: number;
+  attempts: number;
+  maxAttempts: number;
+  scheduledFor: string | null;
   cost: string;
   model: string;
   latencyMs: number;
@@ -1290,4 +1320,217 @@ export interface DirectoryMerchantRow {
 export interface DirectoryListResponse<T> {
   items: T[];
   pagination: PaginationInfo;
+}
+
+// ---- Own-data privacy consent (server: modules/privacy) ----
+export interface ConsentItem {
+  type: string;
+  label: string;
+  granted: boolean;
+}
+
+export interface ConsentDefault {
+  type: string;
+  label: string;
+  grantedByDefault: boolean;
+}
+
+/**
+ * Shape of `GET /api/privacy/me`. `consents` is normalised server-side: every
+ * `CONSENT_TYPES` entry is present, so a missing row and an explicit `false`
+ * both surface as `granted: false` — the client cannot tell "never decided"
+ * from "declined". `defaults` marks the types the server treats as baseline.
+ */
+export interface PrivacyConsentState {
+  consents: ConsentItem[];
+  defaults: ConsentDefault[];
+  settings: {
+    require2FA: boolean;
+    loginNotifications: boolean;
+    deviceTracking: boolean;
+  } | null;
+}
+
+// ---- Admin trade desk (server: modules/admin/trade-routes) ----
+export type TradeKind = 'suppliers' | 'merchants' | 'companies';
+
+/**
+ * One seller entity on the admin vetting desk. Unlike the public directory rows,
+ * `name` is normalised server-side across the three tables (companyName /
+ * storeName / legalName) and inactive entities are included so they can be
+ * reactivated.
+ */
+export interface AdminTradeRow {
+  id: string;
+  kind: TradeKind;
+  name: string;
+  slug: string;
+  userId: string;
+  countryId: string | null;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminTradeListResponse {
+  items: AdminTradeRow[];
+  pagination: PaginationInfo;
+}
+
+// ---- Admin finance (settlement / payout money-movement surface) ----
+// Mirrors the shapes returned by `/api/admin/finance/*`; the server stays the
+// only writer of SETTLED/COMPLETED, so these are read/action views, not state.
+
+export type PayoutStatus = 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'HELD';
+
+/** One configured payout rail and what it can prove. Never carries credentials. */
+export interface PayoutRail {
+  id: string;
+  functional: boolean;
+  available: boolean;
+  demo: boolean;
+  transferReference: boolean;
+}
+
+export interface PayoutRails {
+  active: string;
+  providers: PayoutRail[];
+}
+
+/** The seller payout record as persisted (net amount is derived, never supplied). */
+export interface PayoutRecord {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+}
+
+/** Result of `POST /settlements/confirm`: whether it applied, or was a replay. */
+export interface SettlementResult {
+  applied: boolean;
+  duplicate: boolean;
+  settlementEntryId: string | null;
+}
+
+/** One row of the admin payout list (`GET /payouts`). Read-only projection. */
+export interface PayoutListRow {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+/** Paginated payout list as returned by `GET /payouts`. */
+export interface PayoutListResult {
+  items: PayoutListRow[];
+  pagination: { page: number; pageSize: number; total: number };
+}
+
+// ---- Reconciliation (PS-04 three-way matching) ----
+
+export type ReconciliationStatus = 'MATCHED' | 'MISMATCH';
+
+/** Why a reference did not reconcile; the engine classifies, never guesses. */
+export type MismatchKind =
+  | 'MISSING_IN_LEDGER'
+  | 'MISSING_IN_PROVIDER'
+  | 'MISSING_IN_BANK'
+  | 'AMOUNT_MISMATCH'
+  | 'FEE_MISMATCH'
+  | 'NET_MISMATCH'
+  | 'CURRENCY_MISMATCH'
+  | 'NOT_SETTLED_IN_LEDGER'
+  | 'DUPLICATE_REFERENCE';
+
+export interface ProviderFeedLine {
+  reference: string;
+  settlementRef?: string | null;
+  payoutRef?: string | null;
+  grossAmount: string;
+  providerFee: string;
+  netAmount: string;
+  currencyCode: string;
+  occurredAt?: string | null;
+}
+
+export interface BankFeedLine {
+  reference: string;
+  settlementRef?: string | null;
+  payoutRef?: string | null;
+  amount: string;
+  currencyCode: string;
+  occurredAt?: string | null;
+}
+
+export interface LedgerFeedLine {
+  reference: string;
+  grossAmount: string;
+  providerFee: string;
+  netAmount: string;
+  currencyCode: string;
+  settled: boolean;
+}
+
+export interface ReconciliationDecision {
+  reference: string;
+  status: ReconciliationStatus;
+  mismatches: MismatchKind[];
+  provider: ProviderFeedLine | null;
+  bank: BankFeedLine | null;
+  ledger: LedgerFeedLine | null;
+}
+
+export interface ReconciliationReport {
+  currencyCode: string;
+  decisions: ReconciliationDecision[];
+  matched: number;
+  mismatched: number;
+}
+
+/** Result of `POST /reconciliation/import`: the persisted report, or a replay. */
+export interface ReconciliationImportResult {
+  importId: string;
+  duplicate: boolean;
+  insertedLines: number;
+  report: ReconciliationReport;
+}
+
+/** Result of `POST /reconciliation/preview-file`: the report, nothing written. */
+export interface ReconciliationPreviewResult {
+  format: 'csv' | 'tsv' | 'json';
+  source: 'PROVIDER' | 'BANK';
+  currencyCode: string;
+  rowCount: number;
+  report: ReconciliationReport;
+}
+
+export type ReceiptSource = 'BANK_STATEMENT' | 'ACQUIRER' | 'PROVIDER';
+
+/** Result of `POST /receipts`: WASIT's commission funds proven received. */
+export interface ReceiptResult {
+  id: string;
+  status: 'RECEIVED';
+  reference: string;
+  amount: string;
+  currencyCode: string;
+  source: ReceiptSource;
+  duplicate: boolean;
 }

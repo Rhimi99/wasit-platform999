@@ -5,6 +5,8 @@ import { advanceDueDeletionRetentions } from '../modules/privacy/service';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
+import { dispatchDueSchedules, ensureSchedules } from '../modules/ai/copilot';
+import { executeDueTasks, reapStaleTasks } from '../modules/ai/runner';
 
 export interface SchedulerHandle {
   stop: () => void;
@@ -91,10 +93,29 @@ export function startScheduler(options: {
     }
   };
 
+  /**
+   * Agent automation: dispatch any due agent schedules (the Copilot delegates
+   * them), run their queued tasks, then fail stale running tasks via the
+   * watchdog. All three are idempotent, so a duplicate tick is a no-op.
+   */
+  const runAgentWork = async (): Promise<void> => {
+    try {
+      const { dispatched } = await dispatchDueSchedules(db);
+      const { ran, failed } = await executeDueTasks(db);
+      const reaped = await reapStaleTasks(db);
+      if (dispatched || ran || reaped) {
+        logger.info('agent cycle', { dispatched, ran, failed, reaped });
+      }
+    } catch (err) {
+      logger.error('agent cycle failed', { error: (err as Error).message });
+    }
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
     await runRetentionSweep();
+    await runAgentWork();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
       await runRateLimitPurge();

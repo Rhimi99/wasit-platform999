@@ -190,6 +190,34 @@
       "when": 1790674220619,
       "tag": "0026_p6_p7_dispute_webhook_dlq",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790900000000,
+      "tag": "0027_agent_layer_integration",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790900100000,
+      "tag": "0028_agent_task_dedupe_open_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790900200000,
+      "tag": "0029_agent_metrics_memory",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790900300000,
+      "tag": "0030_login_lockout",
+      "breakpoints": true
     }
   ]
 }

@@ -79,6 +79,13 @@ Users, Merchants, Suppliers, Companies, Products, Categories, Orders, Transactio
 - الخادم: `updateCampaign`/`addCreative` تُعفى من حرس الملكية من يملك `CAMPAIGN_MANAGE` — الكتابة تطابق نطاق مسارات القراءة؛ غيرهما يبقى 403.
 - ترجمات كاملة ar/fr/en/zh.
 
+### مكتب التحقق التجاري (PR-02)
+
+- `/admin/trade` — `AdminTradePage.tsx` (محروس بـ`AdminOnly`، مدخل تنقّل «مكتب التحقق التجاري» (`admin.trade`) في `AppSidebar`): ثلاث تبويبات (`admin-trade-tab-suppliers|merchants|companies`) لكل جدول أعمدة الاسم/المعرّف/التوثيق/التنشيط + زرّان لكل صف: توثيق (`admin-trade-toggle-verified-<id>`) وتعليق/إعادة تنشيط (`admin-trade-toggle-active-<id>`)، مربوطان بـ`PATCH /api/admin/trade/:kind/:id`.
+- الخادم: `GET/PATCH /api/admin/trade/{suppliers,merchants,companies}` خلف `requireAuth` + `requireRole('ADMIN','SUPER_ADMIN')` + `requirePermission(SUPPLIER|MERCHANT|COMPANY_LIST|UPDATE)`. الطبقتان معًا ضروريتان: دور `MERCHANT`/`COMPANY` يملك `*_UPDATE` الخاصة به، فحرس الدور وحده يمنع التصعيد.
+- الكتابة على `verified`/`isActive` مُدقّقة (`TRADE.VERIFIED|UNVERIFIED|SUSPENDED|REACTIVATED|STATUS_UNCHANGED`) مع before/after، وتنعكس مباشرة على `directory`/`search`/`sitemap` (تقرأ هذين العمودين).
+- ترجمات كاملة ar/fr/en/zh.
+
 ### آلة حالة الحملات الإعلانية + حرس إيقاف المنتج (مكتملة — B14)
 
 - `/dashboard/ads` — `DashboardAdsPage.tsx`: بطاقة الحملة (`ads-campaign-<id>`) تعرض الأزرار وفق آلة الحالة الحقيقية فقط: `DRAFT` → تفعيل (`ads-activate-<id>`) + إلغاء (`ads-cancel-<id>`)؛ `ACTIVE` → إيقاف مؤقت (`ads-pause-<id>`) + إنهاء (`ads-end-<id>`)؛ `PAUSED` → استئناف (`ads-resume-<id>`) + إلغاء + إنهاء؛ `COMPLETED`/`CANCELLED` بلا أي انتقال (كان زر الاستئناف يظهر خطأً فيُرفض بـ409).

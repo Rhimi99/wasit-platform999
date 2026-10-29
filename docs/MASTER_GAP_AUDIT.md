@@ -7,6 +7,12 @@
 > `docs/DEVELOPMENT_ROADMAP.md`, `docs/DEPLOYMENT.md`) + تحقق حيّ من قاعدة `wasit_demo` و`/api/*`.
 > **قاعدة صارمة**: لا يُعتبر النقص مغلقًا إلا بدليل من الكود أو اختبار/تكامل حقيقي. E2E أخضر ≠ اكتمال تجاري.
 
+> **تصحيح PS-01-A (توثيقي فقط) — الفرع `ci/repair-sandbox-2u-g-20261020-190057` · HEAD `9fa85ae4`**:
+> هذا التدقيق كُتب عند HEAD `bada224`، ثم نُفِّذت طبقة التسوية/الدفع للمورّد/المطابقة في commits لاحقة
+> (`1ecfc23` PS-01 · `e9a99de` PS-02 · `de59216` PS-02/PS-04 schema · `12c3949` provenance). لذلك صفوف
+> `PS-01` و`PS-02` و`PS-04` أدناه **قديمة** ويجب قراءتها مع «الملحق أ» في نهاية هذا الملف.
+> لم يُغيَّر أي كود تسوية في هذا التصحيح؛ الإغلاق المُعلَن هو **إغلاق منطقي برمجي**، ولا يعني اكتمالًا تجاريًا/إنتاجيًا.
+
 ---
 
 ## 1. ملاحظات دقّة على وثائق الأساس (قبل الجدول)
@@ -29,6 +35,7 @@
 - **سياسة العمولة 4% = 2% + 2%** مُطبَّقة عبر Policy Engine (غير Hardcoded): طلب حيّ `grand_total = items + buyer_commission`،
   و`transaction_ledger` يحمل قيدَي `COMMISSION` (SELLER/BUYER) منفصلين + `PAYMENT_FEE` مستقل. مُتحقَّق من DB الحيّة.
 - **Order → Intent → Webhook (HMAC) → Confirmation → Ledger** موصول كاملًا، مع رفض توقيع مزيّف وعدم إعادة تشغيل.
+- **بوابة تأكيد الطلب (PS-08A)**: `PATCH /api/orders/:id/status` لا يقبل `CONFIRMED` إلا بعد `paymentStatus='PAID'` (409 وإلا)، ولا أثر مخزون عند الرفض.
 - **Refunds**: idempotent + منع over-refund + عكس العمولة/الرسوم + قيد `REFUND`.
 - **Inventory**: حجز ذرّي قبل كتابة الطلب + تحرير/خصم حسب الانتقالات.
 - **11 AI Agent** مُسجَّلون مع RBAC/capabilities/budget/usage/approval gate؛ Marketing Video E2E حقيقي (720×1280, d=35).
@@ -46,15 +53,16 @@ AI/Automation · Documentation · Test/Harness
 
 | ID | Gap | Category | Current State | Evidence | Severity | P | G |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| PS-01 | لا طبقة Settlement: `settlement_status` لا يُكتب أبدًا، ولا كاتب لقيد `SETTLEMENT`، ولا جداول settlement | Payment/Settlement | `settlement_status` مُعرَّف (`commerce.ts:79`) لكن **صفر كتابة**؛ `SETTLEMENT` enum فقط (`commerce.ts:149`)؛ `ledger-flow` يقرأه فيعطيه 0 | `grep -rn "settlementStatus" src/modules` = ∅ · DB: كل الطلبات `settle=PENDING` · `count(SETTLEMENT)=0` | Critical | Yes | Yes |
-| PS-02 | لا Seller/Merchant Payout: لا مسار يحوّل صافي مستحقّ البائع | Payment/Settlement | لا كود ولا جدول `payouts`/`settlement_accounts` | `grep -rniE "payout\|iban\|swift\|bank_transfer\|treasury" src` = ∅ | Critical | Yes | Yes |
-| PS-03 | قدرة Split لدى المزوّد (iPay/ClicToPay/Flouci) **غير مؤكَّدة وغير موثَّقة** | Payment/Settlement | الكود يمرّر `metadata` للتسوية فقط؛ النموذج 1020→980+40 يحتاج split أو WASIT كحامل أموال | `docs/PAYMENT_PROVIDER_IPAY_COMPATIBILITY_AUDIT.md` §D: لا endpoint منشور للـsplit/sub-merchant/settlement/settlement_status | Critical | Yes | Yes |
-| PS-04 | لا Reconciliation مع حساب المزوّد/البنك (لا Treasury) | Payment/Settlement | «التسوية» الحالية = حالة قيد محاسبي فقط (`transaction_ledger.status=SETTLED`) | `payments/service.ts:142` تعليق صريح: «provider record … NOT a user wallet» | Critical | Yes | Yes |
-| PS-05 | لا مسار إتمام دفع `manual`/offline من الواجهة | Payment/Settlement | `manual` يُنشئ intent `PENDING` بـ`checkoutUrl=null`، ولا «settlement desk» في الويب | `lib/payments/providers.ts:50-79` · `grep web "settle\|markPaid"` = ∅ · CheckoutPage يبقى «بانتظار الدفع» | Critical | Yes | Yes |
+| PS-01 | طبقة Settlement: **مغلقة منطقيًا** (كانت: `settlement_status` لا يُكتب أبدًا، ولا كاتب لقيد `SETTLEMENT`) — التفاصيل في «الملحق أ» | Payment/Settlement | `modules/settlements/service.ts:74 confirmSettlement` هو **الكاتب الوحيد** لـ`transaction_ledger.status='SETTLED'` (سطر 149) و**الكاتب الوحيد** لقيد `SETTLEMENT` (سطر 165)، خلف دليل إلزامي (`settlementRef` سطر 39/75) داخل `db.transaction` مع قفل `FOR UPDATE` (سطر 125) + ترقية `orders.settlementStatus='SETTLED'` (سطر 181) + Audit `SETTLEMENT.CONFIRMED` (سطر 185). مُفوَّض من الـwebhook (`payments/service.ts:370`) ومسار إداري (`finance/routes.ts:117` على `/api/admin/finance`، `app.ts:126`) | `tests/settlement-ledger.test.ts` (9 حالات) · `tests/money-path-invariants.test.ts` (9) · `tests/persistence-invariants.test.ts` · `e2e/settlement-integrity.spec.ts` (4) · `scripts/verify-money-path.ts` | ~~Critical~~ → **Closed (logic)** | No | Yes |
+| PS-02 | Seller Payout: **مغلقة منطقيًا** (كانت: لا مسار يحوّل صافي مستحقّ البائع) — التفاصيل في «الملحق أ» | Payment/Settlement | محرّك خالص `modules/payouts/engine.ts` (`CREATED→PROCESSING→COMPLETED/FAILED/HELD`؛ `COMPLETED` يتطلّب `payoutRef` + مطابقة مبلغ/عملة) + تخزين `modules/payouts/service.ts` + جدول `payouts` (migration `0024`، CHECK `payouts_completed_requires_ref`) + منفّذ المزوّد `provider-service.ts`؛ صافي البائع = `itemsTotal − sellerCommission` (سطر `engine.ts:computeSellerPayable`) | `tests/payout-engine.test.ts` (11) · `tests/payout-provider.test.ts` (20) · `tests/finance-routes.test.ts` (16) · `tests/persistence-invariants.test.ts` | ~~Critical~~ → **Closed (logic)** | No | Yes |
+| PS-03 | قدرة Split لدى المزوّد (iPay/ClicToPay/Flouci) **غير مؤكَّدة وغير موثَّقة** — **تبقى مفتوحة (مسارات مستقل، لا يُغلقها PS-01-A)** | Payment/Settlement | الكود يمرّر `metadata` للتسوية فقط؛ النموذج 1020→980+40 يحتاج split أو WASIT كحامل أموال | `docs/PAYMENT_PROVIDER_IPAY_COMPATIBILITY_AUDIT.md` §D: لا endpoint منشور للـsplit/sub-merchant/settlement/settlement_status | Critical | Yes | Yes |
+| PS-04 | Reconciliation/Treasury: **مغلقة منطقيًا** (كانت: لا Reconciliation مع حساب المزوّد/البنك) — التفاصيل في «الملحق أ» | Payment/Settlement | محرّك مطابقة ثلاثية خالص `modules/reconciliation/engine.ts` (Provider ↔ Bank ↔ Ledger بفروق مصنَّفة تظهر MISMATCH) + تخزين `service.ts` + جداول `reconciliation_{imports,lines,decisions}` (migration `0024`) + provenance `provenance.ts` + Receipt `receipt-service.ts` | `tests/reconciliation-engine.test.ts` (17) · `tests/finance-routes.test.ts` (16) · `tests/persistence-invariants.test.ts` | ~~Critical~~ → **Closed (logic)** | No | Yes |
+| PS-05 | مسار إتمام دفع `manual`/offline: **مغلق على هذا الفرع** — `POST /api/payments/orders/:orderId/complete-manual` (`payments/service.ts:950`) + واجهة `/admin/orders` (`AdminPages.tsx:385`، `admin-order-complete-manual-<id>`) | Payment/Settlement | كان: `manual` يُنشئ intent `PENDING` بلا مخرج من الويب | `payments/routes.ts:77` · `e2e/manual-payment.spec.ts` · `tests/manual-payment-completion.test.ts` | ~~Critical~~ → **Closed (demo rail only)** | No | Yes |
 | PS-06 | Refunds غير مدعومة في ClicToPay | Payment/Settlement | `refund()` يرمي 503 | `lib/payments/clictopay.ts:121-122` («not exposed via the documented REST API») | High | Yes | No |
 | PS-07 | لا Credentials إنتاجية لمزوّد الدفع | Production/Infra | الكل يمرّ عبر `PaymentProviderPort`؛ لا مفاتيح حيّة | `.env.demo`: `PAYMENT_PROVIDER=manual`؛ `docs/PROJECT_BASELINE.md` §6 بند 3 | Critical | Yes | Yes |
+| PS-08A | تأكيد الطلب قبل إثبات الدفع: **مغلق** (كان: `PATCH /api/orders/:id/status` يقبل `CONFIRMED` على طلب غير مدفوع فيحوّل الحجز إلى بيع) | Payment/Settlement | بوابة مال في `modules/orders/service.ts:updateOrderStatus` (سطر 382-393): `CONFIRMED` يتطلّب `orders.paymentStatus='PAID'` وإلا **409 CONFLICT**؛ `PAID` يكتبه فقط `applyPaymentSucceeded` عن دليل موثَّق؛ الفحص قبل أي أثر مخزون؛ بقية الانتقالات بلا قيد | `tests/order-confirmation-gate.test.ts` (7 حالات) · `tests/inventory.test.ts` (مُحدَّث) · `e2e/order-lifecycle.spec.ts` (+حالة 409) | ~~High~~ → **Closed (logic)** | No | Yes |
 | LC-01 | لا ToS / Privacy Policy / Cookie Policy (محتوى أو صفحات) | Security/Compliance | لا Route ولا نصّ قانوني في المستودع | `grep web "terms\|privacy policy\|cookie"` = ∅ · لا ملفات قانونية في `docs/` | Critical | Yes | Yes |
-| LC-02 | لا التقاط موافقة الكوكيز/GDPR من الواجهة (API موجود) | Security/Compliance | `PUT /api/privacy/consents` موجود، لكن لا banner/UI | `modules/privacy/routes.ts:70` مقابل `grep web "cookie"` = ∅ | High | Yes | Yes |
+| LC-02 | التقاط موافقة الكوكيز/GDPR من الواجهة (API موجود) — **مُغلق تقنيًا** | Security/Compliance | `PUT /api/privacy/consents` + `GET /api/privacy/me` خلف `requireAuth`؛ الواجهة تعرض banner للزيارة الأولى + بطاقة إعدادات وتكتب عبر الـendpoint الحقيقي | `packages/web/src/components/CookieConsent.tsx` · `e2e/cookie-consent.spec.ts` · `security-privacy.test.ts` (رفض الزائر المجهول + التطبيع). لا يوجد endpoint موافقة مجهول، والكوكي الوحيد هو جلسة أساسية — موثَّق في `FINAL-AUDIT.md` | High | Yes | Yes |
 | LC-03 | لا سياسة سلع محظورة (محتوى/إنفاذ) | Security/Compliance | لا قائمة ولا فلترة | `grep -rniE "prohibit\|banned\|restricted goods" src` = ∅ | High | Yes | Yes |
 | LC-04 | لا Refund/Dispute Policy ولا Merchant/Buyer Terms (محتوى عام) | Security/Compliance | سياسات النزاع/الاستبقاء موجودة كـ**بيانات داخلية**، لا كنصوص تعاقدية عامة | `admin/policy-routes.ts` (داخلي) مقابل لا صفحات عامة | High | Yes | Yes |
 | LC-05 | لا تكامل KYC/KYB/AML/sanctions — التحقق مراجعة وثائق بشرية | Security/Compliance | حقول `documentType/documentRef` + موافقة أدمن؛ لا مزوّد هوية | `modules/verification/service.ts:76,121` · `seed.ts:320` (requirements) · لا مزوّد | High | Yes | Yes |
@@ -73,7 +81,7 @@ AI/Automation · Documentation · Test/Harness
 | PI-10 | Email/SMS افتراضيًا `log`؛ لا بوابة إنتاجية | Production/Infra | المنافذ جاهزة (SMTP/HTTP) بلا مزوّد مُهيّأ | `.env.demo`: `MAIL_TRANSPORT=log`, `SMS_TRANSPORT=log` | Medium | No | Yes |
 | PI-11 | لا HA/DR (replica/multi-region/failover) | Production/Infra | لا إعداد | لا كود/إعداد replica | Medium | No | Yes |
 | PR-01 | لا Cart دائم/دفع متعدد البنود من الواجهة | Product | `CheckoutPage` يشتري **منتجًا واحدًا** (`productId` + `qty`)؛ لا سلة | `App.tsx:86` · `CheckoutPage.tsx:91-93` (`items:[{…}]`) · لا جدول cart | Medium | No | Yes |
-| PR-02 | Admin Desks ناقصة: Merchants/Suppliers/Companies/Categories/Currencies/Languages/Commissions | Product | لا مسارات admin لها (فقط users/products/orders/transactions/ledger/audit + engines) | `grep "admin/merchants\|admin/suppliers\|admin/companies\|admin/commissions"` = ∅ · `admin/routes.ts` | High | No | Yes |
+| PR-02 | Admin Desks ناقصة: Merchants/Suppliers/Companies/Categories/Currencies/Languages/Commissions — **جزئيًا مُغلق**: تمّت إضافة مكتب تحقق للموردين/التجار/الشركات | Product | `/api/admin/trade/{suppliers,merchants,companies}` (GET/PATCH) خلف `requireAuth`+`requireRole('ADMIN','SUPER_ADMIN')`+`requirePermission` لكل نوع؛ `verified`/`isActive` أصبح لهما مسار كتابة مُدقّق (`TRADE.VERIFIED`/`TRADE.SUSPENDED`/…). لا تزال Categories/Currencies/Languages/Commissions بلا مسارات admin | `modules/admin/trade-routes.ts` · `modules/admin/trade-service.ts` · `AdminTradePage.tsx` · `admin-trade.test.ts` · `e2e/admin-trade.spec.ts` | High | Partial | Yes |
 | PR-03 | أسطح أدوار Placeholder: Branches، Employees | Product | EmptyState بلا Backend | `DashboardListPages.tsx:322-334` | Medium | No | Yes |
 | PR-04 | أسطح Placeholder: Sales، Finance، Reports | Product | بطاقات «—» ثابتة/نص roadmap | `DashboardInventoryPages.tsx:438` · `DashboardListPages.tsx:338,352` | Medium | No | Yes |
 | PR-05 | Business Calculator `/tools/calculator` غير منفَّذ | Product | لا Route ولا وحدة | `grep web "calculator"` = ∅ · Baseline §5 | Medium | No | Yes |
@@ -90,7 +98,7 @@ AI/Automation · Documentation · Test/Harness
 | DO-01 | `PAYMENT_SETTLEMENT_AUDIT.md` stale (يعرض RC-1/3/4/5 كمفتوحة وهي مُصلَحة) | Documentation | خطر قرارات خاطئة | §1 أعلاه (الأدلة من الكود) | Medium | Yes | No |
 | DO-02 | `DEVELOPMENT_ROADMAP.md` drift (أعداد اختبارات، ادعاء غياب اختبار geo) | Documentation | أرقام قديمة | Roadmap vs `geo.test.ts`/الواقع | Low | No | Yes |
 | DO-03 | تقرير 2026-09-14 يقول Marketing Video «contract only» | Documentation | متجاوَز | §1 أعلاه | Low | No | No |
-| TH-01 | لا اختبارات لـSettlement/Payout/Reconciliation (لعدم وجودها) | Test/Harness | لا شيء يُختبر | متعدد PS-01..04 | Medium | No | Yes |
+| TH-01 | اختبارات Settlement/Payout/Reconciliation: **مغلقة** (كانت: لا شيء يُختبر لعدم وجود الوحدات) | Test/Harness | الاختبارات موجودة ومحصورة: `settlement-ledger.test.ts` (9) · `payout-engine.test.ts` (11) · `payout-provider.test.ts` (20) · `reconciliation-engine.test.ts` (17) · `reconciliation-file-import.test.ts` (33) · `finance-routes.test.ts` (16) · `persistence-invariants.test.ts` · `money-path-invariants.test.ts` (9) · `e2e/settlement-integrity.spec.ts` (4) · `e2e/admin-finance.spec.ts` (15) | تغطية خادمية كاملة للوحدات + **E2E لمسارات `/api/admin/finance/*` مُغلقة** (`e2e/admin-finance.spec.ts`، 15 حالة: settlements/confirm + payouts) و**واجهة `/admin/finance` مُضافة ومُغطّاة** (`e2e/admin-finance-ui.spec.ts`، 4 حالات + `e2e/admin-finance-recon-ui.spec.ts`، 5 حالات لـReconciliation/Receipt + `e2e/admin-finance-payout-list-ui.spec.ts`، 4 حالات لقائمة Payout + **استيراد ملفات المطابقة** `reconciliation-file-import.test.ts`، 33 حالة — الملحق أ.5-1 **مغلق**) | ~~Medium~~ → **Closed (unit/integration/E2E)** | No | Yes |
 | TH-02 | أسطح Placeholder غير مغطّاة بـE2E | Test/Harness | لا تغطية للأسطح «—» | PR-03/04 | Low | No | Yes |
 | TH-03 | 8 اختبارات demo-gated تُتخطّى في E2E العادي | Test/Harness | SKIP ما لم يُفعّل auto-login | `functional-audit.spec.ts` (8 skipped) | Low | No | Yes |
 | BU-01 | لا عقد مزوّد دفع حقيقي (تأكيد split/settlement من iPay) | Business | None (تجاري خارجي) | `PAYMENT_PROVIDER_IPAY_COMPATIBILITY_AUDIT.md` §A/§M/§O | Critical | Yes | Yes |
@@ -107,12 +115,15 @@ AI/Automation · Documentation · Test/Harness
 ## 3. التصنيف النهائي (القوائم الأربع)
 
 ### 1) BLOCKERS — تمنع Pilot حقيقيًا بمال فعلي
-- **PS-01** لا طبقة Settlement (لا كاتب لـ`SETTLEMENT`/`settlement_status`).
-- **PS-02** لا Seller/Merchant Payout.
-- **PS-03** قدرة Split لدى المزوّد غير مؤكَّدة/موثّقة.
-- **PS-04** لا Reconciliation/Treasury مع المزوّد/البنك.
-- **PS-05** لا مسار إتمام دفع `manual`/offline من الواجهة.
-- **PS-07** لا Credentials إنتاجية لمزوّد الدفع.
+> **تصحيح PS-01-A**: `PS-01`/`PS-02`/`PS-04` **لم تعد blockers برمجية** — نُفِّذت منطقيًا (انظر «الملحق أ»).
+> ما يبقى مانعًا فعليًا في المسار المالي هو **المتطلبات الخارجية**: `PS-03` (split المزوّد) · `PS-07`
+> (credentials إنتاجية) · `BU-01` (عقد مزوّد) · `BU-02` (حساب تسوية/بنكي) — وهذه لا يُغلقها أي كود داخلي.
+- ~~**PS-01** لا طبقة Settlement~~ → **مُغلقة منطقيًا** (`modules/settlements/service.ts` + 9 اختبارات + E2E).
+- ~~**PS-02** لا Seller/Merchant Payout~~ → **مُغلقة منطقيًا** (`modules/payouts/*` + migration `0024`).
+- **PS-03** قدرة Split لدى المزوّد غير مؤكَّدة/موثّقة — **تبقى مفتوحة** (مسار مستقل، خارجي).
+- ~~**PS-04** لا Reconciliation/Treasury~~ → **مُغلقة منطقيًا** (`modules/reconciliation/*` + migration `0024`).
+- ~~**PS-05** لا مسار إتمام دفع `manual`/offline~~ → **مُغلقة على هذا الفرع** (مسار `complete-manual` + واجهة؛ للمزوّد التجريبي فقط).
+- **PS-07** لا Credentials إنتاجية لمزوّد الدفع — **تبقى مفتوحة** (بنية/تعاقد خارجي).
 - **PI-01 / PI-02** لا بيئة إنتاج/Staging مستضافة، ولا Domain/DNS/TLS.
 - **LC-01** لا ToS/Privacy/Cookie Policy.
 - **LC-05** لا KYC/KYB/AML provider.
@@ -120,7 +131,7 @@ AI/Automation · Documentation · Test/Harness
 - **BU-01 / BU-02 / BU-03 / BU-04 / BU-06** (تجارية): لا عقد مزوّد، لا حساب تسوية، لا مزوّد KYC، لا موردين/مشترين، لا سياسة بلد.
 
 ### 2) PRE-LAUNCH GAPS — تُغلق قبل إطلاق تجاري حقيقي
-- **LC-02** موافقة كوكيز/GDPR من الواجهة.
+- **LC-02** موافقة كوكيز/GDPR من الواجهة — **مُغلق تقنيًا** (banner + بطاقة إعدادات؛ انظر `FINAL-AUDIT.md`). يبقى الاعتماد القانوني لنصوص السياسات (LC-01).
 - **LC-03** سياسة سلع محظورة.
 - **LC-04** Refund/Dispute Policy + Merchant/Buyer Terms.
 - **LC-06** إلزام MFA للـstaff/admin.
@@ -140,7 +151,7 @@ AI/Automation · Documentation · Test/Harness
 - **PR-10** تفضيلات الإشعارات.
 - **PR-11 / BU-08** Support Desk/التصعيد.
 - **DO-01** تحديث وثيقة التسوية (تجنّب قرارات خاطئة).
-- **TH-01** اختبارات Settlement/Payout.
+- ~~**TH-01** اختبارات Settlement/Payout~~ → **مُغلقة** (اختبارات الوحدات + E2E لمسارات `/api/admin/finance/*` في `e2e/admin-finance.spec.ts`)؛ فجوة **الواجهة (UI)** لمسارات المالية **مُغلقة للمسارات الموجودة (N3: `/admin/finance` + `e2e/admin-finance-ui.spec.ts`؛ N4: Reconciliation/Receipt + `e2e/admin-finance-recon-ui.spec.ts`؛ N5: قائمة Payout + `e2e/admin-finance-payout-list-ui.spec.ts`؛ N7: استيراد ملفات المطابقة + `reconciliation-file-import.test.ts`)**.
 
 ### 3) POST-LAUNCH / SCALE — قابلة للتأجيل
 - **PR-01** Cart/دفع متعدد البنود.
@@ -172,6 +183,9 @@ AI/Automation · Documentation · Test/Harness
 
 ## 4. الأعداد
 
+> **تصحيح PS-01-A**: الأعداد أدناه تعكس التدقيق الأصلي (HEAD `bada224`) ولا تُعاد صياغتها بأثر رجعي.
+> الفرق الحالي: `PS-01`/`PS-02`/`PS-04` و`TH-01` خرجت من قائمة «مفتوح» منطقيًا (انظر «الملحق أ»).
+
 | المقياس | العدد |
 | --- | --- |
 | **إجمالي الفجوات الحقيقية** | **64** (55 صفًّا في الجدول أعلاه + 9 بنود حُسمت في §3) |
@@ -186,18 +200,94 @@ AI/Automation · Documentation · Test/Harness
 
 ## 5. أهم 10 نواقص حقيقية مرتّبة حسب تأثيرها على الإطلاق
 
+> **تصحيح PS-01-A**: الصفوف 1 و2 و5 (PS-01/PS-02/PS-04) **لم تعد نواقص برمجية**؛ بقي تأثيرها
+> فقط عبر اعتمادها على متطلبات خارجية (`PS-03`/`PS-07`/`BU-01`/`BU-02`). أُبقيت هنا موسومة ~~مُشطوبة~~
+> للحفاظ على أثر التدقيق الأصلي.
+
 | # | Gap | لماذا هو الأعلى تأثيرًا |
 | --- | --- | --- |
-| 1 | **PS-01** لا Settlement | لا مال يصل إلى WASIT؛ `settlement_status` جامد → كل تقارير التسوية كاذبة هيكليًا |
-| 2 | **PS-02** لا Payout للبائع | لا يستطيع المورّد استلام 980 → يفرغ السوق من البائعين |
-| 3 | **PS-03** Split المزوّد غير مؤكَّد | النموذج المالي (1020 = 980 + 40) بلا مسار تنفيذي مثبت |
+| 1 | ~~**PS-01** لا Settlement~~ → **مُغلقة منطقيًا** | ~~لا مال يصل إلى WASIT~~ — المنطق موجود؛ الأثر المتبقّي: لا إثبات حركة فعلية بلا `PS-07`/`BU-01` |
+| 2 | ~~**PS-02** لا Payout للبائع~~ → **مُغلقة منطقيًا** | ~~المورّد لا يستلم 980~~ — المحرّك والتخزين موجودان؛ يبقى تنفيذ تحويل فعلي (مزوّد/بنك) |
+| 3 | **PS-03** Split المزوّد غير مؤكَّد | النموذج المالي (1020 = 980 + 40) بلا مسار تنفيذي مثبت — **فجوة خارجية قائمة** |
 | 4 | **BU-01/BU-02** لا عقد مزوّد ولا حساب تسوية | بلا كيان قانوني/بنكي، لا يمكن تحصيل أو توزيع |
-| 5 | **PS-04** لا Reconciliation/Treasury | لا مطابقة بين ما عند المزوّد وما في الدفاتر/البنك → مخاطر محاسبية |
+| 5 | ~~**PS-04** لا Reconciliation/Treasury~~ → **مُغلقة منطقيًا** | ~~لا مطابقة~~ — المطابقة الثلاثية موجودة؛ يبقى استيراد كشوف فعلية من المزوّد/البنك |
 | 6 | **PI-01/PI-02** لا بيئة إنتاج + Domain/TLS | لا إطلاق حقيقي ممكن |
 | 7 | **LC-01** لا ToS/Privacy/Cookie | يمنع التشغيل القانوني (تونس وEU/FR) |
 | 8 | **LC-05** لا KYC/KYB/AML | لا يمكن التحقق من المورّدين/التجار بشكل نظامي |
-| 9 | **PS-05** لا مسار إتمام الدفع اليدوي | كل عملية `manual` تبقى «معلّقة» بلا مخرج من الواجهة |
+| 9 | ~~**PS-05** لا مسار إتمام الدفع اليدوي~~ → **مُغلقة على هذا الفرع** | ~~عمليات `manual` تبقى معلّقة~~ — المسار والواجهة موجودان (للمزوّد التجريبي فقط) |
 | 10 | **PI-03** نسخ بلا offsite/تشفير/WAL | فقدان بيانات = توقف أعمال بلا تعافٍ مضمون |
 
 > **تنبيه**: لم يُنفَّذ أي إصلاح في هذه المهمة. التشخيص فقط. لا migration/reset/drop/push، ولا تغيير في DB،
 > ولا مساس بسياسة العمولة (4% = 2%+2%) أو Marketing Video Agent أو الـPayment Kernel أو RBAC.
+
+---
+
+## الملحق أ — إغلاق PS-01/PS-02/PS-04 (تصحيح PS-01-A)
+
+> **السياق**: هذا الملف كُتب عند HEAD `bada224`. بعد ذلك نُفِّذت طبقات حركة المال في commits لاحقة على
+> الفرع `ci/repair-sandbox-2u-g-20261020-190057`. هذا الملحق يوثّق الأدلة الفعلية من الكود الحالي
+> **دون تغيير أي كود**، ويفصل بين (أ) منطق التسوية المُنجَز و(ب) الفجوات المتبقية (واجهة/E2E/خارجية).
+
+### أ.1 الأدلة من الكود (HEAD `9fa85ae4`)
+
+| المرحلة | الوحدة/الملف | الدليل |
+| --- | --- | --- |
+| **PS-01 Settlement** | `packages/server/src/modules/settlements/service.ts` | `confirmSettlement` (سطر 74) — الكاتب الوحيد لـ`transaction_ledger.status='SETTLED'` (سطر 149) والكاتب الوحيد لقيد `SETTLEMENT` (سطر 165)؛ دليل إلزامي `settlementRef` (سطر 39/75)؛ مطابقة amount/currency؛ `db.transaction` + قفل `FOR UPDATE` (سطر 125)؛ ترقية `orders.settlementStatus='SETTLED'` (سطر 181)؛ Audit `SETTLEMENT.CONFIRMED` (سطر 185) |
+| تفويض الـwebhook | `modules/payments/service.ts` | استيراد (سطر 18)؛ بوابة `capabilities.settlementEvidence` (سطر 272)؛ استدعاء `confirmSettlement` (سطر 370) |
+| مسار HTTP | `modules/finance/routes.ts` | `POST /settlements/confirm` (سطر 117) بصلاحية `payment:read`/`commission:manage`؛ مثبَّت في `app.ts:126` على `/api/admin/finance` |
+| **PS-02 Payout** | `modules/payouts/engine.ts` · `service.ts` · `provider-service.ts` | محرّك خالص `CREATED→PROCESSING→COMPLETED/FAILED/HELD`؛ `COMPLETED` يتطلّب `payoutRef` + مطابقة؛ `assertPayoutCapable` يمنع مزوّد الديمو؛ صافي البائع = `itemsTotal − sellerCommission` |
+| **PS-04 Reconciliation** | `modules/reconciliation/engine.ts` · `service.ts` · `provenance.ts` · `receipt-service.ts` | مطابقة ثلاثية Provider ↔ Bank ↔ Ledger بفروق مصنَّفة (MISMATCH لا يتحوّل لنجاح)؛ تخزين idempotent بـ`(source, checksum)`؛ provenance لا يخمّن |
+| Schema/migration | `db/schema/{payouts,reconciliation,receipts}.ts` · `migrations/0024_remarkable_redwing.sql` | 5 enums + 5 جداول + 20 index + CHECK `payouts_completed_requires_ref` + **0 FK** |
+
+### أ.2 معرّفات commits مثبتة فعليًا (من `git log`)
+
+| الـcommit | الوصف | يخصّ |
+| --- | --- | --- |
+| `1ecfc23` | `feat(settlement): PS-01 real Settlement Ledger with evidence-gated SETTLED writer` | PS-01 |
+| `e9a99de` | `feat(payout): PS-02 provider-agnostic seller payout engine (no persistence yet)` | PS-02 |
+| `9b164f5` | `fix(payments): enforce Payment != Settlement in the money path` | PS-01/PS-02 |
+| `de59216` | `feat(money): PS-02/PS-04/WASIT Receipt additive schema + persistence (migration 0024)` | PS-02/PS-04 |
+| `12c3949` | `fix(reconciliation): persist MATCHED provenance (transaction/ledger/audit) + final audit` | PS-04 |
+
+### أ.3 الاختبارات ذات الصلة (أعداد `it(...)` الفعلية)
+
+`settlement-ledger.test.ts` = **9** · `payout-engine.test.ts` = **11** · `payout-provider.test.ts` = **20** ·
+`reconciliation-engine.test.ts` = **17** · `finance-routes.test.ts` = **16** · `money-path-invariants.test.ts` = **9** ·
+`persistence-invariants.test.ts` (كاتب واحد لكل انتقال) · `e2e/settlement-integrity.spec.ts` = **4**.
+
+### أ.4 ما هو مُغلق منطقيًا (بحسب الأدلة)
+
+- **PS-01** — منطق التسوية المُقاد بالأدلة، بكاتب واحد، idempotent، داخل معاملة ذرّية: **مُغلق منطقيًا**.
+- **PS-02** — محرّك Payout + تخزين + CHECK على مستوى DB: **مُغلق منطقيًا**.
+- **PS-04** — محرّك المطابقة الثلاثية + تخزين + provenance + Receipt: **مُغلق منطقيًا**.
+- **TH-01** — اختبارات الوحدات/التكامل للتسوية/Payout/Reconciliation موجودة: **مُغلقة (unit/integration)**.
+
+### أ.5 ما يبقى **مفتوحًا** (لا يُغلقه PS-01-A)
+
+1. **واجهة الإدارة (UI)** — **مغلقة جزئيًا (N3)**: أُضيفت صفحة `/admin/finance` (`packages/web/src/pages/AdminFinancePage.tsx`) مربوطة بمسارات
+   التسوية/Payout الموجودة فعلًا (`GET /payout-providers`، `POST /settlements/confirm`، `POST /payouts`، `GET /payouts/:id`،
+   `POST /payouts/:id/dispatch`، `POST /payouts/:id/sync`) مع دالة لكلٍّ في `packages/web/src/lib/api.ts`، ومدخل في `ADMIN_NAV` (Sidebar)،
+   ومسار `AdminOnly` في `App.tsx`، ومفاتيح i18n في `ar/en/fr/zh`، واختبار E2E `e2e/admin-finance-ui.spec.ts` (4 حالات: عرض حقيقي، حارس الخادم 403،
+   تأكيد تسوية + idempotency، دورة Payout لا تصل COMPLETED بلا دليل). الصفحة لا تشتق حالة مالية ولا ترسل مبلغ Payout — الخادم هو المرجع.
+   **N4 استكمل السطح**: أُضيفت بطاقتا **Reconciliation** و**WASIT Receipt** إلى نفس الصفحة (`AdminFinancePage.tsx`)، مربوطتين بمسارَي الخادم الموجودين
+   (`POST /api/admin/finance/reconciliation/import` سطر 213 و`POST /api/admin/finance/receipts` سطر 236) مع دالّتين في `api.ts` وأنواع في `types.ts` ومفاتيح i18n في `ar/en/fr/zh`.
+   الواجهة تعرض تصنيف المحرّك كما هو (MISMATCH يظهر MISMATCH ولا يُحوَّل إلى نجاح)، والإيصال يُسجَّل من دليل كشف مستقل فقط. مُغطّاة بـ`e2e/admin-finance-recon-ui.spec.ts` (5 حالات).
+   **N5 استكمل السطح**: أُضيفت **قائمة Payout** للقراءة فقط إلى نفس الصفحة (`admin-finance-payout-list`)، مدعومة بمسار خادم جديد **`GET /api/admin/finance/payouts`**
+   (`modules/payouts/service.ts:listPayouts` + `modules/finance/routes.ts`) بترقيم صفحات محدود (افتراضي 20، سقف 100) وترتيب ثابت (`created_at desc, id desc`) وتصفية اختيارية بالحالة،
+   خلف صلاحية `payment:read`/`commission:manage`. القائمة تعرض المخزَّن فقط ولا تُغيّر أي حالة (اختبار «read-only» يثبّت ذلك). مُغطّاة بـ`e2e/admin-finance-payout-list-ui.spec.ts` (4 حالات).
+   **N7 استكمل السطح**: أُضيف **استيراد ملفات المطابقة** (الملحق أ.5-1): مساران جديدان `POST /api/admin/finance/reconciliation/preview-file` و`POST /api/admin/finance/reconciliation/import-file` (multipart، ملف واحد تحت الحقل `file`)، يقبلان **`.csv`/`.tsv`/`.json`** (UTF-8، ≤1 ميجابايت، ≤5000 صف) ويُحوِّلان الملف إلى نفس `ProviderFeedLine`/`BankFeedLine` عبر `modules/reconciliation/file-import.ts` (تحقق كامل على الخادم: الامتداد، الترميز، الترويسة، الأعمدة المطلوبة/المجهولة، الأرقام، الصلاحيات) ثم يمرّان بنفس `importReconciliationFeed` (نفس الـchecksum/idempotency ونفس حفظ MISMATCH). **المعاينة لا تكتب شيئًا**؛ والاستيراد يسجّل الدليل والتصنيف فقط ولا يعتمد أي تسوية. الجانب الدفتري (ledger) **لا يُقبل من ملف**. مُغطّى بـ`reconciliation-file-import.test.ts` (33 حالة) مع واجهة في `AdminFinancePage.tsx` (منتقي ملف + معاينة + استيراد) ومفاتيح i18n في `ar/en/fr/zh`.
+   → **مغلق لسطح التسوية/Payout (بما فيه قائمة Payout)/المطابقة/الإيصال/استيراد ملفات المطابقة بالكامل**.
+2. **E2E لمسارات `/api/admin/finance/*`** — **مُغلقة الآن**: `e2e/admin-finance.spec.ts` (15 حالة، HTTP حقيقي + جلسات حقيقية) يغطي
+   `POST /settlements/confirm` (رفض 422 بلا مرجع/بعملة مشوّهة، 404 لنية غير موجودة، 409 لنية غير مدفوعة، تأكيد + idempotency + رفض مرجع مختلف 409،
+   ترقية `orders.settlementStatus='SETTLED'`) و`/payouts` (`CREATED` بمبلغ مشتق من سياسة 4%، 409 لمعاملة غير مسوّاة، 422 لمزوّد بلا صلاحية payout،
+   قراءة/404، `dispatch→PROCESSING` ولا `COMPLETED`، رفض payout نشط ثانٍ 409) مع حُرّاس RBAC (401/403). الواجهة المالية (UI) **أُضيفت في N3** ومُغطّاة بـ`e2e/admin-finance-ui.spec.ts` (البند 1)، و**قائمة Payout في N5** ومُغطّاة بـ`e2e/admin-finance-payout-list-ui.spec.ts` (4 حالات) + اختبارات تكامل خادمية في `finance-routes.test.ts` (5 حالات للقائمة: ترتيب ثابت، ترقيم بلا تداخل، رفض معاملات خارج المدى 422، تصفية بالحالة، read-only، RBAC 401/403)؛ و**استيراد ملفات المطابقة في N7** مُغطّى بـ`reconciliation-file-import.test.ts` (33 حالة) — **الملحق أ.5-1 مغلق**.
+3. **PS-03 (Split المزوّد)** — خارجي/تعاقدي: **مفتوح**، مسار مستقل.
+4. **PS-07 (credentials إنتاجية)** + **BU-01/BU-02** (عقد مزوّد/حساب تسوية) — خارجي/بنكي: **مفتوح**.
+5. **الدلالة الإنتاجية**: الإغلاق أعلاه **منطقي برمجي**، ولا يعني أن حركة أموال حقيقية مُثبتة في الإنتاج —
+   ذلك يتطلّب مزوّدًا فعليًا + بيئة إنتاج + حساب تسوية (أعلاه).
+
+### أ.6 خلاصة
+
+`PS-01` (وكذلك `PS-02`/`PS-04`) **مغلقة على مستوى منطق التسوية/الدفع/المطابقة** بدليل الكود والاختبارات.
+الفجوات المتبقية **منفصلة**: سطح إدارة (UI)، تغطية E2E للمسارات المالية، ومتطلبات خارجية (`PS-03`/`PS-07`/`BU-01`/`BU-02`)
+لا يمكن إغلاقها بكود داخلي. **لم يُعلَن أي اكتمال تجاري أو إنتاجي.**

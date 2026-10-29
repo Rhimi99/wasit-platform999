@@ -359,6 +359,9 @@ export function AdminOrdersPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [refundError, setRefundError] = useState<string | null>(null);
+  const [manualBusyId, setManualBusyId] = useState<string | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [manualProvider, setManualProvider] = useState<string | null>(null);
 
   useEffect(() => {
     apiCall(() => api.adminOrders()).then((res) => {
@@ -368,7 +371,31 @@ export function AdminOrdersPage() {
     });
   }, [reloadKey]);
 
+  // The offline completion desk only makes sense when the active rail is the
+  // offline `manual` harness; with a real acquirer the webhook confirms payments.
+  useEffect(() => {
+    apiCall(() => api.getPaymentMethods()).then((res) => {
+      setManualProvider(res.data?.active ?? null);
+    });
+  }, []);
+
   const refundable = (o: Order) => o.paymentStatus === 'PAID' || o.paymentStatus === 'PARTIALLY_REFUNDED';
+  const completable = (o: Order) => o.paymentStatus === 'PENDING' && manualProvider === 'manual';
+
+  async function completeManual(order: Order) {
+    setManualBusyId(order.id);
+    setManualError(null);
+    setNotice(null);
+    try {
+      const res = await api.completeManualPayment(order.id);
+      setNotice(`${t('admin.manualPay.done')}: ${res.orderId} · ${res.paymentStatus}`);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setManualError(apiErrorMessage(e));
+    } finally {
+      setManualBusyId(null);
+    }
+  }
 
   async function openRefund(order: Order) {
     setOpenId(order.id);
@@ -410,6 +437,7 @@ export function AdminOrdersPage() {
     <AppLayout>
       <SectionHeader title={t('admin.orders')} />
       {notice && <p className="mb-2 text-sm text-green-700" role="status" data-testid="admin-refund-notice">{notice}</p>}
+      {manualError && <p className="mb-2 text-sm text-red-600" role="alert" data-testid="admin-manual-pay-error">{manualError}</p>}
       {loading ? <Spinner /> : error ? <ErrorState message={error} /> : orders.length === 0 ? <EmptyState title={t('common.noData')} /> : (
         <Card className="overflow-x-auto">
           <table className="table-base">
@@ -425,16 +453,29 @@ export function AdminOrdersPage() {
                   <td>{formatMoney(o.grandTotal, o.currencyCode)}</td>
                   <td>{formatDate(o.createdAt)}</td>
                   <td>
-                    {refundable(o) && (
-                      <button
-                        type="button"
-                        data-testid={`admin-order-refund-${o.id}`}
-                        onClick={() => openRefund(o)}
-                        className="text-xs font-medium text-red-600 hover:underline"
-                      >
-                        {t('admin.refund.action')}
-                      </button>
-                    )}
+                    <div className="flex flex-col items-start gap-1">
+                      {completable(o) && (
+                        <button
+                          type="button"
+                          data-testid={`admin-order-complete-manual-${o.id}`}
+                          disabled={manualBusyId === o.id}
+                          onClick={() => completeManual(o)}
+                          className="text-xs font-medium text-emerald-700 hover:underline disabled:opacity-50"
+                        >
+                          {manualBusyId === o.id ? '…' : t('admin.manualPay.action')}
+                        </button>
+                      )}
+                      {refundable(o) && (
+                        <button
+                          type="button"
+                          data-testid={`admin-order-refund-${o.id}`}
+                          onClick={() => openRefund(o)}
+                          className="text-xs font-medium text-red-600 hover:underline"
+                        >
+                          {t('admin.refund.action')}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

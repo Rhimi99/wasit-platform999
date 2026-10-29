@@ -1,15 +1,19 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { PERMISSIONS } from '@wasit/shared';
+import { ApiError, PERMISSIONS } from '@wasit/shared';
 import { requirePermission } from '../../middleware/auth';
-import { validateBody, getValidatedBody } from '../../middleware/validate';
+import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate';
 import { getContext } from '../../lib/request-context';
 import { confirmSettlement } from '../settlements/service';
-import { createPayout, getPayout } from '../payouts/service';
+import { createPayout, getPayout, listPayouts } from '../payouts/service';
 import { dispatchPayoutToProvider, syncPayoutFromProvider } from '../payouts/provider-service';
 import { describePayoutProviders } from '../../lib/payments/payout-resolve';
-import { importReconciliationFeed } from '../reconciliation/service';
+import { importReconciliationFeed, importReconciliationFile, previewReconciliationFile } from '../reconciliation/service';
 import { recordReceipt } from '../reconciliation/receipt-service';
+import { RECON_FILE_LIMITS } from '../reconciliation/file-import';
+
+/** Slack allowed on the multipart envelope (boundaries, part headers) over the file itself. */
+const MULTIPART_OVERHEAD_BYTES = 8 * 1024;
 
 /**
  * P3 — HTTP surface for the money-movement layers (settlement, payout,
@@ -39,6 +43,12 @@ const payoutSchema = z.object({
   transactionId: z.string().min(1),
   providerId: z.string().min(1),
   idempotencyKey: z.string().nullish(),
+});
+
+const listPayoutsQuerySchema = z.object({
+  status: z.enum(['CREATED', 'PROCESSING', 'COMPLETED', 'FAILED', 'HELD']).optional(),
+  page: z.coerce.number().int().positive().optional(),
+  pageSize: z.coerce.number().int().positive().max(100).optional(),
 });
 
 const dispatchSchema = z.object({
@@ -161,6 +171,27 @@ financeRoutes.post(
   },
 );
 
+/**
+ * Lists payouts for the admin desk (newest first, bounded page size). Read-only:
+ * it projects the stored rows and never advances a payout's status.
+ * Declared before `/payouts/:id` so the collection path is never read as an id.
+ */
+financeRoutes.get(
+  '/payouts',
+  requirePermission(PERMISSIONS.PAYMENT_READ, PERMISSIONS.COMMISSION_MANAGE),
+  validateQuery(listPayoutsQuerySchema),
+  async (c) => {
+    const query = getValidatedQuery<z.infer<typeof listPayoutsQuerySchema>>(c);
+    const ctx = getContext(c);
+    const result = await listPayouts(ctx.db, {
+      status: query.status,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
 financeRoutes.get(
   '/payouts/:id',
   requirePermission(PERMISSIONS.PAYMENT_READ, PERMISSIONS.COMMISSION_MANAGE),
@@ -224,6 +255,86 @@ financeRoutes.post(
       provider: body.provider,
       bank: body.bank,
       ledger: body.ledger,
+      actorId: ctx.user?.id ?? null,
+      ipAddress: ctx.ipAddress ?? null,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
+/**
+ * Reads the single uploaded statement from a multipart body. Only the external
+ * evidence (provider/bank) is accepted; the ledger side is internal and can never
+ * come from a file. Rejects a missing/oversized/duplicate file with a clear error.
+ */
+async function readUploadedFile(c: Context): Promise<{ filename: string; bytes: Uint8Array }> {
+  const contentType = c.req.header('content-type') ?? '';
+  if (!contentType.startsWith('multipart/form-data')) {
+    throw ApiError.validation([{ field: 'file', message: 'Expected a multipart/form-data upload', code: 'INVALID_CONTENT_TYPE' }]);
+  }
+  // Reject an oversized upload before buffering it. The parser re-checks the real
+  // decoded size, so a missing/forged content-length is still caught there.
+  const declared = Number(c.req.header('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > RECON_FILE_LIMITS.maxBytes + MULTIPART_OVERHEAD_BYTES) {
+    throw ApiError.validation([{ field: 'file', message: 'Uploaded file is too large', code: 'FILE_TOO_LARGE' }]);
+  }
+  let body: Record<string, string | File>;
+  try {
+    body = (await c.req.parseBody()) as Record<string, string | File>;
+  } catch {
+    throw ApiError.validation([{ field: 'file', message: 'Malformed multipart body', code: 'MALFORMED_FILE' }]);
+  }
+  const file = body['file'];
+  if (!(file instanceof File)) {
+    throw ApiError.validation([{ field: 'file', message: 'Attach a file under the "file" field', code: 'REQUIRED' }]);
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return { filename: file.name, bytes };
+}
+
+/** Validates an uploaded statement and returns the match report WITHOUT writing. */
+financeRoutes.post(
+  '/reconciliation/preview-file',
+  requirePermission(PERMISSIONS.COMMISSION_MANAGE, PERMISSIONS.PAYMENT_READ),
+  async (c) => {
+    const { filename, bytes } = await readUploadedFile(c);
+    const source = c.req.query('source');
+    const currencyCode = c.req.query('currencyCode') ?? '';
+    const sourceSchema = z.enum(['PROVIDER', 'BANK']);
+    const parsedSource = sourceSchema.safeParse(source);
+    if (!parsedSource.success) {
+      throw ApiError.validation([{ field: 'source', message: 'source must be PROVIDER or BANK', code: 'VALIDATION_FAILED' }]);
+    }
+    const ctx = getContext(c);
+    const result = await previewReconciliationFile(ctx.db, {
+      filename,
+      bytes,
+      source: parsedSource.data,
+      currencyCode,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
+/** Imports an uploaded statement through the shared reconciliation service. */
+financeRoutes.post(
+  '/reconciliation/import-file',
+  requirePermission(PERMISSIONS.COMMISSION_MANAGE, PERMISSIONS.PAYMENT_READ),
+  async (c) => {
+    const { filename, bytes } = await readUploadedFile(c);
+    const sourceSchema = z.enum(['PROVIDER', 'BANK']);
+    const parsedSource = sourceSchema.safeParse(c.req.query('source'));
+    if (!parsedSource.success) {
+      throw ApiError.validation([{ field: 'source', message: 'source must be PROVIDER or BANK', code: 'VALIDATION_FAILED' }]);
+    }
+    const ctx = getContext(c);
+    const result = await importReconciliationFile(ctx.db, {
+      filename,
+      bytes,
+      source: parsedSource.data,
+      currencyCode: c.req.query('currencyCode') ?? '',
+      importKey: c.req.query('importKey') ?? null,
+      providerId: c.req.query('providerId') ?? null,
       actorId: ctx.user?.id ?? null,
       ipAddress: ctx.ipAddress ?? null,
     });

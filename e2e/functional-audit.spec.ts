@@ -1,3 +1,4 @@
+import { Pool } from 'pg';
 import { test, expect, storageFor, DEMO_USERS, DEMO_PASSWORD, placeOrderViaUi, loginViaUi, completeEmailVerification, isDemoVerified } from './helpers';
 
 /**
@@ -678,6 +679,7 @@ test.describe('ADMIN — every admin surface', () => {
     ['/admin/orders', /الطلبات|Orders/i],
     ['/admin/transactions', /المعاملات|Transactions/i],
     ['/admin/ledger', /دفتر الحسابات|Ledger/i],
+    ['/admin/finance', /الإدارة المالية|Finance administration/i],
     ['/admin/audit', /سجل التدقيق|Audit/i],
     ['/admin/verification', /التحقق|Verification/i],
     ['/admin/trust', /الثقة|Trust/i],
@@ -764,6 +766,67 @@ test.describe('ADMIN — every admin surface', () => {
     expect(persisted, 'a trust snapshot must exist for the recomputed user').toBeTruthy();
     expect(persisted!.effectiveAt).toBeTruthy();
     await expect(page.locator('table tbody tr').filter({ hasText: userId }).first()).toBeVisible();
+  });
+
+  test('trust desk creates the first score from an empty table (picker path)', async ({ page }) => {
+    // The gap: with no snapshots the desk showed only an instruction to recompute
+    // and no control to act on it — the operator was stuck. Empty the table, then
+    // prove the desk can create a score by choosing a user from the picker, and
+    // that the new snapshot is real server state (not an optimistic UI update).
+    const pool = new Pool({
+      connectionString:
+        process.env.DATABASE_URL ?? 'postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev',
+    });
+    const saved = (await pool.query('SELECT * FROM trust_scores')).rows;
+    try {
+      await pool.query('DELETE FROM trust_scores');
+
+      // Choose a user the desk will actually list: the trust table filters
+      // inactive users out, and the picker is fed by the same admin user list, so
+      // an active user from that API is guaranteed to be both selectable and
+      // visible after recompute.
+      const users = ((await (await page.request.get('/api/admin/users')).json()).data as {
+        items: Array<{ id: string; email: string; isActive: boolean }>;
+      }).items;
+      const target = users.find((u) => u.isActive);
+      expect(target, 'an active user must exist to recompute').toBeTruthy();
+
+      await page.goto('/admin/trust');
+      // Genuinely empty — the operator's dead end is reproduced.
+      await expect(page.getByTestId('admin-trust-user-select')).toBeVisible();
+      await expect(page.locator('table tbody tr')).toHaveCount(1); // the empty-state row only
+
+      const select = page.getByTestId('admin-trust-user-select');
+      await select.selectOption(target!.id);
+
+      const [recompute] = await Promise.all([
+        page.waitForResponse((r) => r.url().includes('/api/admin/trust/') && r.request().method() === 'POST'),
+        page.getByTestId('admin-trust-recompute').click(),
+      ]);
+      expect(recompute.ok()).toBeTruthy();
+
+      // The score must now exist server-side and appear in the desk's table.
+      await expect.poll(async () => {
+        const rows = ((await (await page.request.get('/api/admin/trust')).json()).data as {
+          items: Array<{ userId: string; score: number }>;
+        }).items;
+        return rows.find((r) => r.userId === target!.id)?.score ?? null;
+      }).not.toBeNull();
+      await expect(page.locator('table tbody tr').filter({ hasText: target!.id }).first()).toBeVisible();
+    } finally {
+      // Restore the table exactly as it was before this test so it stays a
+      // fixture, not a side effect on the shared dev database (the recompute
+      // inserted a brand-new row that must not survive the test).
+      await pool.query('DELETE FROM trust_scores');
+      for (const row of saved) {
+        await pool.query(
+          `INSERT INTO trust_scores (id, user_id, score, level, factors, summary, effective_at, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [row.id, row.user_id, row.score, row.level, row.factors, row.summary, row.effective_at, row.created_at],
+        );
+      }
+      await pool.end();
+    }
   });
 
   test('risk desk reassesses a user and the refreshed score is rendered', async ({ page, browser }) => {

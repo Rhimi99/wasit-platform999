@@ -115,7 +115,7 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `GET /` — طلباتي (browser)
 - `GET /:id` — تفاصيل (مالك/بائع)
 - `POST /` — إنشاء (buyerId, buyerType, items[{productId, quantity}]) — يتحقق من: وجود المنتج، الحالة ACTIVE، MOQ، المخزون؛ يحسب العمولة من السياسة ورسوم الدفع، ينشئ transaction + ledger + audit
-- `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر)
+- `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر). **`CONFIRMED` يتطلّب `paymentStatus='PAID'`** وإلا **409 `CONFLICT`** — التأكيد يحوّل الحجز إلى بيع، فلا يُسمح به قبل إثبات الدفع (webhook موقَّع أو إتمام `manual` لنيّة حقيقية). بقية الانتقالات بلا قيد دفع.
 
 ## المعاملات (`/api/transactions`)
 
@@ -131,6 +131,9 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `GET /ledger` — سجل الحركات
 - `GET /products` — قائمة منتجات
 - `GET /audit-logs` — سجل المراجعة
+- Trade vetting (`/api/admin/trade`) — `ADMIN/SUPER_ADMIN` + صلاحية لكل نوع (`SUPPLIER|MERCHANT|COMPANY` `_LIST`/`_UPDATE`):
+  - `GET /trade/{suppliers,merchants,companies}?q=&verified=&isActive=&page=&pageSize=` — قائمة كيانات البيع (تشمل غير النشطة، بخلاف الدليل العام) مع `kind` موحّد واسم مُطبَّع
+  - `PATCH /trade/{suppliers,merchants,companies}/:id` — `{verified?, isActive?}` (واحد على الأقل؛ 422 خلاف ذلك، 404 لغير الموجود)؛ يُدقَّق `TRADE.VERIFIED|UNVERIFIED|SUSPENDED|REACTIVATED|STATUS_UNCHANGED` مع before/after وينعكس على `directory`/`search`/`sitemap`
 - Policies (`admin:policies`):
   - `GET /policies/dispute` + `PUT /policies/dispute` + `GET /policies/dispute/resolved` — قواعد النزاع العامة/لكل دولة
   - `GET /policies/retention` + `PUT /policies/retention` + `GET /policies/retention/resolved` — قواعد الاحتفاظ بالبيانات (`PRIVACY/DATA_RETENTION`): `defaultRetentionDays`, `legalHoldFinanciallyRequired`, `preserves`. التجاهز لكل دولة؛ غياب صف الدولة يُسجَّل `DECISION_REQUIRED` ويُحلّ عند الإضافة. كل تعديل Audit (who/what/old/new/when/reason) ويرفع `version`.
@@ -231,6 +234,24 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `DELETE /assets/:id` — حذف ناعم (DELETED) مع إبقاء السجل للـ Audit
 - `GET /assets/:id/content?token=…` — بث/تنزيل الأصل برابط موقّع قصير العمر + دعم Range
   (`MEDIA_DOWNLOAD_TTL_SECONDS`). لا ملفات ثابتة عامة.
+
+## المالية الإدارية (`/api/admin/finance`) — `commission:manage` أو `payment:read`
+
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/api/admin/finance/payout-providers` | كتالوج مسارات Payout المتاحة |
+| POST | `/api/admin/finance/settlements/confirm` | تأكيد تسوية من دليل المزوّد (idempotent) |
+| POST | `/api/admin/finance/payouts` | إنشاء Payout (يبدأ `CREATED`) |
+| GET | `/api/admin/finance/payouts` | قائمة Payout بترقيم صفحات (افتراضي 20، سقف 100) |
+| GET | `/api/admin/finance/payouts/:id` | قراءة Payout |
+| POST | `/api/admin/finance/payouts/:id/dispatch` | إرسال Payout للمسار (يصل `PROCESSING` فقط) |
+| POST | `/api/admin/finance/payouts/:id/sync` | إعادة فحص Payout مع المسار |
+| POST | `/api/admin/finance/reconciliation/import` | استيراد تغذية مطابقة كـJSON (provider/bank/ledger) |
+| POST | `/api/admin/finance/reconciliation/preview-file` | **معاينة** ملف مطابقة (لا تكتب شيئًا) |
+| POST | `/api/admin/finance/reconciliation/import-file` | استيراد ملف مطابقة (CSV/TSV/JSON) |
+| POST | `/api/admin/finance/receipts` | تسجيل وصول عمولة WASIT من دليل مستقل |
+
+**استيراد ملفات المطابقة** (الملحق أ.5-1): يُرسل الملف كـ`multipart/form-data` تحت الحقل `file`، مع `source=PROVIDER|BANK` و`currencyCode` في سلسلة الاستعلام (`importKey`/`providerId` اختياريان للاستيراد). التفاصيل الكاملة في `docs/RECONCILIATION_FILE_IMPORT.md`.
 
 ## بقية الوحدات (Routes تحت التطوير)
 

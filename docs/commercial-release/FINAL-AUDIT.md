@@ -33,15 +33,104 @@
 The 8 E2E skips are conditional on `DEMO_AUTO_LOGIN`; each skipped branch has a
 working counterpart that runs. They are not failures.
 
-### Known non-blocker — Admin Trust empty state
+### Admin Trust empty state — resolved
 
-When the Trust table is empty, the page shows a message instructing the operator
-to recompute scores, but the recompute button is not rendered, so the instruction
-cannot be followed from that screen. This is a real UX/functional gap. It was
-**not** fixed in this session because it falls outside the scope of the current
-final audit, and it does not block any commercial requirement: the self-service
-recompute path (merchant `/dashboard/trust`) and the admin console
-`/admin/trust` both work on non-empty data, as the admin smoke suite proves.
+When the Trust table is empty, the desk used to show a message instructing the
+operator to recompute scores, but the recompute button was only rendered inside
+existing rows, so the instruction could not be followed from that screen. The
+empty state now renders a user picker and a recompute control that call the same
+`POST /api/admin/trust/:userId/recompute` endpoint (permission `TRUST_READ_ALL`)
+as a row action, so the operator can create the first score without leaving the
+desk. Covered by the E2E test "trust desk creates the first score from an empty
+table (picker path)" in `e2e/functional-audit.spec.ts`, which empties the table,
+drives the picker through the UI, and confirms the new snapshot is real server
+state (and restores the table afterwards).
+
+### Cookie/GDPR consent from the UI — resolved
+
+The consent API existed (`PUT /api/privacy/consents`, `GET /api/privacy/me`) but
+nothing in the web app ever called it, so no user could record a cookie/GDPR
+decision. The platform now ships a first-visit consent notice plus a permanent
+consent card on `/dashboard/settings`.
+
+Two server-side facts shape the design, and the implementation is honest about
+both rather than papering over them:
+
+- **There is no anonymous consent endpoint.** Both consent routes sit behind
+  `requireAuth`; an anonymous caller gets `401` (asserted in
+  `security-privacy.test.ts`). A signed-out visitor therefore has nowhere to
+  record a decision, so the notice is scoped to a signed-in account. That is not
+  a practical gap: the only cookie the platform sets is the essential session
+  cookie (`wasit_session`, issued on login) and the SPA ships no tracker, so
+  nothing non-essential runs before a decision can be taken.
+- **The read model normalises every type.** `getConsentState` returns
+  `granted: current.get(type) ?? false` for all `CONSENT_TYPES`, so "never
+  decided" and "declined" are indistinguishable through the API. The notice
+  therefore keeps its own device-local marker (`wasit.cookieConsent.decided`) to
+  know it has already run; the decision itself always lives in the server's
+  consent rows.
+
+Because of that normalisation, the UI persists **only the optional types** — the
+actual cookie/GDPR decision. The baseline types (`TERMS`, `PRIVACY_POLICY`,
+`DATA_PROCESSING`) are shown as always-required, because the application's
+`grantedByDefault` policy treats them as the legal basis for using the platform,
+not as a cookie choice; the UI does not write them as granted consents. Their
+read-back state therefore follows the application policy rather than a stored
+consent row, and the notice does not claim to have recorded them. This closes the
+UI capture gap only; it is not a claim of full GDPR compliance, and LC-01 (legal
+policy text) remains open.
+
+The controls offer accept-all, reject-non-essential, and a granular per-type
+selection, each written through the real endpoint. A failed write is never
+reported as success: the notice stays open with the server's own reason. Covered
+by two new server tests (anonymous refusal on both endpoints; normalisation and
+single-type flip), the E2E `e2e/cookie-consent.spec.ts` (first-visit appearance
+and absence when anonymous, accept-all, reject, granular save, and the Settings
+card — each verified against `GET /api/privacy/me`), and recorded in
+`COMMERCIAL-RELEASE-MANIFEST.md`.
+
+### Manual/offline payment completion — resolved
+
+The `manual` (offline desk) rail has no signed provider callback, so nothing ever
+moved an offline order past `PENDING`: `paymentStatus` could only be set to `PAID`
+by the webhook handler, and a manual intent produces no webhook. Every offline
+transaction was therefore stuck with no way out of the UI.
+
+The fix adds an operator-only completion path,
+`POST /api/payments/orders/:orderId/complete-manual`, surfaced on `/admin/orders`
+as a per-row action shown only when the active rail is `manual` and the order is
+`PENDING`. The state transition is delegated to the same internal
+`applyPaymentSucceeded` the webhook path uses, so the two paths cannot diverge.
+
+The boundaries are enforced server-side, not just hidden in the UI:
+
+- **Privileged only.** `requirePermission(REFUND_MANAGE)` — the same permission
+  the refund and webhook-replay paths already use. The buyer/seller who own the
+  order, and SUPPORT staff, get `403`; unauthenticated callers get `401`.
+- **Offline rail only.** An intent on a real acquirer (Flouci, ClicToPay,
+  open-checkout) is refused with `422` — those must confirm through their signed
+  webhook, never a human assertion.
+- **Never on a live stack.** The `manual` provider is a demo harness, so
+  `resolvePaymentProvider()` refuses it outside demo mode: on `NODE_ENV=production`
+  completion returns `503` and nothing moves.
+- **Real intent required.** A missing intent, a `FAILED` intent, an order with no
+  payment in progress, and a double completion are all refused (`404`/`409`).
+- **Concurrency-safe.** The whole operation runs in one transaction behind a
+  `SELECT … FOR UPDATE` on the order row. Without that lock the "still PENDING?"
+  check and the update are a check-then-act race: a burst of concurrent
+  completions all read `PENDING` and each applies the transition, writing
+  duplicate `PAYMENT.SUCCEEDED` entries (reproduced before the lock was added).
+  With the lock exactly one succeeds and the rest fail closed with `409`.
+
+Crucially this records the **payment only**: it does not write `SETTLED` and does
+not move the ledger. `persistence-invariants.test.ts` still asserts a single
+writer per money-path transition, so no emergency path can settle, receipt or pay
+out. Covered by `packages/server/tests/manual-payment-completion.test.ts`
+(7 tests: success + ledger-stays-PENDING, permission refusals, double-completion,
+missing/unknown order, non-offline rail, demo-mode refusal, and a 24-way
+concurrent burst asserting exactly one success) and the E2E
+`e2e/manual-payment.spec.ts` (the operator completes a pending offline payment
+from `/admin/orders` and the row shows `PAID`).
 
 ---
 

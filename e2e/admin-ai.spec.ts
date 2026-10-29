@@ -71,14 +71,24 @@ test.describe('Admin AI governance desk', () => {
   });
 
   test('refresh re-reads the requests table changed behind the page', async ({ page }) => {
-    // Mutate the server after the page has already loaded its snapshot: another
-    // actor issues a real AI request after this table has rendered.
+    // Establish a baseline request through the public AI endpoint before the page
+    // renders. The desk shows an empty state instead of the requests table when
+    // no invocations exist, so the refresh behaviour can only be observed against
+    // a table that already has rows.
+    const baseline = await page.request.post('/api/ai/run', {
+      data: { requestType: 'MARKET_ANALYSIS', user: 'admin-ai-e2e refresh baseline' },
+    });
+    expect(baseline.ok()).toBeTruthy();
+
     await page.goto('/admin/ai');
     await page.getByTestId('admin-ai-tab-requests').click();
     await expect(page.getByTestId('admin-ai-requests')).toBeVisible();
     const rows = page.locator('[data-testid^="admin-ai-request-"]');
-    await expect.poll(async () => rows.count()).toBeGreaterThanOrEqual(0);
+    await expect(rows.first()).toBeVisible();
     const firstBefore = await rows.first().getAttribute('data-testid');
+
+    // Mutate the server after the page has already loaded its snapshot: another
+    // actor issues a real AI request after this table has rendered.
 
     const customerCtx = await page.context().browser()!.newContext({ storageState: storageFor('customer') });
     const cp = await customerCtx.newPage();
@@ -364,18 +374,24 @@ test.describe('Agent task results reach the requesting user', () => {
     const approved = await adminApi.post(`/api/ai/tasks/${taskId}/approve`, { data: { decision: 'APPROVE' } });
     expect(approved.ok()).toBeTruthy();
     expect((await approved.json()).data.status).toBe('approved');
+
+    // Approval records the decision only; the authorised operator triggers the
+    // execution explicitly through the official on-demand run route.
+    const run = await adminApi.post(`/api/ai/tasks/${taskId}/run`);
+    expect(run.ok()).toBeTruthy();
+    expect((await run.json()).data.status).toBe('succeeded');
     await adminApi.dispose();
 
-    // Reload: the approved task and its computed result must now be visible.
+    // Reload: the executed task and its computed result must now be visible.
     await page.reload();
     const approvedRow = page.getByTestId(`ai-task-${taskId}`);
     await expect(approvedRow).toBeVisible();
-    await expect(approvedRow).toContainText(/معتمد|Approved/i);
+    await expect(approvedRow).toContainText(/نجح|Succeeded/i);
     await expect(approvedRow.getByTestId('ai-task-result')).toBeVisible();
 
     // Prove the rendered result matches the real backend payload.
     const task = (await (await page.request.get(`/api/ai/tasks/${taskId}`)).json()).data;
-    expect(task.status).toBe('approved');
+    expect(task.status).toBe('succeeded');
     expect(task.result).toBeTruthy();
   });
 });
