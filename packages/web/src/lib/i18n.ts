@@ -4281,6 +4281,7 @@ const zh: Dict = {
   'common.cancel': '取消',
   'common.edit': '编辑',
   'common.search': '搜索',
+  'common.date': '日期',
   'common.status': '状态',
   'common.price': '价格',
   'common.quantity': '数量',
