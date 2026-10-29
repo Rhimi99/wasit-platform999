@@ -96,7 +96,7 @@ AI/Automation · Documentation · Test/Harness
 | DO-01 | `PAYMENT_SETTLEMENT_AUDIT.md` stale (يعرض RC-1/3/4/5 كمفتوحة وهي مُصلَحة) | Documentation | خطر قرارات خاطئة | §1 أعلاه (الأدلة من الكود) | Medium | Yes | No |
 | DO-02 | `DEVELOPMENT_ROADMAP.md` drift (أعداد اختبارات، ادعاء غياب اختبار geo) | Documentation | أرقام قديمة | Roadmap vs `geo.test.ts`/الواقع | Low | No | Yes |
 | DO-03 | تقرير 2026-09-14 يقول Marketing Video «contract only» | Documentation | متجاوَز | §1 أعلاه | Low | No | No |
-| TH-01 | اختبارات Settlement/Payout/Reconciliation: **مغلقة** (كانت: لا شيء يُختبر لعدم وجود الوحدات) | Test/Harness | الاختبارات موجودة ومحصورة: `settlement-ledger.test.ts` (9) · `payout-engine.test.ts` (11) · `payout-provider.test.ts` (20) · `reconciliation-engine.test.ts` (17) · `finance-routes.test.ts` (16) · `persistence-invariants.test.ts` · `money-path-invariants.test.ts` (9) · `e2e/settlement-integrity.spec.ts` (4) | تغطية خادمية كاملة للوحدات؛ **تبقى فجوة E2E مستقلة** لمسارات `/api/admin/finance/*` ولوحة التسوية (انظر «الملحق أ») | ~~Medium~~ → **Closed (unit/integration)** | No | Yes |
+| TH-01 | اختبارات Settlement/Payout/Reconciliation: **مغلقة** (كانت: لا شيء يُختبر لعدم وجود الوحدات) | Test/Harness | الاختبارات موجودة ومحصورة: `settlement-ledger.test.ts` (9) · `payout-engine.test.ts` (11) · `payout-provider.test.ts` (20) · `reconciliation-engine.test.ts` (17) · `finance-routes.test.ts` (16) · `persistence-invariants.test.ts` · `money-path-invariants.test.ts` (9) · `e2e/settlement-integrity.spec.ts` (4) · `e2e/admin-finance.spec.ts` (15) | تغطية خادمية كاملة للوحدات + **E2E لمسارات `/api/admin/finance/*` مُغلقة** (`e2e/admin-finance.spec.ts`، 15 حالة: settlements/confirm + payouts)؛ **تبقى فجوة الواجهة (UI) مستقلة** (الملحق أ.5-1) | ~~Medium~~ → **Closed (unit/integration/E2E)** | No | Yes |
 | TH-02 | أسطح Placeholder غير مغطّاة بـE2E | Test/Harness | لا تغطية للأسطح «—» | PR-03/04 | Low | No | Yes |
 | TH-03 | 8 اختبارات demo-gated تُتخطّى في E2E العادي | Test/Harness | SKIP ما لم يُفعّل auto-login | `functional-audit.spec.ts` (8 skipped) | Low | No | Yes |
 | BU-01 | لا عقد مزوّد دفع حقيقي (تأكيد split/settlement من iPay) | Business | None (تجاري خارجي) | `PAYMENT_PROVIDER_IPAY_COMPATIBILITY_AUDIT.md` §A/§M/§O | Critical | Yes | Yes |
@@ -149,7 +149,7 @@ AI/Automation · Documentation · Test/Harness
 - **PR-10** تفضيلات الإشعارات.
 - **PR-11 / BU-08** Support Desk/التصعيد.
 - **DO-01** تحديث وثيقة التسوية (تجنّب قرارات خاطئة).
-- ~~**TH-01** اختبارات Settlement/Payout~~ → **مُغلقة** (اختبارات الوحدات موجودة)؛ يبقى **E2E** لمسارات `/api/admin/finance/*` فجوة تغطية مستقلة (الملحق أ).
+- ~~**TH-01** اختبارات Settlement/Payout~~ → **مُغلقة** (اختبارات الوحدات + E2E لمسارات `/api/admin/finance/*` في `e2e/admin-finance.spec.ts`)؛ تبقى فجوة **الواجهة (UI)** لمسارات المالية مستقلة (الملحق أ.5-1).
 
 ### 3) POST-LAUNCH / SCALE — قابلة للتأجيل
 - **PR-01** Cart/دفع متعدد البنود.
@@ -264,8 +264,10 @@ AI/Automation · Documentation · Test/Harness
 
 1. **واجهة الإدارة (UI)** — لا صفحة `/admin/finance` ولا مدخل Sidebar ولا دالة في `packages/web/src/lib/api.ts`
    لمسارات التسوية/Payout/Reconciliation؛ الطبقة backend-only. (`grep` على الويب = ∅.) → **مفتوح**.
-2. **E2E لمسارات `/api/admin/finance/*`** — `e2e/settlement-integrity.spec.ts` يغطي الدفع/التسوية عبر webhook
-   لا واجهة المالية؛ لا E2E يشير إلى `admin/finance`. → **مفتوح**.
+2. **E2E لمسارات `/api/admin/finance/*`** — **مُغلقة الآن**: `e2e/admin-finance.spec.ts` (15 حالة، HTTP حقيقي + جلسات حقيقية) يغطي
+   `POST /settlements/confirm` (رفض 422 بلا مرجع/بعملة مشوّهة، 404 لنية غير موجودة، 409 لنية غير مدفوعة، تأكيد + idempotency + رفض مرجع مختلف 409،
+   ترقية `orders.settlementStatus='SETTLED'`) و`/payouts` (`CREATED` بمبلغ مشتق من سياسة 4%، 409 لمعاملة غير مسوّاة، 422 لمزوّد بلا صلاحية payout،
+   قراءة/404، `dispatch→PROCESSING` ولا `COMPLETED`، رفض payout نشط ثانٍ 409) مع حُرّاس RBAC (401/403). الواجهة المالية (UI) تبقى مفتوحة (البند 1).
 3. **PS-03 (Split المزوّد)** — خارجي/تعاقدي: **مفتوح**، مسار مستقل.
 4. **PS-07 (credentials إنتاجية)** + **BU-01/BU-02** (عقد مزوّد/حساب تسوية) — خارجي/بنكي: **مفتوح**.
 5. **الدلالة الإنتاجية**: الإغلاق أعلاه **منطقي برمجي**، ولا يعني أن حركة أموال حقيقية مُثبتة في الإنتاج —
