@@ -22,6 +22,13 @@ export async function createNotification(
     entityType?: string | null;
     entityId?: string | null;
     idempotencyKey?: string | null;
+    /**
+     * Template variables (orderNumber, amount, currency, status, …). Required for
+     * any event whose registry template has placeholders: the engine refuses to
+     * queue a row whose variables are incomplete, so a missing value fails loudly
+     * here instead of being delivered as a blank field.
+     */
+    vars?: Record<string, string>;
   },
 ): Promise<void> {
   await notify(db, {
@@ -33,5 +40,6 @@ export async function createNotification(
     entityType: input.entityType ?? null,
     entityId: input.entityId ?? null,
     idempotencyKey: input.idempotencyKey ?? null,
+    vars: input.vars,
   });
 }

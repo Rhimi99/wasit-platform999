@@ -10,13 +10,15 @@ import {
   notify,
   dispatchPendingDeliveries,
   isChannelEnabled,
+  NotificationTemplateError,
+  STORED_BODY,
 } from '../src/lib/notifications/engine.js';
 import { eventDefinition } from '../src/lib/notifications/types.js';
 import { renderNotification, emailParts, smsBody } from '../src/lib/notifications/templates.js';
-import { resetMailTransport } from '../src/lib/mail/resolve.js';
-import { resetSmsTransport } from '../src/lib/sms/resolve.js';
+import { resetMailTransport, resolveMailTransport } from '../src/lib/mail/resolve.js';
+import { resetSmsTransport, resolveSmsTransport } from '../src/lib/sms/resolve.js';
 import { resetPushTransport } from '../src/lib/notifications/push.js';
-import { resetNotificationWebhook } from '../src/lib/notifications/webhook.js';
+import { resetNotificationWebhook, resolveNotificationWebhook } from '../src/lib/notifications/webhook.js';
 
 const app = createApp();
 
@@ -120,6 +122,112 @@ describe('Notification engine — registry and templates', () => {
   });
 });
 
+describe('Notification engine — template variables', () => {
+  it('renders every template with real values in ar/fr/en (no leftover placeholders)', () => {
+    const cases: Array<{ type: string; vars: Record<string, string>; expect: string[] }> = [
+      { type: 'ORDER_CREATED', vars: { orderNumber: 'ORD-9' }, expect: ['ORD-9'] },
+      { type: 'ORDER_STATUS_CHANGED', vars: { orderNumber: 'ORD-9', status: 'SHIPPED' }, expect: ['ORD-9', 'SHIPPED'] },
+      { type: 'PAYMENT_SUCCEEDED', vars: { orderNumber: 'ORD-9', amount: '125.5000', currency: 'TND' }, expect: ['ORD-9', '125.5000', 'TND'] },
+      { type: 'PAYMENT_FAILED', vars: { orderNumber: 'ORD-9' }, expect: ['ORD-9'] },
+      { type: 'REFUND_COMPLETED', vars: { orderNumber: 'ORD-9', amount: '40.0000', currency: 'EUR' }, expect: ['ORD-9', '40.0000', 'EUR'] },
+    ];
+    for (const { type, vars, expect: needles } of cases) {
+      for (const locale of ['ar', 'fr', 'en'] as const) {
+        const copy = renderNotification(type, vars, locale);
+        expect(`${copy.title} ${copy.body}`).not.toMatch(/\{\w+\}/);
+        for (const needle of needles) expect(copy.body).toContain(needle);
+      }
+    }
+  });
+
+  it('refuses to queue a template notification whose variables are missing', async () => {
+    const userId = await createUser(`it-pr09-vars-${Date.now()}@wasit.tn`);
+    createdUserIds.push(userId);
+
+    // PAYMENT_SUCCEEDED needs orderNumber, amount and currency.
+    await expect(
+      notify(db, { userId, type: 'PAYMENT_SUCCEEDED', entityType: 'ORDER', entityId: 'ORD-VARS-1' }),
+    ).rejects.toBeInstanceOf(NotificationTemplateError);
+
+    // The failure is loud and names the missing keys, and nothing was queued.
+    const rows = await db
+      .select()
+      .from(notificationDeliveries)
+      .where(eq(notificationDeliveries.entityId, 'ORD-VARS-1'));
+    expect(rows.length).toBe(0);
+  });
+
+  it('stores the resolved copy in the ledger and delivers it verbatim to email, SMS and webhook', async () => {
+    const userId = await createUser(`it-pr09-content-${Date.now()}@wasit.tn`);
+    createdUserIds.push(userId);
+    await db.update(users).set({ phone: '+21620000000' }).where(eq(users.id, userId));
+
+    await notify(db, {
+      userId,
+      type: 'PAYMENT_SUCCEEDED',
+      entityType: 'ORDER',
+      entityId: 'ORD-CONTENT-1',
+      idempotencyKey: 'ORD-CONTENT-1:PAID',
+      vars: { orderNumber: 'ORD-CONTENT-1', amount: '125.5000', currency: 'TND' },
+    });
+
+    // The ledger stores the concrete copy (the regression guard).
+    const emailRow = await db
+      .select()
+      .from(notificationDeliveries)
+      .where(and(
+        eq(notificationDeliveries.entityId, 'ORD-CONTENT-1'),
+        eq(notificationDeliveries.userId, userId),
+        eq(notificationDeliveries.channel, 'EMAIL'),
+      ));
+    const stored = emailRow[0].vars as Record<string, string>;
+    expect(stored[STORED_BODY]).toContain('ORD-CONTENT-1');
+    expect(stored[STORED_BODY]).toContain('125.5000');
+    expect(stored[STORED_BODY]).toContain('TND');
+    expect(stored[STORED_BODY]).not.toMatch(/\{\w+\}/);
+
+    // Spy on every external transport by replacing the memoized instance in
+    // place; each is restored from the reset seam in `finally`.
+    const emails: Array<{ text: string }> = [];
+    const sms: Array<{ text: string }> = [];
+    const hooks: Array<{ body: string; title: string }> = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mail = resolveMailTransport() as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const smsTransport = resolveSmsTransport() as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const webhook = resolveNotificationWebhook() as any;
+    Object.assign(mail, { id: 'spy', isAvailable: () => true, send: async (m: { text: string }) => { emails.push(m); } });
+    Object.assign(smsTransport, { id: 'spy', isAvailable: () => true, send: async (m: { text: string }) => { sms.push(m); } });
+    Object.assign(webhook, { id: 'spy', isAvailable: () => true, send: async (m: { body: string; title: string }) => { hooks.push(m); } });
+    try {
+      await dispatchPendingDeliveries(db, 500);
+    } finally {
+      resetMailTransport();
+      resetSmsTransport();
+      resetNotificationWebhook();
+    }
+
+    const assertContent = (text: string): void => {
+      expect(text).toContain('ORD-CONTENT-1');
+      expect(text).toContain('125.5000');
+      expect(text).toContain('TND');
+      expect(text).not.toMatch(/\{\w+\}/);
+    };
+    // The drain also picks up pending rows queued by earlier cases, so match the
+    // message for this order rather than assuming it is first.
+    const emailFor = emails.find((e) => e.text.includes('ORD-CONTENT-1'));
+    expect(emailFor).toBeDefined();
+    assertContent(emailFor!.text);
+    const smsFor = sms.find((m) => m.text.includes('ORD-CONTENT-1'));
+    expect(smsFor).toBeDefined();
+    assertContent(smsFor!.text);
+    const hookFor = hooks.find((h) => h.body.includes('ORD-CONTENT-1'));
+    expect(hookFor).toBeDefined();
+    assertContent(hookFor!.body);
+  });
+});
+
 describe('Notification engine — delivery ledger', () => {
   it('records one ledger row per channel and links the in-app row to its delivery', async () => {
     const userId = await createUser(`it-pr09-ledger-${Date.now()}@wasit.tn`);
@@ -164,6 +272,7 @@ describe('Notification engine — delivery ledger', () => {
       entityType: 'ORDER',
       entityId: 'ORD-IDEM-1',
       idempotencyKey: 'ORD-IDEM-1:PAID',
+      vars: { orderNumber: 'ORD-IDEM-1', amount: '100.0000', currency: 'TND' },
     });
     const second = await notify(db, {
       userId,
@@ -171,6 +280,7 @@ describe('Notification engine — delivery ledger', () => {
       entityType: 'ORDER',
       entityId: 'ORD-IDEM-1',
       idempotencyKey: 'ORD-IDEM-1:PAID',
+      vars: { orderNumber: 'ORD-IDEM-1', amount: '100.0000', currency: 'TND' },
     });
     expect(first.notificationId).toBeTruthy();
     // The duplicate is a no-op: no new feed row is returned.
@@ -258,6 +368,7 @@ describe('Notification engine — dispatch and preferences', () => {
       entityType: 'ORDER',
       entityId: 'ORD-PREF-1',
       idempotencyKey: 'ORD-PREF-1',
+      vars: { orderNumber: 'ORD-PREF-1' },
     });
     await dispatchPendingDeliveries(db, 500);
 
@@ -318,6 +429,7 @@ describe('Notification engine — dispatch and preferences', () => {
       entityType: 'ORDER',
       entityId: 'ORD-DELIV-1',
       idempotencyKey: 'ORD-DELIV-1',
+      vars: { orderNumber: 'ORD-DELIV-1' },
     });
 
     const mine = await a.req('/api/notifications/deliveries');
@@ -372,6 +484,7 @@ describe('Notification engine — external-approval gate', () => {
         entityType: 'ORDER',
         entityId: 'ORD-GATE-1',
         idempotencyKey: 'ORD-GATE-1',
+        vars: { orderNumber: 'ORD-GATE-1' },
       });
       await dispatchPendingDeliveries(db, 500);
 

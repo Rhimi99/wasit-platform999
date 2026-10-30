@@ -269,6 +269,7 @@ export async function createOrder(
     entityType: 'ORDER',
     entityId: orderId,
     idempotencyKey: orderId,
+    vars: { orderNumber },
   });
 
   return {
@@ -453,6 +454,7 @@ export async function updateOrderStatus(
       entityType: 'ORDER',
       entityId: orderId,
       idempotencyKey: `${orderId}:${order[0].status}->${status}`,
+      vars: { orderNumber: order[0].orderNumber, status },
     });
   }
 }

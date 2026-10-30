@@ -690,6 +690,11 @@ async function applyPaymentSucceeded(db: DB, providerId: string, externalRef: st
     entityType: 'ORDER',
     entityId: orderId,
     idempotencyKey: `${orderId}:PAID`,
+    vars: {
+      orderNumber: order[0].orderNumber,
+      amount: String(order[0].grandTotal),
+      currency: order[0].currencyCode,
+    },
   });
 }
 
@@ -889,6 +894,11 @@ export async function createRefund(
       entityType: 'ORDER',
       entityId: order.id,
       idempotencyKey: `${refundId}:REFUNDED`,
+      vars: {
+        orderNumber: order.orderNumber,
+        amount: requested.toFixed(4),
+        currency: order.currencyCode,
+      },
     });
   }
 

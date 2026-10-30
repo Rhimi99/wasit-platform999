@@ -9,7 +9,7 @@ import { resolveMailTransport } from '../mail/resolve';
 import { resolveSmsTransport } from '../sms/resolve';
 import { sendMail } from '../mail/send';
 import { sendSms } from '../sms/send';
-import { renderNotification, emailParts, smsBody } from './templates';
+import { renderNotification, emailParts, smsBody, templatePlaceholders } from './templates';
 import {
   eventDefinition,
   type NotificationChannel,
@@ -59,11 +59,27 @@ export async function notify(db: DB, event: NotifyEvent): Promise<{ notification
   const channels = event.channels ?? def.channels;
   const wantsInApp = channels.includes('IN_APP');
 
+  const vars = event.vars ?? {};
   const copy =
     event.title !== undefined || event.body !== undefined
       ? { title: event.title ?? event.type, body: event.body ?? '' }
-      : renderNotification(event.type, event.vars ?? {}, null);
-  const vars = event.vars ?? null;
+      : renderNotification(event.type, vars, null);
+  // Refuse to queue a template whose variables are missing. `fill` substitutes an
+  // absent key with an empty string, so the result cannot be detected by scanning
+  // for braces — the placeholder set must be checked against the supplied keys.
+  // Without this a call site that forgets `vars` would enqueue a body of blank
+  // fields ("Order  is now .") that only surfaces on a real transport, a silent
+  // user-visible defect. The error names the missing keys.
+  assertTemplateVars(event.type, vars);
+
+  // The ledger stores the exact copy that will be delivered, under reserved
+  // keys, so dispatch never re-renders with a different (empty) locale/vars set.
+  const storedVars: Record<string, string> = {
+    ...vars,
+    [STORED_TITLE]: copy.title,
+    [STORED_BODY]: copy.body,
+  };
+
   // One token for the whole call: without an explicit idempotency key each call
   // is a distinct occurrence, and a shared token keeps the per-channel keys
   // (and the in-app relink below) consistent.
@@ -89,7 +105,7 @@ export async function notify(db: DB, event: NotifyEvent): Promise<{ notification
         // The in-app row *is* the in-app delivery; it is written just below.
         status: channel === 'IN_APP' ? 'SENT' : 'PENDING',
         attempts: channel === 'IN_APP' ? 1 : 0,
-        vars,
+        vars: storedVars,
         dedupeKey: buildDedupeKey(event, channel, token),
       })
       .onConflictDoNothing()
@@ -117,6 +133,37 @@ export async function notify(db: DB, event: NotifyEvent): Promise<{ notification
   }
 
   return { notificationId };
+}
+
+/** Reserved `vars` keys holding the resolved copy for dispatch to replay. */
+export const STORED_TITLE = '__title';
+export const STORED_BODY = '__body';
+
+/**
+ * Thrown when a call site fails to supply a variable a template needs. It is a
+ * programming error, surfaced loudly at queue time rather than delivered as a
+ * blank field.
+ */
+export class NotificationTemplateError extends Error {
+  readonly eventType: string;
+  readonly missing: string[];
+  constructor(eventType: string, missing: string[]) {
+    super(`Notification template ${eventType} is missing variables: ${missing.join(', ')}`);
+    this.name = 'NotificationTemplateError';
+    this.eventType = eventType;
+    this.missing = missing;
+  }
+}
+
+/**
+ * Rejects a call whose variables do not cover the event template's placeholders.
+ * A missing key is a programming error at the call site: fail loudly at queue
+ * time rather than deliver a blank field.
+ */
+function assertTemplateVars(eventType: string, vars: Record<string, string>): void {
+  const required = templatePlaceholders(eventType);
+  const missing = required.filter((key) => vars[key] === undefined || vars[key] === '');
+  if (missing.length > 0) throw new NotificationTemplateError(eventType, missing);
 }
 
 function buildDedupeKey(event: NotifyEvent, channel: NotificationChannel, token: string): string {
@@ -209,7 +256,16 @@ async function sendOnChannel(
   const recipient = await resolveRecipient(db, row.userId);
   if (!recipient) return { status: 'SKIPPED', attempts: 0, error: 'recipient not found' };
 
-  const copy = renderNotification(row.eventType, (row.vars as Record<string, string> | null) ?? {}, recipient.locale);
+  // Replay the copy captured at queue time rather than re-rendering. Re-rendering
+  // from `row.vars` under the recipient's locale would lose the amount/status
+  // that only the call site knew, and a template change between queue and send
+  // could produce a different message than the one recorded. The stored keys are
+  // authoritative; the render is a fallback for rows queued before this change.
+  const vars = (row.vars as Record<string, string> | null) ?? {};
+  const copy = {
+    title: vars[STORED_TITLE] ?? renderNotification(row.eventType, vars, recipient.locale).title,
+    body: vars[STORED_BODY] ?? renderNotification(row.eventType, vars, recipient.locale).body,
+  };
   const attempts = env.NOTIFICATION_RETRY_ATTEMPTS;
   let lastError = '';
 

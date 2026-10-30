@@ -80,6 +80,29 @@ export function renderNotification(
   return table[locale(l)](vars);
 }
 
+/**
+ * The placeholder names a template needs, in declaration order and deduplicated.
+ * Derived from the copy itself so it can never drift from the wording: the
+ * template is rendered against a proxy that echoes each placeholder, and the
+ * survivors are the required keys. All locales share one placeholder set, so the
+ * Arabic table is representative. Returns `[]` for an unknown event (no template
+ * — the caller supplies its own copy).
+ */
+export function templatePlaceholders(type: string): string[] {
+  const table = TABLES[type];
+  if (!table) return [];
+  const echo = new Proxy(
+    {},
+    {
+      get: (_t, key) => (typeof key === 'string' ? `{${key}}` : undefined),
+      has: () => true,
+    },
+  ) as Record<string, string>;
+  const copy = table.ar(echo);
+  const found = `${copy.title} ${copy.body}`.match(/\{(\w+)\}/g) ?? [];
+  return [...new Set(found.map((p) => p.slice(1, -1)))];
+}
+
 /** Plain-text/HTML bodies for the email channel, from the same copy. */
 export function emailParts(copy: Copy): { subject: string; text: string; html: string } {
   return {
