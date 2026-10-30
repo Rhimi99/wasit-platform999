@@ -218,6 +218,13 @@
       "when": 1790900300000,
       "tag": "0030_login_lockout",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790900400000,
+      "tag": "0031_notification_deliveries",
+      "breakpoints": true
     }
   ]
 }

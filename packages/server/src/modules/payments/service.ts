@@ -687,6 +687,9 @@ async function applyPaymentSucceeded(db: DB, providerId: string, externalRef: st
     title: 'Payment confirmed',
     body: `Payment for order ${order[0].orderNumber} was confirmed.`,
     data: { orderId, intentId: intent.id },
+    entityType: 'ORDER',
+    entityId: orderId,
+    idempotencyKey: `${orderId}:PAID`,
   });
 }
 
@@ -883,6 +886,9 @@ export async function createRefund(
       title: 'Refund processed',
       body: `A refund of ${requested.toFixed(4)} ${order.currencyCode} was processed for order ${order.orderNumber}.`,
       data: { orderId: order.id, refundId },
+      entityType: 'ORDER',
+      entityId: order.id,
+      idempotencyKey: `${refundId}:REFUNDED`,
     });
   }
 

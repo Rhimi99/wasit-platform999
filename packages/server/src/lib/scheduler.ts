@@ -7,6 +7,7 @@ import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
 import { dispatchDueSchedules, ensureSchedules } from '../modules/ai/copilot';
 import { executeDueTasks, reapStaleTasks } from '../modules/ai/runner';
+import { dispatchPendingDeliveries } from './notifications/engine';
 
 export interface SchedulerHandle {
   stop: () => void;
@@ -27,6 +28,7 @@ export function startScheduler(options: {
   rateLimitPurgeIntervalMinutes?: number;
   alertsEnabled?: boolean;
   alertIntervalMinutes?: number;
+  notificationIntervalMinutes?: number;
 }): SchedulerHandle {
   const intervalMs = options.rolloverIntervalMinutes * 60 * 1000;
   const purgeIntervalMs = (options.rateLimitPurgeIntervalMinutes ?? 15) * 60 * 1000;
@@ -111,6 +113,20 @@ export function startScheduler(options: {
     }
   };
 
+  /**
+   * Drains queued notification deliveries (email/SMS/push/webhook) that were
+   * recorded inside business transactions. Runs on its own fast cadence so a
+   * transient provider outage is retried promptly rather than on the hourly
+   * rollover. Idempotent: a row is sent once and then leaves the PENDING set.
+   */
+  const runNotifications = async (): Promise<void> => {
+    try {
+      await dispatchPendingDeliveries(db);
+    } catch (err) {
+      logger.error('notification dispatch failed', { error: (err as Error).message });
+    }
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
@@ -132,10 +148,17 @@ export function startScheduler(options: {
   const alertTimer = options.alertsEnabled ? setInterval(runAlerts, alertIntervalMs) : null;
   alertTimer?.unref();
 
+  // Notification dispatch runs on its own fast cadence (default 1 minute): a
+  // queued email/SMS/push should go out promptly, not wait for the hourly tick.
+  const notifyIntervalMs = (options.notificationIntervalMinutes ?? 1) * 60 * 1000;
+  const notifyTimer = setInterval(runNotifications, notifyIntervalMs);
+  notifyTimer.unref();
+
   return {
     stop: () => {
       clearInterval(timer);
       if (alertTimer) clearInterval(alertTimer);
+      clearInterval(notifyTimer);
     },
   };
 }

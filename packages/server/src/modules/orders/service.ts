@@ -19,6 +19,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { createNotification } from '../../lib/notifications-service.js';
 import { reserveStock, commitReservationToSale, restoreStockForCancelledOrder, releaseReservation } from '../../lib/inventory-engine.js';
 import { resolveCommission } from '../../lib/commission.js';
+import { resolveSellerUserId } from '../../lib/seller-ownership.js';
 
 export interface OrderItemInput {
   productId: string;
@@ -253,13 +254,21 @@ export async function createOrder(
     },
   });
 
-  // Notify seller
+  // Notify the seller. `products.sellerId` is the *entity* id, so it is resolved
+  // to the owning user: the notification feed and every delivery channel address
+  // a user id, and a seller entity id would be invisible to the person who owns
+  // it. Falls back to the entity id only for the legacy orders that stored a user
+  // id directly.
+  const sellerUserId = (await resolveSellerUserId(db, firstProduct.sellerId)) ?? firstProduct.sellerId;
   await createNotification(db, {
-    userId: firstProduct.sellerId,
+    userId: sellerUserId,
     type: 'ORDER_CREATED',
     title: 'New order',
     body: `Order ${orderNumber} received`,
     data: { orderId },
+    entityType: 'ORDER',
+    entityId: orderId,
+    idempotencyKey: orderId,
   });
 
   return {
@@ -428,4 +437,22 @@ export async function updateOrderStatus(
     before: { status: order[0].status },
     after: { status },
   });
+
+  // Notify the counterparty — the party who did not make the change — so a buyer
+  // sees seller-side progress (shipped/delivered) and a seller sees a buyer
+  // cancellation. The actor never notifies themselves. `idempotencyKey` pairs the
+  // new status with the transition, so re-applying the same status is silent.
+  const counterparty = isBuyer ? order[0].sellerId : order[0].buyerId;
+  if (counterparty && counterparty !== actorId) {
+    await createNotification(db, {
+      userId: counterparty,
+      type: 'ORDER_STATUS_CHANGED',
+      title: 'Order status updated',
+      body: `Order ${order[0].orderNumber} is now ${status}.`,
+      data: { orderId, status },
+      entityType: 'ORDER',
+      entityId: orderId,
+      idempotencyKey: `${orderId}:${order[0].status}->${status}`,
+    });
+  }
 }
