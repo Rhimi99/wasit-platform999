@@ -14,6 +14,9 @@ import { withAgentRunContext, withAgentRunBudget, AgentRunBudget, getAgentRunCon
 import { executeAgentTask } from './executors.js';
 import { DEFAULT_SUPERVISOR_LIMITS } from './supervisor-policy.js';
 import { supervise, unhealthyAgentKeys } from './supervisor.js';
+import { recordMetric } from './metrics-repo.js';
+import { tryDeriveScope, deriveSystemScope, type AgentScopeCtx } from './scope.js';
+import { recordTaskMemory, recallAgentContext, enforceMemoryRetention, isMemorableStatus, DEFAULT_MEMORY_KEEP } from './memory-service.js';
 
 export { AGENT_CATALOGUE, COPILOT_CATALOGUE, allAgentSpecs, agentCount, isSensitiveAction, SENSITIVE_ACTIONS } from './catalogue.js';
 
@@ -207,6 +210,7 @@ async function blockIfAgentStopped(
   taskId: string,
   agentKey: string,
   audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  current: ResolvedAgentTask,
 ): Promise<ResolvedAgentTask | null> {
   const registry = await getRegistryAgent(db, agentKey);
   if (registry.status !== 'DISABLED' && registry.status !== 'PAUSED') return null;
@@ -217,6 +221,10 @@ async function blockIfAgentStopped(
     .returning({ id: agentTasks.id });
   // The watchdog may have already failed the task; then it is not ours to block.
   if (blocked.length === 0) return getTask(db, taskId);
+  await recordTaskObservability(db, {
+    id: taskId, agentKey, taskType: current.taskType, requestedBy: current.requestedBy,
+    status: 'blocked', latencyMs: 0, error: { code: `AGENT_${registry.status}` }, triggeredBy: current.triggeredBy, attempts: current.attempts + 1,
+  });
   await writeAudit(db, audit, {
     action: 'AI.AGENT_TASK_BLOCKED',
     entityType: 'AGENT_TASK',
@@ -467,6 +475,7 @@ async function runSupervisorTask(
   db: DB,
   taskId: string,
   audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  current: ResolvedAgentTask,
 ): Promise<ResolvedAgentTask> {
   const started = Date.now();
   const held = await db
@@ -488,6 +497,10 @@ async function runSupervisorTask(
       .where(runningClaimGuard(taskId))
       .returning({ id: agentTasks.id });
     if (finished.length === 0) return getTask(db, taskId);
+    await recordTaskObservability(db, {
+      id: taskId, agentKey: SUPERVISOR_KEY, taskType: 'supervisor.observe', requestedBy: current.requestedBy,
+      status: 'succeeded', latencyMs: Date.now() - started, error: null, triggeredBy: current.triggeredBy, attempts: current.attempts + 1,
+    });
     await writeAudit(db, audit, {
       action: 'AI.SUPERVISOR_OBSERVED',
       entityType: 'AGENT_TASK',
@@ -502,6 +515,10 @@ async function runSupervisorTask(
       .where(runningClaimGuard(taskId))
       .returning({ id: agentTasks.id });
     if (finished.length === 0) return getTask(db, taskId);
+    await recordTaskObservability(db, {
+      id: taskId, agentKey: SUPERVISOR_KEY, taskType: 'supervisor.observe', requestedBy: current.requestedBy,
+      status: 'failed', latencyMs: Date.now() - started, error: { message }, triggeredBy: current.triggeredBy, attempts: current.attempts + 1,
+    });
     await writeAudit(db, audit, { action: 'AI.SUPERVISOR_FAILED', entityType: 'AGENT_TASK', entityId: taskId, metadata: { error: message } });
   }
   return getTask(db, taskId);
@@ -544,6 +561,96 @@ async function claimTaskForRun(
  */
 function runningClaimGuard(taskId: string) {
   return and(eq(agentTasks.id, taskId), eq(agentTasks.status, 'running'));
+}
+
+/**
+ * AI-06.0 / AI-06.1 — records a terminal task into the observability stores.
+ *
+ * Called only AFTER the task's terminal status is committed and only when this
+ * caller won the guarded write (so a task the watchdog already failed is not
+ * double-recorded). It writes two independent, scope-scoped records:
+ *   - one `agent_metrics` row (outcome/latency/attempt/error code), and
+ *   - one compact `agent_memory` note, then trims to the per-scope cap.
+ *
+ * IDENTITY: the scope is derived from the task's trusted provenance, never from
+ * `input`. A task the trusted scheduler enqueued (`requestedBy === 'system'` AND a
+ * `schedule:` provenance marker) is recorded under the dedicated **system** bucket
+ * — so its success/failure/delay is measurable and clearly separated from every
+ * human owner. Any other task is recorded under its real requester's owner scope;
+ * a task that merely claims `system` without the marker resolves to no owner and
+ * is recorded in neither store (it is refused at execution time anyway).
+ *
+ * FAIL-OPEN: every step is best-effort and swallows its own failure. The outcome
+ * is already persisted, so a metrics/memory failure can neither change nor fake
+ * it — it only leaves a gap the operator sees as a warning.
+ */
+async function recordTaskObservability(
+  db: DB,
+  task: { id: string; agentKey: string; taskType: string | null; requestedBy: string; status: string; latencyMs: number; error: unknown; triggeredBy: string; attempts: number },
+): Promise<void> {
+  const scope = observabilityScope(task);
+  if (!scope) return;
+  // Each step is isolated: one failing store never suppresses the other, and
+  // neither can escape to change the task outcome (already committed).
+  try {
+    if (isMemorableStatus(task.status)) {
+      await recordMetric(db, scope, {
+        agentKey: task.agentKey,
+        taskType: task.taskType,
+        taskId: task.id,
+        outcome: outcomeForStatus(task.status, task.error),
+        attempt: Math.max(1, task.attempts),
+        latencyMs: task.latencyMs,
+        errorCode: metricErrorCode(task.error),
+      });
+    }
+  } catch (err) {
+    logger.warn('agent metric record failed (task outcome unaffected)', {
+      taskId: task.id, agentKey: task.agentKey, error: (err as Error).message,
+    });
+  }
+  try {
+    await recordTaskMemory(db, scope, task);
+    await enforceMemoryRetention(db, scope, DEFAULT_MEMORY_KEEP);
+  } catch (err) {
+    logger.warn('agent memory record failed (task outcome unaffected)', {
+      taskId: task.id, agentKey: task.agentKey, error: (err as Error).message,
+    });
+  }
+}
+
+/**
+ * Resolves the observability scope for a finished task from its trusted
+ * provenance. A trusted scheduler task is recorded under the system bucket; any
+ * other task under its real requester. Returns null when neither applies (an
+ * unowned task, e.g. one that merely claims `system` without the marker).
+ */
+export function observabilityScope(task: { requestedBy: string; triggeredBy: string }): AgentScopeCtx | null {
+  if (task.requestedBy === SYSTEM_PRINCIPAL && isTrustedSchedulerTask(task.triggeredBy)) {
+    return deriveSystemScope();
+  }
+  return tryDeriveScope({ userId: task.requestedBy });
+}
+
+/**
+ * The metric/memory outcome for a terminal task status. A deliberate refusal is
+ * `refused` — a first-class outcome distinct from a technical `failed` (AI-06.1):
+ * the executor's refusal is persisted as `failed` with `error.refused === true`,
+ * and an approval REJECT is the `rejected` status.
+ */
+export function outcomeForStatus(status: string, error: unknown): 'succeeded' | 'failed' | 'blocked' | 'refused' {
+  if (status === 'rejected') return 'refused';
+  if (error && typeof error === 'object' && (error as { refused?: unknown }).refused === true) return 'refused';
+  return status as 'succeeded' | 'failed' | 'blocked';
+}
+
+/** A short machine error code from a task's stored error, or null. */
+function metricErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const e = error as { code?: unknown; refused?: unknown };
+  if (typeof e.code === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(e.code)) return e.code;
+  if (e.refused === true) return 'REFUSED';
+  return null;
 }
 
 /**
@@ -594,9 +701,9 @@ async function executeClaimedTask(
   // kill switch is honoured *before* this branch so a PAUSED/DISABLED supervisor
   // cannot keep running through its dedicated path.
   if (agent.key === SUPERVISOR_KEY) {
-    const stopped = await blockIfAgentStopped(db, taskId, current.agentKey, audit);
+    const stopped = await blockIfAgentStopped(db, taskId, current.agentKey, audit, current);
     if (stopped) return stopped;
-    return runSupervisorTask(db, taskId, audit);
+    return runSupervisorTask(db, taskId, audit, current);
   }
 
   // Permission re-check at execution time. A task may have been created earlier
@@ -624,6 +731,10 @@ async function executeClaimedTask(
       .where(runningClaimGuard(taskId))
       .returning({ id: agentTasks.id });
     if (blocked.length === 0) return getTask(db, taskId);
+    await recordTaskObservability(db, {
+      id: taskId, agentKey: agent.key, taskType: current.taskType, requestedBy: current.requestedBy,
+      status: 'blocked', latencyMs: 0, error: { code: 'PERMISSION_REVOKED' }, triggeredBy: current.triggeredBy, attempts: current.attempts + 1,
+    });
     await writeAudit(db, audit, {
       action: 'AI.AGENT_TASK_BLOCKED',
       entityType: 'AGENT_TASK',
@@ -634,7 +745,7 @@ async function executeClaimedTask(
   }
 
   // Loop guard: a paused/disabled agent or an engaged kill switch blocks the run.
-  const stopped = await blockIfAgentStopped(db, taskId, current.agentKey, audit);
+  const stopped = await blockIfAgentStopped(db, taskId, current.agentKey, audit, current);
   if (stopped) return stopped;
 
   // Boundary guard (supervisor): never start work for an agent that is already
@@ -648,6 +759,10 @@ async function executeClaimedTask(
         .where(runningClaimGuard(taskId))
         .returning({ id: agentTasks.id });
       if (blocked.length === 0) return getTask(db, taskId);
+      await recordTaskObservability(db, {
+        id: taskId, agentKey: agent.key, taskType: current.taskType, requestedBy: current.requestedBy,
+        status: 'blocked', latencyMs: 0, error: { code: 'SUPERVISOR_UNHEALTHY' }, triggeredBy: current.triggeredBy, attempts: current.attempts + 1,
+      });
       await writeAudit(db, audit, {
         action: 'AI.SUPERVISOR_BLOCKED',
         entityType: 'AGENT_TASK',
@@ -691,6 +806,15 @@ async function executeClaimedTask(
   // cannot reset the counter and spend the cap afresh. An unparseable stored
   // value degrades to zero rather than disabling the cap.
   const runBudget = new AgentRunBudget(runCapUsd.isZero() ? null : runCapUsd, parseStoredCostUsd(current.cost));
+  // AI-06.0 / AI-06.1: recall the relevant prior context for this run — the
+  // requester's own notes for a human run, or the dedicated system bucket for a
+  // trusted scheduled run. Owner-scoped and deterministic facts only. Best-effort
+  // — a recall failure leaves the run without context rather than failing it. A
+  // task that merely claims `system` resolves to no scope and recalls nothing.
+  const observabilityCtx = observabilityScope(current);
+  const priorContext = observabilityCtx
+    ? (await recallAgentContext(db, observabilityCtx, agent.key, current.taskType)) ?? undefined
+    : undefined;
   const runContext = {
     taskId,
     agentKey: agent.key,
@@ -705,6 +829,7 @@ async function executeClaimedTask(
     // task `input`, so a caller cannot forge the principal a tool runs as.
     requestedBy: current.requestedBy,
     requesterRoles,
+    priorContext,
   };
   try {
     // The trusted run identity and the per-run budget are bound to THIS async
@@ -748,6 +873,10 @@ async function executeClaimedTask(
         .returning({ id: agentTasks.id });
       // The watchdog failed the task first: keep its terminal state, skip the audit.
       if (recorded.length === 0) return getTask(db, taskId);
+      await recordTaskObservability(db, {
+        id: taskId, agentKey: agent.key, taskType: current.taskType, requestedBy: current.requestedBy,
+        status: 'failed', latencyMs, error: { code: refusal.code, refused: true }, triggeredBy: current.triggeredBy, attempts,
+      });
       await writeAudit(db, audit, {
         action: 'AI.AGENT_TASK_REFUSED',
         entityType: 'AGENT_TASK',
@@ -779,6 +908,10 @@ async function executeClaimedTask(
       .returning({ id: agentTasks.id });
     // The watchdog failed the task first: keep its terminal state, skip the audit.
     if (recorded.length === 0) return getTask(db, taskId);
+    await recordTaskObservability(db, {
+      id: taskId, agentKey: agent.key, taskType: current.taskType, requestedBy: current.requestedBy,
+      status: 'succeeded', latencyMs, error: null, triggeredBy: current.triggeredBy, attempts,
+    });
     await writeAudit(db, audit, {
       action: 'AI.AGENT_TASK_SUCCEEDED',
       entityType: 'AGENT_TASK',
@@ -805,6 +938,14 @@ async function executeClaimedTask(
     // The watchdog failed the task first: do not reschedule it or record a
     // contradictory outcome — the timeout stands.
     if (recorded.length === 0) return getTask(db, taskId);
+    if (!willRetry) {
+      // Record the permanent failure in the observability stores (a retry is not
+      // terminal, so it is recorded only when the task finally gives up).
+      await recordTaskObservability(db, {
+        id: taskId, agentKey: agent.key, taskType: current.taskType, requestedBy: current.requestedBy,
+        status: 'failed', latencyMs: Date.now() - started, error: { message }, triggeredBy: current.triggeredBy, attempts,
+      });
+    }
     await writeAudit(db, audit, {
       action: willRetry ? 'AI.AGENT_TASK_RETRY_SCHEDULED' : 'AI.AGENT_TASK_FAILED',
       entityType: 'AGENT_TASK',
@@ -845,16 +986,26 @@ export async function decideAgentTask(
   }
 
   if (decision === 'REJECT') {
-    await db
+    const rejected = await db
       .update(agentTasks)
       .set({ status: 'rejected', approvedBy: approverId, approvedAt: new Date(), rejectionReason: reason })
-      .where(eq(agentTasks.id, taskId));
+      .where(eq(agentTasks.id, taskId))
+      .returning({ id: agentTasks.id });
     await writeAudit(db, audit, {
       action: 'AI.AGENT_TASK_REJECTED',
       entityType: 'AGENT_TASK',
       entityId: taskId,
       metadata: { reason },
     });
+    // AI-06.1: a human refusal is a first-class `refused` outcome, recorded so the
+    // GM can distinguish it from a technical failure (it is neither a success nor
+    // a failure). Only recorded when the guarded update applied.
+    if (rejected.length > 0) {
+      await recordTaskObservability(db, {
+        id: taskId, agentKey: task.agentKey, taskType: task.taskType, requestedBy: task.requestedBy,
+        status: 'rejected', latencyMs: 0, error: { code: 'REJECTED', refused: true }, triggeredBy: task.triggeredBy, attempts: task.attempts,
+      });
+    }
     return getTask(db, taskId);
   }
 
@@ -938,7 +1089,7 @@ export async function executeDueTasks(
   db: DB,
   limit = 25,
   audit: { actorId: string } = { actorId: 'scheduler' },
-): Promise<{ ran: number; failed: number }> {
+): Promise<{ ran: number; failed: number; refused: number }> {
   const due = await db
     .select()
     .from(agentTasks)
@@ -952,14 +1103,24 @@ export async function executeDueTasks(
     .limit(limit);
   let ran = 0;
   let failed = 0;
+  let refused = 0;
   for (const t of due) {
     const claimed = await claimTaskForRun(db, t.id, ['queued', 'approved']);
     if (!claimed) continue; // already claimed by a concurrent path
     const out = await executeClaimedTask(db, t.id, audit);
     ran += 1;
-    if (out.status === 'failed') failed += 1;
+    if (out.status === 'failed') {
+      // A deliberate refusal is a distinct outcome, not a technical failure.
+      if (isRefusal(out.error)) refused += 1;
+      else failed += 1;
+    }
   }
-  return { ran, failed };
+  return { ran, failed, refused };
+}
+
+/** True when a stored task error marks a deliberate (non-technical) refusal. */
+export function isRefusal(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { refused?: unknown }).refused === true;
 }
 
 /**
@@ -969,20 +1130,43 @@ export async function executeDueTasks(
 export async function reapStaleTasks(db: DB, timeoutSeconds = 300): Promise<number> {
   const cutoff = new Date(Date.now() - timeoutSeconds * 1000);
   const stale = await db
-    .select({ id: agentTasks.id })
+    .select({
+      id: agentTasks.id,
+      agentKey: agentTasks.agentKey,
+      taskType: agentTasks.taskType,
+      requestedBy: agentTasks.requestedBy,
+      triggeredBy: agentTasks.triggeredBy,
+      attempts: agentTasks.attempts,
+      startedAt: agentTasks.startedAt,
+    })
     .from(agentTasks)
     .where(and(eq(agentTasks.status, 'running'), lt(agentTasks.startedAt, cutoff)));
   if (stale.length === 0) return 0;
-  await db
+  const now = new Date();
+  const failedIds = await db
     .update(agentTasks)
-    .set({ status: 'failed', error: { message: `timeout: running longer than ${timeoutSeconds}s` } as never, errorAt: new Date() })
-    .where(inArray(agentTasks.id, stale.map((s) => s.id)));
+    .set({ status: 'failed', error: { message: `timeout: running longer than ${timeoutSeconds}s`, code: 'TIMEOUT' } as never, errorAt: now })
+    .where(inArray(agentTasks.id, stale.map((s) => s.id)))
+    .returning({ id: agentTasks.id });
   await writeAudit(db, { actorId: 'scheduler' }, {
     action: 'AI.AGENT_TASK_TIMEOUT',
     entityType: 'AGENT_TASK',
-    metadata: { count: stale.length },
+    metadata: { count: failedIds.length },
   });
-  return stale.length;
+  // AI-06.1: a run the watchdog had to fail is a delayed/failed run. Record it in
+  // the observability stores under the task's trusted scope so a stuck scheduled
+  // run is visible to the GM rather than silently dropped. Best-effort: recording
+  // can never change the terminal state already committed above.
+  const failedSet = new Set(failedIds.map((f) => f.id));
+  for (const s of stale) {
+    if (!failedSet.has(s.id)) continue;
+    const latencyMs = s.startedAt ? Math.max(0, now.getTime() - s.startedAt.getTime()) : 0;
+    await recordTaskObservability(db, {
+      id: s.id, agentKey: s.agentKey, taskType: s.taskType, requestedBy: s.requestedBy,
+      status: 'failed', latencyMs, error: { code: 'TIMEOUT' }, triggeredBy: s.triggeredBy, attempts: s.attempts,
+    });
+  }
+  return failedIds.length;
 }
 
 /** Operator lifecycle control: pause / resume / disable an agent (kill switch). */

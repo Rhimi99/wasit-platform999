@@ -4,7 +4,7 @@ import type { DB } from '../../db/client';
 import { agentMetrics } from '../../db/schema/agents';
 import { newId } from '../../lib/ids';
 import { findAgentSpec } from './catalogue';
-import { assertValidScope, type AgentScopeCtx } from './scope';
+import { assertValidScope, SYSTEM_PRINCIPAL, type AgentScopeCtx } from './scope';
 
 /**
  * Owner-scoped access to `agent_metrics`.
@@ -107,6 +107,21 @@ function ownerPredicate(ctx: AgentScopeCtx): SQL {
   return eq(agentMetrics.scopeOwner, ctx.owner);
 }
 
+/**
+ * The read predicate that separates the system bucket from human owners (AI-06.1).
+ *
+ *   - system scope  → only the scheduler's own bucket (`scope_owner = 'system'`);
+ *   - platform scope → every owner **except** system, so the GM's platform view of
+ *     human activity never mixes in scheduler telemetry (it is reported separately);
+ *   - owner scope   → only that owner's rows (a human owner is never `'system'`, so
+ *     a human read can never see the system bucket).
+ */
+function scopePredicate(ctx: AgentScopeCtx): SQL {
+  if (ctx.isSystem) return eq(agentMetrics.scopeOwner, ctx.owner);
+  if (ctx.isPlatform) return sql`${agentMetrics.scopeOwner} <> ${SYSTEM_PRINCIPAL}`;
+  return ownerPredicate(ctx);
+}
+
 function filterPredicate(filter?: MetricFilter): SQL | undefined {
   const conds: SQL[] = [];
   if (filter?.agentKey) conds.push(eq(agentMetrics.agentKey, filter.agentKey));
@@ -152,11 +167,10 @@ export async function listMetrics(db: DB, ctx: AgentScopeCtx, filter?: MetricFil
  */
 export async function aggregateMetrics(db: DB, ctx: AgentScopeCtx, filter?: MetricFilter): Promise<MetricAggregate> {
   assertScope(ctx);
-  const conds: SQL[] = [];
-  if (!ctx.isPlatform) conds.push(ownerPredicate(ctx));
+  const conds: SQL[] = [scopePredicate(ctx)];
   const fp = filterPredicate(filter);
   if (fp) conds.push(fp);
-  const where = conds.length === 0 ? sql`true` : conds.length === 1 ? conds[0] : and(...conds);
+  const where = and(...conds);
   const rows = await db
     .select({
       total: sql<number>`count(*)::int`,
@@ -173,4 +187,52 @@ export async function aggregateMetrics(db: DB, ctx: AgentScopeCtx, filter?: Metr
 
 /** The scope predicate builder, exported for tests that assert the predicate is
  * always present (they render it to SQL; no database is involved). */
-export const __internal = { ownerPredicate, filterPredicate };
+export const __internal = { ownerPredicate, scopePredicate, filterPredicate };
+
+/** One row per agent with recorded activity, for the AI-06.0 monitor. */
+export interface PerAgentMetricRow {
+  agentKey: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  blocked: number;
+  refused: number;
+  avgLatencyMs: number;
+  lastAt: string | null;
+}
+
+/**
+ * Per-agent outcome aggregates for the caller's scope (AI-06.0).
+ *
+ * A tenant caller sees only its own rows; a platform caller sees the
+ * platform-wide aggregate. Read-only — no row-level detail is returned, only
+ * counts and averages, so nothing here can leak another owner's records.
+ */
+export async function perAgentMetrics(db: DB, ctx: AgentScopeCtx): Promise<PerAgentMetricRow[]> {
+  assertScope(ctx);
+  const where = scopePredicate(ctx);
+  const rows = await db
+    .select({
+      agentKey: agentMetrics.agentKey,
+      total: sql<number>`count(*)::int`,
+      succeeded: sql<number>`count(*) filter (where ${agentMetrics.outcome} = 'succeeded')::int`,
+      failed: sql<number>`count(*) filter (where ${agentMetrics.outcome} = 'failed')::int`,
+      blocked: sql<number>`count(*) filter (where ${agentMetrics.outcome} = 'blocked')::int`,
+      refused: sql<number>`count(*) filter (where ${agentMetrics.outcome} = 'refused')::int`,
+      avgLatencyMs: sql<number>`coalesce(avg(${agentMetrics.latencyMs}), 0)::int`,
+      lastAt: sql<string | null>`max(${agentMetrics.createdAt})`,
+    })
+    .from(agentMetrics)
+    .where(where)
+    .groupBy(agentMetrics.agentKey);
+  return rows.map((r) => ({
+    agentKey: r.agentKey,
+    total: Number(r.total),
+    succeeded: Number(r.succeeded),
+    failed: Number(r.failed),
+    blocked: Number(r.blocked),
+    refused: Number(r.refused),
+    avgLatencyMs: Number(r.avgLatencyMs),
+    lastAt: r.lastAt ? new Date(r.lastAt).toISOString() : null,
+  }));
+}

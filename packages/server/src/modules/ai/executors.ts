@@ -237,6 +237,14 @@ async function reasonAboutAgent(
   const route = await resolveAiRoute(db, 'AGENT_REASONING', roles);
   const isVendor = route.providerId !== 'local-heuristic' && route.providerId !== 'noop';
 
+  // AI-06.0: prepend the requester's recalled prior-run context (deterministic
+  // facts only) so the model reasons with relevant history. It comes from the
+  // trusted run context — never from task input — and is absent when there is
+  // none. The deterministic facts remain the agent's output; this only informs
+  // the linguistic proposal.
+  const priorContext = getAgentRunContext()?.priorContext;
+  const userPrompt = priorContext ? `${priorContext}\n\n${args.user}` : args.user;
+
   const call = async (
     provider: typeof route.provider,
     modelKey: string,
@@ -248,7 +256,7 @@ async function reasonAboutAgent(
       roles,
       requestType: `AGENT:${agent.key}`,
       system: args.system,
-      user: args.user,
+      user: userPrompt,
       maxTokens: args.maxTokens,
       modelKey,
       vendorModel,

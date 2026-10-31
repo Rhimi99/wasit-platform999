@@ -8,16 +8,29 @@ import type { DB } from '../../db/client';
  * Every read/write against `agent_metrics` / `agent_memory` must be scoped to a
  * single owner. The owner is the authenticated **user id** of whoever caused the
  * task — never a seller entity, never a company, and never the shared scheduler
- * principal. A caller that cannot produce such an id is refused with `NO_SCOPE`
- * rather than silently widened to a platform-wide read.
+ * principal. The sole exception is the dedicated **system** bucket
+ * ({@link deriveSystemScope}), which holds the scheduler's own telemetry and is
+ * never reachable from a human owner. A caller that cannot produce a trustworthy
+ * owner is refused with `NO_SCOPE` rather than silently widened to a
+ * platform-wide read.
  */
 
 /** A user id that has been validated as a real owner. Branded so a bare string
  * cannot be passed where a validated owner is required. */
 export type OwnerId = string & { readonly __brand: 'OwnerId' };
 
-/** The scheduler principal. It is *not* a data owner: it may never read another
- * user's memory, and any row it writes is attributed to no owner. */
+/**
+ * The internal automation principal used by the trusted in-process scheduler.
+ * It is a *named, singular* identity — never an arbitrary user id — and a task
+ * only runs under it when its `triggeredBy` carries the scheduler provenance
+ * marker (see the runner).
+ *
+ * AI-06.1: the scheduler's own operational telemetry is recorded under a
+ * dedicated **system** owner bucket ({@link deriveSystemScope}) so its runs are
+ * measurable and kept separate from every human owner. This constant is still
+ * *not* a real user: {@link deriveScope} refuses it, and only
+ * {@link deriveSystemScope} may produce a context whose owner is this value.
+ */
 export const SYSTEM_PRINCIPAL = 'system';
 
 /** The refusal code surfaced when no trustworthy owner can be established. */
@@ -35,6 +48,15 @@ export interface AgentScopeCtx {
    * is ignored.
    */
   readonly isPlatform: boolean;
+  /**
+   * System scope (AI-06.1): the owner is the {@link SYSTEM_PRINCIPAL} bucket.
+   * Rows written under it are the scheduler's own operational telemetry, kept
+   * **separate** from every human owner. It is set ONLY by
+   * {@link deriveSystemScope}, never from request input, and it grants **no**
+   * roles, **no** platform/tenant read and **no** tool authority — it only names
+   * the bucket a scheduled run's metric/memory row is written to and read from.
+   */
+  readonly isSystem: boolean;
 }
 
 /** Inputs a scope may be derived from. These are trusted *sources*, not claims:
@@ -75,7 +97,7 @@ function isRealUser(id: unknown): id is string {
  */
 export function deriveScope(source: ScopeSource): AgentScopeCtx {
   if (!isRealUser(source.userId)) throw new NoScopeError();
-  const ctx: AgentScopeCtx = { owner: source.userId as OwnerId, isPlatform: false };
+  const ctx: AgentScopeCtx = { owner: source.userId as OwnerId, isPlatform: false, isSystem: false };
   VALID_SCOPES.add(ctx);
   return ctx;
 }
@@ -87,6 +109,29 @@ export function tryDeriveScope(source: ScopeSource): AgentScopeCtx | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Derives the **system** observability scope (AI-06.1) — the owner bucket the
+ * trusted scheduler writes its own operational telemetry to.
+ *
+ * This is the ONLY way an `AgentScopeCtx` may carry `owner = 'system'`, and it is
+ * deliberately distinct from {@link deriveScope}: a system context is owner-only
+ * (`isPlatform` and `isSystem` are the sole flags it sets), grants no roles and no
+ * cross-owner read, and can never be produced from request input — the runner
+ * calls it only for a task the trusted scheduler itself enqueued. Rows under this
+ * bucket are kept separate from every human owner (a human owner is never
+ * `'system'`, so no human read can ever see them).
+ */
+export function deriveSystemScope(): AgentScopeCtx {
+  const ctx: AgentScopeCtx = { owner: SYSTEM_PRINCIPAL as OwnerId, isPlatform: false, isSystem: true };
+  VALID_SCOPES.add(ctx);
+  return ctx;
+}
+
+/** True for the system observability scope produced by {@link deriveSystemScope}. */
+export function isSystemScope(ctx: AgentScopeCtx): boolean {
+  return ctx.isSystem === true;
 }
 
 /** The minimal role shape needed to authorize platform scope. */
@@ -119,22 +164,31 @@ export function resolvePlatformScope(source: PlatformRoleSource): boolean {
 export function derivePlatformScope(source: ScopeSource, authz: PlatformRoleSource): AgentScopeCtx {
   if (!isRealUser(source.userId)) throw new NoScopeError();
   if (!resolvePlatformScope(authz)) throw new NoScopeError('Platform scope not granted for this user.');
-  const ctx: AgentScopeCtx = { owner: source.userId as OwnerId, isPlatform: true };
+  const ctx: AgentScopeCtx = { owner: source.userId as OwnerId, isPlatform: true, isSystem: false };
   VALID_SCOPES.add(ctx);
   return ctx;
 }
 
 /**
  * Runtime guard every repository operation must call. Rejects a context that was
- * not produced by {@link deriveScope}/{@link derivePlatformScope} — e.g. an
- * object literal with `isPlatform: true` — and any missing owner. This is the
- * actual enforcement; a TypeScript type alone is not a security barrier.
+ * not produced by {@link deriveScope}/{@link derivePlatformScope}/{@link deriveSystemScope}
+ * — e.g. an object literal with `isPlatform: true` — and any missing owner. A
+ * human owner must be a real user id; the system context is the sole exception,
+ * and it is accepted only when it carries the `isSystem` flag set by
+ * {@link deriveSystemScope}. This is the actual enforcement; a TypeScript type
+ * alone is not a security barrier.
  */
 export function assertValidScope(ctx: AgentScopeCtx | null | undefined): AgentScopeCtx {
   if (!ctx || typeof ctx !== 'object' || !VALID_SCOPES.has(ctx as object)) {
     throw new NoScopeError('Scope was not derived from a trusted source — refusing to run.');
   }
-  if (!isRealUser((ctx as AgentScopeCtx).owner)) throw new NoScopeError();
+  const c = ctx as AgentScopeCtx;
+  if (c.isSystem) {
+    // Only the system bucket may hold the system principal as its owner.
+    if (c.owner !== SYSTEM_PRINCIPAL) throw new NoScopeError();
+    return ctx;
+  }
+  if (!isRealUser(c.owner)) throw new NoScopeError();
   return ctx;
 }
 

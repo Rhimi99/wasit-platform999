@@ -7,6 +7,8 @@ import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
 import { dispatchDueSchedules, ensureSchedules } from '../modules/ai/copilot';
 import { executeDueTasks, reapStaleTasks } from '../modules/ai/runner';
+import { pruneMemoryByAge } from '../modules/ai/memory-repo';
+import { DEFAULT_MEMORY_MAX_AGE_DAYS } from '../modules/ai/memory-service';
 import { dispatchPendingDeliveries } from './notifications/engine';
 
 export interface SchedulerHandle {
@@ -103,10 +105,10 @@ export function startScheduler(options: {
   const runAgentWork = async (): Promise<void> => {
     try {
       const { dispatched } = await dispatchDueSchedules(db);
-      const { ran, failed } = await executeDueTasks(db);
+      const { ran, failed, refused } = await executeDueTasks(db);
       const reaped = await reapStaleTasks(db);
       if (dispatched || ran || reaped) {
-        logger.info('agent cycle', { dispatched, ran, failed, reaped });
+        logger.info('agent cycle', { dispatched, ran, failed, refused, reaped });
       }
     } catch (err) {
       logger.error('agent cycle failed', { error: (err as Error).message });
@@ -127,11 +129,25 @@ export function startScheduler(options: {
     }
   };
 
+  /**
+   * AI-06.0 retention: age-based sweep of agent memory notes (never the audit
+   * trail). Idempotent, so a duplicate tick is a no-op.
+   */
+  const runMemoryRetention = async (): Promise<void> => {
+    try {
+      const pruned = await pruneMemoryByAge(db, DEFAULT_MEMORY_MAX_AGE_DAYS);
+      if (pruned > 0) logger.info('agent memory retention sweep', { pruned });
+    } catch (err) {
+      logger.error('agent memory retention sweep failed', { error: (err as Error).message });
+    }
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
     await runRetentionSweep();
     await runAgentWork();
+    await runMemoryRetention();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
       await runRateLimitPurge();

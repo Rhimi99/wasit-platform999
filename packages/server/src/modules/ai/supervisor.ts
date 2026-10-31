@@ -144,14 +144,15 @@ export async function supervise(db: DB, limits: SupervisorLimits = DEFAULT_SUPER
   // Per-agent failure-rate over the rolling window.
   const windowStart = new Date(now.getTime() - limits.windowSeconds * 1000);
   const windowRows = await db
-    .select({ agentKey: agentTasks.agentKey, status: agentTasks.status })
+    .select({ agentKey: agentTasks.agentKey, status: agentTasks.status, error: agentTasks.error })
     .from(agentTasks)
     .where(gt(agentTasks.createdAt, windowStart));
   const byAgent = new Map<string, { total: number; failed: number }>();
   for (const r of windowRows) {
     const cur = byAgent.get(r.agentKey) ?? { total: 0, failed: 0 };
     cur.total += 1;
-    if (r.status === 'failed') cur.failed += 1;
+    // A deliberate refusal (AI-06.1) is not a technical failure.
+    if (r.status === 'failed' && !isRefusalError(r.error)) cur.failed += 1;
     byAgent.set(r.agentKey, cur);
   }
   let failureRateFlagged = false;
@@ -249,14 +250,16 @@ export async function unhealthyAgentKeys(db: DB, limits: SupervisorLimits = DEFA
   const now = Date.now();
   const windowStart = new Date(now - limits.windowSeconds * 1000);
   const rows = await db
-    .select({ agentKey: agentTasks.agentKey, status: agentTasks.status })
+    .select({ agentKey: agentTasks.agentKey, status: agentTasks.status, error: agentTasks.error })
     .from(agentTasks)
     .where(gt(agentTasks.createdAt, windowStart));
   const byAgent = new Map<string, { total: number; failed: number }>();
   for (const r of rows) {
     const cur = byAgent.get(r.agentKey) ?? { total: 0, failed: 0 };
     cur.total += 1;
-    if (r.status === 'failed') cur.failed += 1;
+    // A deliberate refusal (AI-06.1) is a healthy-but-declined run, not a
+    // technical failure, so it must not drive an agent over the failure ceiling.
+    if (r.status === 'failed' && !isRefusalError(r.error)) cur.failed += 1;
     byAgent.set(r.agentKey, cur);
   }
   const unhealthy = new Set<string>();
@@ -264,6 +267,11 @@ export async function unhealthyAgentKeys(db: DB, limits: SupervisorLimits = DEFA
     if (v.total >= limits.minSamples && v.failed / v.total > limits.failureRateThreshold) unhealthy.add(agentKey);
   }
   return unhealthy;
+}
+
+/** True when a stored task error marks a deliberate (non-technical) refusal. */
+function isRefusalError(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { refused?: unknown }).refused === true;
 }
 
 /** Contained tasks awaiting a human look — the supervisor's escalation queue. */

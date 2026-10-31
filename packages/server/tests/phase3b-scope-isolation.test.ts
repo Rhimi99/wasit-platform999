@@ -138,7 +138,7 @@ describe('refusal paths fire before any query', () => {
   const bad: Array<[string, AgentScopeCtx | null | undefined]> = [
     ['null ctx', null],
     ['undefined ctx', undefined],
-    ['ctx without owner', { owner: undefined as never, isPlatform: false }],
+    ['ctx without owner', { owner: undefined as never, isPlatform: false, isSystem: false }],
   ];
 
   it('every write/read/delete refuses a missing scope', async () => {

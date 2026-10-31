@@ -7,7 +7,7 @@ import { env } from '../env';
 import type { AIFeatureResult, AIProvider } from './types';
 import { resolveProvider, estimateTokens } from './provider';
 import { logger } from '../observability/logger';
-import { getAgentRunBudget, AgentRunBudgetExceededError, AgentCostRecordingError } from './agent-run-context';
+import { getAgentRunBudget, getAgentRunContext, mergeAgentTaskMetadata, AgentRunBudgetExceededError, AgentCostRecordingError } from './agent-run-context';
 import {
   assertWithinBudget,
   recordAiRequest,
@@ -153,6 +153,11 @@ export async function runAIFeature(
     throw new AgentRunBudgetExceededError(runBudget.maxCostUsd!.toFixed(10), runBudget.spentUsd.toFixed(10));
   }
 
+  // Attribute this request to the running agent task, if any. `taskId` comes
+  // from the trusted run context (never `input`), so the AI ledger can be joined
+  // back to `agent_tasks` for per-agent cost/token/fallback metrics (AI-06.0).
+  const requestMetadata = mergeAgentTaskMetadata(input.metadata, getAgentRunContext());
+
   const started = Date.now();
   let result;
   try {
@@ -182,7 +187,7 @@ export async function runAIFeature(
       status: (err as { statusCode?: number }).statusCode === 503 ? 'UNAVAILABLE' : 'FAILED',
       latencyMs,
       metadata: {
-        ...(input.metadata ?? {}),
+        ...requestMetadata,
         provider: provider.id,
         errorName: (err as Error).name,
         providerStatus: (err as { statusCode?: number }).statusCode ?? null,
@@ -217,8 +222,8 @@ export async function runAIFeature(
     status: overBudget ? 'OVER_BUDGET' : 'SUCCESS',
     latencyMs,
     metadata: overBudget
-      ? { ...(input.metadata ?? {}), provider: provider.id, runBudgetExceeded: true }
-      : { ...(input.metadata ?? {}), provider: provider.id },
+      ? { ...requestMetadata, provider: provider.id, runBudgetExceeded: true }
+      : { ...requestMetadata, provider: provider.id },
   };
 
   let requestId: string;

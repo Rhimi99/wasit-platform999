@@ -59,6 +59,14 @@ export interface AgentRunContext {
    * check refuses.
    */
   readonly requesterRoles?: readonly UserRole[];
+  /**
+   * A short, owner-scoped recall of this agent's prior runs for the same
+   * requester (AI-06.0), assembled by the runner from `agent_memory` — never
+   * from task `input`. It contains only deterministic facts (status, latency,
+   * error code, tags), never a past model guess. Absent when there is no prior
+   * context or recall failed; the run proceeds without it.
+   */
+  readonly priorContext?: string;
 }
 
 /**
@@ -124,10 +132,11 @@ export function requireAction(actionId: string, scope: ActionScope = 'actions'):
 /**
  * Merges the trusted task identity into AI request metadata.
  *
- * `taskId` is always taken from the trusted run context. A caller-supplied
- * `taskId` is overwritten when a task is running and deleted otherwise, so a
- * forged `metadata.taskId` can never attribute a request to a task — and a
- * request made outside any task never carries one.
+ * `taskId` and `agentKey` are always taken from the trusted run context. A
+ * caller-supplied value is overwritten when a task is running and deleted
+ * otherwise, so a forged `metadata.taskId`/`metadata.agentKey` can never
+ * attribute a request to a task or an agent — and a request made outside any task
+ * never carries one. This keeps per-agent cost/fallback metrics (AI-06.1) honest.
  */
 export function mergeAgentTaskMetadata(
   metadata: Record<string, unknown> | undefined,
@@ -138,6 +147,11 @@ export function mergeAgentTaskMetadata(
     merged.taskId = ctx.taskId;
   } else {
     delete merged.taskId;
+  }
+  if (ctx?.agentKey) {
+    merged.agentKey = ctx.agentKey;
+  } else {
+    delete merged.agentKey;
   }
   return merged;
 }
