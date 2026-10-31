@@ -25,11 +25,12 @@ import { DashboardInventoryPage, DashboardComparisonPage, DashboardSalesPage } f
 import { DashboardListPage, DashboardFinancePage, DashboardReportsPage, DashboardCustomersPage, DashboardBuyersPage, DashboardSuppliersPage, DashboardMerchantsListPage, DashboardMySuppliersPage, DashboardMyMerchantsPage } from './pages/DashboardListPages';
 import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
-import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
+import { AdminOnly, StaffOnly, SuperAdminOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
 import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
 import { AdminAiPage } from './pages/AdminAiPage';
+import { AdminCopilotPage } from './pages/AdminCopilotPage';
 import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
@@ -139,6 +140,7 @@ export default function App() {
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ai" element={<RequireAuth><AdminOnly><AdminAiPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/copilot" element={<RequireAuth><SuperAdminOnly><AdminCopilotPage /></SuperAdminOnly></RequireAuth>} />
       <Route path="/admin/observability" element={<RequireAuth><AdminOnly><AdminObservabilityPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/privacy" element={<RequireAuth><AdminOnly><AdminPrivacyPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ads" element={<RequireAuth><AdminOnly><AdminAdsPage /></AdminOnly></RequireAuth>} />

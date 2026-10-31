@@ -28,16 +28,31 @@ const PLATFORM_DATA_AGENTS = [
   'finance-agent',
   'operations-agent',
   'analytics-agent',
+  'compliance-agent',
 ] as const;
 
-// The executors that must call the executor-level gate by name.
-const GATED_EXECUTOR_FUNCS: Record<string, string> = {
+// Executors that keep an inline executor-level gate (they read owner-scoped or
+// single-tenant data and still self-check).
+const INLINE_GATED_EXECUTOR_FUNCS: Record<string, string> = {
   'ads-agent': 'execAdsAgent',
+  'development-agent': 'execDevelopmentAgent',
+};
+
+// Executors whose cross-owner reads were moved behind the central Tool Gateway
+// (AI-02.1 / AI-02.1-R1). They no longer run a direct query; the gateway enforces
+// admin-only platform scope before any handler runs.
+const GATEWAY_ROUTED_EXECUTOR_FUNCS: Record<string, string> = {
   'risk-agent': 'execRiskAgent',
   'dispute-assistant': 'execDisputeAssistant',
-  'development-agent': 'execDevelopmentAgent',
   'finance-agent': 'execFinanceAgent',
   'operations-agent': 'execOperationsAgent',
+  'analytics-agent': 'execAnalyticsAgent',
+  'payment-settlement-agent': 'execPaymentSettlementAgent',
+  'compliance-agent': 'execComplianceAgent',
+  // AI-03.6: market-research-agent's platform aggregates moved behind the
+  // gateway's `market.read_overview` (admin-only); its own slice comes from
+  // `market.read_own`. It keeps no inline gate — the gateway is the boundary.
+  'market-research-agent': 'execMarketResearchAgent',
 };
 
 const NON_ADMIN_ROLES: UserRole[][] = [
@@ -103,14 +118,24 @@ describe('executors enforce the gate in code (defence in depth)', () => {
     return next === -1 ? rest : rest.slice(0, next);
   }
 
-  it('every gated executor calls requirePlatformGate before querying', () => {
-    for (const [agentKey, fn] of Object.entries(GATED_EXECUTOR_FUNCS)) {
+  it('every inline-gated executor calls requirePlatformGate before querying', () => {
+    for (const [agentKey, fn] of Object.entries(INLINE_GATED_EXECUTOR_FUNCS)) {
       const body = bodyOf(fn);
       expect(body.includes('requirePlatformGate('), `${fn} (${agentKey}) must gate`).toBe(true);
     }
   });
 
-  it('the gate is the same admin predicate (no inline widening)', () => {
+  it('every gateway-routed executor reads through invokeTool (no direct cross-owner query)', () => {
+    for (const [agentKey, fn] of Object.entries(GATEWAY_ROUTED_EXECUTOR_FUNCS)) {
+      const body = bodyOf(fn);
+      expect(body.includes('invokeTool('), `${fn} (${agentKey}) must route through the Tool Gateway`).toBe(true);
+      // The admin-only decision is the gateway's; a routed executor must not keep
+      // a stale direct gate that could drift from it.
+      expect(body.includes('requirePlatformGate('), `${fn} (${agentKey}) must not inline-gate`).toBe(false);
+    }
+  });
+
+  it('the inline gate is the same admin predicate (no inline widening)', () => {
     // requirePlatformGate delegates to canReadPlatformData, which is admin-only.
     expect(SRC.includes('async function requirePlatformGate(')).toBe(true);
     expect(SRC.includes('await canReadPlatformData(db, userId, agent)')).toBe(true);

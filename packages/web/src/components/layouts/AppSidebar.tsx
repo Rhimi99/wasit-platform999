@@ -12,6 +12,8 @@ export interface NavItem {
   key: string;
   icon: string;
   feature?: Feature;
+  /** Renders only for SUPER_ADMIN (server enforces the same on the route). */
+  superAdminOnly?: boolean;
 }
 
 function baseNav(roleKey: string): NavItem[] {
@@ -120,6 +122,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/ads', key: 'admin.ads', icon: '📣' },
   { to: '/admin/subscriptions', key: 'admin.subscriptions', icon: '🔁' },
   { to: '/admin/ai', key: 'admin.aiGovernance', icon: '🤖' },
+  { to: '/admin/copilot', key: 'admin.copilot', icon: '🧭', superAdminOnly: true },
   { to: '/admin/observability', key: 'admin.observability', icon: '📈' },
   { to: '/admin/privacy', key: 'admin.privacy', icon: '🔒' },
   { to: '/admin/audit', key: 'admin.audit', icon: '🔎' },
@@ -130,11 +133,14 @@ export function AppSidebar() {
   const { user, role, can, logout } = useAuth();
   const navigate = useNavigate();
 
-  const items = user?.roles.includes('ADMIN') || user?.roles.includes('SUPER_ADMIN')
+  const isSuperAdmin = user?.roles.includes('SUPER_ADMIN') ?? false;
+  const items = user?.roles.includes('ADMIN') || isSuperAdmin
     ? [...ADMIN_NAV, ...baseNav(role)]
     : baseNav(role);
 
-  const visible = items.filter((i) => !i.feature || can(i.feature));
+  const visible = items.filter(
+    (i) => (!i.feature || can(i.feature)) && (!i.superAdminOnly || isSuperAdmin),
+  );
 
   const handleLogout = async () => {
     await logout();

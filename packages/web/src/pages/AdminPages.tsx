@@ -47,6 +47,24 @@ export function StaffOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Wrapper renders children only for the SUPER_ADMIN role. The Copilot desk is
+// deliberately narrower than the admin area: the server enforces
+// `requireRole('SUPER_ADMIN')` on every `/api/admin/copilot/*` route, and this
+// guard mirrors that so an ADMIN never even renders the page shell. Hiding the
+// link is never the control — the server is.
+export function SuperAdminOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.roles.includes('SUPER_ADMIN');
+  if (user && !isSuperAdmin) {
+    return (
+      <AppLayout>
+        <ErrorState message="Forbidden: Super Admin area" />
+      </AppLayout>
+    );
+  }
+  return <>{children}</>;
+}
+
 export function AdminDashboardPage() {
   const { t } = useI18n();
   const [stats, setStats] = useState<AdminStats | null>(null);

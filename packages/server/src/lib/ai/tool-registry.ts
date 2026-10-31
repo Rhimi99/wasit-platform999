@@ -1,0 +1,210 @@
+import { z } from 'zod';
+import type { AgentDefinition } from './types';
+import type { UserRole } from '@wasit/shared';
+import { resolvePlatformScope } from '../../modules/ai/scope';
+
+/**
+ * Central Tool Gateway registry (AI-02.1).
+ *
+ * Every tool an agent may invoke is declared here, exactly once, with:
+ *  - a stable `id` (also the action id the run context must grant),
+ *  - a Zod input schema the gateway validates BEFORE execution,
+ *  - the effect class (`read` only in this phase — no writes exist yet),
+ *  - the platform permission a caller must hold,
+ *  - whether the tool reads platform-wide data (admin-only) and whether it may
+ *    run for the trusted scheduler principal.
+ *
+ * The registry is the single source of truth: the gateway refuses any id that is
+ * not registered here, so an agent can never invoke an unregistered (or a
+ * "declared but unbound") tool. Registration does NOT by itself authorize a
+ * call — the run's server-derived grant list and the RBAC/scope checks still
+ * apply on top.
+ */
+
+export type ToolEffect = 'read';
+
+export interface ToolDefinition {
+  /** Stable tool id; also the action id the run context must grant. */
+  readonly id: string;
+  readonly description: string;
+  readonly effect: ToolEffect;
+  /** Zod schema validated against the caller's args before execution. */
+  readonly inputSchema: z.ZodType<Record<string, unknown>>;
+  /** Platform permission the requester must hold (admins bypass). */
+  readonly permission: string;
+  /** True when the tool returns platform-wide data → admin roles only. */
+  readonly platformScoped: boolean;
+}
+
+// ---------------------------------------------------------------- tool ids
+export const PLATFORM_METRICS = 'platform.metrics';
+export const PLATFORM_READ_ORDERS = 'platform.read_orders';
+export const OPERATIONS_READ_HEALTH = 'operations.read_health';
+export const RISK_READ_OVERVIEW = 'risk.read_overview';
+export const DISPUTES_READ_SUMMARY = 'disputes.read_summary';
+export const PAYMENTS_READ_SETTLEMENTS = 'payments.read_settlements';
+export const FINANCE_READ_LEDGER = 'finance.read_ledger';
+export const COMPLIANCE_READ_PLATFORM = 'compliance.read_platform';
+export const MARKET_READ_OVERVIEW = 'market.read_overview';
+export const MARKET_READ_OWN = 'market.read_own';
+
+/** `{ limit?: int }` — a bounded page size, the only knob the read tools take. */
+const limit = (max: number) => z.number().int().min(1).max(max).optional();
+
+const TOOL_LIST: readonly ToolDefinition[] = [
+  {
+    id: PLATFORM_METRICS,
+    description: 'Platform-wide KPIs (users, products, orders, GMV, commission).',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'analytics:read:all',
+    platformScoped: true,
+  },
+  {
+    id: PLATFORM_READ_ORDERS,
+    description: 'Platform order summary — counts per status and totals.',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(100) }).strict(),
+    permission: 'order:read',
+    platformScoped: true,
+  },
+  {
+    id: OPERATIONS_READ_HEALTH,
+    description: 'Operational health — failed agent tasks, open disputes, low-stock items.',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'ai:manage',
+    platformScoped: true,
+  },
+  {
+    id: RISK_READ_OVERVIEW,
+    description: 'Risk overview — top risk profiles and recent risk events.',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'risk:read',
+    platformScoped: true,
+  },
+  {
+    id: DISPUTES_READ_SUMMARY,
+    description: 'Dispute summary — open disputes and recent messages (read-only).',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'dispute:read',
+    platformScoped: true,
+  },
+  {
+    id: PAYMENTS_READ_SETTLEMENTS,
+    description: 'Payment/settlement status — intents, webhook health, payouts.',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(100) }).strict(),
+    permission: 'payment:read',
+    platformScoped: true,
+  },
+  {
+    id: FINANCE_READ_LEDGER,
+    description: 'Financial ledger summary — flows, active commission policies, recent entries.',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(100), currencyCode: z.string().min(1).max(8).optional() }).strict(),
+    permission: 'revenue:read',
+    platformScoped: true,
+  },
+  {
+    id: COMPLIANCE_READ_PLATFORM,
+    description: 'Platform compliance scan — unverified entities and open disputes (platform-wide aggregates).',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'order:read',
+    platformScoped: true,
+  },
+  {
+    id: MARKET_READ_OVERVIEW,
+    description: 'Platform market overview — product/category/price aggregates and total order value.',
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'analytics:read:all',
+    platformScoped: true,
+  },
+  {
+    id: MARKET_READ_OWN,
+    description: "The caller's own market slice — owned-catalogue product count and own-sales order value.",
+    effect: 'read',
+    inputSchema: z.object({ limit: limit(50) }).strict(),
+    permission: 'ai:use',
+    platformScoped: false,
+  },
+];
+
+/**
+ * Tools declared in agent `allowedTools` but with no bound implementation yet.
+ *
+ * This list MUST equal the set of declared ids that are absent from the registry
+ * (see the `tool-gateway` spec, which derives that set from the catalogue). An
+ * id here is inert: it is not registered, has no handler, and
+ * `toolGrantForAgent` filters it out, so it can never be executed — listing it
+ * only makes the declaration honest instead of silently missing.
+ */
+export const UNBOUND_DECLARED_TOOLS: readonly string[] = [
+  'platform.read_catalog',
+  'report.generate',
+  'outreach.discover_entities',
+  // Outreach acquisition surface declared by the `outreach-acquisition-agent`
+  // but not yet implemented as gateway tools.
+  'outreach.verify_entity',
+  'outreach.classify_fit',
+  'outreach.persist_prospects',
+  'messaging.draft_outreach',
+  'outreach.persist_drafts',
+  'outreach.record_outcome',
+  'outreach.refer',
+];
+
+const REGISTRY: ReadonlyMap<string, ToolDefinition> = new Map(TOOL_LIST.map((t) => [t.id, t]));
+
+/** The registered tool ids, in declaration order (for tests and docs). */
+export function registeredToolIds(): string[] {
+  return TOOL_LIST.map((t) => t.id);
+}
+
+/** All registered tool definitions. */
+export function allTools(): readonly ToolDefinition[] {
+  return TOOL_LIST;
+}
+
+/** Looks up a registered tool, or `undefined` when the id is unknown. */
+export function findTool(id: string): ToolDefinition | undefined {
+  return REGISTRY.get(id);
+}
+
+/** True when `id` is a registered tool. */
+export function isRegisteredTool(id: string): boolean {
+  return REGISTRY.has(id);
+}
+
+/**
+ * The registered tools an agent's catalogue binds it to — `allowedTools`
+ * intersected with the registry.
+ *
+ * This is a *scoping* list, NOT an authority: it only bounds which registered
+ * tools the agent may even attempt. `allowedTools` alone never authorizes
+ * execution — the gateway still enforces registration, the trusted run context,
+ * RBAC and data scope on top, so a declared-but-unregistered id is inert.
+ */
+export function toolGrantForAgent(agent: AgentDefinition): string[] {
+  return (agent.allowedTools ?? []).filter((id) => REGISTRY.has(id));
+}
+
+/** True when the role set may read platform-wide data (admins only). */
+export function rolesAllowPlatformScope(roles: readonly UserRole[]): boolean {
+  return resolvePlatformScope({ roles: roles as UserRole[] });
+}
+
+/** True when a role set satisfies a permission (admins bypass, as elsewhere). */
+export function rolesHoldPermission(
+  roles: readonly UserRole[],
+  permission: string,
+  rolePermissions: Record<string, ReadonlySet<string>>,
+): boolean {
+  if (roles.includes('ADMIN') || roles.includes('SUPER_ADMIN')) return true;
+  return roles.some((r) => rolePermissions[r]?.has(permission));
+}
+

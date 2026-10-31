@@ -35,10 +35,12 @@ function localeBlock(locale: string): string {
   throw new Error(`unterminated locale block: ${locale}`);
 }
 
-/** The literal value of `'<key>': '<value>',` inside a locale block. */
+/** The literal value of `'<key>': '<value>',` (single- or double-quoted) in a block. */
 function keyValue(block: string, key: string): string | null {
-  const m = block.match(new RegExp(`'${key.replace('.', '\\.')}':\\s*'((?:[^'\\\\]|\\\\.)*)'`));
-  return m ? m[1] : null;
+  const m = block.match(
+    new RegExp(`'${key.replace('.', '\\.')}':\\s*(?:'((?:[^'\\\\]|\\\\.)*)'|"((?:[^"\\\\]|\\\\.)*)")`),
+  );
+  return m ? (m[1] ?? m[2]) : null;
 }
 
 describe('i18n — common.date across locales', () => {
@@ -61,5 +63,82 @@ describe('i18n — common.date across locales', () => {
     expect(keyValue(localeBlock('en'), 'common.date')).toBe('Date');
     expect(keyValue(localeBlock('fr'), 'common.date')).toBe('Date');
     expect(keyValue(localeBlock('zh'), 'common.date')).toBe('日期');
+  });
+});
+
+/**
+ * AI-02.2 — the Admin Copilot desk's keys.
+ *
+ * The desk is a new surface (SUPER_ADMIN only) that ships in all four locales at
+ * once. A key present in ar but missing from zh would render an English fallback
+ * on the Chinese UI, exactly the N6 class of bug, so the whole `adminCopilot.*`
+ * namespace plus the `admin.copilot` nav label is pinned across locales here.
+ */
+describe('i18n — adminCopilot keys across locales', () => {
+  const COPILOT_KEYS = [
+    'admin.copilot',
+    'adminCopilot.title',
+    'adminCopilot.subtitle',
+    'adminCopilot.tab.control',
+    'adminCopilot.tab.tasks',
+    'adminCopilot.tab.agents',
+    'adminCopilot.tab.approvals',
+    'adminCopilot.tab.audit',
+    'adminCopilot.preview.title',
+    'adminCopilot.preview.hint',
+    'adminCopilot.preview.event',
+    'adminCopilot.preview.button',
+    'adminCopilot.preview.confirm',
+    'adminCopilot.preview.cancel',
+    'adminCopilot.preview.agent',
+    'adminCopilot.preview.runnable',
+    'adminCopilot.preview.gated',
+    'adminCopilot.preview.reason',
+    'adminCopilot.preview.empty',
+    'adminCopilot.routed',
+    'adminCopilot.skipped',
+    'adminCopilot.tasks.empty',
+    'adminCopilot.task.agent',
+    'adminCopilot.task.type',
+    'adminCopilot.task.status',
+    'adminCopilot.task.cost',
+    'adminCopilot.task.createdAt',
+    'adminCopilot.task.actions',
+    'adminCopilot.task.result',
+    'adminCopilot.task.error',
+    'adminCopilot.task.attempts',
+    'adminCopilot.task.approve',
+    'adminCopilot.task.reject',
+    'adminCopilot.task.run',
+    'adminCopilot.task.approved',
+    'adminCopilot.agents.empty',
+    'adminCopilot.agent.pause',
+    'adminCopilot.agent.resume',
+    'adminCopilot.agent.disable',
+    'adminCopilot.approvals.empty',
+    'adminCopilot.approvals.count',
+    'adminCopilot.audit.empty',
+    'adminCopilot.audit.action',
+    'adminCopilot.audit.actor',
+    'adminCopilot.audit.entity',
+    'adminCopilot.audit.time',
+    'adminCopilot.notice.agentStatus',
+    'adminCopilot.notice.approved',
+    'adminCopilot.notice.rejected',
+    'adminCopilot.notice.ran',
+    'adminCopilot.notice.routed',
+    'common.yes',
+    'common.no',
+  ];
+
+  it('exists with a real translation in all four locales', () => {
+    for (const locale of LOCALES) {
+      const block = localeBlock(locale);
+      for (const key of COPILOT_KEYS) {
+        const value = keyValue(block, key);
+        expect(value, `${locale} :: ${key}`).toBeTruthy();
+        expect(value, `${locale} :: ${key}`).not.toBe(key);
+      }
+    }
   });
 });

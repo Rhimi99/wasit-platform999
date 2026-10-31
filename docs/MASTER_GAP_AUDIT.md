@@ -13,6 +13,19 @@
 > `PS-01` و`PS-02` و`PS-04` أدناه **قديمة** ويجب قراءتها مع «الملحق أ» في نهاية هذا الملف.
 > لم يُغيَّر أي كود تسوية في هذا التصحيح؛ الإغلاق المُعلَن هو **إغلاق منطقي برمجي**، ولا يعني اكتمالًا تجاريًا/إنتاجيًا.
 
+> **تصحيح L-5 (توثيقي فقط) — الفرع `ci/repair-sandbox-2u-g-20261020-190057` · HEAD `3ba538dc`**:
+> الملف `packages/server/src/modules/ai/agents.ts` **لم يعد موجودًا**؛ أُزيل في commit `4af09b7`
+> («fix(ai): remove obsolete agent definitions»). المراجع الحالية لوظائف الوكلاء هي:
+> الكتالوج `AGENT_CATALOGUE` في `packages/server/src/modules/ai/catalogue.ts` (تعريف `support-agent`
+> سطر 169 و`dispute-assistant` سطر 279)، والمنفّذون في `packages/server/src/modules/ai/executors.ts`،
+> وإنشاء/طابور المهام `createAgentTask` و`listRegistryAgents` في `packages/server/src/modules/ai/runner.ts`.
+> صف `AI-03` أدناه حُدِّث ليشير إلى المسارات الحالية؛ **لم يُحذف أي أثر تدقيق**. المرجع الأصلي
+> `modules/ai/agents.ts:54,94` كان صحيحًا وقت التدقيق (`bada224`) ثم صار قديمًا بعد الإزالة.
+> **ملاحظة (تمييز تاريخي/حالي)**: نسختا `docs/partnership/WASIT-BUSINESS-GLOBAL-PARTNERSHIP-DOSSIER.md`
+> و`.partner-docs/…` إصدار موثّق **مجمّد** (`b03d17b`، 2026-10-04) بختم `SHA256SUMS.txt` وملفات
+> PDF/DOCX مولّدة منه؛ لم تُعدّل للحفاظ على تطابق البصمة مع الأصل المنشور، ويُقرأ مرجعها كحالة **تاريخية**
+> لا حالية. المرجع الحيّ للحالة التقنية هو هذا الملف و`docs/AI_ARCHITECTURE.md`.
+
 ---
 
 ## 1. ملاحظات دقّة على وثائق الأساس (قبل الجدول)
@@ -94,7 +107,7 @@ AI/Automation · Documentation · Test/Harness
 | PR-12 | WASIT AI Copilot غير منفَّذ (اختياري صراحةً) | Product | مواصفة فقط | `docs/AI_ARCHITECTURE.md` §6.5 · Roadmap «مستقبلي» | Low | No | No |
 | AI-01 | الوكلاء طلب-استجابة فقط؛ لا تنفيذ autonomous/مجدول | AI/Automation | لا scheduler/cron للوكلاء | `grep -rniE "schedule\|cron\|autonomous" modules/ai lib/ai` = ∅ | Medium | No | Yes |
 | AI-02 | Marketing Video متزامن؛ مسار المزوّد غير المتزامن غير منفَّذ | AI/Automation | `isAsync` مُعرَّف في النوع، لا polling pipeline | `lib/media/video-types.ts:53` · `video-provider.ts:168` (`isAsync=false`) | Low | No | No |
-| AI-03 | توجيه النزاعات/الدعم تلقائيًا إلى Agent غير موصول بطابور | AI/Automation | `dispute-assistant`/`support-agent` موجودان لكن تشغيلهما يدوي | `modules/ai/agents.ts:54,94` | Low | No | No |
+| AI-03 | توجيه النزاعات/الدعم تلقائيًا إلى Agent غير موصول بطابور | AI/Automation | `dispute-assistant`/`support-agent` موجودان لكن تشغيلهما يدوي | `modules/ai/catalogue.ts:169,279` (الكتالوج الحالي؛ كان `modules/ai/agents.ts:54,94` قبل إزالة الملف في `4af09b7`) · المنفّذون `modules/ai/executors.ts` | Low | No | No |
 | DO-01 | `PAYMENT_SETTLEMENT_AUDIT.md` stale (يعرض RC-1/3/4/5 كمفتوحة وهي مُصلَحة) | Documentation | خطر قرارات خاطئة | §1 أعلاه (الأدلة من الكود) | Medium | Yes | No |
 | DO-02 | `DEVELOPMENT_ROADMAP.md` drift (أعداد اختبارات، ادعاء غياب اختبار geo) | Documentation | أرقام قديمة | Roadmap vs `geo.test.ts`/الواقع | Low | No | Yes |
 | DO-03 | تقرير 2026-09-14 يقول Marketing Video «contract only» | Documentation | متجاوَز | §1 أعلاه | Low | No | No |

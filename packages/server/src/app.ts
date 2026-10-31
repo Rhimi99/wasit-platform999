@@ -27,6 +27,7 @@ import { disputeRoutes } from './modules/disputes/routes.js';
 import { adminRoutes } from './modules/admin/routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
+import { adminCopilotRoutes } from './modules/admin/copilot-routes.js';
 import { adminAnalyticsRoutes } from './modules/admin/analytics-routes.js';
 import { adminPolicyRoutes } from './modules/admin/policy-routes.js';
 import { adminCountryRoutes } from './modules/admin/country-routes.js';
@@ -120,6 +121,7 @@ export function createApp(): Hono {
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);
+  app.route('/api/admin/copilot', adminCopilotRoutes);
   app.route('/api/admin/analytics', adminAnalyticsRoutes);
   app.route('/api/admin/observability', adminObservabilityRoutes);
   app.route('/api/admin/tax', taxRoutes);

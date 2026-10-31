@@ -448,7 +448,7 @@
   - كل عملية عرض رسالة نجاح/خطأ عبر `ErrorState`/شريط حالة — لا إخفاء أخطاء ولا تعطيل أزرار للتغطية.
 - **التسجيل**: مسار `/admin/ai` داخل `AdminOnly` في `App.tsx` + عنصر `admin.aiGovernance` في `ADMIN_NAV`.
 - **طبقة API/الأنواع**: `adminAiUsage`, `adminAiRequests`, `adminAiBudgets`, `adminUpsertAiBudget`, `adminAiModels`, `adminUpsertAiModel`, `adminAiAgents`, `adminAiTasks`, `decideAgentTask` + أنواع `AiAdminUsage`, `AiAdminModel`, `AiAdminBudget`, `AiAdminRequestRow`, `AgentRegistryRow`, `AgentTaskRow`, `AgentTaskDecision`.
-- **إصلاح سبب حقيقي (لا إخفاء)**: مسار `GET /admin/ai/agents` كان يقرأ جدول `agent_registry` مباشرة، بينما التهيئة (`ensureAgentRegistrySeeded`) تحدث فقط في المسار الموجّه للمستخدم `/api/ai/agents`. على قاعدة لم يستدعِ فيها أي مستخدم وكيلًا، **تبويب الوكلاء يظهر فارغًا**. أُضيفت `listRegistryAgents()` في `modules/ai/agents.ts` (تُهيّئ ثم تقرأ) واستُخدمت في المسار الإداري — فأصبح الكتالوج مضمونًا دائمًا.
+- **إصلاح سبب حقيقي (لا إخفاء)**: مسار `GET /admin/ai/agents` كان يقرأ جدول `agent_registry` مباشرة، بينما التهيئة (`ensureAgentRegistrySeeded`) تحدث فقط في المسار الموجّه للمستخدم `/api/ai/agents`. على قاعدة لم يستدعِ فيها أي مستخدم وكيلًا، **تبويب الوكلاء يظهر فارغًا**. أُضيفت `listRegistryAgents()` في `modules/ai/agents.ts` (تُهيّئ ثم تقرأ) واستُخدمت في المسار الإداري — فأصبح الكتالوج مضمونًا دائمًا. *(مرجع تاريخي: هذا الملف أُزيل في `4af09b7`؛ `listRegistryAgents()` توجد حاليًا في `modules/ai/runner.ts` والكتالوج في `modules/ai/catalogue.ts`.)*
 - **التوطين**: مفاتيح `adminAi.*` + `admin.aiGovernance` في `ar/en/fr/zh` (لا نصوص داخل المكوّن، وسقوط آمن للعربية كما هو نمط الملف).
 
 ### الاختبارات والتحقق

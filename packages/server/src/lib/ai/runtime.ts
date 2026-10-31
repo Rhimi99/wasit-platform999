@@ -7,6 +7,7 @@ import { env } from '../env';
 import type { AIFeatureResult, AIProvider } from './types';
 import { resolveProvider, estimateTokens } from './provider';
 import { logger } from '../observability/logger';
+import { getAgentRunBudget, AgentRunBudgetExceededError, AgentCostRecordingError } from './agent-run-context';
 import {
   assertWithinBudget,
   recordAiRequest,
@@ -142,6 +143,16 @@ export async function runAIFeature(
   };
   await assertWithinBudget(db, input.userId, input.roles, period, snapshot, env.AI_BUDGET_MONTHLY_USD);
 
+  // Per-run ceiling (agent tasks only). This is an ADDITIONAL guard on top of the
+  // monthly budget above. The call's conservative estimate is reserved atomically
+  // BEFORE the provider call, so two concurrent calls in one run cannot both slip
+  // under the same remaining headroom — the second is refused up front. The
+  // reservation is settled to the measured cost after the call (see below).
+  const runBudget = getAgentRunBudget();
+  if (runBudget && !runBudget.reserve(estimated.cost)) {
+    throw new AgentRunBudgetExceededError(runBudget.maxCostUsd!.toFixed(10), runBudget.spentUsd.toFixed(10));
+  }
+
   const started = Date.now();
   let result;
   try {
@@ -154,6 +165,9 @@ export async function runAIFeature(
       model: vendorModel,
     });
   } catch (err) {
+    // The call never produced a billable result, so release the reservation: the
+    // run must not be charged for a call that did not complete.
+    runBudget?.release(estimated.cost);
     const latencyMs = Date.now() - started;
     // Persist the failed attempt (no tokens billed) so the ledger and the audit
     // trail reflect that a provider call was made and did not succeed.
@@ -184,7 +198,15 @@ export async function runAIFeature(
   // Exact cost from the measured tokens.
   const actualCost = price.inputPer1k.mul(result.tokensInput / 1000).plus(price.outputPer1k.mul(result.tokensOutput / 1000));
 
-  const requestId = await recordAiRequest(db, {
+  // Settle the reservation to the measured cost. The provider call has already
+  // happened, so the money is spent whether or not the run stays within its
+  // ceiling — the cost is ALWAYS recorded (never dropped) and the accumulator is
+  // always moved to the true spend, so a later call can never be allowed on the
+  // strength of an unrecorded overshoot. `overBudget` is true only when the
+  // settled total exceeds the ceiling; the request is then recorded in full with
+  // an over-budget marker and the run is refused after the ledger is written.
+  const overBudget = runBudget ? !runBudget.settle(estimated.cost, actualCost) : false;
+  const costRecord = {
     userId: input.userId,
     requestType: input.requestType,
     model: result.model,
@@ -192,19 +214,57 @@ export async function runAIFeature(
     tokensOutput: result.tokensOutput,
     cost: actualCost.toFixed(10),
     currencyCode: price.currencyCode,
-    status: 'SUCCESS',
+    status: overBudget ? 'OVER_BUDGET' : 'SUCCESS',
     latencyMs,
-    metadata: { ...(input.metadata ?? {}), provider: provider.id },
-  });
+    metadata: overBudget
+      ? { ...(input.metadata ?? {}), provider: provider.id, runBudgetExceeded: true }
+      : { ...(input.metadata ?? {}), provider: provider.id },
+  };
 
-  const window = currentPeriodWindow(period);
-  await upsertAiUsage(db, input.userId, period, window, {
-    requests: 1,
-    tokensInput: result.tokensInput,
-    tokensOutput: result.tokensOutput,
-    cost: actualCost.toFixed(10),
-    currencyCode: price.currencyCode,
-  });
+  let requestId: string;
+  try {
+    requestId = await recordAiRequest(db, costRecord);
+  } catch (recordErr) {
+    // The measured cost could not be persisted. The money was still spent, so we
+    // must not claim it was recorded and must not let the run continue on an
+    // under-counted ledger — fail the run closed with a distinct, retryable
+    // error (the caller's retry re-enters the ledger path).
+    logger.error('Failed to record the measured AI cost; refusing to continue', {
+      error: (recordErr as Error).message,
+      requestType: input.requestType,
+      cost: costRecord.cost,
+    });
+    throw new AgentCostRecordingError(costRecord.cost, (recordErr as Error).message);
+  }
+
+  // Monthly usage aggregation is a derived rollup for dashboards. The
+  // authoritative ledger row above is what the monthly budget re-sums
+  // (`usageSum` reads `ai_requests`), so a rollup failure cannot lose cost or
+  // weaken enforcement — it is logged, not fatal, to avoid a needless retry that
+  // would itself spend more.
+  try {
+    const window = currentPeriodWindow(period);
+    await upsertAiUsage(db, input.userId, period, window, {
+      requests: 1,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      cost: actualCost.toFixed(10),
+      currencyCode: price.currencyCode,
+    });
+  } catch (usageErr) {
+    logger.error('Failed to aggregate AI usage after a measured call', {
+      error: (usageErr as Error).message,
+      requestType: input.requestType,
+      cost: costRecord.cost,
+    });
+  }
+
+  if (overBudget) {
+    // Refuse the run only AFTER the full cost is on the ledger. The accumulator
+    // was settled to the true (over-cap) spend, so any subsequent call is refused
+    // up front too.
+    throw new AgentRunBudgetExceededError(runBudget!.maxCostUsd!.toFixed(10), runBudget!.spentUsd.toFixed(10));
+  }
 
   return {
     content: result.content,

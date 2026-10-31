@@ -15,6 +15,9 @@ import type { AgentDefinition } from '../../lib/ai/types.js';
 // Shared tool groups keep the specs readable and consistent.
 const READ_TOOLS = ['platform.metrics', 'platform.read_orders', 'report.generate'];
 const CATALOG_TOOLS = ['platform.read_catalog', 'platform.metrics', 'report.generate'];
+// Platform-wide compliance aggregates. Kept off READ_TOOLS so the tool is
+// granted only to the compliance agent (gateway still enforces admin scope).
+const COMPLIANCE_TOOLS = ['compliance.read_platform'];
 const OUTREACH_TOOLS = [
   'outreach.discover_entities',
   'outreach.verify_entity',
@@ -216,7 +219,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'insight',
     description: 'Provides market overview, category trends and competitive notes.',
     capabilities: [{ action: 'market_overview', description: 'Summarize a market/category' }],
-    allowedTools: ['outreach.discover_entities', 'platform.metrics', 'report.generate'],
+    allowedTools: ['outreach.discover_entities', 'platform.metrics', 'market.read_overview', 'market.read_own', 'report.generate'],
     approvalActions: [],
     limits: { maxCostUsdPerRun: 1.5, discoveryLimit: 100 },
     taskTypes: ['research.scan_market'],
@@ -226,7 +229,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use'],
-    // Platform-wide *aggregates* only; raw records stay scoped to the caller.
+    // Dual-scope: the platform-wide aggregates are read ONLY through the Tool
+    // Gateway (`market.read_overview`, platformScoped → admin-only); the
+    // caller's own market slice (`market.read_own`) resolves the owner from the
+    // trusted run context. `requiresPlatformScope` is deliberately NOT set so a
+    // non-admin still receives its own slice — never the platform aggregates.
     scope: 'platform',
     requiresHumanApproval: false,
   },
@@ -257,7 +264,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'trust',
     description: 'Assesses risk indicators for an entity or transaction.',
     capabilities: [{ action: 'assess_risk', description: 'Evaluate risk indicators' }],
-    allowedTools: READ_TOOLS,
+    allowedTools: [...READ_TOOLS, 'risk.read_overview'],
     approvalActions: ['risk.block_account'],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['risk.scan'],
@@ -280,7 +287,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'trust',
     description: 'Summarizes dispute context and recommends possible resolution paths.',
     capabilities: [{ action: 'summarize_dispute', description: 'Summarize dispute context' }],
-    allowedTools: READ_TOOLS,
+    allowedTools: [...READ_TOOLS, 'disputes.read_summary'],
     approvalActions: ['dispute.final_decision'],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['dispute.summarize'],
@@ -328,7 +335,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'finance',
     description: 'Summarizes commission, payment-fee and refund flows from the ledger; never moves funds.',
     capabilities: [{ action: 'reconcile', description: 'Produce a financial reconciliation summary' }],
-    allowedTools: READ_TOOLS,
+    allowedTools: [...READ_TOOLS, 'finance.read_ledger'],
     approvalActions: ['finance.payout', 'finance.refund', 'commission.change'],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['finance.reconcile'],
@@ -351,7 +358,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'finance',
     description: 'Reports payment intents, webhook health and settlement/payout status; read-only.',
     capabilities: [{ action: 'monitor_settlement', description: 'Report settlement anomalies' }],
-    allowedTools: READ_TOOLS,
+    allowedTools: [...READ_TOOLS, 'payments.read_settlements'],
     approvalActions: ['payment.settle', 'finance.payout'],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['payment.monitor_settlement'],
@@ -371,7 +378,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'trust',
     description: 'Surfaces policy/verification gaps for entities and orders; produces findings only.',
     capabilities: [{ action: 'check', description: 'Produce compliance findings' }],
-    allowedTools: READ_TOOLS,
+    allowedTools: COMPLIANCE_TOOLS,
     approvalActions: ['compliance.final_ruling'],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['compliance.check'],
@@ -381,6 +388,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use', 'order:read'],
+    // The scan reads platform-wide aggregates, so the runner gates it to admins
+    // (defence in depth alongside the Tool Gateway's platform-scope check).
+    requiresPlatformScope: true,
     requiresHumanApproval: true,
   },
   {
@@ -453,7 +463,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'operations',
     description: 'Reports operational health (open orders, failed tasks, inventory alerts).',
     capabilities: [{ action: 'health_check', description: 'Produce an ops health report' }],
-    allowedTools: READ_TOOLS,
+    allowedTools: [...READ_TOOLS, 'operations.read_health'],
     approvalActions: [],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['operations.health_check'],
@@ -549,6 +559,21 @@ export function agentCount(): number {
 export function findAgentSpec(key: string): AgentDefinition | undefined {
   if (key === COPILOT_KEY) return COPILOT_CATALOGUE;
   return AGENT_CATALOGUE.find((a) => a.key === key);
+}
+
+/**
+ * The trusted, server-derived set of action ids an agent run is authorised to
+ * perform.
+ *
+ * This is the grant list the executor boundary ({@link requireAction}) consults.
+ * It is derived from the agent's declared `capabilities` — a catalogue constant —
+ * and NEVER from `allowedTools` (which names data sources, not effects) nor from
+ * any task input, so a caller cannot name an action the run was not granted. An
+ * agent that declares no capabilities yields an EMPTY list, which makes every
+ * action boundary refuse (fail closed) rather than run ungated.
+ */
+export function authorizedActionsForAgent(agent: AgentDefinition): string[] {
+  return agent.capabilities.map((c) => c.action);
 }
 
 /** True when an action always requires a human approval, regardless of agent. */

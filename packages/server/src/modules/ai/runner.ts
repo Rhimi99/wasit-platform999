@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { ApiError, type UserRole } from '@wasit/shared';
+import Decimal from 'decimal.js';
+import { ApiError, ROLE_PERMISSIONS, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { agentRegistry, agentTasks } from '../../db/schema/agents';
 import { roles, userRoles } from '../../db/schema/auth';
@@ -7,7 +8,9 @@ import { writeAudit } from '../../lib/audit';
 import { newId } from '../../lib/ids';
 import { logger } from '../../lib/observability/logger';
 import type { AgentDefinition, AgentTaskStatus, CreateAgentTaskInput, ResolvedAgentTask } from '../../lib/ai/types.js';
-import { AGENT_CATALOGUE, COPILOT_CATALOGUE, allAgentSpecs, findAgentSpec, resolveApproval } from './catalogue.js';
+import { AGENT_CATALOGUE, COPILOT_CATALOGUE, allAgentSpecs, findAgentSpec, resolveApproval, authorizedActionsForAgent } from './catalogue.js';
+import { toolGrantForAgent } from '../../lib/ai/tool-registry.js';
+import { withAgentRunContext, withAgentRunBudget, AgentRunBudget, getAgentRunContext } from '../../lib/ai/agent-run-context.js';
 import { executeAgentTask } from './executors.js';
 import { DEFAULT_SUPERVISOR_LIMITS } from './supervisor-policy.js';
 import { supervise, unhealthyAgentKeys } from './supervisor.js';
@@ -44,6 +47,43 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 
 /** Default per-run budget guard when an agent does not declare one. */
 const DEFAULT_MAX_COST_USD = 5;
+
+/**
+ * Resolves the trusted per-run cost ceiling (USD) for an agent from its
+ * declarative catalogue `limits` — never from task input.
+ *
+ * Semantics:
+ *   - a finite `maxCostUsdPerRun > 0` is honoured as the ceiling;
+ *   - a positive-but-non-finite value, or a non-number, falls back to the runner
+ *     default (`DEFAULT_MAX_COST_USD`) so a malformed limit can never disable the
+ *     cap;
+ *   - an explicit `0` means "uncapped" — a deliberate operator choice, since the
+ *     catalogue sets a positive cap on every agent by default.
+ */
+export function resolveRunCostCapUsd(agent: AgentDefinition): Decimal {
+  const raw = agent.limits.maxCostUsdPerRun;
+  const value = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(value)) return new Decimal(DEFAULT_MAX_COST_USD);
+  if (value === 0) return new Decimal(0);
+  if (value > 0) return new Decimal(value);
+  return new Decimal(DEFAULT_MAX_COST_USD);
+}
+
+/**
+ * Parses a stored `agent_tasks.cost` value (a decimal string) into an exact
+ * Decimal, degrading an absent or malformed value to zero. Zero is the safe
+ * direction here: it only ever *under*-counts prior spend for the retry
+ * carry-over, and the per-call checks still enforce the ceiling on every call.
+ */
+function parseStoredCostUsd(cost: string | null | undefined): Decimal {
+  if (!cost) return new Decimal(0);
+  try {
+    const value = new Decimal(cost);
+    return value.isFinite() && value.gte(0) ? value : new Decimal(0);
+  } catch {
+    return new Decimal(0);
+  }
+}
 
 /**
  * Idempotently mirror the declarative catalogue into `agent_registry`.
@@ -134,14 +174,26 @@ export async function listRegistryAgents(db: DB) {
   return db.select().from(agentRegistry).orderBy(asc(agentRegistry.category), asc(agentRegistry.key));
 }
 
-/** Role check: ADMIN/SUPER_ADMIN bypass; otherwise every required permission. */
-async function assertAgentAllowed(role: UserRole[], agent: AgentDefinition): Promise<void> {
-  if (role.includes('ADMIN') || role.includes('SUPER_ADMIN')) return;
-  const { ROLE_PERMISSIONS } = await import('@wasit/shared');
-  const hasAll = agent.permissionsRequired.every((p) =>
+/**
+ * True when a role set may invoke this agent at all.
+ *
+ * ADMIN/SUPER_ADMIN bypass the permission list; everyone else must hold every
+ * `permissionsRequired` entry on at least one of their roles. Exported so the
+ * Copilot's *preview* can compute exactly what {@link assertAgentAllowed} will
+ * enforce at creation time — one authority, no drift.
+ */
+export function callerMayUseAgent(role: UserRole[], agent: AgentDefinition): boolean {
+  if (role.includes('ADMIN') || role.includes('SUPER_ADMIN')) return true;
+  return agent.permissionsRequired.every((p) =>
     role.some((r) => (ROLE_PERMISSIONS[r] as ReadonlySet<string>)?.has(p)),
   );
-  if (!hasAll) throw ApiError.forbidden('Agent capability not allowed for your role');
+}
+
+/** Role check: ADMIN/SUPER_ADMIN bypass; otherwise every required permission. */
+async function assertAgentAllowed(role: UserRole[], agent: AgentDefinition): Promise<void> {
+  if (!callerMayUseAgent(role, agent)) {
+    throw ApiError.forbidden('Agent capability not allowed for your role');
+  }
 }
 
 /**
@@ -301,6 +353,17 @@ export async function createAgentTask(
   audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
 ): Promise<ResolvedAgentTask> {
   const agent = await getAgentDef(db, input.agentKey);
+
+  // The Copilot is a coordinator, not a runnable executor: it has no case in
+  // `executeAgentTask` and is deliberately excluded from the specialised
+  // catalogue. An Agent Task for it would be persisted and then fail at
+  // dispatch, so the boundary is enforced here — before any row is written —
+  // and re-asserted in the executor (defence in depth). Copilot routing and
+  // planning run through their own routes and are unaffected.
+  if (agent.isCopilot) {
+    throw ApiError.forbidden('The Copilot is a coordinator and cannot be run as an agent task; use the Copilot routing endpoints');
+  }
+
   await assertAgentAllowed(role, agent);
   await assertAgentScope(db, role, agent);
 
@@ -610,13 +673,56 @@ async function executeClaimedTask(
   if (recording.length === 0) return getTask(db, taskId);
 
   const timeoutMs = opts.timeoutMs ?? 30_000;
+  // Trusted, server-derived execution policy. Both values come from the
+  // catalogue (`agent`) — never from the task row or `input` — so a caller cannot
+  // widen its own permissions or raise its own cost ceiling. An agent with no
+  // declared capabilities gets an EMPTY grant list, which makes every
+  // `requireAction` boundary refuse (fail closed).
+  const authorizedActions = authorizedActionsForAgent(agent);
+  // The registered Tool Gateway tools this run is bound to, derived from the
+  // agent's catalogue `allowedTools` intersected with the tool registry. Carried
+  // on the trusted run context so the gateway can enforce it without trusting any
+  // caller-supplied value. `allowedTools` is a scoping list, not an authority:
+  // RBAC and data scope are still enforced by the gateway on top.
+  const allowedTools = toolGrantForAgent(agent);
+  const runCapUsd = resolveRunCostCapUsd(agent);
+  // Seed the accumulator with the cost earlier attempts of THIS task already
+  // recorded, so the ceiling bounds the whole task across retries — a retry
+  // cannot reset the counter and spend the cap afresh. An unparseable stored
+  // value degrades to zero rather than disabling the cap.
+  const runBudget = new AgentRunBudget(runCapUsd.isZero() ? null : runCapUsd, parseStoredCostUsd(current.cost));
+  const runContext = {
+    taskId,
+    agentKey: agent.key,
+    taskType: current.taskType ?? undefined,
+    runCapUsd: runCapUsd.toFixed(10),
+    attempt: attempts,
+    authorizedActions,
+    allowedTools,
+    // Trusted requester identity and roles, resolved server-side above (from the
+    // stored task row + the database, or the scheduler principal's own roles).
+    // The Tool Gateway uses these for RBAC/scope; they are never taken from
+    // task `input`, so a caller cannot forge the principal a tool runs as.
+    requestedBy: current.requestedBy,
+    requesterRoles,
+  };
   try {
-    const advice = await Promise.race([
-      executeAgentTask(db, agent, { ...current.input, __userId: current.requestedBy }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)),
-    ]);
+    // The trusted run identity and the per-run budget are bound to THIS async
+    // execution only. `AsyncLocalStorage` scopes them to the callback, so they
+    // expire when the run returns and can never leak into a concurrent run or a
+    // later one — the `finally` below is a second, explicit guarantee that the
+    // runner holds no residual state on this call path.
+    const advice = await withAgentRunContext(runContext, () =>
+      withAgentRunBudget(runBudget, () =>
+        Promise.race([
+          executeAgentTask(db, agent, { ...current.input, __userId: current.requestedBy }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)),
+        ]),
+      ),
+    );
     const result = { agentKey: agent.key, advice: advice.content, readOnly: true };
     const latencyMs = Date.now() - started;
+    const runCostUsd = runBudget.spentUsd.toFixed(10);
     const refusal = detectRefusal(advice.content);
     if (refusal) {
       // The executor declined to act — most often because no data scope could be
@@ -634,6 +740,7 @@ async function executeClaimedTask(
           tokensInput: advice.tokensInput,
           tokensOutput: advice.tokensOutput,
           model: 'local-heuristic',
+          cost: runCostUsd,
           completedAt: new Date(),
           latencyMs,
         })
@@ -664,6 +771,7 @@ async function executeClaimedTask(
         tokensInput: advice.tokensInput,
         tokensOutput: advice.tokensOutput,
         model: 'local-heuristic',
+        cost: runCostUsd,
         completedAt: new Date(),
         latencyMs,
       })
@@ -676,7 +784,7 @@ async function executeClaimedTask(
       entityType: 'AGENT_TASK',
       entityId: taskId,
       after: result as never,
-      metadata: { latencyMs, attempts },
+      metadata: { latencyMs, attempts, costUsd: runCostUsd, runCalls: runBudget.callCount },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -689,6 +797,7 @@ async function executeClaimedTask(
         error: { message, attempts } as never,
         errorAt: willRetry ? null : new Date(),
         scheduledFor: willRetry ? new Date(Date.now() + backoffMs) : null,
+        cost: runBudget.spentUsd.toFixed(10),
         latencyMs: Date.now() - started,
       })
       .where(runningClaimGuard(taskId))
@@ -700,11 +809,19 @@ async function executeClaimedTask(
       action: willRetry ? 'AI.AGENT_TASK_RETRY_SCHEDULED' : 'AI.AGENT_TASK_FAILED',
       entityType: 'AGENT_TASK',
       entityId: taskId,
-      metadata: { error: message, attempt: attempts, backoffMs: willRetry ? backoffMs : 0 },
+      metadata: { error: message, attempt: attempts, backoffMs: willRetry ? backoffMs : 0, costUsd: runBudget.spentUsd.toFixed(10) },
     });
     if (!willRetry) {
       // Escalate a permanently failed task to the manager (Super Admin).
       logger.warn('agent task failed permanently', { agentKey: agent.key, taskId, error: message });
+    }
+  } finally {
+    // Defence in depth: the async-context scopes already expire when the wrapped
+    // callbacks return, but assert here that this execution path holds no
+    // residual run identity or budget — a leak would be a cross-run contamination
+    // bug, so it is surfaced loudly rather than silently tolerated.
+    if (getAgentRunContext()) {
+      logger.error('agent run context leaked past execution', { taskId, agentKey: agent.key });
     }
   }
   return getTask(db, taskId);

@@ -1,12 +1,19 @@
-import { and, asc, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { ApiError, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { agentSchedules, agentTasks } from '../../db/schema/agents';
+import { auditLogs } from '../../db/schema/audit';
 import { writeAudit } from '../../lib/audit';
 import { newId } from '../../lib/ids';
 import { logger } from '../../lib/observability/logger';
-import { COPILOT_KEY, findAgentSpec } from './catalogue.js';
-import { createAgentTask, getRegistryAgent, syncAgentRegistry, SUPERVISOR_KEY } from './runner.js';
+import { COPILOT_KEY, findAgentSpec, resolveApproval } from './catalogue.js';
+import {
+  callerMayUseAgent,
+  createAgentTask,
+  getRegistryAgent,
+  syncAgentRegistry,
+  SUPERVISOR_KEY,
+} from './runner.js';
 import { DEFAULT_SUPERVISOR_LIMITS } from './supervisor-policy.js';
 
 /**
@@ -129,6 +136,68 @@ export async function routeEvents(
   });
 
   return { correlationId, routed, skipped };
+}
+
+/**
+ * What one event *would* do, without touching the database.
+ *
+ * This is the routing *preview* the admin Copilot shows before an operator
+ * confirms: it computes the same decision {@link routeEvents} would make —
+ * route found? agent runnable (not PAUSED/DISABLED)? caller permitted? does the
+ * agent gate on a human approval? — but creates nothing and audits nothing.
+ * Preview and execution therefore cannot disagree, because both read the same
+ * {@link EVENT_ROUTING} table, the same registry row and the same RBAC helpers.
+ */
+export interface RoutingPreview {
+  event: string;
+  agentKey: string | null;
+  taskType: string | null;
+  runnable: boolean;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  /** Why this event would be skipped, or `null` when it would be routed. */
+  reason: string | null;
+}
+
+export async function planRouteEvents(db: DB, events: string[], role: UserRole[]): Promise<RoutingPreview[]> {
+  await syncAgentRegistry(db);
+  const seen = new Set<string>();
+  const preview: RoutingPreview[] = [];
+
+  for (const [index, event] of events.entries()) {
+    const route = EVENT_ROUTING[event];
+    if (!route) {
+      preview.push({ event, agentKey: null, taskType: null, runnable: false, requiresApproval: false, approvalAction: null, reason: 'no route for event' });
+      continue;
+    }
+    if (index >= MAX_FANOUT) {
+      preview.push({ event, agentKey: route.agentKey, taskType: route.taskType, runnable: false, requiresApproval: false, approvalAction: null, reason: `fan-out cap reached (${MAX_FANOUT})` });
+      continue;
+    }
+    const dedupe = `${event}:${route.agentKey}`;
+    if (seen.has(dedupe)) {
+      preview.push({ event, agentKey: route.agentKey, taskType: route.taskType, runnable: false, requiresApproval: false, approvalAction: null, reason: 'duplicate event in batch' });
+      continue;
+    }
+    seen.add(dedupe);
+
+    const spec = findAgentSpec(route.agentKey);
+    const approval = spec ? resolveApproval(spec, route.taskType) : { requiresApproval: false, approvalAction: null };
+
+    const registry = await getRegistryAgent(db, route.agentKey);
+    if (registry.status !== 'ACTIVE') {
+      preview.push({ event, agentKey: route.agentKey, taskType: route.taskType, runnable: false, requiresApproval: approval.requiresApproval, approvalAction: approval.approvalAction, reason: `agent ${route.agentKey} is ${registry.status}` });
+      continue;
+    }
+    if (spec && !callerMayUseAgent(role, spec)) {
+      preview.push({ event, agentKey: route.agentKey, taskType: route.taskType, runnable: false, requiresApproval: approval.requiresApproval, approvalAction: approval.approvalAction, reason: 'your role may not invoke this agent' });
+      continue;
+    }
+
+    preview.push({ event, agentKey: route.agentKey, taskType: route.taskType, runnable: true, requiresApproval: approval.requiresApproval, approvalAction: approval.approvalAction, reason: null });
+  }
+
+  return preview;
 }
 
 /** Aggregates the tasks a Copilot run spawned into a human-readable summary. */
@@ -274,4 +343,55 @@ export async function pendingApprovalsCount(db: DB): Promise<number> {
 /** Recent tasks across all agents, for the admin oversight table. */
 export async function listRecentTasks(db: DB, limit = 50) {
   return db.select().from(agentTasks).orderBy(desc(agentTasks.createdAt)).limit(limit);
+}
+
+/**
+ * A Copilot run detail: the summary of every task the run spawned, plus the
+ * run's aggregated cost. Cost is summed from the persisted task rows
+ * (`agent_tasks.cost`, `tokens_*`) — the same values the per-task view shows —
+ * so the run total is never a second, drifting source of truth.
+ */
+export async function copilotRunDetail(db: DB, correlationId: string) {
+  const summary = await summarizeRun(db, correlationId);
+  const agg = await db
+    .select({
+      cost: sql<string>`coalesce(sum(cast(${agentTasks.cost} as numeric)),0)::text`,
+      tokensInput: sql<number>`coalesce(sum(${agentTasks.tokensInput}),0)::int`,
+      tokensOutput: sql<number>`coalesce(sum(${agentTasks.tokensOutput}),0)::int`,
+    })
+    .from(agentTasks)
+    .where(eq(agentTasks.correlationId, correlationId));
+  const a = agg[0];
+  return {
+    ...summary,
+    cost: {
+      totalCost: String(a?.cost ?? '0'),
+      tokensInput: Number(a?.tokensInput ?? 0),
+      tokensOutput: Number(a?.tokensOutput ?? 0),
+    },
+  };
+}
+
+/**
+ * The Copilot's audit trail: every `AI.*` entry in `audit_logs`, newest first.
+ * Scoped to AI actions only so the desk shows agent activity rather than the
+ * whole platform log. Optional exact-action filter, never a free-text query.
+ */
+export async function listCopilotActivity(db: DB, opts: { action?: string; limit?: number } = {}) {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const where = opts.action ? and(like(auditLogs.action, 'AI.%'), eq(auditLogs.action, opts.action)) : like(auditLogs.action, 'AI.%');
+  return db
+    .select({
+      id: auditLogs.id,
+      action: auditLogs.action,
+      actorId: auditLogs.actorId,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+      metadata: auditLogs.metadata,
+      createdAt: auditLogs.createdAt,
+    })
+    .from(auditLogs)
+    .where(where)
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(limit);
 }

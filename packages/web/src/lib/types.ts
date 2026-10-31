@@ -814,6 +814,49 @@ export interface AgentTaskDecision {
   status: AgentTaskStatus;
 }
 
+/** One event's routing preview (AI-02.2). No task is created by a preview. */
+export interface CopilotRoutingPreview {
+  event: string;
+  agentKey: string | null;
+  taskType: string | null;
+  runnable: boolean;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  reason: string | null;
+}
+
+export interface CopilotRouteResult {
+  correlationId: string;
+  routed: { event: string; agentKey: string; taskId: string; status: string }[];
+  skipped: { event: string; reason: string }[];
+}
+
+export interface CopilotRunDetail {
+  correlationId: string;
+  total: number;
+  byStatus: Record<string, number>;
+  tasks: Array<{
+    id: string;
+    agentKey: string;
+    taskType: string | null;
+    status: string;
+    requiresApproval: boolean;
+    approvalAction: string | null;
+  }>;
+  needsHumanAction: number;
+  cost: { totalCost: string; tokensInput: number; tokensOutput: number };
+}
+
+export interface CopilotAuditRow {
+  id: string;
+  action: string;
+  actorId: string | null;
+  entityType: string | null;
+  entityId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
 
 export interface Country {
   id: string;

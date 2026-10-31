@@ -16,7 +16,7 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
-  AgentScheduleRow,
+  AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
@@ -1196,6 +1196,73 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
     });
+  },
+
+  // ---- Admin Copilot desk (SUPER_ADMIN only; server enforces requireRole) ----
+  async adminCopilotSpec() {
+    return request<AgentRegistryRow>('/api/admin/copilot');
+  },
+  async adminCopilotAgents() {
+    return request<{ items: AgentRegistryRow[] }>('/api/admin/copilot/agents');
+  },
+  async adminCopilotAgentSummary() {
+    return request<{ total: number; byStatus: Record<string, number>; pendingApprovals: number }>(
+      '/api/admin/copilot/agents/summary',
+    );
+  },
+  async adminCopilotSetAgentStatus(agentKey: string, status: 'ACTIVE' | 'PAUSED' | 'DISABLED', reason?: string) {
+    return request<AgentRegistryRow>(`/api/admin/copilot/agents/${agentKey}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason: reason ?? null }),
+    });
+  },
+  async adminCopilotCreateTask(agentKey: string, input: Record<string, unknown> = {}, taskType?: string) {
+    return request<AgentTaskRow>(`/api/admin/copilot/agents/${agentKey}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify({ input, taskType: taskType ?? undefined }),
+    });
+  },
+  async adminCopilotPreviewRoute(events: string[]) {
+    return request<{ preview: CopilotRoutingPreview[]; routable: number; gated: number }>(
+      '/api/admin/copilot/route/preview',
+      { method: 'POST', body: JSON.stringify({ events }) },
+    );
+  },
+  async adminCopilotConfirmRoute(events: Array<{ event: string; payload?: Record<string, unknown> }>) {
+    return request<CopilotRouteResult>('/api/admin/copilot/route', {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    });
+  },
+  async adminCopilotRunDetail(correlationId: string) {
+    return request<CopilotRunDetail>(`/api/admin/copilot/runs/${correlationId}`);
+  },
+  async adminCopilotTasks(params: { status?: string; agentKey?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentTaskRow[] }>(`/api/admin/copilot/tasks${suffix}`);
+  },
+  async adminCopilotTask(taskId: string) {
+    return request<AgentTaskRow>(`/api/admin/copilot/tasks/${taskId}`);
+  },
+  async adminCopilotDecideTask(taskId: string, decision: 'APPROVE' | 'REJECT', reason?: string) {
+    return request<AgentTaskDecision>(`/api/admin/copilot/tasks/${taskId}/${decision === 'APPROVE' ? 'approve' : 'reject'}`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, reason: reason ?? null }),
+    });
+  },
+  async adminCopilotRunTask(taskId: string) {
+    return request<AgentTaskRow>(`/api/admin/copilot/tasks/${taskId}/run`, { method: 'POST' });
+  },
+  async adminCopilotAudit(params: { action?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.action) qs.set('action', params.action);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: CopilotAuditRow[] }>(`/api/admin/copilot/audit${suffix}`);
   },
 
   // ---- Admin observability (server enforces ADMIN_SYSTEM) ----
