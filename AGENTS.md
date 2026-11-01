@@ -75,11 +75,11 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - **`src/modules/geo/service.ts`**: أُصلحت 3 أخطاء — `conditions: (SQL | undefined)[]` صريحة في `listCountries/listCurrencies/listLanguages` + `import type { SQL }` — سلوك الاستعلامات لم يتغير.
 - **أمر التحقق**: `cd packages/server && npx tsc --noEmit` → **exit 0**. لا توجد أخطاء متبقية في Geo/Revenue/Subscriptions.
 
-## الحالة الحالية (2026-10-29) — G8: دورة الوكلاء عند الطلب (GM On-Demand AI Cycle) — 1335/1338 Tests
+## الحالة الحالية (2026-10-29) — G8: دورة الوكلاء عند الطلب (GM On-Demand AI Cycle) — 1337/1340 Tests
 
 - ✅ **G8 — تشغيل دورة الوكلاء يدويًا (مغلق)**: مساران جديدان `POST /api/admin/gm/cycle` و`GET /api/admin/gm/cycles` (`SUPER_ADMIN` فقط). `modules/ai/cycle.ts` (`runAgentCycle`/`listAgentCycles`) يركّب نفس دوال المجدول بالترتيب (`dispatchDueSchedules` → `executeDueTasks` → `reapStaleTasks` → `dispatchOutboxEvents`) — **لا محرّك تنفيذ جديد** ولا صلاحيات جديدة، فتبقى RBAC والنطاق ومفتاح الإيقاف وبوابة الموافقة وميزانية التشغيل الواحد ومسار `AI.*` كما هي. بوابتان على مستوى الدورة: أحادية المسار (قفل Postgres استشاري → `blocked/ALREADY_RUNNING`) وبوابة الميزانية (منصّة/مشغّل → `blocked/BUDGET_EXHAUSTED`). النتيجة صادقة: خطوة تفشل ⇒ `AI.AGENT_CYCLE_FAILED` بلا `COMPLETED`؛ عملية تموت في المنتصف ⇒ يبقى `AI.AGENT_CYCLE_STARTED` (حالة «بدأ، النتيجة مجهولة»). الهوية من الجلسة (`ctx.user.id`) لا من الجسم. الواجهة: تبويب «دورة الوكلاء» في `AdminGmPage` + مفاتيح `adminGm.cycle.*` في اللغات الأربع. **لا تُنفّذ أي إجراء تجاري/مالي تلقائي**، والمهام المحتاجة موافقة تبقى `awaiting_approval`.
-- ✅ **اختبارات G8**: `tests/gm-agent-cycle.test.ts` — **14/14** (RBAC 401/403/200 + 422، دورة تُنفّذ مهمة حقيقية وتستنزف حدث صادر حقيقيًا، عدم تنفيذ `awaiting_approval`، `ALREADY_RUNNING`، `BUDGET_EXHAUSTED`، فشل خطوة ⇒ `failed`، سجل الدورات قراءة فقط وعبر HTTP، سلامة السجل) + `e2e/admin-gm.spec.ts` (**10/10**: دورة من الواجهة + RBAC).
-- ✅ **المجموعة الكاملة**: **103 Test Files · 1335/1338 Tests (3 متخطّاة) · Exit 0** — لا كسر في أي module سابق.
+- ✅ **اختبارات G8**: `tests/gm-agent-cycle.test.ts` — **16/16** (RBAC 401/403/200 + 422، دورة تُنفّذ مهمة حقيقية وتستنزف حدث صادر حقيقيًا، عدم تنفيذ `awaiting_approval`، احترام مفتاح الإيقاف (`blocked` لا يُنفَّذ)، لا كتابة على مسار الأموال (لا طلب/دفع/حركة)، `ALREADY_RUNNING`، `BUDGET_EXHAUSTED`، فشل خطوة ⇒ `failed`، سجل الدورات قراءة فقط وعبر HTTP، سلامة السجل) + `e2e/admin-gm.spec.ts` (**10/10**: دورة من الواجهة + RBAC).
+- ✅ **المجموعة الكاملة**: **103 Test Files · 1337/1340 Tests (3 متخطّاة) · Exit 0** — لا كسر في أي module سابق.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §20 + `docs/API_SPECIFICATION.md` (قسم `/api/admin/gm`).
 - ⚠️ **حدود**: تشغيل يدوي فقط (لا يُفعّل المجدول)؛ القفل استشاري لكل قاعدة بيانات؛ لا ضمان «بالضبط مرة» على مستوى نقل صف الـoutbox (كما في AI-08.0).
 

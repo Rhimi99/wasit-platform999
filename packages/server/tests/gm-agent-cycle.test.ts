@@ -9,9 +9,10 @@ import { agentTasks, agentRegistry } from '../src/db/schema/agents.js';
 import { eventOutbox } from '../src/db/schema/outbox.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { aiBudgets } from '../src/db/schema/ai.js';
+import { orders, payments, transactions } from '../src/db/schema/commerce.js';
 import { enqueueEvent } from '../src/modules/ai/outbox-repo.js';
 import { runAgentCycle, listAgentCycles, resolveCycleBudget } from '../src/modules/ai/cycle.js';
-import { createAgentTask, getTask, syncAgentRegistry } from '../src/modules/ai/runner.js';
+import { createAgentTask, getTask, setAgentStatus, syncAgentRegistry } from '../src/modules/ai/runner.js';
 import * as outboxWorker from '../src/modules/ai/outbox-worker.js';
 import type { UserRole } from '@wasit/shared';
 
@@ -319,6 +320,71 @@ describe('G8 — the cycle log (read-only retrieval)', () => {
     expect(list.status).toBe(200);
     const ids = (list.data.data.items as { correlationId: string }[]).map((i) => i.correlationId);
     expect(ids).toContain(correlationId);
+  });
+});
+
+describe('G8 — the kill switch is honoured by the cycle', () => {
+  it('does not run a queued task whose agent is PAUSED (blocked, not executed)', async () => {
+    const gm = await insertStaff('SUPER_ADMIN');
+    // `merchant-agent` is a read-only agent no other spec ever executes, so
+    // pausing it here cannot race a concurrent file.
+    await setAgentStatus(db, 'merchant-agent', 'PAUSED', 'g8 kill switch', { actorId: gm.id });
+    try {
+      const task = await enqueueQueuedTask('merchant-agent', 'merchant.onboard', gm.id);
+
+      const result = await runAgentCycle(db, { actorId: gm.id }, { limit: 25 });
+      expect(result.status).toBe('completed');
+
+      // The kill switch stopped it: blocked, never run.
+      const done = await getTask(db, task.id);
+      expect(done.status).toBe('blocked');
+      expect(done.result).toBeNull();
+
+      const blockedAudit = await db
+        .select()
+        .from(auditLogs)
+        .where(and(eq(auditLogs.action, 'AI.AGENT_TASK_BLOCKED'), eq(auditLogs.entityId, task.id)));
+      expect(blockedAudit).toHaveLength(1);
+    } finally {
+      await setAgentStatus(db, 'merchant-agent', 'ACTIVE', 'g8 kill switch restore', { actorId: gm.id });
+    }
+  });
+});
+
+describe('G8 — the cycle performs no money-path write', () => {
+  it('processes a committed order.placed event with a read-only task and never materialises the order', async () => {
+    const gm = await insertStaff('SUPER_ADMIN');
+    const orderId = randomUUID();
+    const { id: eventId } = await enqueueEvent(db, {
+      eventType: 'order.placed', aggregateType: 'ORDER', aggregateId: orderId,
+      payload: { orderId }, dedupeKey: `order.placed:${orderId}`,
+    });
+    createdEventIds.push(eventId);
+
+    const result = await runAgentCycle(db, { actorId: gm.id }, { limit: 25 });
+    expect(result.status).toBe('completed');
+
+    // The event really was drained and routed to the one allow-listed, read-only
+    // route — an operations health check, which declares `readOnly: true`.
+    const routed = await db.select().from(agentTasks).where(eq(agentTasks.correlationId, eventId));
+    expect(routed).toHaveLength(1);
+    createdTaskIds.push(routed[0].id);
+    expect(routed[0].agentKey).toBe('operations-agent');
+    expect(routed[0].taskType).toBe('operations.health_check');
+    const advice = JSON.parse(String((routed[0].result as { advice: string }).advice)) as { readOnly?: boolean };
+    expect(advice.readOnly).toBe(true);
+
+    // A cycle over an event for an order this suite never created must not have
+    // fabricated the order, a payment or a ledger transaction for it. Scoped to
+    // the event's own (unique) id so a concurrently-running file cannot affect
+    // it. Ledger rows hang off a transaction, so asserting no transaction also
+    // covers `transaction_ledger`.
+    const ordersForEvent = await db.select().from(orders).where(eq(orders.id, orderId));
+    expect(ordersForEvent).toHaveLength(0);
+    const paymentsForEvent = await db.select().from(payments).where(eq(payments.orderId, orderId));
+    expect(paymentsForEvent).toHaveLength(0);
+    const transactionsForEvent = await db.select().from(transactions).where(eq(transactions.orderId, orderId));
+    expect(transactionsForEvent).toHaveLength(0);
   });
 });
 
