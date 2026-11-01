@@ -4,6 +4,7 @@ import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
 import { getGmRun, listGmPlaybooks, listGmRuns, orchestrateGmGoal } from '../ai/orchestrator.js';
+import { listAgentCycles, runAgentCycle, DEFAULT_CYCLE_LIMIT, MAX_CYCLE_LIMIT } from '../ai/cycle.js';
 import { resolveUserRoles } from '../ai/runner.js';
 
 /**
@@ -24,6 +25,10 @@ import { resolveUserRoles } from '../ai/runner.js';
 const orchestrateSchema = z.object({
   goal: z.string().min(3).max(1000),
   maxSteps: z.number().int().positive().max(8).optional(),
+});
+
+const cycleSchema = z.object({
+  limit: z.number().int().positive().max(MAX_CYCLE_LIMIT).optional(),
 });
 
 export const gmRoutes = new Hono();
@@ -85,4 +90,38 @@ gmRoutes.post('/orchestrate', validateBody(orchestrateSchema), async (c) => {
     options: { maxSteps: body.maxSteps },
   });
   return c.json({ success: true, data: result }, 201);
+});
+
+/**
+ * Runs one on-demand AI agent cycle (G8).
+ *
+ * This is the manual counterpart to the in-process scheduler tick: it dispatches
+ * due schedules, runs queued/approved tasks, fails stale runs and drains the
+ * outbox — so the GM can operate the team even when `SCHEDULER_ENABLED=false`.
+ * It adds no execution path of its own: `runAgentCycle` composes the exact
+ * functions the scheduler calls, so RBAC, scope, the kill switch, the approval
+ * gate, the per-run budget and the `AI.*` audit trail are unchanged.
+ *
+ * The operator identity is `ctx.user!.id` — resolved from the session by
+ * `requireRole('SUPER_ADMIN')`, never read from the body. The response carries
+ * the real outcome (`completed` / `blocked` / `failed`), never a hopeful success.
+ */
+gmRoutes.post('/cycle', validateBody(cycleSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof cycleSchema>>(c);
+  const result = await runAgentCycle(
+    ctx.db,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    { limit: body.limit ?? DEFAULT_CYCLE_LIMIT },
+  );
+  return c.json({ success: true, data: result });
+});
+
+/** Recent on-demand cycles (the cycle log). Read-only. */
+gmRoutes.get('/cycles', async (c) => {
+  const ctx = getContext(c);
+  const rawLimit = Number(c.req.query('limit'));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+  const items = await listAgentCycles(ctx.db, { limit });
+  return c.json({ success: true, data: { items } });
 });

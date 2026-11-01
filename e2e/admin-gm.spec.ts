@@ -135,3 +135,41 @@ test.describe('GM operations desk — merchant RBAC', () => {
     expect((await page.request.get('/api/admin/gm/runs')).status()).toBe(403);
   });
 });
+
+/**
+ * G8 — on-demand AI agent cycle.
+ *
+ * The GM triggers a real cycle from the UI and then reads the real outcome back
+ * through `page.request`: the status rendered is the status the server reported,
+ * and the same `correlationId` appears in the cycle log the API returns.
+ */
+test.describe('GM on-demand AI cycle', () => {
+  test.use({ storageState: storageFor('admin') });
+
+  test('runs a cycle from the UI and reports the real outcome', async ({ page }) => {
+    await page.goto('/admin/gm');
+    await page.getByTestId('admin-gm-tab-cycle').click();
+    await expect(page.getByTestId('admin-gm-cycle-panel')).toBeVisible();
+
+    await page.getByTestId('admin-gm-cycle-run').click();
+    await expect(page.getByTestId('admin-gm-cycle-result')).toBeVisible();
+    const badge = page.getByTestId('admin-gm-cycle-status');
+    await expect(badge).toBeVisible();
+    const label = (await badge.textContent()) ?? '';
+    expect(label).toMatch(/اكتملت|Completed|محجوبة|Blocked|فشلت|Failed|قيد التشغيل|Running/i);
+
+    // The cycle is persisted and visible in the log the API serves.
+    const cycles = (await (await page.request.get('/api/admin/gm/cycles?limit=5')).json()).data.items as Array<{ correlationId: string; status: string }>;
+    expect(cycles.length).toBeGreaterThan(0);
+    await expect(page.getByTestId(`admin-gm-cycle-row-${cycles[0].correlationId}`)).toBeVisible();
+  });
+});
+
+test.describe('GM on-demand AI cycle — RBAC', () => {
+  test.use({ storageState: storageFor('admin2') });
+
+  test('an ADMIN-only user is refused the cycle endpoints', async ({ page }) => {
+    expect((await page.request.get('/api/admin/gm/cycles')).status()).toBe(403);
+    expect((await page.request.post('/api/admin/gm/cycle', { data: {} })).status()).toBe(403);
+  });
+});

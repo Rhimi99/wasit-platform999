@@ -957,6 +957,49 @@ export interface GmRunSummaryRow {
   hasSnapshot: boolean;
 }
 
+// ---- On-demand AI agent cycle (G8) ----
+// Mirrors the server types in `modules/ai/cycle.ts`. The status is the real
+// outcome the server reported; `blocked`/`failed` are never rendered as success.
+
+export type AgentCycleStatus = 'completed' | 'blocked' | 'failed';
+export type AgentCycleLifecycle = 'started' | 'completed' | 'blocked' | 'failed';
+
+export interface AgentCycleSteps {
+  schedulesDispatched: number;
+  tasksRan: number;
+  tasksFailed: number;
+  tasksRefused: number;
+  staleReaped: number;
+  outboxClaimed: number;
+  outboxProcessed: number;
+  outboxFailed: number;
+  outboxReaped: number;
+}
+
+/** The result of `POST /api/admin/gm/cycle`. */
+export interface AgentCycleResult {
+  correlationId: string;
+  status: AgentCycleStatus;
+  reason: string | null;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  budget: { spentUsd: string; limitUsd: string | null; source: string; currencyCode: string };
+  steps: AgentCycleSteps;
+}
+
+/** One row of the cycle log (`GET /api/admin/gm/cycles`). */
+export interface AgentCycleSummary {
+  correlationId: string;
+  status: AgentCycleLifecycle;
+  reason: string | null;
+  actorId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  steps: AgentCycleSteps | null;
+}
+
 // ---- Agent Operations desk (AI-06.0 / AI-06.1) ----
 // Mirrors the server types in `modules/ai/agent-monitor.ts` and
 // `modules/ai/supervisor.ts`. Every field is derived server-side from real

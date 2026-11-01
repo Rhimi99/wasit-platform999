@@ -3,9 +3,9 @@ import { api, apiCall, apiErrorMessage, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { GmPlaybookRow, GmRunRecord, GmRunSummaryRow, GmStepResultRow } from '@/lib/types';
+import type { AgentCycleResult, AgentCycleSummary, GmPlaybookRow, GmRunRecord, GmRunSummaryRow, GmStepResultRow } from '@/lib/types';
 
-type Tab = 'control' | 'runs';
+type Tab = 'control' | 'runs' | 'cycle';
 
 const OUTCOME_COLOR: Record<string, 'green' | 'amber' | 'red' | 'teal' | 'slate' | 'indigo'> = {
   succeeded: 'green',
@@ -18,6 +18,14 @@ const OUTCOME_COLOR: Record<string, 'green' | 'amber' | 'red' | 'teal' | 'slate'
 
 function outcomeColor(s: string): 'green' | 'amber' | 'red' | 'teal' | 'slate' | 'indigo' {
   return OUTCOME_COLOR[s] ?? 'slate';
+}
+
+/** Colour for a cycle status badge — never renders a non-success as green. */
+function cycleColor(s: string): 'green' | 'amber' | 'red' | 'slate' {
+  if (s === 'completed') return 'green';
+  if (s === 'blocked') return 'amber';
+  if (s === 'failed') return 'red';
+  return 'slate';
 }
 
 /**
@@ -47,6 +55,11 @@ export function AdminGmPage() {
   const [detail, setDetail] = useState<GmRunRecord | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
+  const [cycles, setCycles] = useState<AgentCycleSummary[]>([]);
+  const [cycleResult, setCycleResult] = useState<AgentCycleResult | null>(null);
+  const [cycleBusy, setCycleBusy] = useState(false);
+  const [cycleError, setCycleError] = useState<string | null>(null);
+
   const load = async () => {
     setError(null);
     const [pb, rn] = await Promise.all([
@@ -59,7 +72,29 @@ export function AdminGmPage() {
     setLoading(false);
   };
 
+  const loadCycles = async () => {
+    const res = await apiCall(() => api.adminGmCycles({ limit: 50 }));
+    setCycles(res.data?.items ?? []);
+    if (res.error) setCycleError(res.error);
+  };
+
   useEffect(() => { void load(); }, []);
+  useEffect(() => { if (tab === 'cycle') void loadCycles(); }, [tab]);
+
+  const doRunCycle = async () => {
+    setCycleBusy(true);
+    setCycleError(null);
+    setCycleResult(null);
+    try {
+      const result = await api.adminGmRunCycle();
+      setCycleResult(result);
+      await loadCycles();
+    } catch (e) {
+      setCycleError(apiErrorMessage(e));
+    } finally {
+      setCycleBusy(false);
+    }
+  };
 
   const doRun = async () => {
     const g = goal.trim();
@@ -94,6 +129,7 @@ export function AdminGmPage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'control', label: t('adminGm.tab.control') },
     { id: 'runs', label: t('adminGm.tab.runs') },
+    { id: 'cycle', label: t('adminGm.tab.cycle') },
   ];
 
   return (
@@ -242,6 +278,86 @@ export function AdminGmPage() {
                   )}
                 </>
               )}
+            </div>
+          )}
+
+          {tab === 'cycle' && (
+            <div className="space-y-4">
+              {cycleError && (
+                <div role="alert" data-testid="admin-gm-cycle-error" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+                  {cycleError}
+                </div>
+              )}
+
+              <Card testId="admin-gm-cycle-panel">
+                <h3 className="text-sm font-bold text-slate-800">{t('adminGm.cycle.title')}</h3>
+                <p className="mt-1 text-xs text-slate-500">{t('adminGm.cycle.hint')}</p>
+                <button
+                  type="button"
+                  data-testid="admin-gm-cycle-run"
+                  disabled={cycleBusy}
+                  onClick={() => void doRunCycle()}
+                  className="mt-3 rounded-md bg-wasit-600 px-4 py-2 text-sm font-medium text-white hover:bg-wasit-700 disabled:opacity-50"
+                >
+                  {cycleBusy ? t('adminGm.cycle.running') : t('adminGm.cycle.run')}
+                </button>
+
+                {cycleResult && (
+                  <div data-testid="admin-gm-cycle-result" className="mt-3 rounded-md border border-slate-200 p-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-500">{t('adminGm.cycle.status')}:</span>
+                      <Badge color={cycleColor(cycleResult.status)} testId="admin-gm-cycle-status">
+                        {t(`adminGm.cycle.status.${cycleResult.status}`)}
+                      </Badge>
+                      {cycleResult.reason && <span className="text-slate-500" dir="ltr">{cycleResult.reason}</span>}
+                      <span className="text-slate-400" dir="ltr">{cycleResult.correlationId}</span>
+                    </div>
+                    <dl className="mt-2 grid gap-2 sm:grid-cols-3">
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.duration')}</dt><dd className="font-medium text-slate-700" dir="ltr">{cycleResult.durationMs} ms</dd></div>
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.tasksRan')}</dt><dd className="font-medium text-slate-700" data-testid="admin-gm-cycle-tasks-ran">{cycleResult.steps.tasksRan}</dd></div>
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.outboxProcessed')}</dt><dd className="font-medium text-slate-700" data-testid="admin-gm-cycle-outbox">{cycleResult.steps.outboxProcessed}</dd></div>
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.schedules')}</dt><dd className="font-medium text-slate-700">{cycleResult.steps.schedulesDispatched}</dd></div>
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.tasksFailed')}</dt><dd className="font-medium text-slate-700">{cycleResult.steps.tasksFailed}</dd></div>
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.staleReaped')}</dt><dd className="font-medium text-slate-700">{cycleResult.steps.staleReaped}</dd></div>
+                      <div><dt className="text-slate-400">{t('adminGm.cycle.budget')}</dt><dd className="font-medium text-slate-700" dir="ltr">{cycleResult.budget.spentUsd} / {cycleResult.budget.limitUsd ?? '—'} {cycleResult.budget.currencyCode}</dd></div>
+                    </dl>
+                  </div>
+                )}
+              </Card>
+
+              <Card className="overflow-x-auto" testId="admin-gm-cycles">
+                <h3 className="text-sm font-bold text-slate-800">{t('adminGm.cycle.log.title')}</h3>
+                <p className="mt-1 text-xs text-slate-500">{t('adminGm.cycle.log.hint')}</p>
+                {cycles.length === 0 ? <p className="mt-2 text-xs text-slate-400">{t('adminGm.cycle.log.empty')}</p> : (
+                  <table className="table-base mt-2">
+                    <thead>
+                      <tr>
+                        <th>{t('adminGm.cycle.log.startedAt')}</th>
+                        <th>{t('adminGm.cycle.status')}</th>
+                        <th>{t('adminGm.cycle.duration')}</th>
+                        <th>{t('adminGm.cycle.tasksRan')}</th>
+                        <th>{t('adminGm.cycle.outboxProcessed')}</th>
+                        <th>{t('adminGm.cycle.log.actor')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cycles.map((cy) => (
+                        <tr key={cy.correlationId} data-testid={`admin-gm-cycle-row-${cy.correlationId}`}>
+                          <td className="text-xs">{formatDate(cy.startedAt)}</td>
+                          <td>
+                            <Badge color={cycleColor(cy.status)}>{t(`adminGm.cycle.status.${cy.status}`)}</Badge>
+                            {cy.reason && <span className="ml-1 text-xs text-slate-400" dir="ltr">{cy.reason}</span>}
+                          </td>
+                          <td className="text-xs" dir="ltr">{cy.durationMs === null ? '—' : `${cy.durationMs} ms`}</td>
+                          <td className="text-xs">{cy.steps?.tasksRan ?? '—'}</td>
+                          <td className="text-xs">{cy.steps?.outboxProcessed ?? '—'}</td>
+                          <td className="text-xs" dir="ltr">{cy.actorId ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </Card>
             </div>
           )}
         </>

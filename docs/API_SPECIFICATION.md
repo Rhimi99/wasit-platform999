@@ -269,6 +269,18 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - الحالة: `PENDING → PROCESSING → PROCESSED | FAILED` مع Lease (`locked_at`) واستعادة بعد التعطّل
   (`reapStaleEvents`) وتراجع أُسّي. التوجيه محصور بقائمة سماح صريحة (`outbox-routes.ts`).
 
+## دورة الوكلاء عند الطلب (`/api/admin/gm`) — G8
+
+`SUPER_ADMIN` فقط (requireRole). تشغيل يدوي لدورة الوكلاء دون تفعيل المجدول في الإنتاج.
+
+| Method | Path | الوصف |
+|---|---|---|
+| POST | `/api/admin/gm/cycle` | تشغيل دورة واحدة؛ `{ limit? }` (1..100، الافتراضي 25)؛ يعيد `{ correlationId, status, reason, startedAt, finishedAt, durationMs, budget, steps }` — `status` ∈ `completed`/`blocked`/`failed` (الحقيقة لا تُجمَّل) |
+| GET | `/api/admin/gm/cycles?limit=` | سجل الدورات (قراءة فقط من قيود التدقيق `AI.AGENT_CYCLE_*`) |
+
+- الحالة `blocked` تعني `ALREADY_RUNNING` (دورة أخرى قيد التشغيل) أو `BUDGET_EXHAUSTED` (الميزانية مستنفدة).
+- الدورة تُركّب نفس دوال المجدول (توزيع الجداول → تنفيذ المهام → إفشال العالقة → استنزاف الصادر)، فلا مسار تنفيذ جديد ولا صلاحيات جديدة.
+
 ## بقية الوحدات (Routes تحت التطوير)
 
 `/users`, `/ads`, `/ai`, `/analytics`, `/geo`, `/policies`, `/subscriptions`, `/subscriptions/plans`, `/refunds`, `/commissions`

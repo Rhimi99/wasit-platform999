@@ -18,6 +18,7 @@ import type {
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
   GmRunRecord, GmRunSummaryRow, GmPlaybookRow,
+  AgentCycleResult, AgentCycleSummary,
   AgentPerformanceRow, TeamHealth, AgentActivityRow, SupervisorReportRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -1287,6 +1288,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ goal, ...(maxSteps ? { maxSteps } : {}) }),
     });
+  },
+
+  // ---- On-demand AI agent cycle (G8) ----
+  // The manual counterpart to the scheduler tick. `run` returns the real outcome
+  // (`completed`/`blocked`/`failed`); the log is read-only and replayed from the
+  // cycle audit rows.
+  async adminGmRunCycle(limit?: number) {
+    return request<AgentCycleResult>('/api/admin/gm/cycle', {
+      method: 'POST',
+      body: JSON.stringify({ ...(limit ? { limit } : {}) }),
+    });
+  },
+  async adminGmCycles(params: { limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentCycleSummary[] }>(`/api/admin/gm/cycles${suffix}`);
   },
 
   // ---- Agent Operations desk (AI-06.2) ----
