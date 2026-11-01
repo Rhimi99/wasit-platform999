@@ -1116,6 +1116,24 @@ export interface AgentActivityRow {
   completedAt: string | null;
 }
 
+/**
+ * One row of `GET /api/admin/agent-ops/memory` (G7). A bounded, already-validated
+ * projection of a stored operational-memory note — never the raw content jsonb.
+ * All fields are display-only and are rendered as plain text (never as markup).
+ */
+export interface AgentMemoryRow {
+  id: string;
+  agentKey: string;
+  kind: string;
+  taskId: string | null;
+  source: string | null;
+  tags: string[];
+  outcome: string | null;
+  latencyMs: number | null;
+  errorCode: string | null;
+  createdAt: string;
+}
+
 /** A supervisor alert (`GET /api/admin/ai/supervisor/report`). */
 export interface SupervisorAlertRow {
   agentKey: string;

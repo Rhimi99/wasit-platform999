@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
-import { api, apiCall, formatDate } from '@/lib/api';
+import { api, apiCall, apiErrorMessage, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import type {
   AgentActivityRow,
+  AgentMemoryRow,
   AgentPerformanceRow,
   MonitorAlert,
   SupervisorReportRow,
   TeamHealth,
 } from '@/lib/types';
 
-type Tab = 'overview' | 'performance' | 'activity' | 'supervisor';
+type Tab = 'overview' | 'performance' | 'activity' | 'memory' | 'supervisor';
 
 const STATUS_COLOR: Record<string, 'green' | 'amber' | 'red' | 'teal' | 'slate' | 'indigo'> = {
   succeeded: 'green',
@@ -76,6 +77,7 @@ export function AdminAgentOpsPage() {
     { id: 'overview', label: t('adminAgentOps.tab.overview') },
     { id: 'performance', label: t('adminAgentOps.tab.performance') },
     { id: 'activity', label: t('adminAgentOps.tab.activity') },
+    { id: 'memory', label: t('adminAgentOps.tab.memory') },
     { id: 'supervisor', label: t('adminAgentOps.tab.supervisor') },
   ];
 
@@ -125,6 +127,7 @@ export function AdminAgentOpsPage() {
           {tab === 'overview' && health && <Overview health={health} />}
           {tab === 'performance' && <Performance rows={perf} />}
           {tab === 'activity' && <Activity rows={activity} />}
+          {tab === 'memory' && <Memory />}
           {tab === 'supervisor' && supervisor && <Supervisor report={supervisor} />}
         </>
       )}
@@ -362,6 +365,148 @@ function Activity({ rows }: { rows: AgentActivityRow[] }) {
         </tbody>
       </table>
     </Card>
+  );
+}
+
+/**
+ * G7 — Operational memory (read-only).
+ *
+ * Fetches the caller's own memory notes from the server, which resolves the
+ * scope from the session: the client never sends a scope and the filters only
+ * narrow the caller's own notes. Every value is rendered as plain text (never
+ * `dangerouslySetInnerHTML`), so a note's content cannot become markup. The view
+ * is strictly read-only — there is no edit, delete or re-write control.
+ */
+function Memory() {
+  const { t } = useI18n();
+  const [items, setItems] = useState<AgentMemoryRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [agentKey, setAgentKey] = useState('');
+  const [taskId, setTaskId] = useState('');
+  const [applied, setApplied] = useState<{ agentKey?: string; taskId?: string }>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async (filters: { agentKey?: string; taskId?: string } = {}) => {
+    setLoading(true);
+    setError(null);
+    const res = await apiCall(() => api.adminAgentOpsMemory({ ...filters, limit: 50 }));
+    if (res.error) {
+      setError(res.error);
+      setItems([]);
+      setTotal(0);
+    } else {
+      setItems(res.data?.items ?? []);
+      setTotal(res.data?.total ?? 0);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const onFilter = (e: React.FormEvent) => {
+    e.preventDefault();
+    const next: { agentKey?: string; taskId?: string } = {};
+    if (agentKey.trim()) next.agentKey = agentKey.trim();
+    if (taskId.trim()) next.taskId = taskId.trim();
+    setApplied(next);
+    void load(next);
+  };
+
+  const onClear = () => {
+    setAgentKey('');
+    setTaskId('');
+    setApplied({});
+    void load({});
+  };
+
+  return (
+    <div className="space-y-4" data-testid="admin-agent-ops-memory">
+      <Card testId="admin-agent-ops-memory-filters">
+        <h3 className="text-sm font-bold text-slate-800">{t('adminAgentOps.memory.title')}</h3>
+        <p className="mt-1 text-xs text-slate-500">{t('adminAgentOps.memory.hint')}</p>
+        <form className="mt-3 flex flex-wrap items-end gap-3" onSubmit={onFilter}>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('adminAgentOps.memory.filterAgent')}</span>
+            <input
+              type="text"
+              dir="ltr"
+              value={agentKey}
+              data-testid="admin-agent-ops-memory-agent-input"
+              onChange={(e) => setAgentKey(e.target.value)}
+              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+              placeholder="support-agent"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('adminAgentOps.memory.filterTask')}</span>
+            <input
+              type="text"
+              dir="ltr"
+              value={taskId}
+              data-testid="admin-agent-ops-memory-task-input"
+              onChange={(e) => setTaskId(e.target.value)}
+              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+            />
+          </label>
+          <button
+            type="submit"
+            data-testid="admin-agent-ops-memory-apply"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            {t('adminAgentOps.memory.apply')}
+          </button>
+          <button
+            type="button"
+            data-testid="admin-agent-ops-memory-clear"
+            onClick={onClear}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            {t('adminAgentOps.memory.clear')}
+          </button>
+        </form>
+        <p className="mt-3 text-xs text-slate-400" data-testid="admin-agent-ops-memory-total">
+          {t('adminAgentOps.memory.total')}: {total}
+        </p>
+      </Card>
+
+      {loading ? <Spinner /> : error ? (
+        <ErrorState message={error} onRetry={() => void load(applied)} />
+      ) : items.length === 0 ? (
+        <EmptyState title={t('adminAgentOps.memory.empty')} />
+      ) : (
+        <Card className="overflow-x-auto" testId="admin-agent-ops-memory-table">
+          <table className="table-base">
+            <thead>
+              <tr>
+                <th>{t('adminAgentOps.memory.agent')}</th>
+                <th>{t('adminAgentOps.memory.kind')}</th>
+                <th>{t('adminAgentOps.memory.task')}</th>
+                <th>{t('adminAgentOps.memory.source')}</th>
+                <th>{t('adminAgentOps.memory.outcome')}</th>
+                <th>{t('adminAgentOps.memory.tags')}</th>
+                <th>{t('adminAgentOps.memory.latency')}</th>
+                <th>{t('adminAgentOps.memory.createdAt')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r) => (
+                <tr key={r.id} data-testid={`admin-agent-ops-memory-${r.id}`}>
+                  <td className="text-xs font-medium" dir="ltr">{r.agentKey}</td>
+                  <td className="text-xs" dir="ltr">{r.kind}</td>
+                  <td className="text-xs" dir="ltr">{r.taskId ?? '—'}</td>
+                  <td className="text-xs" dir="ltr">{r.source ?? '—'}</td>
+                  <td className="text-xs" dir="ltr">{r.outcome ?? '—'}</td>
+                  <td className="text-xs" dir="ltr">{r.tags.length ? r.tags.join(', ') : '—'}</td>
+                  <td className="text-xs" dir="ltr">{r.latencyMs === null ? '—' : `${r.latencyMs} ms`}</td>
+                  <td className="text-xs">{formatDate(r.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
   );
 }
 

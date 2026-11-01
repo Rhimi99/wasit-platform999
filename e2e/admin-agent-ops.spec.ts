@@ -100,6 +100,47 @@ test.describe('Agent operations desk', () => {
     }
   });
 
+  test('the memory tab renders the exact rows the API returns (G7)', async ({ page }) => {
+    await page.goto('/admin/agent-ops');
+    await page.getByTestId('admin-agent-ops-tab-memory').click();
+
+    const memory = (await (await page.request.get('/api/admin/agent-ops/memory?limit=50')).json()).data as {
+      items: Array<{ id: string; agentKey: string; taskId: string | null }>;
+      total: number;
+    };
+    // The total rendered matches the server's own count, never a client guess.
+    await expect(page.getByTestId('admin-agent-ops-memory-total')).toContainText(String(memory.total));
+    if (memory.items.length === 0) {
+      await expect(page.getByText(/No memory notes in your scope|لا توجد ملاحظات ذاكرة في نطاقك/i)).toBeVisible();
+      return;
+    }
+    await expect(page.getByTestId('admin-agent-ops-memory-table')).toBeVisible();
+    for (const row of memory.items) {
+      await expect(page.getByTestId(`admin-agent-ops-memory-${row.id}`)).toContainText(row.agentKey);
+    }
+  });
+
+  test('the memory tab is strictly read-only and cannot widen scope (G7)', async ({ page }) => {
+    await page.goto('/admin/agent-ops');
+    await page.getByTestId('admin-agent-ops-tab-memory').click();
+    await expect(page.getByTestId('admin-agent-ops-memory')).toBeVisible();
+
+    // No write control exists anywhere on the surface.
+    await expect(page.getByRole('button', { name: /delete|حذف|save|حفظ|edit|تعديل/i })).toHaveCount(0);
+
+    // Filtering by an agent narrows the caller's own notes; the server resolves the
+    // scope, so the filter can never widen it to another owner.
+    const filtered = (await (await page.request.get('/api/admin/agent-ops/memory?agentKey=support-agent')).json()).data as {
+      items: Array<{ agentKey: string }>;
+    };
+    for (const row of filtered.items) expect(row.agentKey).toBe('support-agent');
+
+    // A scope claim in the query is ignored: the result equals the unfiltered one.
+    const base = (await (await page.request.get('/api/admin/agent-ops/memory')).json()).data as { total: number };
+    const claimed = (await (await page.request.get('/api/admin/agent-ops/memory?scope=platform&isPlatform=true&owner=someone-else')).json()).data as { total: number };
+    expect(claimed.total).toBe(base.total);
+  });
+
   test('reading the desk writes nothing: the health payload is stable across two fetches', async ({ page }) => {
     await page.goto('/admin/agent-ops');
     const first = (await (await page.request.get('/api/admin/agent-ops/health')).json()).data as { agents: { total: number }; tasks: { running: number } };

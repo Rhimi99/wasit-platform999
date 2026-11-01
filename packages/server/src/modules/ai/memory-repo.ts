@@ -47,7 +47,26 @@ export interface AgentMemoryRow {
 export interface MemoryFilter {
   agentKey?: string;
   kind?: MemoryKind;
+  /** Only notes whose stored `content.taskId` equals this id. */
+  taskId?: string;
 }
+
+/** A bounded, stable page over one owner's notes. `limit`/`offset` are already
+ * clamped by the caller; the repo applies the same guard defensively. */
+export interface MemoryQuery extends MemoryFilter {
+  limit?: number;
+  offset?: number;
+}
+
+export interface MemoryPage {
+  items: AgentMemoryRow[];
+  total: number;
+}
+
+/** The maximum page size the read surface will ever return. */
+export const MAX_MEMORY_LIMIT = 100;
+/** The default page size when the caller does not ask for one. */
+export const DEFAULT_MEMORY_LIMIT = 50;
 
 // ---------- allow-list content schema ----------
 //
@@ -263,11 +282,23 @@ function filterPredicate(filter?: MemoryFilter): SQL | undefined {
   const conds: SQL[] = [];
   if (filter?.agentKey) conds.push(eq(agentMemory.agentKey, filter.agentKey));
   if (filter?.kind) conds.push(eq(agentMemory.kind, filter.kind));
+  // `taskId` lives inside the jsonb `content`, so it is matched with a JSON
+  // accessor — never string-interpolated, so the value is bound, not injected.
+  if (filter?.taskId) conds.push(sql`${agentMemory.content}->>'taskId' = ${filter.taskId}`);
   if (conds.length === 0) return undefined;
   return conds.length === 1 ? conds[0] : and(...conds);
 }
 
 // ---------- operations ----------
+
+/** Whether `taskId` is a task owned by `owner`. A memory note may only reference
+ * a task the same owner requested, so a stored id can never point at — or later
+ * leak — another owner's task. Exported so the read surface can reject a
+ * `taskId` filter that names a task outside the caller's scope (404, never a
+ * silently-empty page that would still confirm nothing). */
+export async function taskBelongsToOwner(db: DB, owner: string, taskId: string): Promise<boolean> {
+  return ownsTask(db, owner, taskId);
+}
 
 /** Whether `taskId` is a task owned by `owner`. A memory note may only reference
  * a task the same owner requested, so a stored id can never point at — or later
@@ -331,6 +362,41 @@ export async function listMemory(db: DB, ctx: AgentScopeCtx, filter?: MemoryFilt
   const where = fp ? and(ownerPredicate(ctx), fp) : ownerPredicate(ctx);
   const rows = await db.select().from(agentMemory).where(where).orderBy(desc(agentMemory.createdAt));
   return rows as AgentMemoryRow[];
+}
+
+/**
+ * A bounded, stable page of this owner's notes plus the total matching count.
+ *
+ * Reads only `ctx.owner`'s rows — the same owner predicate as {@link listMemory},
+ * so it can never widen to another owner. Ordering is `created_at DESC, id DESC`:
+ * `id` is the deterministic tiebreaker, so two notes written in the same
+ * millisecond never swap position between pages (a stable pagination key).
+ *
+ * `limit` is clamped to {@link MAX_MEMORY_LIMIT} and `offset` to a non-negative
+ * integer here as a second guard, independent of route-level validation.
+ */
+export async function listMemoryPage(db: DB, ctx: AgentScopeCtx, query: MemoryQuery = {}): Promise<MemoryPage> {
+  assertScope(ctx);
+  const fp = filterPredicate(query);
+  const where = fp ? and(ownerPredicate(ctx), fp) : ownerPredicate(ctx);
+
+  const rawLimit = Number(query.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), MAX_MEMORY_LIMIT) : DEFAULT_MEMORY_LIMIT;
+  const rawOffset = Number(query.offset);
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+
+  const [rows, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(agentMemory)
+      .where(where)
+      .orderBy(desc(agentMemory.createdAt), desc(agentMemory.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ v: sql<number>`count(*)::int` }).from(agentMemory).where(where),
+  ]);
+
+  return { items: rows as AgentMemoryRow[], total: Number(totalRows[0]?.v ?? 0) };
 }
 
 /** Deletes one of this owner's entries. Returns false when the id is not theirs. */

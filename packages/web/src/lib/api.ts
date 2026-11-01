@@ -19,7 +19,7 @@ import type {
   AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
   GmRunRecord, GmRunSummaryRow, GmPlaybookRow, GmActionResultRow, GmRunActionRow,
   AgentCycleResult, AgentCycleSummary,
-  AgentPerformanceRow, TeamHealth, AgentActivityRow, SupervisorReportRow,
+  AgentPerformanceRow, TeamHealth, AgentActivityRow, AgentMemoryRow, SupervisorReportRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
@@ -1345,6 +1345,20 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit));
     const suffix = qs.toString() ? `?${qs}` : '';
     return request<{ items: AgentActivityRow[] }>(`/api/admin/agent-ops/activity${suffix}`);
+  },
+  // G7 — read-only operational memory for the caller's own scope. The server
+  // resolves the scope from the session; the client never sends one. `agentKey`
+  // and `taskId` only narrow the caller's own notes.
+  async adminAgentOpsMemory(params: { agentKey?: string; taskId?: string; limit?: number; offset?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.taskId) qs.set('taskId', params.taskId);
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentMemoryRow[]; total: number; limit: number; offset: number }>(
+      `/api/admin/agent-ops/memory${suffix}`,
+    );
   },
   async adminAiSupervisorReport() {
     return request<SupervisorReportRow>('/api/admin/ai/supervisor/report');

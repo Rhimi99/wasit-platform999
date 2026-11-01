@@ -9,6 +9,7 @@ import {
   trimOwnMemory,
   ALLOWED_TAGS,
   SOURCE_TYPES,
+  type AgentMemoryRow,
   type MemoryKind,
   type MemorySource,
 } from './memory-repo';
@@ -211,5 +212,44 @@ export async function enforceMemoryRetention(db: DB, scope: AgentScopeCtx, keep:
 /** Default per-owner note cap and age window, overridable by callers. */
 export const DEFAULT_MEMORY_KEEP = 200;
 export const DEFAULT_MEMORY_MAX_AGE_DAYS = 180;
+
+/**
+ * A memory row projected for the read-only admin surface.
+ *
+ * Only the allow-listed, already-validated fields are surfaced — the raw
+ * `content` jsonb is never passed through wholesale, so a future content key
+ * cannot leak by accident. `content` is treated as untrusted: every field is
+ * type-checked and defaulted, and no value is ever interpreted as markup.
+ */
+export interface MemoryViewRow {
+  id: string;
+  agentKey: string;
+  kind: string;
+  taskId: string | null;
+  source: string | null;
+  tags: string[];
+  outcome: string | null;
+  latencyMs: number | null;
+  errorCode: string | null;
+  createdAt: string;
+}
+
+/** Projects a stored memory row into the bounded read-only shape above. */
+export function toMemoryView(row: AgentMemoryRow): MemoryViewRow {
+  const c = (row.content ?? {}) as Record<string, unknown>;
+  const m = (c.metrics ?? {}) as Record<string, unknown>;
+  return {
+    id: row.id,
+    agentKey: row.agentKey,
+    kind: row.kind,
+    taskId: typeof c.taskId === 'string' ? c.taskId : null,
+    source: typeof c.source === 'string' ? c.source : null,
+    tags: Array.isArray(c.tags) ? c.tags.filter((t): t is string => typeof t === 'string') : [],
+    outcome: typeof m.outcome === 'string' ? m.outcome : null,
+    latencyMs: typeof m.latencyMs === 'number' && Number.isFinite(m.latencyMs) ? m.latencyMs : null,
+    errorCode: typeof m.errorCode === 'string' ? m.errorCode : null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 export const __internal = { outcomeOf, errorCodeOf, SOURCE_TYPES };
