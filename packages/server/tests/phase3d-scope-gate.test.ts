@@ -32,8 +32,15 @@ const PLATFORM_DATA_AGENTS = [
 ] as const;
 
 // Executors that keep an inline executor-level gate (they read owner-scoped or
-// single-tenant data and still self-check).
-const INLINE_GATED_EXECUTOR_FUNCS: Record<string, string> = {
+// single-tenant data and still self-check). Empty after G5 Phase 1 moved the two
+// remaining inline-gated executors behind the gateway (see below).
+const INLINE_GATED_EXECUTOR_FUNCS: Record<string, string> = {};
+
+// G5 Phase 1 — executors whose cross-owner reads now go through the central Tool
+// Gateway while KEEPING their own defence-in-depth `requirePlatformGate`. The
+// gateway re-enforces admin-only platform scope, and the inline gate stays as a
+// second, unchanged check. Neither grants new authority.
+const GATEWAY_ROUTED_WITH_INLINE_GATE: Record<string, string> = {
   'ads-agent': 'execAdsAgent',
   'development-agent': 'execDevelopmentAgent',
 };
@@ -122,6 +129,17 @@ describe('executors enforce the gate in code (defence in depth)', () => {
     for (const [agentKey, fn] of Object.entries(INLINE_GATED_EXECUTOR_FUNCS)) {
       const body = bodyOf(fn);
       expect(body.includes('requirePlatformGate('), `${fn} (${agentKey}) must gate`).toBe(true);
+    }
+  });
+
+  it('G5 Phase 1: ads/development read through the gateway AND keep their inline gate, with no direct query', () => {
+    for (const [agentKey, fn] of Object.entries(GATEWAY_ROUTED_WITH_INLINE_GATE)) {
+      const body = bodyOf(fn);
+      expect(body.includes('invokeTool('), `${fn} (${agentKey}) must route through the Tool Gateway`).toBe(true);
+      // The defence-in-depth gate is preserved unchanged.
+      expect(body.includes('requirePlatformGate('), `${fn} (${agentKey}) must keep its inline gate`).toBe(true);
+      // No direct cross-owner Drizzle read remains.
+      expect(body.includes('.from('), `${fn} (${agentKey}) must not query tables directly`).toBe(false);
     }
   });
 

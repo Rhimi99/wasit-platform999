@@ -9,11 +9,14 @@ import { disputes, disputeMessages } from '../../db/schema/disputes';
 import { users } from '../../db/schema/auth';
 import { commissionPolicies } from '../../db/schema/engine';
 import { dailyKpis } from '../../db/schema/analytics';
+import { campaigns, adEvents } from '../../db/schema/ads';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { resolveOwnedSellerIds } from '../../lib/seller-ownership';
 import { getAgentRunContext } from './agent-run-context';
 import {
+  ADS_READ_CAMPAIGNS,
   COMPLIANCE_READ_PLATFORM,
+  DEVELOPMENT_READ_PLATFORM,
   DISPUTES_READ_SUMMARY,
   FINANCE_READ_LEDGER,
   MARKET_READ_OVERVIEW,
@@ -366,6 +369,90 @@ const marketReadOwn: ToolHandler = async (db) => {
   return { scope: 'own', products: toNum(ownProducts[0]?.v), orderValue: ownOrderValue[0]?.v ?? '0' };
 };
 
+/**
+ * Platform ad book — campaign budget/spend rows plus impression/click/conversion
+ * counts. Cross-owner advertising data, so the gateway admits admins only
+ * (`platformScoped: true`). The payload mirrors `execAdsAgent`'s former direct
+ * read exactly; no advertiser identity beyond the campaign's own title is added.
+ */
+const adsReadCampaigns: ToolHandler = async (db) => {
+  const [campaignsAll, impressions, clicks, conversions] = await Promise.all([
+    db
+      .select({
+        id: campaigns.id,
+        title: campaigns.title,
+        objective: campaigns.objective,
+        status: campaigns.status,
+        budget: campaigns.budget,
+        spent: campaigns.spent,
+        isActive: campaigns.isActive,
+        startsAt: campaigns.startsAt,
+        endsAt: campaigns.endsAt,
+      })
+      .from(campaigns)
+      .orderBy(desc(campaigns.createdAt)),
+    db.select({ v: sql<number>`count(*)::int` }).from(adEvents).where(eq(adEvents.eventType, 'IMPRESSION')),
+    db.select({ v: sql<number>`count(*)::int` }).from(adEvents).where(eq(adEvents.eventType, 'CLICK')),
+    db.select({ v: sql<number>`count(*)::int` }).from(adEvents).where(eq(adEvents.eventType, 'CONVERSION')),
+  ]);
+  const imp = toNum(impressions[0]?.v);
+  const clk = toNum(clicks[0]?.v);
+  const conv = toNum(conversions[0]?.v);
+  return {
+    scope: 'platform',
+    snapshot: {
+      campaigns: campaignsAll.length,
+      activeCampaigns: campaignsAll.filter((c) => c.status === 'ACTIVE' && c.isActive).length,
+      impressions: imp,
+      clicks: clk,
+      conversions: conv,
+      ctr: imp > 0 ? ((clk / imp) * 100).toFixed(2) : '0',
+      conversionRate: clk > 0 ? ((conv / clk) * 100).toFixed(2) : '0',
+      budgetVsSpend: campaignsAll.slice(0, 5).map((c) => ({
+        id: c.id,
+        title: c.title,
+        objective: c.objective,
+        status: c.status,
+        budget: String(c.budget),
+        spent: String(c.spent),
+      })),
+    },
+  };
+};
+
+/**
+ * Platform build context — user/product/order/campaign counts and the latest
+ * daily KPI row. Cross-owner platform data, so the gateway admits admins only.
+ * Mirrors `execDevelopmentAgent`'s former direct read exactly.
+ */
+const developmentReadPlatform: ToolHandler = async (db) => {
+  const [usersCount, productsCount, ordersCount, campaignsCount, kpiDays, lastMonthlyKpi] = await Promise.all([
+    db.select({ v: sql<number>`count(*)::int` }).from(users),
+    db.select({ v: sql<number>`count(*)::int` }).from(products),
+    db.select({ v: sql<number>`count(*)::int` }).from(orders),
+    db.select({ v: sql<number>`count(*)::int` }).from(campaigns),
+    db.select({ v: sql<number>`count(*)::int` }).from(dailyKpis),
+    db
+      .select({ date: dailyKpis.date, metricName: dailyKpis.metricName, metricValue: dailyKpis.metricValue })
+      .from(dailyKpis)
+      .orderBy(desc(dailyKpis.date))
+      .limit(1),
+  ]);
+  return {
+    scope: 'platform',
+    snapshot: {
+      users: toNum(usersCount[0]?.v),
+      products: toNum(productsCount[0]?.v),
+      orders: toNum(ordersCount[0]?.v),
+      campaigns: toNum(campaignsCount[0]?.v),
+      kpiDays: toNum(kpiDays[0]?.v),
+      lastDaily: lastMonthlyKpi[0]
+        ? { date: lastMonthlyKpi[0].date.toISOString(), metric: lastMonthlyKpi[0].metricName, value: String(lastMonthlyKpi[0].metricValue) }
+        : null,
+    },
+  };
+};
+
 const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>([
   [PLATFORM_METRICS, platformMetrics],
   [PLATFORM_READ_ORDERS, platformReadOrders],
@@ -377,6 +464,8 @@ const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>(
   [COMPLIANCE_READ_PLATFORM, complianceReadPlatform],
   [MARKET_READ_OVERVIEW, marketReadOverview],
   [MARKET_READ_OWN, marketReadOwn],
+  [ADS_READ_CAMPAIGNS, adsReadCampaigns],
+  [DEVELOPMENT_READ_PLATFORM, developmentReadPlatform],
 ]);
 
 /** Looks up the handler bound to a registered tool. */

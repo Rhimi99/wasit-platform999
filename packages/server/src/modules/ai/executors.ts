@@ -22,20 +22,20 @@ import {
   COMPLIANCE_READ_PLATFORM,
   MARKET_READ_OVERVIEW,
   MARKET_READ_OWN,
+  ADS_READ_CAMPAIGNS,
+  DEVELOPMENT_READ_PLATFORM,
 } from '../../lib/ai/tool-registry';
 import { products, categories, productVariants, productImages } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { orders, orderItems, transactions, transactionLedger } from '../../db/schema/commerce';
 import { inventoryItems, inventoryMovements } from '../../db/schema/commerce_extras';
-import { campaigns, adCreatives, adEvents } from '../../db/schema/ads';
+import { adCreatives } from '../../db/schema/ads';
 import { riskProfiles, riskEvents } from '../../db/schema/risk';
 import { disputes, disputeMessages } from '../../db/schema/disputes';
 import { trustScores, reviews } from '../../db/schema/trust';
 import { messages, threads, threadParticipants } from '../../db/schema/messaging';
 import { users } from '../../db/schema/auth';
 import { agentTasks } from '../../db/schema/agents';
-import { commissionPolicies } from '../../db/schema/engine';
-import { dailyKpis } from '../../db/schema/analytics';
 import { listRecentMarketingVideos } from '../media/service';
 import { listOwnedSellerEntities, resolveOwnedSellerIds } from '../../lib/seller-ownership';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
@@ -601,56 +601,20 @@ async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
   const denied = await requirePlatformGate(db, userId, agent);
   if (denied) return denied;
-  const [campaignsAll, impressions, clicks, conversions] = await Promise.all([
-    db
-      .select({
-        id: campaigns.id,
-        title: campaigns.title,
-        objective: campaigns.objective,
-        status: campaigns.status,
-        budget: campaigns.budget,
-        spent: campaigns.spent,
-        isActive: campaigns.isActive,
-        startsAt: campaigns.startsAt,
-        endsAt: campaigns.endsAt,
-      })
-      .from(campaigns)
-      .orderBy(desc(campaigns.createdAt)),
-    db.select({ v: sql<number>`count(*)::int` }).from(adEvents).where(eq(adEvents.eventType, 'IMPRESSION')),
-    db.select({ v: sql<number>`count(*)::int` }).from(adEvents).where(eq(adEvents.eventType, 'CLICK')),
-    db.select({ v: sql<number>`count(*)::int` }).from(adEvents).where(eq(adEvents.eventType, 'CONVERSION')),
-  ]);
+  // G5 Phase 1: the cross-owner ad book is read ONLY through the Tool Gateway
+  // (admin-only), never a direct query. `requirePlatformGate` above is kept as
+  // the executor's own defence-in-depth check; the gateway re-enforces admin
+  // scope before the handler runs.
+  const { data } = await invokeTool(db, ADS_READ_CAMPAIGNS, {});
+  const facts = data.snapshot as Record<string, unknown>;
 
-  const imp = toNum(impressions[0]?.v);
-  const clk = toNum(clicks[0]?.v);
-  const conv = toNum(conversions[0]?.v);
-  const activeCampaigns = campaignsAll.filter((c) => c.status === 'ACTIVE' && c.isActive).length;
-
-  const facts = {
-    campaigns: campaignsAll.length,
-    activeCampaigns,
-    impressions: imp,
-    clicks: clk,
-    conversions: conv,
-    ctr: imp > 0 ? ((clk / imp) * 100).toFixed(2) : '0',
-    conversionRate: clk > 0 ? ((conv / clk) * 100).toFixed(2) : '0',
-    budgetVsSpend: campaignsAll.slice(0, 5).map((c) => ({
-      id: c.id,
-      title: c.title,
-      objective: c.objective,
-      status: c.status,
-      budget: String(c.budget),
-      spent: String(c.spent),
-    })),
-  };
-
-  const data: Record<string, unknown> = {
+  const data_out: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'recommend_ads',
     snapshot: facts,
     recommendation: {
       topUp:
-        activeCampaigns === 0
+        (facts.activeCampaigns as number) === 0
           ? 'No active campaigns — allocate budget to a new campaign (e.g. TOP_ADS or B2B_ADS).'
           : 'Keep running active campaigns; monitor CTR and pause underperformers.',
       budgetSplit: 'SPONSORED_SEARCH 50% / PRODUCT_ADS 30% / B2B_ADS 20% (example — adjust by goals).',
@@ -665,14 +629,14 @@ async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string
   );
 
   const reasoning = await reasonAboutAgent(db, agent, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    userId,
     system: 'You are the WASIT Ads Agent.',
     user: text,
     maxTokens: 96,
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(withProposal(data, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
+  return { content: JSON.stringify(withProposal(data_out, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
 }
 
 async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -1063,29 +1027,14 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
   const denied = await requirePlatformGate(db, userId, agent);
   if (denied) return denied;
-  const [usersCount, productsCount, ordersCount, campaignsCount, auditCount, lastMonthlyKpi] = await Promise.all([
-    db.select({ v: sql<number>`count(*)::int` }).from(users),
-    db.select({ v: sql<number>`count(*)::int` }).from(products),
-    db.select({ v: sql<number>`count(*)::int` }).from(orders),
-    db.select({ v: sql<number>`count(*)::int` }).from(campaigns),
-    db.select({ v: sql<number>`count(*)::int` }).from(dailyKpis),
-    db
-      .select({ date: dailyKpis.date, metricName: dailyKpis.metricName, metricValue: dailyKpis.metricValue })
-      .from(dailyKpis)
-      .orderBy(desc(dailyKpis.date))
-      .limit(1),
-  ]);
+  // G5 Phase 1: the cross-owner build context is read ONLY through the Tool
+  // Gateway (admin-only), never a direct query. `requirePlatformGate` above is
+  // kept as the executor's own defence-in-depth check; the gateway re-enforces
+  // admin scope before the handler runs.
+  const { data } = await invokeTool(db, DEVELOPMENT_READ_PLATFORM, {});
+  const facts = data.snapshot as Record<string, unknown>;
 
-  const facts = {
-    users: toNum(usersCount[0]?.v),
-    products: toNum(productsCount[0]?.v),
-    orders: toNum(ordersCount[0]?.v),
-    campaigns: toNum(campaignsCount[0]?.v),
-    kpiDays: toNum(auditCount[0]?.v),
-    lastDaily: lastMonthlyKpi[0] ? { date: lastMonthlyKpi[0].date.toISOString(), metric: lastMonthlyKpi[0].metricName, value: String(lastMonthlyKpi[0].metricValue) } : null,
-  };
-
-  const data: Record<string, unknown> = {
+  const data_out: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'dev_plan',
     snapshot: facts,
@@ -1101,14 +1050,14 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
   );
 
   const reasoning = await reasonAboutAgent(db, agent, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    userId,
     system: 'You are the WASIT Development Agent.',
     user: text,
     maxTokens: 96,
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(withProposal(data, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
+  return { content: JSON.stringify(withProposal(data_out, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
 }
 
 // ---------- Phase 19: the eight additional specialised agents ----------

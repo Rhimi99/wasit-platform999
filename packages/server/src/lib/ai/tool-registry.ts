@@ -47,6 +47,12 @@ export const FINANCE_READ_LEDGER = 'finance.read_ledger';
 export const COMPLIANCE_READ_PLATFORM = 'compliance.read_platform';
 export const MARKET_READ_OVERVIEW = 'market.read_overview';
 export const MARKET_READ_OWN = 'market.read_own';
+// G5 Phase 1: platform-scoped reads moved out of the two executors that kept an
+// inline `requirePlatformGate` (ads-agent, development-agent). Each mirrors the
+// exact cross-owner aggregates those executors already read, so routing them
+// through the gateway changes no result and grants no new authority.
+export const ADS_READ_CAMPAIGNS = 'ads.read_campaigns';
+export const DEVELOPMENT_READ_PLATFORM = 'development.read_platform';
 
 /** `{ limit?: int }` — a bounded page size, the only knob the read tools take. */
 const limit = (max: number) => z.number().int().min(1).max(max).optional();
@@ -131,6 +137,22 @@ const TOOL_LIST: readonly ToolDefinition[] = [
     inputSchema: z.object({ limit: limit(50) }).strict(),
     permission: 'ai:use',
     platformScoped: false,
+  },
+  {
+    id: ADS_READ_CAMPAIGNS,
+    description: 'Platform ad book — campaign budget/spend rows plus impression/click/conversion counts (admin-only).',
+    effect: 'read',
+    inputSchema: z.object({}).strict(),
+    permission: 'ad:manage',
+    platformScoped: true,
+  },
+  {
+    id: DEVELOPMENT_READ_PLATFORM,
+    description: 'Platform build context — user/product/order/campaign counts and the latest daily KPI (admin-only).',
+    effect: 'read',
+    inputSchema: z.object({}).strict(),
+    permission: 'analytics:read:all',
+    platformScoped: true,
   },
 ];
 

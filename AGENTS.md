@@ -75,6 +75,18 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - **`src/modules/geo/service.ts`**: أُصلحت 3 أخطاء — `conditions: (SQL | undefined)[]` صريحة في `listCountries/listCurrencies/listLanguages` + `import type { SQL }` — سلوك الاستعلامات لم يتغير.
 - **أمر التحقق**: `cd packages/server && npx tsc --noEmit` → **exit 0**. لا توجد أخطاء متبقية في Geo/Revenue/Subscriptions.
 
+## الحالة الحالية (2026-11-01) — G5 Phase 1: توحيد Ads + Development عبر بوابة الأدوات — 1394/1397 Tests
+
+- ✅ **G5 Phase 1 (تدريجي)**: نُقلت قراءات `execAdsAgent` و`execDevelopmentAgent` (آخر منفّذين بنطاق المنصّة ولهما بوّابة داخلية) إلى بوابة الأدوات المركزية عبر أداتين جديدتين **قراءة فقط** و`platformScoped`:
+  - `ads.read_campaigns` (permission `ad:manage`) — دفتر الإعلانات: عدّ الحملات/النشطة + انطباعات/نقرات/تحويلات + CTR + أول 5 حملات.
+  - `development.read_platform` (permission `analytics:read:all`) — عدّ المستخدمين/المنتجات/الطلبات/الحملات + أحدث مؤشر يومي.
+- ✅ **لا توسيع**: `requirePlatformGate` باقٍ كما هو (دفاع في العمق)، و`requiresPlatformScope`/`permissionsRequired`/`approvalActions` لم تُمسّ. `allowedTools` أُضيف لها معرّف واحد لكل وكيل فقط. لا كتابة، لا migrations، لا تفعيل لـ`UNBOUND_DECLARED_TOOLS`.
+- ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `PLATFORM_SCOPE_DENIED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق).
+- ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
+- ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
+- ⚠️ **متبقٍّ (لم يبدأ)**: 10 منفّذين بنطاق المالك خارج البوابة + `agent-supervisor` = G5 Phase 2 وما بعدها.
+
 ## الحالة الحالية (2026-10-29) — G8: دورة الوكلاء عند الطلب (GM On-Demand AI Cycle) — 1337/1340 Tests
 
 - ✅ **G8 — تشغيل دورة الوكلاء يدويًا (مغلق)**: مساران جديدان `POST /api/admin/gm/cycle` و`GET /api/admin/gm/cycles` (`SUPER_ADMIN` فقط). `modules/ai/cycle.ts` (`runAgentCycle`/`listAgentCycles`) يركّب نفس دوال المجدول بالترتيب (`dispatchDueSchedules` → `executeDueTasks` → `reapStaleTasks` → `dispatchOutboxEvents`) — **لا محرّك تنفيذ جديد** ولا صلاحيات جديدة، فتبقى RBAC والنطاق ومفتاح الإيقاف وبوابة الموافقة وميزانية التشغيل الواحد ومسار `AI.*` كما هي. بوابتان على مستوى الدورة: أحادية المسار (قفل Postgres استشاري → `blocked/ALREADY_RUNNING`) وبوابة الميزانية (منصّة/مشغّل → `blocked/BUDGET_EXHAUSTED`). النتيجة صادقة: خطوة تفشل ⇒ `AI.AGENT_CYCLE_FAILED` بلا `COMPLETED`؛ عملية تموت في المنتصف ⇒ يبقى `AI.AGENT_CYCLE_STARTED` (حالة «بدأ، النتيجة مجهولة»). الهوية من الجلسة (`ctx.user.id`) لا من الجسم. الواجهة: تبويب «دورة الوكلاء» في `AdminGmPage` + مفاتيح `adminGm.cycle.*` في اللغات الأربع. **لا تُنفّذ أي إجراء تجاري/مالي تلقائي**، والمهام المحتاجة موافقة تبقى `awaiting_approval`.

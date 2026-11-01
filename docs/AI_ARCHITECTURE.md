@@ -179,8 +179,8 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 **فقط** عبر `invokeTool` — لم يبقَ استعلام مباشر في مساراتهم. يُثبت ذلك اختبار على مستوى
 المصدر (لا `.from(` داخل المنفّذ) واختبارات سلوكية حقيقية على قاعدة بيانات.
 
-> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي 12 منفّذاً
-> آخر يقرأون مباشرةً بنطاق ذاتي أو بوّابة داخلية (انظر القسم 10).
+> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي 10 منفّذين
+> آخر يقرأون مباشرةً بنطاق ذاتي (انظر القسمين 10 و22).
 
 ## 10. إصلاح ثغرات المراجعة الأمنية (AI-02.1-R1)
 
@@ -226,7 +226,7 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 | --- | --- |
 | `execProductAgent` | **ثغرة مؤكّدة** → أُصلحت (10.1) |
 | `execComplianceAgent` | **ثغرة مؤكّدة** → أُصلحت (10.2) |
-| `execAdsAgent`, `execDevelopmentAgent` | بوّابة داخلية `requirePlatformGate` (إداري) |
+| `execAdsAgent`, `execDevelopmentAgent` | بوّابة داخلية `requirePlatformGate` (إداري) — **وُحِّدت عبر البوابة في G5 Phase 1 (القسم 22)** |
 | `execSalesAgent`, `execMarketingAgent`, `execSupportAgent`, `execB2BAgent`, `execCustomerIntelligenceAgent`, `execOutreachAcquisitionAgent` | وصول مشروع ضمن نطاق المالك / قراءة عامة مسموحة |
 | `execMarketResearchAgent` | **ثغرة مؤكّدة** (مجاميع منصّة بلا قيد) → أُصلحت في AI-03.6 (القسم 14) |
 | `execSupplierAgent`, `execMerchantAgent` | وصول مشروع ضمن نطاق المالك |
@@ -235,8 +235,10 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 لا تُعدّ مجرّد عدم المرور عبر البوابة ثغرة بذاتها؛ التصنيف مبنيّ على أثر أمني مُثبَت.
 
 ### 10.5 قيود متبقّية
-- البوابة ليست إلزامية لكل الأدوات بعد (12 منفّذاً خارجها بنطاق ذاتي/بوّابة داخلية). توحيدها
-  مهمّة مستقلة.
+- البوابة ليست إلزامية لكل الأدوات بعد. بعد G5 Phase 1 (القسم 22) بقي **10 منفّذين** خارجها
+  بنطاق ذاتي (الملكية): `sales`, `marketing`, `support`, `product`, `b2b`, `customer-intelligence`,
+  `outreach-acquisition`, `supplier`, `merchant`، إضافةً إلى `agent-supervisor` الحتمي. توحيدهم
+  مهمّة مستقلة (G5 Phase 2 وما بعدها).
 - أدوات `allowedTools` المُعلنة بلا تنفيذ تبقى خاملة في البوابة (`UNBOUND_DECLARED_TOOLS`)؛
   صارت القائمة الآن مكتملة ومتطابقة مع المُعلَن (انظر القسم 12).
 
@@ -864,3 +866,55 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 ### 21.11 قيود متبقّية
 - الإجراءات غير المربوطة بوكيل تبقى غير قابلة للتنفيذ (`NO_AGENT`) حتى يُسجَّل لها مسار صريح.
 - لا تنفيذ تلقائي؛ كل إجراء حساس يمرّ عبر بوابة الموافقة البشرية.
+
+## 22. توحيد بوابة الأدوات — G5 Phase 1 (Ads + Development)
+
+### 22.1 الهدف
+كان `execAdsAgent` و`execDevelopmentAgent` آخر منفّذين يقرآن بيانات منصّة متعدّدة المالكين
+مباشرةً خلف بوّابة داخلية `requirePlatformGate`. نقلت هذه المرحلة قراءاتهما إلى البوابة المركزية
+عبر أداتين جديدتين مسجّلتين، **دون تغيير أي صلاحية أو نطاق أو سلوك**.
+
+### 22.2 الأدوات الجديدة (قراءة فقط، نطاق المنصّة)
+| الأداة | الوصف | `effect` | `permission` | `platformScoped` |
+| --- | --- | --- | --- | --- |
+| `ads.read_campaigns` | دفتر الإعلانات: عدد الحملات/النشطة، انطباعات/نقرات/تحويلات، CTR، وأول 5 حملات (ميزانية/مصروف) | `read` | `ad:manage` | ✅ |
+| `development.read_platform` | سياق البناء: عدّ المستخدمين/المنتجات/الطلبات/الحملات + أحدث مؤشر يومي | `read` | `analytics:read:all` | ✅ |
+
+كلاهما `read` فقط، مخطط مُدخل `.strict()` (لا حقن هوية/نطاق)، ولا يمنح أي صلاحية جديدة: الصلاحية
+المطلوبة مملوكة أصلاً من `ADMIN`/`SUPER_ADMIN`، وبوّابة النطاق الإدارية هي الحكم.
+
+### 22.3 ما تغيّر في المنفّذين
+- `execAdsAgent` و`execDevelopmentAgent`: يبقيان على `requirePlatformGate` كما هو (دفاع في العمق)،
+  ثم يقرآن **فقط** عبر `invokeTool` — لا استعلام Drizzle مباشر داخل الجسم.
+- `allowedTools`: أُضيف `ads.read_campaigns` لـ`ads-agent` و`development.read_platform`
+  لـ`development-agent` فقط. لم تُمسّ `permissionsRequired` ولا `requiresPlatformScope` ولا
+  `approvalActions`.
+
+### 22.4 الأمان (لا توسيع)
+- البوابة تفشل مغلقًا: `NO_RUN_CONTEXT` (بلا سياق موثوق)، `ACTION_NOT_AUTHORIZED` (أداة غير
+  ممنوحة)، `PLATFORM_SCOPE_DENIED` (دور يملك الصلاحية لكن ليس إداريًا)، `INVALID_INPUT` (محاولة
+  حقن معطيات).
+- لا كتابة: كل الأدوات `read`؛ الاختبار يثبّت ثبات صفوف `campaigns`/`ad_events` بعد قراءات متكرّرة.
+- المجدول و`SYSTEM_PRINCIPAL` وبقية الوكلاء: لم يُمَسّوا — لا `ads-agent` ولا `development-agent`
+  في `DEFAULT_SCHEDULES` ولا في `OUTBOX_ROUTES`.
+
+### 22.5 الاختبارات ونتائجها
+- `tests/g5-phase1-tool-unification.test.ts` — **18/18** (تسجيل الأداتين + قراءة فقط + عدم تفعيل
+  `UNBOUND_DECLARED_TOOLS` + رفض غياب السياق/الأداة غير الممنوحة/غير الإداري/حقن المعطيات + نجاح
+  المسار المصرّح مع تدقيق `AI.TOOL_EXECUTED` + عدم كتابة + تشغيل المنفّذين الحقيقيين + عدم التوسيع
+  + سلامة المجدول/الصادر/`SYSTEM_PRINCIPAL`).
+- `tests/phase3d-scope-gate.test.ts` — محدَّث: `execAdsAgent`/`execDevelopmentAgent` يقرآن عبر
+  `invokeTool` **مع** الإبقاء على `requirePlatformGate` وبلا `.from(` مباشر.
+
+### 22.6 الملفات التي تغيّرت
+- `packages/server/src/lib/ai/tool-registry.ts` (أداتان جديدتان)
+- `packages/server/src/lib/ai/tool-handlers.ts` (معالجان)
+- `packages/server/src/modules/ai/executors.ts` (توجيه المنفّذين)
+- `packages/server/src/modules/ai/catalogue.ts` (`allowedTools` فقط)
+- `packages/server/tests/g5-phase1-tool-unification.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
+
+### 22.7 قيود متبقّية
+- بقي 10 منفّذين بنطاق المالك خارج البوابة (`sales`, `marketing`, `support`, `product`, `b2b`,
+  `customer-intelligence`, `outreach-acquisition`, `supplier`, `merchant`) + `agent-supervisor`.
+  توحيدهم = G5 Phase 2 وما بعدها (لم تبدأ).
+- لا أدوات كتابة أو مالية جديدة؛ لا migrations.
