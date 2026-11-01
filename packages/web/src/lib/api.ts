@@ -17,6 +17,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
+  GmRunRecord, GmRunSummaryRow, GmPlaybookRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
@@ -1263,6 +1264,28 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit));
     const suffix = qs.toString() ? `?${qs}` : '';
     return request<{ items: CopilotAuditRow[] }>(`/api/admin/copilot/audit${suffix}`);
+  },
+
+  // ---- GM orchestrator desk (SUPER_ADMIN only; server enforces requireRole) ----
+  // The run log and run detail are read-only: retrieval replays the persisted
+  // snapshot and never recomputes a report or writes a record.
+  async adminGmPlaybooks() {
+    return request<{ items: GmPlaybookRow[] }>('/api/admin/gm/playbooks');
+  },
+  async adminGmRuns(params: { limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: GmRunSummaryRow[] }>(`/api/admin/gm/runs${suffix}`);
+  },
+  async adminGmRun(correlationId: string) {
+    return request<GmRunRecord>(`/api/admin/gm/runs/${correlationId}`);
+  },
+  async adminGmOrchestrate(goal: string, maxSteps?: number) {
+    return request<GmRunRecord>('/api/admin/gm/orchestrate', {
+      method: 'POST',
+      body: JSON.stringify({ goal, ...(maxSteps ? { maxSteps } : {}) }),
+    });
   },
 
   // ---- Admin observability (server enforces ADMIN_SYSTEM) ----

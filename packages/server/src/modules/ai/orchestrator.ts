@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { ApiError, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { auditLogs } from '../../db/schema/audit.js';
@@ -446,6 +446,26 @@ export interface GmRunRecord extends GmOrchestrationResult {
   capturedAt: string;
 }
 
+/**
+ * One row of the GM run log (`GET /api/admin/gm/runs`).
+ *
+ * It is a *summary* decoded from the audit row's `metadata` (goal, playbook,
+ * counts) — never a recomputation from live state. `hasSnapshot` is false for a
+ * legacy run written before AI-07.0a; such a run is listed for the record but its
+ * full report is not retrievable (`getGmRun` answers 404 for it).
+ */
+export interface GmRunSummary {
+  runId: string;
+  goal: string | null;
+  playbookId: string | null;
+  createdAt: string;
+  succeeded: number;
+  failed: number;
+  pendingApproval: number;
+  skipped: number;
+  hasSnapshot: boolean;
+}
+
 /** Builds the deterministic management report from the reviewed results. */
 export function buildReport(args: {
   goal: string;
@@ -869,6 +889,48 @@ export async function getGmRun(db: DB, correlationId: string, ownerId: string): 
     createdAt: row.createdAt.toISOString(),
     capturedAt: snapshot.capturedAt ?? row.createdAt.toISOString(),
   };
+}
+
+/**
+ * Lists recent GM runs for the desk log (`GET /api/admin/gm/runs`).
+ *
+ * Reads the `AI.GM_ORCHESTRATED` audit rows newest-first and decodes a summary
+ * from each row's `metadata`; it never recomputes a report from live state. Only
+ * the metadata is read (not the snapshot), so the list stays cheap.
+ *
+ * Scope: the GM desk is SUPER_ADMIN-only, so the route already restricts who may
+ * call this. `ownerId` additionally filters to a single requester when given, so
+ * a caller can ask for "my runs" without widening what the route exposes.
+ */
+export async function listGmRuns(db: DB, opts: { limit?: number; ownerId?: string } = {}): Promise<GmRunSummary[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const where = opts.ownerId
+    ? and(eq(auditLogs.action, 'AI.GM_ORCHESTRATED'), eq(auditLogs.actorId, opts.ownerId))
+    : eq(auditLogs.action, 'AI.GM_ORCHESTRATED');
+
+  const rows = await db
+    .select({ entityId: auditLogs.entityId, metadata: auditLogs.metadata, after: auditLogs.after, createdAt: auditLogs.createdAt })
+    .from(auditLogs)
+    .where(where)
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(limit);
+
+  return rows.map((r) => {
+    const meta = (r.metadata ?? {}) as Record<string, unknown>;
+    const num = (k: string): number => (typeof meta[k] === 'number' ? (meta[k] as number) : 0);
+    const snapshot = r.after as Partial<GmRunSnapshot> | null | undefined;
+    return {
+      runId: r.entityId ?? '',
+      goal: typeof meta.goal === 'string' ? (meta.goal as string) : null,
+      playbookId: typeof meta.playbookId === 'string' ? (meta.playbookId as string) : null,
+      createdAt: r.createdAt.toISOString(),
+      succeeded: num('succeeded'),
+      failed: num('failed'),
+      pendingApproval: num('pendingApproval'),
+      skipped: num('skipped'),
+      hasSnapshot: !!snapshot && typeof snapshot === 'object' && snapshot.version === GM_SNAPSHOT_VERSION,
+    };
+  });
 }
 
 /** Lists the playbooks (for the desk UI and documentation). */

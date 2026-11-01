@@ -123,6 +123,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/subscriptions', key: 'admin.subscriptions', icon: '🔁' },
   { to: '/admin/ai', key: 'admin.aiGovernance', icon: '🤖' },
   { to: '/admin/copilot', key: 'admin.copilot', icon: '🧭', superAdminOnly: true },
+  { to: '/admin/gm', key: 'admin.gm', icon: '🎯', superAdminOnly: true },
   { to: '/admin/observability', key: 'admin.observability', icon: '📈' },
   { to: '/admin/privacy', key: 'admin.privacy', icon: '🔒' },
   { to: '/admin/audit', key: 'admin.audit', icon: '🔎' },

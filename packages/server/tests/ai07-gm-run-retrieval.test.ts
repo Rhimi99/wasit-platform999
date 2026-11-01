@@ -376,3 +376,38 @@ describe('AI-07.0 — HTTP surface /api/admin/gm/runs/:correlationId', () => {
     expect(asAdmin.runId).toBe(run.runId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Run log / list surface (AI-07.1 desk).
+// ---------------------------------------------------------------------------
+
+describe('AI-07.1 — the GM run log lists runs read-only', () => {
+  it('lists a run from its audit metadata with hasSnapshot=true', async () => {
+    const { client, id } = await loginStaff('SUPER_ADMIN');
+    const run = await runAs(id, 'revenue growth plan');
+
+    const res = await client.req('/api/admin/gm/runs?limit=200');
+    expect(res.status).toBe(200);
+    const items = res.data.data.items as { runId: string; playbookId: string | null; hasSnapshot: boolean; goal: string | null }[];
+    const row = items.find((r) => r.runId === run.runId);
+    expect(row).toBeTruthy();
+    expect(row!.playbookId).toBe('revenue.growth');
+    expect(row!.hasSnapshot).toBe(true);
+    expect(row!.goal).toBe('revenue growth plan');
+  });
+
+  it('does not write anything when listing', async () => {
+    const { client, id } = await loginStaff('SUPER_ADMIN');
+    await runAs(id, 'revenue growth plan');
+
+    const first = await client.req('/api/admin/gm/runs?limit=200');
+    const second = await client.req('/api/admin/gm/runs?limit=200');
+    // Identical listing twice: no run was appended by reading.
+    expect((second.data.data.items as unknown[]).length).toBe((first.data.data.items as unknown[]).length);
+  });
+
+  it('refuses an ADMIN-only caller', async () => {
+    const { client } = await loginStaff('ADMIN');
+    expect((await client.req('/api/admin/gm/runs')).status).toBe(403);
+  });
+});

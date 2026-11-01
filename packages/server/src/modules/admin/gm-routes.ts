@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
-import { getGmRun, listGmPlaybooks, orchestrateGmGoal } from '../ai/orchestrator.js';
+import { getGmRun, listGmPlaybooks, listGmRuns, orchestrateGmGoal } from '../ai/orchestrator.js';
 import { resolveUserRoles } from '../ai/runner.js';
 
 /**
@@ -33,6 +33,21 @@ gmRoutes.use('*', requireAuth, requireRole('SUPER_ADMIN'));
 /** The deterministic playbooks the orchestrator can run, for the desk UI. */
 gmRoutes.get('/playbooks', async (c) => {
   return c.json({ success: true, data: { items: listGmPlaybooks() } });
+});
+
+/**
+ * Lists recent orchestrations (the run log).
+ *
+ * Summaries are decoded from the audit `metadata`; nothing is recomputed from
+ * live state and nothing is written. A run without a snapshot (pre-AI-07.0a) is
+ * still listed with `hasSnapshot: false` — its full report is not retrievable.
+ */
+gmRoutes.get('/runs', async (c) => {
+  const ctx = getContext(c);
+  const rawLimit = Number(c.req.query('limit'));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+  const items = await listGmRuns(ctx.db, { limit });
+  return c.json({ success: true, data: { items } });
 });
 
 /**

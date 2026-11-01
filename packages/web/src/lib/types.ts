@@ -857,6 +857,106 @@ export interface CopilotAuditRow {
   createdAt: string;
 }
 
+// ---- General Manager (GM) orchestrator desk (AI-05.0 / AI-07.0) ----
+// Mirrors the server types in `modules/ai/orchestrator.ts`. The retrieved run is
+// the persisted snapshot replayed verbatim, so these fields are always present.
+
+export type GmStepOutcome = 'succeeded' | 'failed' | 'awaiting_approval' | 'blocked' | 'skipped' | 'not_run';
+
+export interface GmStepResultRow {
+  stepId: string;
+  agentKey: string;
+  taskType: string;
+  intent: string;
+  intentAr: string;
+  outcome: GmStepOutcome;
+  taskId: string | null;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  evidenceKeys: string[];
+  evidence: Record<string, string>;
+  error: string | null;
+  skippedReason: string | null;
+}
+
+export interface GmConflictRow {
+  key: string;
+  values: { stepId: string; value: string }[];
+}
+
+export interface GmReviewRow {
+  failed: string[];
+  blocked: string[];
+  notRun: string[];
+  pendingApproval: string[];
+  skipped: { stepId: string; reason: string }[];
+  insufficientEvidence: string[];
+  conflicts: GmConflictRow[];
+  evidenceCount: number;
+  hasBlockingIssues: boolean;
+}
+
+export interface GmReportRow {
+  goal: string;
+  playbookId: string;
+  playbookLabel: string;
+  playbookLabelAr: string;
+  summaryAr: string;
+  summaryEn: string;
+  steps: GmStepResultRow[];
+  risks: string[];
+  priorities: string[];
+  recommendations: string[];
+}
+
+/** A follow-up the GM *proposes* only — never executed by the orchestrator. */
+export interface GmProposedActionRow {
+  action: string;
+  description: string;
+  descriptionAr: string;
+  agentKey: string | null;
+  requiresApproval: boolean;
+  executed: false;
+}
+
+export interface GmPlaybookRow {
+  id: string;
+  label: string;
+  labelAr: string;
+  steps: number;
+  agents: string[];
+}
+
+/** A completed run as returned by `POST /orchestrate` and `GET /runs/:id`. */
+export interface GmRunRecord {
+  runId: string;
+  correlationId: string;
+  requestedBy: string;
+  role: string[];
+  playbookId: string;
+  matchedKeywords: string[];
+  plan: { waves: string[][]; dropped: string[] };
+  results: GmStepResultRow[];
+  review: GmReviewRow;
+  report: GmReportRow;
+  proposedActions: GmProposedActionRow[];
+  createdAt?: string;
+  capturedAt?: string;
+}
+
+/** One row of the GM run log (`GET /api/admin/gm/runs`). */
+export interface GmRunSummaryRow {
+  runId: string;
+  goal: string | null;
+  playbookId: string | null;
+  createdAt: string;
+  succeeded: number;
+  failed: number;
+  pendingApproval: number;
+  skipped: number;
+  hasSnapshot: boolean;
+}
+
 
 export interface Country {
   id: string;
