@@ -20,6 +20,7 @@ import { createNotification } from '../../lib/notifications-service.js';
 import { reserveStock, commitReservationToSale, restoreStockForCancelledOrder, releaseReservation } from '../../lib/inventory-engine.js';
 import { resolveCommission } from '../../lib/commission.js';
 import { resolveSellerUserId } from '../../lib/seller-ownership.js';
+import { enqueueEvent } from '../ai/outbox-repo.js';
 
 export interface OrderItemInput {
   productId: string;
@@ -54,8 +55,26 @@ async function getPaymentFeeRate(db: DB, opts: { currencyCode: string }): Promis
   return { percentRate: '0', flatFee: '0', policyId: null };
 }
 
-/** Creates an order, calculates commission and payment fees via the Policy Engine, and records the transaction + ledger. */
+/**
+ * Creates an order, calculates commission and payment fees via the Policy Engine,
+ * and records the transaction + ledger.
+ *
+ * AI-08.0: every write this produces — stock reservation, the order and its
+ * items, the transaction and ledger entries, the audit entry, the seller
+ * notification and the `order.placed` outbox row — happens in ONE transaction.
+ * Either all of it commits or none does, so a failure at any step (including a
+ * stock conflict discovered late) rolls the order back completely and leaves
+ * neither a partial order nor a stray event.
+ */
 export async function createOrder(
+  db: DB,
+  input: CreateOrderInput,
+  ctx: { actorId: string; ipAddress?: string | null },
+) {
+  return db.transaction(async (tx) => createOrderWithin(tx as unknown as DB, input, ctx));
+}
+
+async function createOrderWithin(
   db: DB,
   input: CreateOrderInput,
   ctx: { actorId: string; ipAddress?: string | null },
@@ -270,6 +289,19 @@ export async function createOrder(
     entityId: orderId,
     idempotencyKey: orderId,
     vars: { orderNumber },
+  });
+
+  // AI-08.0: enqueue the `order.placed` domain event INSIDE this transaction, so
+  // it commits exactly with the order it describes. The unique dedupe key makes a
+  // retried create path idempotent (no second event). Delivery is deferred to the
+  // outbox worker, which routes it after commit — so routing can never run before
+  // the order is durable, and a routing failure can never roll the order back.
+  await enqueueEvent(db, {
+    eventType: 'order.placed',
+    aggregateType: 'ORDER',
+    aggregateId: orderId,
+    payload: { orderId, orderNumber, buyerId: input.buyerId, currencyCode, grandTotal },
+    dedupeKey: `order.placed:${orderId}`,
   });
 
   return {

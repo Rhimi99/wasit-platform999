@@ -13,6 +13,7 @@ import { toolGrantForAgent } from '../../lib/ai/tool-registry.js';
 import { withAgentRunContext, withAgentRunBudget, AgentRunBudget, getAgentRunContext } from '../../lib/ai/agent-run-context.js';
 import { executeAgentTask } from './executors.js';
 import { DEFAULT_SUPERVISOR_LIMITS } from './supervisor-policy.js';
+import { allowedOutboxAgentKeys, OUTBOX_TRIGGER_PREFIX, isAllowedOutboxRoute } from './outbox-routes.js';
 import { supervise, unhealthyAgentKeys } from './supervisor.js';
 import { recordMetric } from './metrics-repo.js';
 import { tryDeriveScope, deriveSystemScope, type AgentScopeCtx } from './scope.js';
@@ -45,6 +46,39 @@ function isTrustedSchedulerTask(triggeredBy: string): boolean {
 /** The roles the scheduler principal executes with (its own delegation roles). */
 function trustedPrincipalRoles(): UserRole[] {
   return ['SUPER_ADMIN'];
+}
+
+/**
+ * The internal automation principal used by the trusted outbox worker (AI-08.0).
+ *
+ * A *named, singular* identity — never a user id — that a task only runs under
+ * when its `triggeredBy` carries the outbox provenance marker AND the agent is on
+ * the outbox allow-list. A task that merely claims `requestedBy: 'outbox'`
+ * without that marker is resolved like an ordinary user (no roles) and refused,
+ * so a forged task cannot inherit automation authority. It has no user account
+ * and is unreachable from any route.
+ */
+export const OUTBOX_PRINCIPAL = 'outbox';
+
+/** True only for a task the trusted outbox worker itself enqueued. */
+function isTrustedOutboxTask(triggeredBy: string): boolean {
+  return triggeredBy.startsWith(OUTBOX_TRIGGER_PREFIX);
+}
+
+/**
+ * The roles the outbox principal executes with — bounded to the allow-list.
+ *
+ * The only agent an outbox event reaches in this task (`operations-agent`) reads
+ * platform-wide data through an `ai:manage` tool, so its run needs the same
+ * trusted automation authority the scheduler already executes with. That
+ * authority is granted ONLY for an allow-listed agent key; for any other agent
+ * the principal resolves to NO roles, so the RBAC and data-scope gates refuse it.
+ * The authority is therefore not a general admin: it is scoped to the single
+ * approved event→agent route and is enforced again at execution time by the
+ * allow-list assertion in {@link executeClaimedTask}.
+ */
+export function outboxPrincipalRoles(agentKey: string): UserRole[] {
+  return allowedOutboxAgentKeys().includes(agentKey) ? trustedPrincipalRoles() : [];
 }
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -717,9 +751,22 @@ async function executeClaimedTask(
   // like an ordinary user, finds no roles, and is refused. That trust anchor is
   // explicit here rather than inferred from a free-form user id.
   const trustedScheduler = current.requestedBy === SYSTEM_PRINCIPAL && isTrustedSchedulerTask(current.triggeredBy);
+  // AI-08.0: the trusted outbox worker is a second, *bounded* automation
+  // principal. It runs with the automation roles ONLY for an agent on the outbox
+  // allow-list AND only for an allow-listed (event → agent, task type) route; any
+  // other task that claims `outbox` — a forged trigger, a non-allow-listed agent,
+  // or a mismatched task type — resolves to no roles and is refused below. This
+  // keeps the principal's authority to exactly the single approved route.
+  const trustedOutbox =
+    current.requestedBy === OUTBOX_PRINCIPAL &&
+    isTrustedOutboxTask(current.triggeredBy) &&
+    allowedOutboxAgentKeys().includes(agent.key) &&
+    isAllowedOutboxRoute(current.triggeredBy.slice(OUTBOX_TRIGGER_PREFIX.length), agent.key, current.taskType);
   const requesterRoles: UserRole[] = trustedScheduler
     ? trustedPrincipalRoles()
-    : await resolveUserRoles(db, current.requestedBy);
+    : trustedOutbox
+      ? trustedPrincipalRoles()
+      : await resolveUserRoles(db, current.requestedBy);
   try {
     await assertAgentAllowed(requesterRoles, agent);
     await assertAgentScope(db, requesterRoles, agent);

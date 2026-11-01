@@ -10,6 +10,7 @@ import { executeDueTasks, reapStaleTasks } from '../modules/ai/runner';
 import { pruneMemoryByAge } from '../modules/ai/memory-repo';
 import { DEFAULT_MEMORY_MAX_AGE_DAYS } from '../modules/ai/memory-service';
 import { dispatchPendingDeliveries } from './notifications/engine';
+import { dispatchOutboxEvents } from '../modules/ai/outbox-worker';
 
 export interface SchedulerHandle {
   stop: () => void;
@@ -142,12 +143,29 @@ export function startScheduler(options: {
     }
   };
 
+  /**
+   * AI-08.0: drains the transactional outbox — routes committed domain events
+   * (e.g. `order.placed`) to their owning agents. Idempotent: the claim is
+   * single-flight and each event is routed once, so a duplicate tick is a no-op.
+   * Runs on the same fast cadence as notification dispatch so a committed event
+   * is picked up promptly rather than waiting for the hourly rollover.
+   */
+  const runOutbox = async (): Promise<void> => {
+    try {
+      const { claimed, processed, failed } = await dispatchOutboxEvents(db);
+      if (claimed > 0) logger.info('outbox dispatch', { claimed, processed, failed });
+    } catch (err) {
+      logger.error('outbox dispatch failed', { error: (err as Error).message });
+    }
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
     await runRetentionSweep();
     await runAgentWork();
     await runMemoryRetention();
+    await runOutbox();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
       await runRateLimitPurge();

@@ -114,7 +114,7 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 
 - `GET /` — طلباتي (browser)
 - `GET /:id` — تفاصيل (مالك/بائع)
-- `POST /` — إنشاء (buyerId, buyerType, items[{productId, quantity}]) — يتحقق من: وجود المنتج، الحالة ACTIVE، MOQ، المخزون؛ يحسب العمولة من السياسة ورسوم الدفع، ينشئ transaction + ledger + audit
+- `POST /` — إنشاء (buyerId, buyerType, items[{productId, quantity}]) — يتحقق من: وجود المنتج، الحالة ACTIVE، MOQ، المخزون؛ يحسب العمولة من السياسة ورسوم الدفع، ينشئ transaction + ledger + audit. **ذرّي بالكامل (AI-08.0)**: كل الكتابات — حجز المخزون، الطلب وبنوده، المعاملة والـledger، التدقيق، إشعار البائع، وإدراج حدث `order.placed` في الـoutbox — داخل **معاملة واحدة** (إما كلها أو لا شيء). الحدث يحمل مفتاح تكرار ثابت `order.placed:{orderId}`.
 - `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر). **`CONFIRMED` يتطلّب `paymentStatus='PAID'`** وإلا **409 `CONFLICT`** — التأكيد يحوّل الحجز إلى بيع، فلا يُسمح به قبل إثبات الدفع (webhook موقَّع أو إتمام `manual` لنيّة حقيقية). بقية الانتقالات بلا قيد دفع.
 
 ## المعاملات (`/api/transactions`)
@@ -259,6 +259,15 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 | POST | `/api/admin/finance/receipts` | تسجيل وصول عمولة WASIT من دليل مستقل |
 
 **استيراد ملفات المطابقة** (الملحق أ.5-1): يُرسل الملف كـ`multipart/form-data` تحت الحقل `file`، مع `source=PROVIDER|BANK` و`currencyCode` في سلسلة الاستعلام (`importKey`/`providerId` اختياريان للاستيراد). التفاصيل الكاملة في `docs/RECONCILIATION_FILE_IMPORT.md`.
+
+## الصادر المعاملاتي (`event_outbox`) — AI-08.0
+
+- **لا مسار HTTP عام.** الجدول `event_outbox` داخلي: تُدرَج الصفوف داخل معاملة الحدث التجاري
+  (حاليًا `POST /api/orders` يُدرج `order.placed`)، ويستنزفها العامل الموثوق داخل نبضة المجدول
+  (`src/lib/scheduler.ts` → `dispatchOutboxEvents`) ويوجّهها عبر `createAgentTask`/`runTask`.
+- مفتاح التكرار: `dedupe_key` فريد (مثال `order.placed:{orderId}`) — الإدراج المتكرر لا يُنشئ صفًا.
+- الحالة: `PENDING → PROCESSING → PROCESSED | FAILED` مع Lease (`locked_at`) واستعادة بعد التعطّل
+  (`reapStaleEvents`) وتراجع أُسّي. التوجيه محصور بقائمة سماح صريحة (`outbox-routes.ts`).
 
 ## بقية الوحدات (Routes تحت التطوير)
 

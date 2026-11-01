@@ -660,3 +660,84 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 ### 18.7 قيود متبقّية
 - لا تحكّم من هذه الصفحة (إيقاف/تغيير حالة الوكيل يبقى في `/admin/ai`) — بقصد، فهي مراقبة فقط.
 - لا migration ولا تغيير Schema.
+
+## 19. الصادر المعاملاتي (Transactional Outbox) + حدث `order.placed` — AI-08.0
+
+### 19.1 الغاية
+ربط حدث النطاق `order.placed` بمسار توجيه الوكلاء تلقائيًا، دون أن يفقد الحدث عند تعطّل، ودون أن
+يُعلن عن طلب لم يُحفظ، ودون أن يتأثر نجاح الطلب بفشل الوكيل. الوسيلة: **جدول outbox معاملاتي** —
+يُدرَج الحدث داخل نفس معاملة إنشاء الطلب، ثم يستنزفه عامل مجدول بعد الـCommit ويوجّهه عبر المسار
+الموثوق نفسه الذي يمرّ به أي مستدعٍ (`createAgentTask` → `runTask`).
+
+### 19.2 المخطّط والترحيل (إضافي فقط — لا تغيير لأي جدول قائم)
+- **`event_outbox`** (Migration `0032_event_outbox.sql`، نمط `0031`): `id`, `event_type`,
+  `aggregate_type`, `aggregate_id`, `payload jsonb`, `dedupe_key`, `status`
+  (`PENDING|PROCESSING|PROCESSED|FAILED`), `attempts`, `max_attempts` (افتراضي 8), `available_at`,
+  `locked_at`, `last_error`, `processed_at`, `created_at`, `updated_at`.
+- فهارس: فريد على `dedupe_key`، و`(status, available_at, created_at)` للاستنزاف، و
+  `(aggregate_type, aggregate_id)`، و`created_at`.
+- `CREATE TABLE IF NOT EXISTS` + فهارس `IF NOT EXISTS` — آمن على قاعدة معمورة.
+- `schema/outbox.ts` مُصدَّر عبر `schema/index.ts`، ومُسجَّل في `meta/_journal.json` (idx 32).
+
+### 19.3 الذرّية (atomicity)
+- `createOrder` أُعيد تنظيمه: الغلاف `createOrder(db, …)` يفتح `db.transaction(...)` ويستدعي
+  `createOrderWithin(tx, …)`. كل الكتابات — حجز المخزون، الطلب وبنوده، المعاملة وقيود الـLedger،
+  سجل التدقيق، إشعار البائع، وصفّ الـoutbox — داخل **معاملة واحدة**. إما تُحفظ جميعها أو لا شيء.
+- إدراج `order.placed` يتم داخل المعاملة نفسها، لذا لا يُتاح للعامل قبل نجاح الـCommit، وفشل
+  أي خطوة (حتى تعارض مخزون متأخر) يُرجع الطلب والحدث معًا.
+- فشل التوجيه/الوكيل لا يمسّ الطلب إطلاقًا: العامل يعمل **بعد** الـCommit فقط.
+
+### 19.4 التكرار المانع (idempotency)
+- **على مستوى الإدراج**: `dedupe_key = order.placed:{orderId}` فريد + `onConflictDoNothing`،
+  فإعادة الإدراج لا تُنشئ صفًا ثانيًا (المفتاح الثابت المعتمد).
+- **على مستوى التوجيه**: `correlation_id = outbox row id` على `agent_tasks`؛ العامل يتحقق من وجود
+  مهمة سابقة قبل الإنشاء، فلا تُنشأ مهمة ثانية عند إعادة المحاولة/إعادة حجز الـLease.
+
+### 19.5 الحجز والاستعادة بعد التعطّل (lease + reclaim)
+- الاستنزاف **أحادي-الطيران**: `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)` — من عدة
+  عمال، واحد فقط يحجز كل صف؛ لا معالجة متزامنة مكرّرة.
+- الحجز يضبط `status=PROCESSING` + `locked_at` (Lease) ويرفع `attempts`.
+- `reapStaleEvents`: أي Lease أقدم من مهلة يُعاد إلى `PENDING` (لا يُفقد الحدث)، ويُفشَل عند نفاد
+  المحاولات. الفشل العابر يعيد الصف إلى `PENDING` بتراجع أُسّي (`backoffMs`, حتى 30 دقيقة).
+
+### 19.6 الهوية والصلاحيات (لا سلطة عامة)
+- هوية نظام **مسمّاة ومفردة** `OUTBOX_PRINCIPAL='outbox'` — لا معرّف مستخدم، غير قابلة للوصول من أي
+  مسار، ولا تملك صفّ مستخدم.
+- تُمنح أدوار الأتمتة (`SUPER_ADMIN` الداخلية) **فقط** لوكيل مدرَج في قائمة السماح، وأي وكيل آخر
+  يُحلّ بـ**صفر أدوار** فيُرفض عبر RBAC/النطاق.
+- تأكيد مزدوج وقت التنفيذ (`executeClaimedTask`): يُقبل المسار فقط إذا كان `triggeredBy` يبدأ بـ
+  `outbox:` **و** الوكيل في القائمة **و** `(event → agent, taskType)` مطابقًا في القائمة.
+- قائمة السماح `outbox-routes.ts` صغيرة وصريحة (`order.placed → operations-agent /
+  operations.health_check`) ومربوطة باختبار يُثبّتها مع `EVENT_ROUTING` (منع الانحراف).
+- Kill Switch وRBAC وميزانية التشغيل (شهريًا + سقف لكل تشغيل) وسجل التدقيق (لكل حدث) كلها محفوظة؛
+  الوكلاء قراءة فقط ولا يعدّلون الطلبات/المدفوعات/Ledger (لا Tool كتابة في مسار `order.placed`).
+
+### 19.7 الواجهة (HTTP)
+- **لا مسار عام جديد.** الـoutbox داخلي بالكامل؛ يُنشأ عبر إنشاء الطلب `POST /api/orders` ويُستنزف
+  داخل نبضة المجدول (`src/lib/scheduler.ts` → `dispatchOutboxEvents`)، ولا يعتمد على تشغيل
+  المجدول في الإنتاج لصحّة الطلب.
+
+### 19.8 الاختبارات ونتائجها
+- **`tests/ai08-outbox.test.ts`** (21 حالة، قاعدة حقيقية بلا mocks): ذرّية الطلب+الحدث، Rollback
+  كامل عند الفشل، لا حجز/حركة مخزون جزئية، لا معالجة قبل الـCommit، منع تكرار الحدث والمهمة،
+  استعادة الحدث بعد تعطّل العامل، لا حجز متزامن مكرّر، فشل الوكيل لا يُفشل الطلب، هوية محدودة
+  وغير قابلة للانتحال (3 حالات انتحال)، منع المشتري من وكيل المنصّة، Kill Switch، وحالات repo.
+- **النتائج**: حزمة الخادم كاملة **102 ملف / 1321 ناجح / 3 متخطّى / 0 فاشل**؛
+  **E2E Playwright** للـspecs المتأثرة (order-lifecycle + admin-agent-ops + admin-copilot) **23 ناجح**.
+
+### 19.9 الملفات التي تغيّرت
+- `packages/server/src/db/schema/outbox.ts` (جديد) + `src/db/schema/index.ts` (تصدير)
+- `packages/server/src/db/migrations/0032_event_outbox.sql` (جديد) + `meta/_journal.json`
+- `packages/server/src/modules/ai/outbox-repo.ts` (جديد) — enqueue/claim/mark/reap/counts
+- `packages/server/src/modules/ai/outbox-routes.ts` (جديد) — قائمة السماح الصريحة
+- `packages/server/src/modules/ai/outbox-worker.ts` (جديد) — الاستنزاف والتوجيه والتدقيق
+- `packages/server/src/modules/ai/runner.ts` — الهوية الموثوقة + تأكيد المسار وقت التنفيذ
+- `packages/server/src/lib/scheduler.ts` — ربط الاستنزاف بالنبضة
+- `packages/server/src/modules/orders/service.ts` — معاملة `createOrder` الذرّية + إدراج الحدث
+- `packages/server/tests/ai08-outbox.test.ts` (جديد)
+
+### 19.10 قيود متبقّية
+- نطاق الأحداث مقصود أن يكون حدثًا واحدًا (`order.placed`)؛ الأحداث الأخرى (مثل `order.paid`) تُربط
+  لاحقًا في مهام مستقلة (AI-08.1+) بقرار منفصل.
+- التسليم at-least-once على مستوى الـoutbox، و**مرة واحدة فعليًا** على مستوى التأثير عبر مفتاح
+  التوجيه (correlation/dedupe)؛ لا ضمان "بالضبط مرة" على مستوى نقل الصف نفسه.
