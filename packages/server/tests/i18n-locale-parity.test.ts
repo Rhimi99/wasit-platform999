@@ -142,3 +142,38 @@ describe('i18n — adminCopilot keys across locales', () => {
     }
   });
 });
+
+/**
+ * G4 — the GM desk's proposed-action execution keys.
+ *
+ * Executing a proposed action adds a new column and a per-reason message to the
+ * GM desk. Every one of these keys must ship in all four locales at once: a key
+ * present in ar but missing from zh would render an English fallback on the
+ * Chinese UI (the N6 class of bug), so the whole set is pinned here.
+ */
+describe('i18n — GM proposed-action keys across locales', () => {
+  const GM_ACTION_KEYS = [
+    'adminGm.actions.status',
+    'adminGm.actions.execute',
+    'adminGm.actions.executing',
+    'adminGm.actions.deduplicated',
+    'adminGm.actionReason.UNKNOWN_ACTION',
+    'adminGm.actionReason.NO_AGENT',
+    'adminGm.actionReason.AGENT_UNAVAILABLE',
+    'adminGm.actionReason.NOT_AUTHORIZED',
+    'adminGm.actionReason.AGENT_STOPPED',
+    'adminGm.actionReason.AGENT_NOT_ACTIVE',
+    'adminGm.actionReason.CONFLICT',
+  ];
+
+  it('exists with a real translation in all four locales', () => {
+    for (const locale of LOCALES) {
+      const block = localeBlock(locale);
+      for (const key of GM_ACTION_KEYS) {
+        const value = keyValue(block, key);
+        expect(value, `${locale} :: ${key}`).toBeTruthy();
+        expect(value, `${locale} :: ${key}`).not.toBe(key);
+      }
+    }
+  });
+});

@@ -919,6 +919,44 @@ export interface GmProposedActionRow {
   executed: false;
 }
 
+/** Why a proposed action cannot be executed (G4). */
+export type GmActionReason =
+  | 'UNKNOWN_ACTION'
+  | 'NO_AGENT'
+  | 'AGENT_UNAVAILABLE'
+  | 'NOT_AUTHORIZED'
+  | 'AGENT_STOPPED'
+  | 'AGENT_NOT_ACTIVE'
+  | 'CONFLICT';
+
+/** The real outcome of `POST /runs/:id/actions/execute` (G4). */
+export interface GmActionResultRow {
+  runId: string;
+  action: string;
+  status: 'task_created' | 'blocked';
+  reason: GmActionReason | null;
+  agentKey: string | null;
+  taskId: string | null;
+  taskStatus: string | null;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  deduplicated: boolean;
+  message: string | null;
+}
+
+/** One proposed action of a run, annotated for the desk (G4, read-only). */
+export interface GmRunActionRow {
+  action: string;
+  description: string;
+  descriptionAr: string;
+  agentKey: string | null;
+  requiresApproval: boolean;
+  executable: boolean;
+  reason: GmActionReason | null;
+  taskId: string | null;
+  taskStatus: string | null;
+}
+
 export interface GmPlaybookRow {
   id: string;
   label: string;

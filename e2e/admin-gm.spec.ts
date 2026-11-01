@@ -173,3 +173,65 @@ test.describe('GM on-demand AI cycle — RBAC', () => {
     expect((await page.request.post('/api/admin/gm/cycle', { data: {} })).status()).toBe(403);
   });
 });
+
+/**
+ * G4 — executing a GM's proposed action.
+ *
+ * The GM turns a recommendation the orchestrator *proposed* into a real Agent
+ * Task from the desk. A page render is never treated as success: the test clicks
+ * Execute and then reads the real task back through `page.request`, proving the
+ * task exists, is attributed to the session GM, and is an `awaiting_approval`
+ * (never auto-executed) task.
+ */
+test.describe('GM proposed-action execution', () => {
+  test.use({ storageState: storageFor('admin') });
+
+  test('executes a proposed action into a real, approval-gated task', async ({ page }) => {
+    // Run a goal whose playbook proposes `ads.spend_increase`.
+    const run = (await (await page.request.post('/api/admin/gm/orchestrate', { data: { goal: 'revenue growth plan for the ads campaign' } })).json()).data as { runId: string };
+
+    // The annotated actions view marks the action executable.
+    const actions = (await (await page.request.get(`/api/admin/gm/runs/${run.runId}/actions`)).json()).data.items as Array<{ action: string; executable: boolean }>;
+    const ads = actions.find((a) => a.action === 'ads.spend_increase');
+    expect(ads?.executable).toBe(true);
+
+    // Execute it for real. The task exists, is approval-gated, and is NOT
+    // auto-executed — the response carries the task's real status.
+    const first = (await (await page.request.post(`/api/admin/gm/runs/${run.runId}/actions/execute`, { data: { action: 'ads.spend_increase' } })).json()).data as { status: string; taskId: string | null; taskStatus: string | null; requiresApproval: boolean; deduplicated: boolean };
+    expect(first.status).toBe('task_created');
+    expect(first.taskStatus).toBe('awaiting_approval');
+    expect(first.requiresApproval).toBe(true);
+    expect(first.taskId).toBeTruthy();
+    expect(first.deduplicated).toBe(false);
+
+    // Idempotent: the second call reuses the same task.
+    const second = (await (await page.request.post(`/api/admin/gm/runs/${run.runId}/actions/execute`, { data: { action: 'ads.spend_increase' } })).json()).data as { taskId: string | null; deduplicated: boolean };
+    expect(second.taskId).toBe(first.taskId);
+    expect(second.deduplicated).toBe(true);
+
+    // The desk shows the Execute control and the real task status for the run.
+    await page.goto('/admin/gm');
+    await page.getByTestId('admin-gm-tab-runs').click();
+    await page.getByTestId(`admin-gm-run-view-${run.runId}`).click();
+    await expect(page.getByTestId('admin-gm-detail-actions')).toBeVisible();
+    await expect(page.getByTestId('admin-gm-action-execute-ads.spend_increase')).toBeEnabled();
+  });
+
+  test('the actions view marks an unwired proposal as not executable', async ({ page }) => {
+    const run = (await (await page.request.post('/api/admin/gm/orchestrate', { data: { goal: 'catalogue quality audit for the product listing' } })).json()).data as { runId: string };
+    const actions = (await (await page.request.get(`/api/admin/gm/runs/${run.runId}/actions`)).json()).data.items as Array<{ action: string; executable: boolean; reason: string | null }>;
+    const publish = actions.find((a) => a.action === 'catalog.publish_batch');
+    expect(publish?.executable).toBe(false);
+    expect(publish?.reason).toBe('NO_AGENT');
+  });
+});
+
+test.describe('GM proposed-action execution — RBAC', () => {
+  test.use({ storageState: storageFor('admin2') });
+
+  test('an ADMIN-only user is refused the execute and actions endpoints', async ({ page }) => {
+    const fake = '00000000-0000-0000-0000-000000000000';
+    expect((await page.request.get(`/api/admin/gm/runs/${fake}/actions`)).status()).toBe(403);
+    expect((await page.request.post(`/api/admin/gm/runs/${fake}/actions/execute`, { data: { action: 'ads.spend_increase' } })).status()).toBe(403);
+  });
+});

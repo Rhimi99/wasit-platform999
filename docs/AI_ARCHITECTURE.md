@@ -802,3 +802,65 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - الدورة تشغيل يدوي فقط؛ لا تُفعّل المجدول ولا تُنشئ بيانات مجدولة جديدة.
 - لا تُنشئ الدورة أي إجراء تجاري/مالي تلقائي؛ المهام المحتاجة موافقة تبقى `awaiting_approval`.
 - القفل استشاري لكل قاعدة بيانات (per-database)؛ يكفي لمنصّة أحادية القاعدة.
+
+---
+
+## 21. تنفيذ إجراءات المدير العام المقترحة (GM Proposed-Action Execution) — G4
+
+### 21.1 المشكلة
+كانت توصيات المدير العام «مقترحة» فقط (`executed: false`) — عرض للقراءة دون أي وسيلة لتحويلها إلى
+مهمة وكيل فعلية. G4 يجعلها قابلة للتنفيذ عبر بوابة المهام القياسية، بموافقة بشرية مضبوطة، دون فتح
+مسار تنفيذ جديد أو صلاحيات جديدة.
+
+### 21.2 المبدأ: بوابة واحدة، لا مسار موازٍ
+`executeGmAction` لا ينفّذ شيئًا بنفسه؛ يتحقق من الإجراء مقابل لقطة التشغيل ثم يستدعي
+`createAgentTask` — نفس بوابة الوكلاء — فترث المهمة RBAC والنطاق ومفتاح الإيقاف وبوابة الموافقة
+والميزانية والتدقيق تلقائيًا. لا كتابة على مسار الأموال ولا تغيير مخطط/ترحيلات.
+
+### 21.3 قائمة السماح الصريحة والتحقق
+`GM_ACTION_ROUTES` تربط كل إجراء مقترح بوكيله ونوع مهمته. أي إجراء غير مُسجَّل ⇒ `NO_AGENT`. كل
+تحقق ينتج سبب حجب مُنمّط (`GmActionReason`): `UNKNOWN_ACTION` (لم تقترحه اللقطة)، `NO_AGENT`،
+`AGENT_UNAVAILABLE`، `NOT_AUTHORIZED`، `AGENT_STOPPED`، `AGENT_NOT_ACTIVE`، `CONFLICT`.
+
+### 21.4 الموافقة البشرية
+الإجراءات الحساسة (`ads.spend_increase`, `risk.block_account`, `compliance.final_ruling`,
+`outreach.send`) تحمل `requiresApproval` فتُنشئ مهمة `awaiting_approval` ولا تُنفَّذ تلقائيًا أبدًا.
+
+### 21.5 الأحادية والهوية
+المفتاح `gm-action:{runId}:{action}` في `dedupe_key` (varchar 200) + الفهرس الفريد الجزئي
+`agent_tasks_dedupe_open_uidx` ⇒ الطلب المتكرر/المتزامن يعيد نفس المهمة (`deduplicated: true`) ولا
+يُنشئ ثانية. `triggered_by` (varchar 64) يحمل الوسم الخشن `gm-action` لأن الزوج أطول من العمود.
+هوية المشغّل من الجلسة (`ctx.user.id`) لا من الجسم.
+
+### 21.6 التدقيق
+`AI.GM_ACTION_REQUESTED` ثم `AI.GM_ACTION_EXECUTED` أو `AI.GM_ACTION_BLOCKED`. `entity_id` = runId
+(varchar 36)، والإجراء في `metadata` — لأن زوج runId+action يتجاوز 36 حرفًا.
+
+### 21.7 الواجهة (HTTP)
+| Method | Path | الصلاحية | الوصف |
+|---|---|---|---|
+| GET | `/api/admin/gm/runs/:correlationId/actions` | SUPER_ADMIN | عرض الإجراءات المقترحة مع قابليتها للتنفيذ (قراءة فقط) |
+| POST | `/api/admin/gm/runs/:correlationId/actions/execute` | SUPER_ADMIN | تنفيذ إجراء واحد؛ الجسم `{ action }` فقط؛ يعيد النتيجة الفعلية |
+
+### 21.8 الواجهة (Web)
+عمود «الحالة» وزر «تنفيذ» في بطاقة الإجراءات المقترحة بـ`AdminGmPage`: الزر معطّل حتى تُعرف قابلية
+التنفيذ من العرض المُعلَّق، ويعرض سبب الحجب عند التعذّر. مفاتيح `adminGm.actions.*` و
+`adminGm.actionReason.*` في اللغات الأربع (ar/en/fr/zh).
+
+### 21.9 الاختبارات ونتائجها
+`tests/gm-action-execution.test.ts` — **23/23**: RBAC والهوية من الجلسة، التحقق مقابل اللقطة،
+الموافقة البشرية، الأحادية (متكرر/متزامن/إجراء مختلف)، التدقيق (REQUESTED→EXECUTED/BLOCKED)، عدم
+الكتابة على مسار الأموال، وعرض الإجراءات (قراءة فقط، قابل/غير قابل). وحراسة الترجمة في
+`tests/i18n-locale-parity.test.ts`، وE2E في `e2e/admin-gm.spec.ts`.
+
+### 21.10 الملفات التي تغيّرت
+- `packages/server/src/modules/ai/gm-actions.ts` (جديد)
+- `packages/server/src/modules/admin/gm-routes.ts` (مسارا التنفيذ والعرض)
+- `packages/web/src/pages/AdminGmPage.tsx`، `packages/web/src/lib/api.ts`،
+  `packages/web/src/lib/types.ts`، `packages/web/src/lib/i18n.ts`
+- `packages/server/tests/gm-action-execution.test.ts` (جديد)، `tests/i18n-locale-parity.test.ts`،
+  `e2e/admin-gm.spec.ts`
+
+### 21.11 قيود متبقّية
+- الإجراءات غير المربوطة بوكيل تبقى غير قابلة للتنفيذ (`NO_AGENT`) حتى يُسجَّل لها مسار صريح.
+- لا تنفيذ تلقائي؛ كل إجراء حساس يمرّ عبر بوابة الموافقة البشرية.

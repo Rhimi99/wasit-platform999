@@ -281,6 +281,27 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - الحالة `blocked` تعني `ALREADY_RUNNING` (دورة أخرى قيد التشغيل) أو `BUDGET_EXHAUSTED` (الميزانية مستنفدة).
 - الدورة تُركّب نفس دوال المجدول (توزيع الجداول → تنفيذ المهام → إفشال العالقة → استنزاف الصادر)، فلا مسار تنفيذ جديد ولا صلاحيات جديدة.
 
+## تنفيذ الإجراءات المقترحة للمدير العام (`/api/admin/gm/runs/:id/actions`) — G4
+
+`SUPER_ADMIN` فقط (requireRole). يحوّل المدير العام توصية **مقترحة** في تقرير تشغيل إلى **مهمة وكيل
+حقيقية**، بموافقة بشرية مضبوطة.
+
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/api/admin/gm/runs/:correlationId/actions` | عرض الإجراءات المقترحة مع قابليتها للتنفيذ (قراءة فقط): `{ action, description, descriptionAr, agentKey, requiresApproval, executable, reason, taskId, taskStatus }` |
+| POST | `/api/admin/gm/runs/:correlationId/actions/execute` | تنفيذ إجراء واحد؛ الجسم `{ action }` فقط؛ يعيد النتيجة الفعلية `{ status: 'task_created'|'blocked', reason, agentKey, taskId, taskStatus, requiresApproval, approvalAction, deduplicated }` |
+
+- الإجراء يجب أن يكون **مقترحًا فعلًا** في لقطة التشغيل (وإلا `blocked / UNKNOWN_ACTION`)، ومربوطًا
+  بوكيل قادر عبر قائمة سماح صريحة (`GM_ACTION_ROUTES`؛ وإلا `blocked / NO_AGENT`)، ووكيله `ACTIVE`
+  (وإلا `blocked / AGENT_NOT_ACTIVE` — مفتاح الإيقاف).
+- المهمة تُنشأ عبر `createAgentTask` — بوابة التنفيذ الواحدة — فترث RBAC والنطاق ومفتاح الإيقاف وبوابة
+  الموافقة والميزانية والتدقيق. الإجراءات الحساسة (`ads.spend_increase`, `risk.block_account`,
+  `compliance.final_ruling`, `outreach.send`) تُنشئ مهمة `awaiting_approval` ولا تُنفَّذ تلقائيًا.
+- أحادية على `(runId, action)` عبر `dedupe_key` + فهرس فريد جزئي: الطلب المتكرر/المتزامن يعيد نفس
+  المهمة (`deduplicated: true`) ولا يُنشئ ثانية. هوية المشغّل من الجلسة (`ctx.user.id`) لا من الجسم.
+- تدقيق: `AI.GM_ACTION_REQUESTED` ثم `AI.GM_ACTION_EXECUTED` أو `AI.GM_ACTION_BLOCKED` (entityId =
+  runId، والإجراء في `metadata`). لا كتابة على مسار الأموال ولا تغيير مخطط/ترحيلات.
+
 ## بقية الوحدات (Routes تحت التطوير)
 
 `/users`, `/ads`, `/ai`, `/analytics`, `/geo`, `/policies`, `/subscriptions`, `/subscriptions/plans`, `/refunds`, `/commissions`

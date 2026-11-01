@@ -3,7 +3,7 @@ import { api, apiCall, apiErrorMessage, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { AgentCycleResult, AgentCycleSummary, GmPlaybookRow, GmRunRecord, GmRunSummaryRow, GmStepResultRow } from '@/lib/types';
+import type { AgentCycleResult, AgentCycleSummary, GmActionResultRow, GmPlaybookRow, GmRunActionRow, GmRunRecord, GmRunSummaryRow, GmStepResultRow } from '@/lib/types';
 
 type Tab = 'control' | 'runs' | 'cycle';
 
@@ -370,6 +370,40 @@ export function AdminGmPage() {
 function RunDetail({ run, onBack }: { run: GmRunRecord; onBack: () => void }) {
   const { t } = useI18n();
   const review = run.review;
+
+  // G4 — the annotated actions view (executability + any task already created).
+  // Read-only; a failed load leaves the table rendered from the snapshot, with the
+  // Execute buttons disabled until the real executability is known.
+  const [actionViews, setActionViews] = useState<GmRunActionRow[] | null>(null);
+  const [actionResults, setActionResults] = useState<Record<string, GmActionResultRow>>({});
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const loadActionViews = async () => {
+    try {
+      const res = await api.adminGmRunActions(run.runId);
+      setActionViews(res.items);
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    }
+  };
+
+  useEffect(() => { void loadActionViews(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [run.runId]);
+
+  const doExecuteAction = async (action: string) => {
+    setActionBusy(action);
+    setActionError(null);
+    try {
+      const result = await api.adminGmExecuteAction(run.runId, action);
+      setActionResults((prev) => ({ ...prev, [action]: result }));
+      await loadActionViews();
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
   const reviewGroups: { label: string; ids: string[] }[] = [
     { label: t('adminGm.review.failed'), ids: review.failed },
     { label: t('adminGm.review.blocked'), ids: review.blocked },
@@ -492,6 +526,11 @@ function RunDetail({ run, onBack }: { run: GmRunRecord; onBack: () => void }) {
       <Card className="overflow-x-auto" testId="admin-gm-detail-actions">
         <h3 className="text-sm font-bold text-slate-800">{t('adminGm.actions.title')}</h3>
         <p className="mt-1 text-xs text-slate-500">{t('adminGm.actions.hint')}</p>
+        {actionError && (
+          <div role="alert" data-testid="admin-gm-action-error" className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
+            {actionError}
+          </div>
+        )}
         {run.proposedActions.length === 0 ? (
           <p className="mt-2 text-xs text-slate-400">{t('adminGm.actions.empty')}</p>
         ) : (
@@ -502,23 +541,60 @@ function RunDetail({ run, onBack }: { run: GmRunRecord; onBack: () => void }) {
                 <th>{t('adminGm.actions.description')}</th>
                 <th>{t('adminGm.actions.agent')}</th>
                 <th>{t('adminGm.actions.approval')}</th>
-                <th>{t('adminGm.actions.notExecuted')}</th>
+                <th>{t('adminGm.actions.status')}</th>
+                <th>{t('adminGm.actions.execute')}</th>
               </tr>
             </thead>
             <tbody>
-              {run.proposedActions.map((a) => (
-                <tr key={a.action} data-testid={`admin-gm-action-${a.action}`}>
-                  <td className="text-xs" dir="ltr">{a.action}</td>
-                  <td className="text-xs">{a.descriptionAr}</td>
-                  <td className="text-xs" dir="ltr">{a.agentKey ?? '—'}</td>
-                  <td>
-                    {a.requiresApproval
-                      ? <Badge color="amber">{t('common.yes')}</Badge>
-                      : <Badge color="teal">{t('common.no')}</Badge>}
-                  </td>
-                  <td><Badge color="slate">{t('adminGm.actions.notExecuted')}</Badge></td>
-                </tr>
-              ))}
+              {run.proposedActions.map((a) => {
+                const view = actionViews?.find((v) => v.action === a.action);
+                const result = actionResults[a.action];
+                const taskId = result?.taskId ?? view?.taskId ?? null;
+                const taskStatus = result?.taskStatus ?? view?.taskStatus ?? null;
+                const executable = view?.executable ?? false;
+                const busy = actionBusy === a.action;
+                return (
+                  <tr key={a.action} data-testid={`admin-gm-action-${a.action}`}>
+                    <td className="text-xs" dir="ltr">{a.action}</td>
+                    <td className="text-xs">{a.descriptionAr}</td>
+                    <td className="text-xs" dir="ltr">{a.agentKey ?? '—'}</td>
+                    <td>
+                      {a.requiresApproval
+                        ? <Badge color="amber">{t('common.yes')}</Badge>
+                        : <Badge color="teal">{t('common.no')}</Badge>}
+                    </td>
+                    <td className="text-xs">
+                      {taskStatus ? (
+                        <span className="flex flex-col gap-1">
+                          <Badge color={taskStatus === 'awaiting_approval' ? 'amber' : taskStatus === 'succeeded' ? 'green' : taskStatus === 'failed' ? 'red' : 'slate'}>
+                            {t(`ai.task.status.${taskStatus}`)}
+                          </Badge>
+                          {taskId && <span className="text-[10px] text-slate-400" dir="ltr">{taskId}</span>}
+                          {result?.deduplicated && <span className="text-[10px] text-slate-400">{t('adminGm.actions.deduplicated')}</span>}
+                        </span>
+                      ) : (
+                        <Badge color="slate">{t('adminGm.actions.notExecuted')}</Badge>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        data-testid={`admin-gm-action-execute-${a.action}`}
+                        disabled={busy || !executable}
+                        onClick={() => void doExecuteAction(a.action)}
+                        className="rounded-md border border-wasit-300 px-3 py-1.5 text-xs font-medium text-wasit-700 hover:bg-wasit-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busy ? t('adminGm.actions.executing') : t('adminGm.actions.execute')}
+                      </button>
+                      {!executable && view?.reason && (
+                        <span className="mt-1 block text-[10px] text-slate-400" data-testid={`admin-gm-action-reason-${a.action}`}>
+                          {t(`adminGm.actionReason.${view.reason}`)}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

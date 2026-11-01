@@ -5,6 +5,7 @@ import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
 import { getGmRun, listGmPlaybooks, listGmRuns, orchestrateGmGoal } from '../ai/orchestrator.js';
 import { listAgentCycles, runAgentCycle, DEFAULT_CYCLE_LIMIT, MAX_CYCLE_LIMIT } from '../ai/cycle.js';
+import { executeGmAction, listGmRunActions } from '../ai/gm-actions.js';
 import { resolveUserRoles } from '../ai/runner.js';
 
 /**
@@ -29,6 +30,17 @@ const orchestrateSchema = z.object({
 
 const cycleSchema = z.object({
   limit: z.number().int().positive().max(MAX_CYCLE_LIMIT).optional(),
+});
+
+/**
+ * A proposed action to execute. Only `action` is accepted from the body — the
+ * run is identified by the URL, and the operator identity is always the session
+ * user (`requireRole('SUPER_ADMIN')`), never a body field. The action must match
+ * one the run actually proposed and that is wired to a runnable agent; anything
+ * else is refused server-side.
+ */
+const executeActionSchema = z.object({
+  action: z.string().min(1).max(64),
 });
 
 export const gmRoutes = new Hono();
@@ -69,6 +81,48 @@ gmRoutes.get('/runs/:correlationId', async (c) => {
   const correlationId = c.req.param('correlationId')!;
   const run = await getGmRun(ctx.db, correlationId, ctx.user!.id);
   return c.json({ success: true, data: run });
+});
+
+/**
+ * The proposed actions of a run, annotated with their current executability.
+ *
+ * Read-only: it writes nothing. `executable` reflects the action's wiring (a
+ * real, currently-runnable agent) and `taskId`/`taskStatus` reflect a task
+ * already created for this `(run, action)`, so the desk shows the real
+ * lifecycle instead of guessing.
+ */
+gmRoutes.get('/runs/:correlationId/actions', async (c) => {
+  const ctx = getContext(c);
+  const correlationId = c.req.param('correlationId')!;
+  const items = await listGmRunActions(ctx.db, correlationId, ctx.user!.id);
+  return c.json({ success: true, data: { items } });
+});
+
+/**
+ * Executes one proposed action of a run (G4).
+ *
+ * The General Manager turns a recommendation the orchestrator *proposed* into a
+ * real Agent Task. The task is created through `createAgentTask` — the single
+ * execution gate — so RBAC, per-agent scope, the kill switch, the human-approval
+ * gate, the per-run budget and the `AI.*` audit trail are unchanged. A sensitive
+ * action lands in `awaiting_approval` and is never auto-executed; the response
+ * reports the real outcome (`task_created` / `blocked`) and never assumes
+ * success.
+ *
+ * Idempotent on `(runId, action)`: a repeated or concurrent request returns the
+ * same task rather than creating a second one. The operator identity is
+ * `ctx.user!.id` (from the session), never a body field.
+ */
+gmRoutes.post('/runs/:correlationId/actions/execute', validateBody(executeActionSchema), async (c) => {
+  const ctx = getContext(c);
+  const correlationId = c.req.param('correlationId')!;
+  const body = getValidatedBody<z.infer<typeof executeActionSchema>>(c);
+  const result = await executeGmAction(ctx.db, correlationId, body.action, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: result });
 });
 
 /**

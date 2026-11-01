@@ -2,6 +2,18 @@
 
 آخر تحديث: **2026-10-29**
 
+## Milestone G4 — تنفيذ توصيات المدير العام كمهام فعلية بموافقة مضبوطة (هذه الجلسة — مكتمل)
+
+- **الفجوة**: كانت توصيات المدير العام «مقترحة» فقط (`executed: false`) — عرض للقراءة بلا أي وسيلة لتحويلها إلى مهمة وكيل حقيقية. G4 يسدّ «قدرة خلفية بلا واجهة» في هذه النقطة تحديدًا.
+- **البوابة الواحدة**: `packages/server/src/modules/ai/gm-actions.ts` (جديد) — `executeGmAction` يتحقق من الإجراء مقابل **لقطة التشغيل** ثم يستدعي `createAgentTask` نفسه، فترث المهمة RBAC والنطاق ومفتاح الإيقاف وبوابة الموافقة والميزانية والتدقيق. لا محرّك تنفيذ ثانٍ ولا كتابة على مسار الأموال ولا تغيير مخطط/ترحيلات.
+- **قائمة السماح والتحقق**: `GM_ACTION_ROUTES` تربط كل إجراء بوكيله ونوع مهمته؛ أي إجراء غير مُسجَّل ⇒ `NO_AGENT`. أسباب الحجب مُنمّطة: `UNKNOWN_ACTION`/`NO_AGENT`/`AGENT_UNAVAILABLE`/`NOT_AUTHORIZED`/`AGENT_STOPPED`/`AGENT_NOT_ACTIVE`/`CONFLICT`.
+- **الموافقة البشرية**: الإجراءات الحساسة (`ads.spend_increase`, `risk.block_account`, `compliance.final_ruling`, `outreach.send`) تُنشئ مهمة `awaiting_approval` ولا تُنفَّذ تلقائيًا.
+- **الأحادية**: `dedupe_key = gm-action:{runId}:{action}` + الفهرس الفريد الجزئي ⇒ المتكرر/المتزامن يعيد نفس المهمة (`deduplicated: true`). `triggered_by` يحمل الوسم الخشن `gm-action` لأن الزوج أطول من varchar(64). الهوية من الجلسة لا من الجسم.
+- **التدقيق**: `AI.GM_ACTION_REQUESTED` ثم `AI.GM_ACTION_EXECUTED` أو `AI.GM_ACTION_BLOCKED` (`entity_id` = runId، الإجراء في `metadata`).
+- **المسارات**: `GET /api/admin/gm/runs/:correlationId/actions` (قراءة فقط) و`POST .../actions/execute` — كلاهما SUPER_ADMIN.
+- **الواجهة**: عمود «الحالة» + زر «تنفيذ» في بطاقة الإجراءات المقترحة بـ`AdminGmPage`؛ الزر معطّل حتى تُعرف قابلية التنفيذ من العرض المُعلَّق ويعرض سبب الحجب عند التعذّر. مفاتيح `adminGm.actions.*` و`adminGm.actionReason.*` في ar/en/fr/zh.
+- **الاختبارات**: `packages/server/tests/gm-action-execution.test.ts` — **23/23**؛ حراسة الترجمة في `i18n-locale-parity.test.ts`؛ E2E في `e2e/admin-gm.spec.ts`.
+
 ## Milestone PS-08A — منع تأكيد الطلب قبل إثبات الدفع (مغلق)
 
 - **الفجوة**: كان `PATCH /api/orders/:id/status` يقبل `status='CONFIRMED'` دون أي فحص على `paymentStatus`. أي طلب غير مدفوع (حتى قبل إنشاء نيّة دفع) كان يمكن تأكيده، ما **يحوّل الحجز إلى بيع** ويخصم المخزون مقابل مالٍ لم يصل. (كانت التسوية `confirmSettlement` مُقادة بالدفع، أمّا التأكيد فلم يكن.)

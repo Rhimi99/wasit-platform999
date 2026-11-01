@@ -17,7 +17,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
-  GmRunRecord, GmRunSummaryRow, GmPlaybookRow,
+  GmRunRecord, GmRunSummaryRow, GmPlaybookRow, GmActionResultRow, GmRunActionRow,
   AgentCycleResult, AgentCycleSummary,
   AgentPerformanceRow, TeamHealth, AgentActivityRow, SupervisorReportRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
@@ -1287,6 +1287,21 @@ export const api = {
     return request<GmRunRecord>('/api/admin/gm/orchestrate', {
       method: 'POST',
       body: JSON.stringify({ goal, ...(maxSteps ? { maxSteps } : {}) }),
+    });
+  },
+  // ---- GM proposed-action execution (G4) ----
+  // `actions` is a read-only, annotated view of a run's proposals (executability
+  // + any task already created). `executeAction` turns one proposal into a real
+  // Agent Task through the server's single execution gate; the response carries
+  // the real outcome (`task_created`/`blocked`), never an assumed success, and is
+  // idempotent on (runId, action).
+  async adminGmRunActions(correlationId: string) {
+    return request<{ items: GmRunActionRow[] }>(`/api/admin/gm/runs/${correlationId}/actions`);
+  },
+  async adminGmExecuteAction(correlationId: string, action: string) {
+    return request<GmActionResultRow>(`/api/admin/gm/runs/${correlationId}/actions/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
     });
   },
 
