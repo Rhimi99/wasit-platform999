@@ -957,6 +957,117 @@ export interface GmRunSummaryRow {
   hasSnapshot: boolean;
 }
 
+// ---- Agent Operations desk (AI-06.0 / AI-06.1) ----
+// Mirrors the server types in `modules/ai/agent-monitor.ts` and
+// `modules/ai/supervisor.ts`. Every field is derived server-side from real
+// operational rows; nothing here is a placeholder.
+
+/** One row of `GET /api/admin/agent-ops/performance` — per-agent, per-scope. */
+export interface AgentPerformanceRow {
+  agentKey: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  blocked: number;
+  refused: number;
+  successRate: number;
+  failureRate: number;
+  avgLatencyMs: number;
+  awaitingApproval: number;
+  running: number;
+  queued: number;
+  overdue: number;
+  costUsd: string;
+  tokensInput: number;
+  tokensOutput: number;
+  providerFailures: number;
+  localRuns: number;
+  toolCalls: number;
+  toolFailures: number;
+  lastActivityAt: string | null;
+}
+
+export type MonitorAlertKind = 'budget' | 'failures' | 'unhealthy' | 'overdue' | 'system-overdue' | 'system-failures';
+
+/** A structured alert the GM should see (`GET /api/admin/agent-ops/health`). */
+export interface MonitorAlert {
+  kind: MonitorAlertKind;
+  severity: 'warning' | 'critical';
+  agentKey?: string;
+  message: string;
+}
+
+/**
+ * The unified team-health picture. `system` is present only in the platform
+ * view and reports the scheduler's telemetry **separately** from human activity,
+ * so the two are never merged.
+ */
+export interface TeamHealth {
+  generatedAt: string;
+  scope: 'platform' | 'owner';
+  agents: { total: number; active: number; paused: number; disabled: number; unhealthy: number };
+  tasks: {
+    queued: number;
+    running: number;
+    awaitingApproval: number;
+    overdue: number;
+    succeeded24h: number;
+    failed24h: number;
+    refused24h: number;
+  };
+  budget: { spentUsd24h: string; runsOverCap24h: number };
+  system?: { succeeded24h: number; failed24h: number; refused24h: number; overdue: number };
+  alerts: MonitorAlert[];
+  needsHumanAttention: Array<{ agentKey: string; reason: string }>;
+}
+
+/** One row of `GET /api/admin/agent-ops/activity`. */
+export interface AgentActivityRow {
+  id: string;
+  agentKey: string;
+  taskType: string | null;
+  status: string;
+  requestedBy: string;
+  triggeredBy: string;
+  latencyMs: number | null;
+  cost: string;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+/** A supervisor alert (`GET /api/admin/ai/supervisor/report`). */
+export interface SupervisorAlertRow {
+  agentKey: string;
+  taskId: string | null;
+  severity: 'WARNING' | 'CRITICAL';
+  reason: string;
+  action: string;
+}
+
+/** One contained (failed/blocked) task in the supervisor's escalation queue. */
+export interface SupervisorContainedTaskRow {
+  id: string;
+  agentKey: string;
+  taskType: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/** Read-only supervisor report (`GET /api/admin/ai/supervisor/report`). */
+export interface SupervisorReportRow {
+  generatedAt: string;
+  total: number;
+  loopDetected: boolean;
+  runawayDetected: boolean;
+  stuckTasks: number;
+  expiredQueued: number;
+  failureRateFlagged: boolean;
+  interventions: Array<{ taskId: string; agentKey: string; reason: string; action: string }>;
+  alerts: SupervisorAlertRow[];
+  haltedAgents: Array<{ key: string; status: string }>;
+  contained: SupervisorContainedTaskRow[];
+}
+
 
 export interface Country {
   id: string;

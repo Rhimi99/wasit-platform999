@@ -32,6 +32,7 @@ import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
 import { AdminAiPage } from './pages/AdminAiPage';
 import { AdminCopilotPage } from './pages/AdminCopilotPage';
 import { AdminGmPage } from './pages/AdminGmPage';
+import { AdminAgentOpsPage } from './pages/AdminAgentOpsPage';
 import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
@@ -141,6 +142,7 @@ export default function App() {
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ai" element={<RequireAuth><AdminOnly><AdminAiPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/agent-ops" element={<RequireAuth><AdminOnly><AdminAgentOpsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/copilot" element={<RequireAuth><SuperAdminOnly><AdminCopilotPage /></SuperAdminOnly></RequireAuth>} />
       <Route path="/admin/gm" element={<RequireAuth><SuperAdminOnly><AdminGmPage /></SuperAdminOnly></RequireAuth>} />
       <Route path="/admin/observability" element={<RequireAuth><AdminOnly><AdminObservabilityPage /></AdminOnly></RequireAuth>} />

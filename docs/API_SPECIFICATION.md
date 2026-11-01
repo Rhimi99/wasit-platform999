@@ -137,6 +137,13 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - Policies (`admin:policies`):
   - `GET /policies/dispute` + `PUT /policies/dispute` + `GET /policies/dispute/resolved` — قواعد النزاع العامة/لكل دولة
   - `GET /policies/retention` + `PUT /policies/retention` + `GET /policies/retention/resolved` — قواعد الاحتفاظ بالبيانات (`PRIVACY/DATA_RETENTION`): `defaultRetentionDays`, `legalHoldFinanciallyRequired`, `preserves`. التجاهز لكل دولة؛ غياب صف الدولة يُسجَّل `DECISION_REQUIRED` ويُحلّ عند الإضافة. كل تعديل Audit (who/what/old/new/when/reason) ويرفع `version`.
+- عمليات الوكلاء (`/api/admin/agent-ops`) — `AI_MANAGE` أو `ADMIN_AI` (ADMIN/SUPER_ADMIN)، **قراءة فقط**:
+  - `GET /performance?overdueSeconds=` — صف لكل وكيل من السجلات الحقيقية؛ النطاق (منصّة/مالك) يُحلّ خادميًا
+  - `GET /health?overdueSeconds=` — `TeamHealth`: وكلاء، مهام حيّة، نتائج 24 ساعة، ميزانية، تنبيهات، `needsHumanAttention`، وكتلة `system` (تليمترية المجدول) **للمنصّة فقط ومنفصلة عن نشاط البشر**
+  - `GET /activity?limit=` — آخر مهام الوكلاء (حدّ أقصى 100)
+- المشرف (`/api/admin/ai`) — `AI_MANAGE` أو `ADMIN_AI`:
+  - `GET /supervisor` — لقطة صحة (عدّادات، وكلاء متوقّفون، تنبيهات مفتوحة)
+  - `GET /supervisor/report` — التقرير الكامل + قائمة المهام المحتَواة (قراءة فقط)
 
 ## الخصوصية (`/api/privacy`) — Auth مطلوب
 

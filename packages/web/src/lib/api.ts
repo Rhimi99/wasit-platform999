@@ -18,6 +18,7 @@ import type {
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
   AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
   GmRunRecord, GmRunSummaryRow, GmPlaybookRow,
+  AgentPerformanceRow, TeamHealth, AgentActivityRow, SupervisorReportRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
@@ -1286,6 +1287,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ goal, ...(maxSteps ? { maxSteps } : {}) }),
     });
+  },
+
+  // ---- Agent Operations desk (AI-06.2) ----
+  // Read-only views over `agent-monitor.ts`. The server resolves the caller's
+  // scope itself (platform vs owner) — the client never sends a scope. Nothing
+  // here writes or mutates a task; budget figures are informational only.
+  async adminAgentOpsHealth(params: { overdueSeconds?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.overdueSeconds) qs.set('overdueSeconds', String(params.overdueSeconds));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<TeamHealth>(`/api/admin/agent-ops/health${suffix}`);
+  },
+  async adminAgentOpsPerformance(params: { overdueSeconds?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.overdueSeconds) qs.set('overdueSeconds', String(params.overdueSeconds));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ scope: 'platform' | 'owner'; items: AgentPerformanceRow[] }>(
+      `/api/admin/agent-ops/performance${suffix}`,
+    );
+  },
+  async adminAgentOpsActivity(params: { limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentActivityRow[] }>(`/api/admin/agent-ops/activity${suffix}`);
+  },
+  async adminAiSupervisorReport() {
+    return request<SupervisorReportRow>('/api/admin/ai/supervisor/report');
   },
 
   // ---- Admin observability (server enforces ADMIN_SYSTEM) ----
