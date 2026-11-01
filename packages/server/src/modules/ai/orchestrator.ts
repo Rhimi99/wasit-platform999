@@ -1,11 +1,14 @@
-import type { UserRole } from '@wasit/shared';
+import { and, eq } from 'drizzle-orm';
+import { ApiError, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
+import { auditLogs } from '../../db/schema/audit.js';
 import { writeAudit } from '../../lib/audit';
 import { newId } from '../../lib/ids';
 import { logger } from '../../lib/observability/logger';
 import type { AgentDefinition, ResolvedAgentTask } from '../../lib/ai/types.js';
 import { findAgentSpec } from './catalogue.js';
 import { callerMayUseAgent, createAgentTask, getRegistryAgent } from './runner.js';
+import { userHasPlatformScope } from './scope.js';
 
 /**
  * GM Orchestrator — the central command and coordination layer for the General
@@ -395,6 +398,54 @@ export interface GmOrchestrationResult {
   proposedActions: GmProposedAction[];
 }
 
+/**
+ * Snapshot format version.
+ *
+ * The snapshot is written to `audit_logs.after` under the `AI.GM_ORCHESTRATED`
+ * entry for a run. Bumping the version is the only way the shape may change;
+ * `getGmRun` refuses to reinterpret a snapshot it does not understand rather
+ * than returning a half-decoded report. Version 1 is the original AI-07.0a
+ * shape (goal, role, plan, results, review, report, proposedActions).
+ */
+export const GM_SNAPSHOT_VERSION = 1 as const;
+
+/**
+ * The immutable record of a completed GM orchestration.
+ *
+ * It captures the run's ENTIRE result as it was at execution time — including
+ * `skipped`, `failed` and `awaiting_approval` steps with their reasons — plus the
+ * review, report and proposed actions. `getGmRun` replays it verbatim; it never
+ * recomputes anything from current system state, so a later approval, kill
+ * switch change or role change cannot rewrite history.
+ *
+ * Deliberately NOT stored: `ipAddress`/`userAgent` (request metadata, already on
+ * the audit row), tool payloads or any payment/credential material. Only the
+ * requester id and their resolved roles at run time are kept, so the run stays
+ * attributable without copying sensitive data.
+ */
+export interface GmRunSnapshot {
+  version: typeof GM_SNAPSHOT_VERSION;
+  goal: string;
+  requestedBy: string;
+  role: UserRole[];
+  playbookId: string;
+  matchedKeywords: string[];
+  plan: { waves: string[][]; dropped: string[] };
+  results: GmStepResult[];
+  review: GmReview;
+  report: GmReport;
+  proposedActions: GmProposedAction[];
+  capturedAt: string;
+}
+
+/** The stored snapshot plus the audit provenance `getGmRun` returns with it. */
+export interface GmRunRecord extends GmOrchestrationResult {
+  /** When the orchestration completed (the audit row's timestamp). */
+  createdAt: string;
+  /** When the snapshot itself was captured (equal to `createdAt` in practice). */
+  capturedAt: string;
+}
+
 /** Builds the deterministic management report from the reviewed results. */
 export function buildReport(args: {
   goal: string;
@@ -707,14 +758,37 @@ export async function orchestrateGmGoal(db: DB, params: GmOrchestrateParams): Pr
   const report = buildReport({ goal, playbook, matched, results, review });
   const proposedActions = proposeActions(playbook, results, review);
 
+  const capturedAt = new Date().toISOString();
+  const snapshot: GmRunSnapshot = {
+    version: GM_SNAPSHOT_VERSION,
+    goal,
+    requestedBy,
+    role,
+    playbookId: playbook.id,
+    matchedKeywords: matched,
+    plan: { waves: waves.map((w) => w.map((s) => s.id)), dropped },
+    results,
+    review,
+    report,
+    proposedActions,
+    capturedAt,
+  };
+
+  // The audit row IS the durable record of the run: `after` carries the full
+  // snapshot, so the exact result (including skipped/failed/awaiting_approval
+  // steps and their reasons) can be replayed later without recomputation. The
+  // `metadata` summary is kept for the existing audit views and stays a
+  // *derived* count-only view — never the source of truth.
   await writeAudit(db, audit, {
     action: 'AI.GM_ORCHESTRATED',
     entityType: 'AI_ORCHESTRATION',
     entityId: runId,
+    after: snapshot as unknown as Record<string, unknown>,
     metadata: {
       goal: goal.slice(0, 200),
       playbookId: playbook.id,
       matchedKeywords: matched,
+      snapshotVersion: GM_SNAPSHOT_VERSION,
       executedSteps: results.filter((r) => r.outcome === 'succeeded' || r.outcome === 'failed').length,
       succeeded: results.filter((r) => r.outcome === 'succeeded').length,
       failed: review.failed.length,
@@ -735,6 +809,65 @@ export async function orchestrateGmGoal(db: DB, params: GmOrchestrateParams): Pr
     review,
     report,
     proposedActions,
+  };
+}
+
+/**
+ * Reads a completed GM orchestration back from its persisted snapshot.
+ *
+ * The run is looked up by `correlationId` on the `AI.GM_ORCHESTRATED` audit row
+ * (the run id and the correlation id are the same value). The result is decoded
+ * **verbatim** from `audit_logs.after` — the review, report and proposed actions
+ * are never recomputed from current agent/task state, so history cannot be
+ * rewritten by a later approval, kill-switch change or role change.
+ *
+ * Fail-closed on missing/legacy data:
+ *   - no such run, or a run whose snapshot predates AI-07.0a (empty/absent
+ *     `after`), or a snapshot version this build does not understand →
+ *     `ApiError.notFound`. We never fall back to reconstructing from live rows,
+ *     which would produce a plausible-but-wrong report.
+ *
+ * Scope: `ownerId` is compared to the snapshot's `requestedBy`. A caller may
+ * read a run only when it is theirs or when they hold platform scope (resolved
+ * from the database, never the request). A non-owner, non-platform caller gets
+ * the same 404 as a missing run — no existence leak.
+ */
+export async function getGmRun(db: DB, correlationId: string, ownerId: string): Promise<GmRunRecord> {
+  const rows = await db
+    .select({ after: auditLogs.after, createdAt: auditLogs.createdAt })
+    .from(auditLogs)
+    .where(and(eq(auditLogs.action, 'AI.GM_ORCHESTRATED'), eq(auditLogs.entityId, correlationId)))
+    .limit(1);
+
+  const row = rows[0];
+  const snapshot = row?.after as Partial<GmRunSnapshot> | null | undefined;
+  if (!row || !snapshot || typeof snapshot !== 'object' || snapshot.version !== GM_SNAPSHOT_VERSION) {
+    // Absent, legacy (no snapshot) or a version this build cannot read: refuse
+    // rather than reconstruct from live state.
+    throw ApiError.notFound('GM run');
+  }
+
+  const isOwner = snapshot.requestedBy === ownerId;
+  if (!isOwner && !(await userHasPlatformScope(db, ownerId))) {
+    // Indistinguishable from "not found" so a caller cannot probe for the
+    // existence of another owner's run.
+    throw ApiError.notFound('GM run');
+  }
+
+  return {
+    runId: correlationId,
+    correlationId,
+    requestedBy: snapshot.requestedBy!,
+    role: snapshot.role!,
+    playbookId: snapshot.playbookId!,
+    matchedKeywords: snapshot.matchedKeywords ?? [],
+    plan: snapshot.plan!,
+    results: snapshot.results!,
+    review: snapshot.review!,
+    report: snapshot.report!,
+    proposedActions: snapshot.proposedActions!,
+    createdAt: row.createdAt.toISOString(),
+    capturedAt: snapshot.capturedAt ?? row.createdAt.toISOString(),
   };
 }
 

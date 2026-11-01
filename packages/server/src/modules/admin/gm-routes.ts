@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
-import { listGmPlaybooks, orchestrateGmGoal } from '../ai/orchestrator.js';
+import { getGmRun, listGmPlaybooks, orchestrateGmGoal } from '../ai/orchestrator.js';
 import { resolveUserRoles } from '../ai/runner.js';
 
 /**
@@ -33,6 +33,22 @@ gmRoutes.use('*', requireAuth, requireRole('SUPER_ADMIN'));
 /** The deterministic playbooks the orchestrator can run, for the desk UI. */
 gmRoutes.get('/playbooks', async (c) => {
   return c.json({ success: true, data: { items: listGmPlaybooks() } });
+});
+
+/**
+ * Reads a completed orchestration back from its persisted snapshot.
+ *
+ * The run is identified by its `correlationId` (equal to the `runId` returned by
+ * `/orchestrate`). The response is decoded verbatim from the snapshot stored at
+ * execution time, so it is the run as it happened — not a recomputation from
+ * current state. A missing run, a legacy run with no snapshot, or a run the
+ * caller may not read all answer `404`.
+ */
+gmRoutes.get('/runs/:correlationId', async (c) => {
+  const ctx = getContext(c);
+  const correlationId = c.req.param('correlationId')!;
+  const run = await getGmRun(ctx.db, correlationId, ctx.user!.id);
+  return c.json({ success: true, data: run });
 });
 
 /**
