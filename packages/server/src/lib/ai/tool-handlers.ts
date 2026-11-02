@@ -21,6 +21,7 @@ import {
   FINANCE_READ_LEDGER,
   MARKET_READ_OVERVIEW,
   MARKET_READ_OWN,
+  MERCHANT_READ_OWN,
   OPERATIONS_READ_HEALTH,
   PAYMENTS_READ_SETTLEMENTS,
   PLATFORM_METRICS,
@@ -422,6 +423,57 @@ const supplierReadOwn: ToolHandler = async (db, args) => {
 };
 
 /**
+ * The caller's own merchant entities — id, name, country, verification and active
+ * flag. The owner is resolved from the TRUSTED run context
+ * (`getAgentRunContext().requestedBy`), never from the tool args, so a caller
+ * cannot name another tenant. An explicit `merchantId` is honoured only when the
+ * caller owns it; otherwise the result is an empty scope (`found: false`), never
+ * another tenant's record. Read-only and bounded by `limit`.
+ */
+const merchantReadOwn: ToolHandler = async (db, args) => {
+  const owner = getAgentRunContext()?.requestedBy ?? null;
+  const owned = owner ? await listOwnedSellerEntities(db, owner) : [];
+  const ownedMerchantIds = owned.filter((e) => e.sellerType === 'MERCHANT').map((e) => e.id);
+  const requestedId = typeof args.merchantId === 'string' ? (args.merchantId as string) : undefined;
+  const limit = Number(args.limit ?? 10);
+
+  const baseQuery = db
+    .select({
+      id: merchants.id,
+      storeName: merchants.storeName,
+      countryId: merchants.countryId,
+      verified: merchants.verified,
+      isActive: merchants.isActive,
+    })
+    .from(merchants);
+
+  // Isolation: an explicit id is honoured only when the caller owns it. A
+  // requested id the caller does not own yields an empty scope, never another
+  // tenant's record. Mirrors `execMerchantAgent`'s former direct read exactly.
+  const ownsRequested = requestedId ? ownedMerchantIds.includes(requestedId) : false;
+  const rows = requestedId
+    ? ownsRequested
+      ? await baseQuery.where(eq(merchants.id, requestedId)).limit(1)
+      : []
+    : ownedMerchantIds.length > 0
+      ? await baseQuery.where(inArray(merchants.id, ownedMerchantIds)).limit(limit)
+      : [];
+
+  return {
+    scope: 'own',
+    scopedToOwned: !requestedId,
+    found: requestedId ? rows.length > 0 : undefined,
+    merchants: rows.map((m) => ({
+      id: m.id,
+      name: m.storeName,
+      countryId: m.countryId,
+      verified: m.verified,
+      isActive: m.isActive,
+    })),
+  };
+};
+
+/**
  * Platform ad book — campaign budget/spend rows plus impression/click/conversion
  * counts. Cross-owner advertising data, so the gateway admits admins only
  * (`platformScoped: true`). The payload mirrors `execAdsAgent`'s former direct
@@ -519,6 +571,7 @@ const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>(
   [ADS_READ_CAMPAIGNS, adsReadCampaigns],
   [DEVELOPMENT_READ_PLATFORM, developmentReadPlatform],
   [SUPPLIER_READ_OWN, supplierReadOwn],
+  [MERCHANT_READ_OWN, merchantReadOwn],
 ]);
 
 /** Looks up the handler bound to a registered tool. */

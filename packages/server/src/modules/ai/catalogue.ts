@@ -425,7 +425,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'network',
     description: 'Reviews merchant records for completeness; scoped to the caller\'s own entity.',
     capabilities: [{ action: 'onboard', description: 'Validate a merchant record' }],
-    allowedTools: CATALOG_TOOLS,
+    // G5 Phase 2 (A2): the merchant agent's owned-entity read now runs through the
+    // gateway's `merchant.read_owned`. Declared as an explicit list (NOT by
+    // mutating the shared CATALOG_TOOLS, which marketing/product/supplier also
+    // use) so the new tool is granted to this agent alone.
+    allowedTools: [...CATALOG_TOOLS, 'merchant.read_owned'],
     approvalActions: [],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['merchant.onboard'],

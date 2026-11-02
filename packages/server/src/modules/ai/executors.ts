@@ -25,6 +25,7 @@ import {
   ADS_READ_CAMPAIGNS,
   DEVELOPMENT_READ_PLATFORM,
   SUPPLIER_READ_OWN,
+  MERCHANT_READ_OWN,
 } from '../../lib/ai/tool-registry';
 import { products, categories, productVariants, productImages } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
@@ -1220,30 +1221,32 @@ async function execSupplierAgent(db: DB, agent: AgentDefinition, input: Record<s
 /** Merchant Agent — same isolation rule as the Supplier Agent, for merchants. */
 async function execMerchantAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
-  const owned = await listOwnedSellerEntities(db, userId);
-  const ownedMerchantIds = owned.filter((e) => e.sellerType === 'MERCHANT').map((e) => e.id);
   const requestedId = typeof input.merchantId === 'string' ? (input.merchantId as string) : undefined;
 
-  const baseQuery = db
-    .select({ id: merchants.id, storeName: merchants.storeName, countryId: merchants.countryId, verified: merchants.verified, isActive: merchants.isActive })
-    .from(merchants);
-  // Isolation: an explicit id is honoured only when the caller owns it.
-  const ownsRequested = requestedId ? ownedMerchantIds.includes(requestedId) : false;
-  const rows = requestedId
-    ? ownsRequested
-      ? await baseQuery.where(eq(merchants.id, requestedId)).limit(1)
-      : []
-    : ownedMerchantIds.length > 0
-      ? await baseQuery.where(inArray(merchants.id, ownedMerchantIds)).limit(Number(input.limit ?? 10))
-      : [];
+  // G5 Phase 2 (A2): the owned-merchant read runs ONLY through the Tool Gateway,
+  // never a direct query. `merchant.read_owned` resolves the owner from the
+  // trusted run context (never from the args) and honours an explicit id only
+  // when the caller owns it — so a caller can never widen the read to another
+  // tenant. The gateway validates the args and audits the invocation.
+  const { data } = await invokeTool(db, MERCHANT_READ_OWN, {
+    ...(requestedId ? { merchantId: requestedId } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  });
+  const rows = (data.merchants ?? []) as Array<{
+    id: string;
+    name: string;
+    countryId: string | null;
+    verified: boolean;
+    isActive: boolean;
+  }>;
 
-  const data: Record<string, unknown> = {
+  const data_out: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'onboard',
     scopedToOwned: !requestedId,
     merchants: rows.map((m) => ({
       id: m.id,
-      name: m.storeName,
+      name: m.name,
       countryId: m.countryId,
       verified: m.verified,
       isActive: m.isActive,
@@ -1263,7 +1266,7 @@ async function execMerchantAgent(db: DB, agent: AgentDefinition, input: Record<s
     metadata: { agentKey: agent.key, action: input.action, scopedToOwned: !requestedId },
   });
 
-  return { content: JSON.stringify(withProposal(data, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
+  return { content: JSON.stringify(withProposal(data_out, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
 }
 
 /**

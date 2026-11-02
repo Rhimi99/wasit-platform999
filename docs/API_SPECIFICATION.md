@@ -313,10 +313,14 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 | `ads.read_campaigns` | منصّة (`platformScoped: true`) | `ad:manage` | دفتر الإعلانات (G5 Phase 1) |
 | `development.read_platform` | منصّة (`platformScoped: true`) | `analytics:read:all` | سياق البناء (G5 Phase 1) |
 | `supplier.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات الموردين **المملوكة للمتصل** (G5 Phase 2 — A1) |
+| `merchant.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات التجّار **المملوكة للمتصل** (G5 Phase 2 — A2) |
 
 - `supplier.read_owned`: الوسائط `{ supplierId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
   السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `supplierId` يُحترم فقط إن كان
   مملوكًا للمتصل وإلا يعيد نطاقًا فارغًا (`found: false`). الأداة ممنوحة لـ`supplier-agent` فقط.
+- `merchant.read_owned`: الوسائط `{ merchantId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
+  السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `merchantId` يُحترم فقط إن كان
+  مملوكًا للمتصل وإلا يعيد نطاقًا فارغًا (`found: false`). الأداة ممنوحة لـ`merchant-agent` فقط.
 - أخطاء البوابة المرتجعة (fail-closed): `TOOL_NOT_REGISTERED`, `NO_RUN_CONTEXT`,
   `ACTION_NOT_AUTHORIZED`, `PERMISSION_DENIED`, `PLATFORM_SCOPE_DENIED`, `INVALID_INPUT`,
   `TOOL_TIMEOUT`, `TOOL_EXECUTION_FAILED` — وكل محاولة (مسموحة أو مرفوضة) تُدقَّق (`AI.TOOL_EXECUTED` /

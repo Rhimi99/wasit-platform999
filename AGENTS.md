@@ -85,7 +85,7 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
 - ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
-- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **11 داخل** البوابة و**9 خارجها** (بعد G5 Phase 2 — A1). الخارجون: 8 وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`, `merchant`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **12 داخل** البوابة و**8 خارجها** (بعد G5 Phase 2 — A1 وA2). الخارجون: 7 وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
 
 ## الحالة الحالية (2026-11-01) — G5 Phase 2 (A1): توحيد Supplier Agent عبر بوابة الأدوات
 
@@ -96,6 +96,17 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق). لا `PLATFORM_SCOPE_DENIED` (الأداة غير منصّية).
 - ✅ **الاختبارات**: `tests/g5-phase2-supplier-tool.test.ts` (جديد) + `tests/phase3d-scope-gate.test.ts` محدَّث — انظر قسم الاختبارات أدناه.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §24 (+ تحديث §10.4/§10.5 والسطر التمهيدي) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A2): توحيد Merchant Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A2)**: نُقلت قراءة `execMerchantAgent` (كيانات التجّار المملوكة) إلى البوابة المركزية عبر أداة جديدة **قراءة فقط** و**نطاق المالك**:
+  - `merchant.read_owned` (`permission ai:use`, `platformScoped: false`) — `{ merchantId?: string(1..64), limit?: int(1..100) }` → كيانات التجّار المملوكة للمتصل (`id`, `name`, `countryId`, `verified`, `isActive`، مع `name` مشتقّ من `storeName`).
+- ✅ **الهوية من السياق الموثوق فقط**: المعالج `merchantReadOwn` يحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**. `merchantId` يُحترم فقط إن كان مملوكًا للمتصل وإلا نطاق فارغ (`found: false`) — لا تسرّب عبر الحسابات.
+- ✅ **لا توسيع**: `allowedTools` لـ`merchant-agent` فقط صار `[...CATALOG_TOOLS, 'merchant.read_owned']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`marketing`/`product`/`supplier`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق). لا `PLATFORM_SCOPE_DENIED` (الأداة غير منصّية).
+- ✅ **حفظ السلوك القديم**: بنية المخرجات ومفاتيحها، شكل عناصر `merchants`، `scopedToOwned = !requestedId`، رسالة `'Merchant not found in your scope.'`، `reasonAboutAgent`، و`withProposal` — كلها دون تغيير.
+- ✅ **الاختبارات**: `tests/g5-phase2-merchant-tool.test.ts` (جديد، **23/23**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**22/22**) — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §25 (+ تحديث §10.4/§10.5/§24.8 والسطر التمهيدي) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
 
 ## الحالة الحالية (2026-11-01) — G7: سطح الذاكرة التشغيلية للقراءة فقط
 

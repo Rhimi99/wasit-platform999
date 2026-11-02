@@ -6,6 +6,7 @@ import { AGENT_CATALOGUE, allAgentSpecs, findAgentSpec } from '../src/modules/ai
 import { resolvePlatformScope, SYSTEM_PRINCIPAL, deriveScope, NoScopeError } from '../src/modules/ai/scope.js';
 import {
   SUPPLIER_READ_OWN,
+  MERCHANT_READ_OWN,
   UNBOUND_DECLARED_TOOLS,
   findTool,
   isRegisteredTool,
@@ -228,6 +229,68 @@ describe('G5 Phase 2 (A1) — supplier agent is routed through the gateway (owne
 
   it('the new tool is registered, not left in the unbound list', () => {
     expect(UNBOUND_DECLARED_TOOLS).not.toContain(SUPPLIER_READ_OWN);
+  });
+});
+
+describe('G5 Phase 2 (A2) — merchant agent is routed through the gateway (owner-scoped)', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'src', 'modules', 'ai', 'executors.ts'), 'utf8');
+
+  function bodyOf(name: string): string {
+    const start = SRC.indexOf(`async function ${name}(`);
+    expect(start, `${name} not found`).toBeGreaterThan(-1);
+    const rest = SRC.slice(start + 1);
+    const next = rest.indexOf('\nasync function ');
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it('registers merchant.read_owned as a read-only, owner-scoped tool with a bound handler', () => {
+    const tool = findTool(MERCHANT_READ_OWN);
+    expect(tool, MERCHANT_READ_OWN).toBeTruthy();
+    expect(tool?.effect).toBe('read');
+    // Owner-scoped: NOT platform-scoped, so the gateway does not require an admin.
+    expect(tool?.platformScoped).toBe(false);
+    expect(isRegisteredTool(MERCHANT_READ_OWN)).toBe(true);
+    expect(registeredToolIds()).toContain(MERCHANT_READ_OWN);
+    expect(getToolHandler(MERCHANT_READ_OWN)).toBeTruthy();
+  });
+
+  it('grants merchant.read_owned to merchant-agent ONLY (no widening)', () => {
+    for (const agent of AGENT_CATALOGUE) {
+      const grant = toolGrantForAgent(agent);
+      if (agent.key === 'merchant-agent') expect(grant, agent.key).toContain(MERCHANT_READ_OWN);
+      else expect(grant, agent.key).not.toContain(MERCHANT_READ_OWN);
+    }
+  });
+
+  it('does not touch the shared CATALOG_TOOLS group (marketing/product/supplier unchanged)', () => {
+    // merchant-agent keeps its catalogue tools PLUS the new own-scoped read.
+    const merchant = findAgentSpec('merchant-agent')!;
+    expect(merchant.allowedTools).toEqual(['platform.read_catalog', 'platform.metrics', 'report.generate', MERCHANT_READ_OWN]);
+    // The sibling CATALOG_TOOLS consumers are untouched (still no merchant tool).
+    for (const key of ['marketing-agent', 'product-agent', 'supplier-agent']) {
+      expect(toolGrantForAgent(findAgentSpec(key)!), key).not.toContain(MERCHANT_READ_OWN);
+    }
+  });
+
+  it('execMerchantAgent reads ONLY through invokeTool (no direct query, no inline platform gate)', () => {
+    const body = bodyOf('execMerchantAgent');
+    expect(body.includes('invokeTool(')).toBe(true);
+    expect(body.includes('.from(')).toBe(false);
+    expect(body.includes('listOwnedSellerEntities(')).toBe(false);
+    // The merchant agent is owner-scoped, never platform-gated.
+    expect(body.includes('requirePlatformGate(')).toBe(false);
+  });
+
+  it('does not change merchant-agent permissions, scope or approval declarations', () => {
+    const merchant = findAgentSpec('merchant-agent')!;
+    expect(merchant.permissionsRequired).toEqual(['ai:use']);
+    expect(merchant.requiresPlatformScope).not.toBe(true);
+    expect(merchant.approvalActions).toEqual([]);
+    expect(merchant.requiresHumanApproval).toBe(false);
+  });
+
+  it('the new tool is registered, not left in the unbound list', () => {
+    expect(UNBOUND_DECLARED_TOOLS).not.toContain(MERCHANT_READ_OWN);
   });
 });
 

@@ -179,8 +179,8 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 **فقط** عبر `invokeTool` — لم يبقَ استعلام مباشر في مساراتهم. يُثبت ذلك اختبار على مستوى
 المصدر (لا `.from(` داخل المنفّذ) واختبارات سلوكية حقيقية على قاعدة بيانات.
 
-> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي **9 منفّذين خارجها**
-> من أصل **20** (8 وكلاء بنطاق مالك/مزدوج + `agent-supervisor` الحتمي الكاتب) — انظر القسمين 10 و22 و24.
+> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي **8 منفّذين خارجها**
+> من أصل **20** (7 وكلاء بنطاق مالك/مزدوج + `agent-supervisor` الحتمي الكاتب) — انظر القسمين 10 و22 و24 و25.
 
 ## 10. إصلاح ثغرات المراجعة الأمنية (AI-02.1-R1)
 
@@ -229,18 +229,18 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 | `execAdsAgent`, `execDevelopmentAgent` | بوّابة داخلية `requirePlatformGate` (إداري) — **وُحِّدت عبر البوابة في G5 Phase 1 (القسم 22)** |
 | `execSalesAgent`, `execMarketingAgent`, `execSupportAgent`, `execB2BAgent`, `execCustomerIntelligenceAgent`, `execOutreachAcquisitionAgent` | وصول مشروع ضمن نطاق المالك / قراءة عامة مسموحة |
 | `execMarketResearchAgent` | **ثغرة مؤكّدة** (مجاميع منصّة بلا قيد) → أُصلحت في AI-03.6 (القسم 14) |
-| `execSupplierAgent`, `execMerchantAgent` | وصول مشروع ضمن نطاق المالك — **`execSupplierAgent` وُحِّد عبر البوابة في G5 Phase 2 (القسم 24)**؛ `execMerchantAgent` لم يبدأ |
+| `execSupplierAgent`, `execMerchantAgent` | وصول مشروع ضمن نطاق المالك — **وُحِّدا عبر البوابة في G5 Phase 2** (`execSupplierAgent` القسم 24، `execMerchantAgent` القسم 25) |
 | `execAgentSupervisor` | حتمي، بلا قراءة صفوف متعدّدة المالكين |
 
 لا تُعدّ مجرّد عدم المرور عبر البوابة ثغرة بذاتها؛ التصنيف مبنيّ على أثر أمني مُثبَت.
 
 ### 10.5 قيود متبقّية
 - البوابة ليست إلزامية لكل الأدوات بعد. عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)،
-  منهم **11 داخل** البوابة و**9 خارجها** (بعد G5 Phase 2، القسم 24). الخارجون هم ثمانية وكلاء
+  منهم **12 داخل** البوابة و**8 خارجها** (بعد G5 Phase 2، القسمان 24 و25). الخارجون هم سبعة وكلاء
   متخصّصون بنطاق مالك أو مزدوج (platform/own) — `sales`, `marketing`, `product`, `support`,
-  `b2b`, `customer-intelligence`, `outreach-acquisition`, `merchant` — إضافةً إلى
+  `b2b`, `customer-intelligence`, `outreach-acquisition` — إضافةً إلى
   `agent-supervisor` (الوكيل الحتمي الإشرافي الوحيد الذي **يكتب** حالات الاحتواء، فلا يندرج تحت
-  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين أُنجز).
+  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين، A2 = التجّار أُنجزا).
 - أدوات `allowedTools` المُعلنة بلا تنفيذ تبقى خاملة في البوابة (`UNBOUND_DECLARED_TOOLS`)؛
   صارت القائمة الآن مكتملة ومتطابقة مع المُعلَن (انظر القسم 12).
 
@@ -1052,7 +1052,75 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - `packages/server/tests/g5-phase2-supplier-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
 
 ### 24.8 قيود متبقّية
-- بقي **9 منفّذين خارج** البوابة من أصل **20**: ثمانية وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
-  `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`, `merchant`) +
-  `agent-supervisor` (الحتمي الكاتب). `merchant-agent` هو الأقرب للتالي (نفس نمط الموردين).
+- بقي **8 منفّذين خارج** البوابة من أصل **20**: سبعة وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
+  `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) +
+  `agent-supervisor` (الحتمي الكاتب). أُنجز التالي: `merchant-agent` في A2 (القسم 25).
+- لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
+
+## 25. توحيد بوابة الأدوات — G5 Phase 2 (A2: Merchant Agent)
+
+### 25.1 الهدف
+`execMerchantAgent` كان يقرأ كيانات التجّار المملوكة **مباشرةً** عبر استعلامين: `listOwnedSellerEntities`
+(SQL خام) و`db.select(...).from(merchants)` (Drizzle). نقلت هذه المرحلة القراءة إلى البوابة المركزية عبر
+أداة جديدة مسجّلة، **دون تغيير أي صلاحية أو نطاق أو سلوك تجاري**. الوكيل بنطاق **المالك فقط**
+(`requiresPlatformScope` غائب)، فلا بوّابة إدارية ولا نطاق منصّي. النمط نفسه الذي أُثبت في A1 (القسم 24).
+
+### 25.2 الأداة الجديدة (قراءة فقط، نطاق المالك)
+| الأداة | الوصف | `effect` | `permission` | `platformScoped` |
+| --- | --- | --- | --- | --- |
+| `merchant.read_owned` | كيانات التجّار المملوكة للمتصل: `id`, `name`, `countryId`, `verified`, `isActive` | `read` | `ai:use` | ❌ (نطاق المالك) |
+
+المخطط `.strict()`: `merchantId?` (نصّي 1..64 — **متساهل عمدًا**: معرّف لا يملكه المتصل يُنتج نطاقًا
+فارغًا لا خطأ تحقّق، ولا يعيد سجل مستأجر آخر)، و`limit?` (`coerce` عدد صحيح 1..100 — يحاكي
+`Number(input.limit)` الحالي). الصلاحية `ai:use` مملوكة أصلاً للأدوار المسموح لها؛ **لم تُضَف صلاحية**،
+و`platformScoped: false` تعني أن البوابة **لا** تشترط دورًا إداريًا، والمالك يُحلّ من السياق الموثوق.
+
+### 25.3 المعالج (Handler)
+`merchantReadOwn` في `tool-handlers.ts`: يحلّ المالك من **السياق الموثوق**
+(`getAgentRunContext()?.requestedBy`) — **لا من الوسائط أبدًا**؛ يجلب `listOwnedSellerEntities`، يفلتر
+`MERCHANT`، ثم يعيد نفس منطق العزل: معرّف صريح يُحترم **فقط** إن كان مملوكًا، وإلا نطاق فارغ. يُعيد
+`{ scope: 'own', scopedToOwned, found?, merchants: [...] }` مع `name` مشتقًّا من `storeName`.
+
+### 25.4 ما تغيّر في المنفّذ
+- `execMerchantAgent`: يقرأ **فقط** عبر `invokeTool(MERCHANT_READ_OWN, …)` — لا استعلام Drizzle مباشر،
+  ولا `listOwnedSellerEntities` داخل الجسم. نفس بناء المخرجات حرفيًا (`agentKey`, `action`,
+  `scopedToOwned`, `merchants`, `note`, `readOnly`, `generatedAt`) ثم `reasonAboutAgent` كما كان، مع
+  الإبقاء على رسالة `'Merchant not found in your scope.'`.
+- `allowedTools`: `merchant-agent` فقط صار `[...CATALOG_TOOLS, 'merchant.read_owned']`. **لم تُمسّ**
+  `CATALOG_TOOLS` المشتركة (فيبقى `marketing-agent`/`product-agent`/`supplier-agent` بلا الأداة)، ولا
+  `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`.
+
+### 25.5 الأمان (لا توسيع)
+- البوابة تفشل مغلقًا: `NO_RUN_CONTEXT` (بلا سياق موثوق)، `ACTION_NOT_AUTHORIZED` (أداة غير ممنوحة)،
+  `INVALID_INPUT` (حقن معطيات في الوسائط). **لا** `PLATFORM_SCOPE_DENIED` لأن الأداة غير منصّية.
+- العزل: الهوية من السياق الموثوق فقط؛ `merchantId` لتاجر لا يملكه المتصل ⇒ نطاق فارغ، ولا تسرّب عبر
+  الحسابات. لا `scope_owner` ولا نطاق من الطلب.
+- لا كتابة: الأداة `read`؛ الاختبار يثبّت عدم وجود كتابة في مسار القراءة.
+- المجدول و`SYSTEM_PRINCIPAL` وبقية الوكلاء: لم يُمَسّوا — `merchant-agent` ليس في `DEFAULT_SCHEDULES`
+  ولا في `OUTBOX_ROUTES`.
+
+### 25.6 الاختبارات ونتائجها
+- `tests/g5-phase2-merchant-tool.test.ts` (جديد، **23 حالة، DB-free**): تسجيل الأداة (قراءة فقط، غير
+  منصّية، معالج مربوط)، رفض غياب السياق/الأداة غير الممنوحة/حقن المعطيات/`limit` خارج النطاق، عزل
+  المالك (لا تسرّب بين حسابين، معرّف غير مملوك ⇒ نطاق فارغ بلا استعلام، معرّف مملوك ⇒ يُعاد، الهوية من
+  السياق لا الوسائط، عدم خلط بيانات الموردين/الشركات)، حدود `limit` والقيمة الافتراضية، تدقيق
+  `AI.TOOL_EXECUTED`، الحصر بـ`merchant-agent` فقط، وحفظ عقد المخرجات القديم (`scopedToOwned` والرسالة).
+  يشغّل البوابة **الحقيقية** عبر `invokeTool` مقابل fake عند حدّ drizzle فقط؛ تشغيل E2E على قاعدة
+  البيانات المؤجّل لدفعة مستقلة (لأنه سيتسابق مع `gm-agent-cycle` الذي يوقف `merchant-agent` بافتراض
+  أن لا اختبار آخر يشغّله).
+- `tests/phase3d-scope-gate.test.ts` — محدَّث (DB-free، 16→22 حالة): يثبّت أن `execMerchantAgent` يقرأ
+  عبر `invokeTool` بلا `.from(` وبلا `listOwnedSellerEntities(` وبلا `requirePlatformGate(`، وأن الأداة
+  ممنوحة **فقط** لـ`merchant-agent`، وأن `CATALOG_TOOLS` المشتركة لم تُمسّ، وأن تصريحات الوكيل لم تتغيّر.
+
+### 25.7 الملفات التي تغيّرت
+- `packages/server/src/lib/ai/tool-registry.ts` (أداة جديدة `merchant.read_owned`)
+- `packages/server/src/lib/ai/tool-handlers.ts` (معالج `merchantReadOwn`)
+- `packages/server/src/modules/ai/executors.ts` (توجيه `execMerchantAgent`)
+- `packages/server/src/modules/ai/catalogue.ts` (`allowedTools` لـ`merchant-agent` فقط)
+- `packages/server/tests/g5-phase2-merchant-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
+
+### 25.8 قيود متبقّية
+- بقي **8 منفّذين خارج** البوابة من أصل **20**: سبعة وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
+  `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) +
+  `agent-supervisor` (الحتمي الكاتب). لا نمط "مالك-كيان" آخر مماثل؛ ما تبقّى وكلاء قراءة عامة/مزدوجة.
 - لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
