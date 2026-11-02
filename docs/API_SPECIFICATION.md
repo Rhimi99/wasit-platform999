@@ -314,6 +314,9 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 | `development.read_platform` | منصّة (`platformScoped: true`) | `analytics:read:all` | سياق البناء (G5 Phase 1) |
 | `supplier.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات الموردين **المملوكة للمتصل** (G5 Phase 2 — A1) |
 | `merchant.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات التجّار **المملوكة للمتصل** (G5 Phase 2 — A2) |
+| `sales.read_orders_owned` | مالك (`platformScoped: false`) | `order:read:own` | طلبات البيع **المملوكة للمتصل** + مؤشراتها (G5 Phase 2 — A3) |
+| `sales.read_orders_platform` | منصّة (`platformScoped: true`) | `order:read` | دفتر الطلبات على مستوى المنصّة — للمشرفين فقط (G5 Phase 2 — A3) |
+| `sales.read_market_totals` | عام (بلا نطاق مالك) | `ai:use` | مجاميع السوق (أعداد + متوسط الثقة) — بلا سجلات/معرّفات (G5 Phase 2 — A3) |
 
 - `supplier.read_owned`: الوسائط `{ supplierId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
   السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `supplierId` يُحترم فقط إن كان
@@ -321,6 +324,15 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `merchant.read_owned`: الوسائط `{ merchantId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
   السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `merchantId` يُحترم فقط إن كان
   مملوكًا للمتصل وإلا يعيد نطاقًا فارغًا (`found: false`). الأداة ممنوحة لـ`merchant-agent` فقط.
+- `sales.read_orders_owned`: الوسائط `{ periodDays?: int(1..365) = 30, limit?: int(1..100) }`؛ **المالك يُحلّ
+  من السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ إن لم يوجد مالك موثوق (مثل
+  `SYSTEM_PRINCIPAL`) يعيد `noScope: true` بلا استعلام. يعيد `{ scope:'own', noScope, kpi, recentOrders }`.
+  الأداة ممنوحة لـ`sales-agent` فقط.
+- `sales.read_orders_platform`: الوسائط `{ periodDays?: int(1..365) = 30, limit?: int(1..100) }`؛
+  `platformScoped: true` — تُقبل فقط لدور `ADMIN`/`SUPER_ADMIN` عبر فحص صلاحية حقيقي، ويُرفض غير المشرف
+  بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`. تعيد `{ scope:'platform', kpi, recentOrders }` عبر كل المالكين.
+- `sales.read_market_totals`: بلا وسائط؛ تعيد **مجاميع فقط** `{ activeProducts, suppliers, merchants, companies,
+  avgTrust }` — بلا أي سجلات أو معرّفات أو بيانات فردية؛ متاحة لكل متصل يملك `ai:use` (كسلوك المنفّذ السابق).
 - أخطاء البوابة المرتجعة (fail-closed): `TOOL_NOT_REGISTERED`, `NO_RUN_CONTEXT`,
   `ACTION_NOT_AUTHORIZED`, `PERMISSION_DENIED`, `PLATFORM_SCOPE_DENIED`, `INVALID_INPUT`,
   `TOOL_TIMEOUT`, `TOOL_EXECUTION_FAILED` — وكل محاولة (مسموحة أو مرفوضة) تُدقَّق (`AI.TOOL_EXECUTED` /

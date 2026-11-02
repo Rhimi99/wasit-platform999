@@ -63,6 +63,15 @@ export const SUPPLIER_READ_OWN = 'supplier.read_owned';
 // ran (owned merchant entities only), so routing it changes no result and grants
 // no new authority — the owner is resolved from the trusted run context.
 export const MERCHANT_READ_OWN = 'merchant.read_owned';
+// G5 Phase 2 (A3): the sales agent's reads moved behind the gateway. It is a
+// dual-scope agent: its own order book (owner) and the platform-wide order book
+// (admins) come from two tools, while the public catalogue/entity counts it
+// always exposed come from a third. Each mirrors the exact query
+// `execSalesAgent` already ran, so routing them changes no result and grants no
+// new authority — the owner is resolved from the trusted run context.
+export const SALES_READ_ORDERS_OWN = 'sales.read_orders_owned';
+export const SALES_READ_ORDERS_PLATFORM = 'sales.read_orders_platform';
+export const SALES_READ_MARKET_TOTALS = 'sales.read_market_totals';
 
 /** `{ limit?: int }` — a bounded page size, the only knob the read tools take. */
 const limit = (max: number) => z.number().int().min(1).max(max).optional();
@@ -203,6 +212,50 @@ const TOOL_LIST: readonly ToolDefinition[] = [
           limit: z.coerce.number().int().min(1).max(100).optional(),
         })
         .strict(),
+      permission: 'ai:use',
+      platformScoped: false,
+    },
+    {
+      id: SALES_READ_ORDERS_OWN,
+      description:
+        "The caller's own order book — KPI totals (orders, GMV, commission, payment fees, net) and recent orders, scoped to orders where the caller is the buyer or owns the seller entity. Owner-scoped: the owner is resolved from the trusted run context, never from the args.",
+      effect: 'read',
+      // Owner-scoped: the caller reads only orders tied to entities they own (as
+      // buyer or seller). `platformScoped: false` means the gateway does NOT
+      // require an admin; the owner is taken from the trusted run context, so a
+      // caller can never widen the read to another tenant's orders.
+      inputSchema: z
+        .object({
+          periodDays: z.coerce.number().int().min(1).max(365).optional(),
+          limit: z.coerce.number().int().min(1).max(100).optional(),
+        })
+        .strict(),
+      permission: 'order:read:own',
+      platformScoped: false,
+    },
+    {
+      id: SALES_READ_ORDERS_PLATFORM,
+      description:
+        'Platform-wide order book — KPI totals and recent orders across every owner. Admin-only: the gateway refuses a non-admin requester.',
+      effect: 'read',
+      inputSchema: z
+        .object({
+          periodDays: z.coerce.number().int().min(1).max(365).optional(),
+          limit: z.coerce.number().int().min(1).max(100).optional(),
+        })
+        .strict(),
+      permission: 'order:read',
+      platformScoped: true,
+    },
+    {
+      id: SALES_READ_MARKET_TOTALS,
+      description:
+        'Public market totals — active product/supplier/merchant/company counts and the average trust score. Aggregate figures only: no rows, ids or per-tenant detail.',
+      effect: 'read',
+      // Public aggregates the sales agent has always surfaced to every caller.
+      // Kept off the platform gate on purpose: it returns only summed counts, so
+      // it leaks no tenant's detail and preserves the previous behaviour.
+      inputSchema: z.object({}).strict(),
       permission: 'ai:use',
       platformScoped: false,
     },

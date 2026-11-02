@@ -179,8 +179,8 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 **فقط** عبر `invokeTool` — لم يبقَ استعلام مباشر في مساراتهم. يُثبت ذلك اختبار على مستوى
 المصدر (لا `.from(` داخل المنفّذ) واختبارات سلوكية حقيقية على قاعدة بيانات.
 
-> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي **8 منفّذين خارجها**
-> من أصل **20** (7 وكلاء بنطاق مالك/مزدوج + `agent-supervisor` الحتمي الكاتب) — انظر القسمين 10 و22 و24 و25.
+> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي **7 منفّذين خارجها**
+> من أصل **20** (6 وكلاء بنطاق مالك/مزدوج + `agent-supervisor` الحتمي الكاتب) — انظر القسمين 10 و22 و24 و25 و26.
 
 ## 10. إصلاح ثغرات المراجعة الأمنية (AI-02.1-R1)
 
@@ -227,20 +227,20 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 | `execProductAgent` | **ثغرة مؤكّدة** → أُصلحت (10.1) |
 | `execComplianceAgent` | **ثغرة مؤكّدة** → أُصلحت (10.2) |
 | `execAdsAgent`, `execDevelopmentAgent` | بوّابة داخلية `requirePlatformGate` (إداري) — **وُحِّدت عبر البوابة في G5 Phase 1 (القسم 22)** |
-| `execSalesAgent`, `execMarketingAgent`, `execSupportAgent`, `execB2BAgent`, `execCustomerIntelligenceAgent`, `execOutreachAcquisitionAgent` | وصول مشروع ضمن نطاق المالك / قراءة عامة مسموحة |
+| `execMarketingAgent`, `execSupportAgent`, `execB2BAgent`, `execCustomerIntelligenceAgent`, `execOutreachAcquisitionAgent` | وصول مشروع ضمن نطاق المالك / قراءة عامة مسموحة |
 | `execMarketResearchAgent` | **ثغرة مؤكّدة** (مجاميع منصّة بلا قيد) → أُصلحت في AI-03.6 (القسم 14) |
-| `execSupplierAgent`, `execMerchantAgent` | وصول مشروع ضمن نطاق المالك — **وُحِّدا عبر البوابة في G5 Phase 2** (`execSupplierAgent` القسم 24، `execMerchantAgent` القسم 25) |
+| `execSupplierAgent`, `execMerchantAgent`, `execSalesAgent` | وصول مشروع ضمن نطاق المالك — **وُحِّدا عبر البوابة في G5 Phase 2** (`execSupplierAgent` القسم 24، `execMerchantAgent` القسم 25، `execSalesAgent` القسم 26) |
 | `execAgentSupervisor` | حتمي، بلا قراءة صفوف متعدّدة المالكين |
 
 لا تُعدّ مجرّد عدم المرور عبر البوابة ثغرة بذاتها؛ التصنيف مبنيّ على أثر أمني مُثبَت.
 
 ### 10.5 قيود متبقّية
 - البوابة ليست إلزامية لكل الأدوات بعد. عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)،
-  منهم **12 داخل** البوابة و**8 خارجها** (بعد G5 Phase 2، القسمان 24 و25). الخارجون هم سبعة وكلاء
-  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `sales`, `marketing`, `product`, `support`,
+  منهم **13 داخل** البوابة و**7 خارجها** (بعد G5 Phase 2، الأقسام 24 و25 و26). الخارجون هم ستة وكلاء
+  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `marketing`, `product`, `support`,
   `b2b`, `customer-intelligence`, `outreach-acquisition` — إضافةً إلى
   `agent-supervisor` (الوكيل الحتمي الإشرافي الوحيد الذي **يكتب** حالات الاحتواء، فلا يندرج تحت
-  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين، A2 = التجّار أُنجزا).
+  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين، A2 = التجّار، A3 = المبيعات أُنجزت).
 - أدوات `allowedTools` المُعلنة بلا تنفيذ تبقى خاملة في البوابة (`UNBOUND_DECLARED_TOOLS`)؛
   صارت القائمة الآن مكتملة ومتطابقة مع المُعلَن (انظر القسم 12).
 
@@ -1052,9 +1052,9 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - `packages/server/tests/g5-phase2-supplier-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
 
 ### 24.8 قيود متبقّية
-- بقي **8 منفّذين خارج** البوابة من أصل **20**: سبعة وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
+- بقي **8 منفّذين خارج** البوابة من أصل **20** عند إنجاز A1: سبعة وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
   `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) +
-  `agent-supervisor` (الحتمي الكاتب). أُنجز التالي: `merchant-agent` في A2 (القسم 25).
+  `agent-supervisor` (الحتمي الكاتب). أُنجز التالي: `merchant-agent` في A2 (القسم 25) ثم `sales-agent` في A3 (القسم 26).
 - لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
 
 ## 25. توحيد بوابة الأدوات — G5 Phase 2 (A2: Merchant Agent)
@@ -1120,7 +1120,97 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - `packages/server/tests/g5-phase2-merchant-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
 
 ### 25.8 قيود متبقّية
-- بقي **8 منفّذين خارج** البوابة من أصل **20**: سبعة وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
+- بقي **8 منفّذين خارج** البوابة من أصل **20** عند إنجاز A2: سبعة وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`,
   `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) +
-  `agent-supervisor` (الحتمي الكاتب). لا نمط "مالك-كيان" آخر مماثل؛ ما تبقّى وكلاء قراءة عامة/مزدوجة.
+  `agent-supervisor` (الحتمي الكاتب). أُنجز التالي: `sales-agent` في A3 (القسم 26).
 - لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
+
+## 26. توحيد بوابة الأدوات — G5 Phase 2 (A3: Sales Agent)
+
+### 26.1 الهدف
+`execSalesAgent` كان يقرأ بياناته **مباشرةً**: دفتر الطلبات (مؤشرات + أحدث الطلبات) عبر
+`canReadPlatformData`/`resolveOwnedSellerIds`، ومجاميع السوق (أعداد المنتجات/الموردين/التجّار/الشركات
+ومتوسط الثقة). نقلت هذه المرحلة **كل** القراءات إلى البوابة المركزية عبر **ثلاث** أدوات مسجّلة، **دون
+تغيير أي صلاحية أو نطاق أو سلوك تجاري**. الوكيل **مزدوج النطاق** (مالك + منصّة)، لذا يلزم فصل مقصود:
+أداة مالك + أداة منصّة + أداة مجاميع عامة. النمط نفسه المُثبَت في A1 (القسم 24) وA2 (القسم 25).
+
+### 26.2 الأدوات الجديدة (قراءة فقط)
+| الأداة | الوصف | `effect` | `permission` | `platformScoped` |
+| --- | --- | --- | --- | --- |
+| `sales.read_orders_owned` | طلبات البيع المملوكة للمتصل + مؤشراتها | `read` | `order:read:own` | ❌ (نطاق المالك) |
+| `sales.read_orders_platform` | دفتر الطلبات عبر كل المالكين | `read` | `order:read` | ✅ (منصّة — `ADMIN`/`SUPER_ADMIN` فقط) |
+| `sales.read_market_totals` | مجاميع السوق: أعداد + متوسط الثقة (**بلا سجلات/معرّفات**) | `read` | `ai:use` | ❌ (عام) |
+
+المخططات `.strict()`:
+- `sales.read_orders_owned` / `sales.read_orders_platform`: `periodDays?` (`coerce` عدد صحيح 1..365،
+  الافتراضي 30) و`limit?` (`coerce` عدد صحيح 1..100). **لا** يقبلان `userId`/`requestedBy`/`scope` —
+  حقن الهوية/النطاق يُرفض بـ`INVALID_INPUT`.
+- `sales.read_market_totals`: بلا وسائط إطلاقًا.
+
+`sales.read_orders_platform` هي الأداة **المنصّية** الوحيدة هنا: البوابة تشترط `ADMIN`/`SUPER_ADMIN`
+عبر `rolesAllowPlatformScope` (نفس مصدر الحقيقة `resolvePlatformScope`) وترفض غير المشرف
+بـ`PLATFORM_SCOPE_DENIED`، وتشترط `order:read` وترفض من لا يملكها بـ`PERMISSION_DENIED`.
+`sales.read_market_totals` غير منصّية ومتاحة لكل من يملك `ai:use` (حفظًا للسلوك السابق).
+
+### 26.3 المعالجات (Handlers)
+في `tool-handlers.ts`: `salesReadOrdersOwn`, `salesReadOrdersPlatform`, `salesReadMarketTotals`، مع
+مُساعد `emptySalesKpi()`.
+- **المالك من السياق الموثوق فقط** (`getAgentRunContext()?.requestedBy`) — **لا من الوسائط**. تُبنى
+  شرطية الملكية من معرّف المستدعي **ومن** كيانات البائع المملوكة له (`resolveOwnedSellerIds`)، فلا
+  يُقرأ صف مستأجر آخر. إن كان المالك هو `SYSTEM_PRINCIPAL` (أو غائبًا) تُعاد
+  `{ scope:'own', noScope: true, recentOrders: [] }` **بلا أي استعلام** — حفظًا لسلوك الرفض السابق.
+  (أُصلح خطأ كان يستعلم بـ`buyerId='system'` حين `owner === 'system'`.)
+- `salesReadOrdersPlatform`: قراءة عبر كل المالكين (بلا شرط مالك) — لا تُستدعى إلا بعد فحص البوابة.
+- `salesReadMarketTotals`: `count(products)`/`count(suppliers)`/`count(merchants)`/`count(companies)`
+  و`avg(trust_scores.score)` — **أرقام فقط** بلا أي صف أو معرّف.
+
+### 26.4 ما تغيّر في المنفّذ
+- `execSalesAgent`: يقرأ **فقط** عبر `invokeTool(...)`. يحاول أولًا `sales.read_orders_platform`؛ فإن
+  رفضتها البوابة بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED` **فقط** ينتقل إلى
+  `sales.read_orders_owned`، وأي خطأ آخر **يُعاد رميه** (لا تفشل مفتوحًا، ولا سقوط صامت). ثم
+  `sales.read_market_totals`.
+- **حفظ الرفض القديم**: `SYSTEM_PRINCIPAL` يُرفض فورًا بـ`scopeDenied` (`status:'refused'`,
+  `error:'NO_SCOPE'`) قبل أي استدعاء — لأن التشغيل المجدول الموثوق يحمل أدوار إدارة كان يمكن أن تمرّ
+  من بوّابة المنصّة، بينما السلوك السابق لهذا الوكيل (نطاق المالك) هو الرفض.
+- نفس بناء المخرجات حرفيًا (`agentKey`, `action`, `scope`, `scopedToOwnSales`, `periodDays`, `kpi`,
+  `recentOrders`, `leadsPotential`, `readOnly`, `generatedAt`) ثم `reasonAboutAgent` و`withProposal`.
+- **إزالة الاستيرادات الميتة**: حُذفت `gte` و`trustScores` و`lt` من `executors.ts` بعد نقل القراءات.
+- `allowedTools`: `sales-agent` فقط صار `[...READ_TOOLS, 'sales.read_orders_owned',
+  'sales.read_orders_platform', 'sales.read_market_totals']`. **لم تُمسّ** `READ_TOOLS` المشتركة (فيبقى
+  `marketing-agent`/`product-agent`/`customer-intelligence-agent` وبقية الوكلاء بلا الأدوات)، ولا
+  `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`.
+
+### 26.5 الأمان (لا توسيع)
+- البوابة تفشل مغلقًا: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `PERMISSION_DENIED` /
+  `PLATFORM_SCOPE_DENIED` (لأداة المنصّة فقط) / `INVALID_INPUT` (حقن معطيات).
+- العزل: الهوية من السياق الموثوق فقط؛ شرطية المالك = معرّف المستدعي ∪ كياناته المملوكة؛ لا نطاق من
+  الطلب. أداة المنصّة محصورة إداريًا بفحص صلاحية حقيقي.
+- لا كتابة: الأدوات `read`؛ الاختبار يثبّت عدم وجود كتابة في مسار القراءة وأن التدقيق `AI.TOOL_EXECUTED`.
+- المجدول و`SYSTEM_PRINCIPAL` وبقية الوكلاء: لم يُمَسّوا — `sales-agent` ليس في `DEFAULT_SCHEDULES` ولا
+  في `OUTBOX_ROUTES`؛ ومسار الرفض القديم محفوظ.
+
+### 26.6 الاختبارات ونتائجها
+- `tests/g5-phase2-sales-tool.test.ts` (جديد، **35/35**، **DB-free**): تسجيل/نطاق/صلاحية الأدوات الثلاث،
+  fail-closed (بلا سياق / أداة غير ممنوحة / حقن معطيات / `periodDays`/`limit` خارج النطاق / دور بلا
+  صلاحية)، عزل المالك (لا تسرّب بين حسابين، الهوية من السياق لا الوسائط، بلا مالك موثوق ⇒ `noScope` بلا
+  استعلام)، بوّابة المنصّة الإدارية (نجاح `ADMIN`/`SUPER_ADMIN` عبر كل المالكين، رفض غير المشرف)،
+  مجاميع فقط بلا سجلات، تدقيق `AI.TOOL_EXECUTED`، حصر `sales-agent` فقط، حفظ عقد المخرجات، ومسار
+  المنفّذ end-to-end مقابل fake عند حدّ drizzle فقط. **لا يفتح اتصال قاعدة بيانات** (يُشغَّل عبر إعداد
+  مؤقّت بلا `globalSetup`). تشغيل E2E الكامل على قاعدة البيانات المؤجّل لدفعة مستقلة معتمدة.
+- `tests/phase3d-scope-gate.test.ts` — محدَّث (**22→27** حالة، DB-free): يثبّت أن `execSalesAgent` يقرأ
+  عبر `invokeTool` بلا `.from(` وبلا `requirePlatformGate(` وبلا `resolveOwnedSellerIds(`، وأن الأدوات
+  ممنوحة **فقط** لـ`sales-agent`، وأن `READ_TOOLS` المشتركة لم تُمسّ، وأن تصريحات الوكيل لم تتغيّر.
+- **إجمالي A3: 62/62** (35 من ملف المبيعات + 27 من بوّابة النطاق)، بالإضافة إلى اختبار انحدار يثبت أن
+  التشغيل المجدول (`system` + أدوار `SUPER_ADMIN`) لا يبلغ `sales.read_orders_platform`.
+
+### 26.7 الملفات التي تغيّرت
+- `packages/server/src/lib/ai/tool-registry.ts` (ثلاث أدوات: `sales.read_orders_owned` / `sales.read_orders_platform` / `sales.read_market_totals`)
+- `packages/server/src/lib/ai/tool-handlers.ts` (المعالجات الثلاثة + `emptySalesKpi`)
+- `packages/server/src/modules/ai/executors.ts` (توجيه `execSalesAgent` + تنظيف الاستيرادات)
+- `packages/server/src/modules/ai/catalogue.ts` (`allowedTools` لـ`sales-agent` فقط)
+- `packages/server/tests/g5-phase2-sales-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
+
+### 26.8 قيود متبقّية
+- بقي **7 منفّذين خارج** البوابة من أصل **20**: ستة وكلاء بنطاق مالك/مزدوج (`marketing`, `product`,
+  `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي
+  الكاتب). لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.

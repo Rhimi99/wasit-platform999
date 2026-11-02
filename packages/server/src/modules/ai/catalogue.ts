@@ -87,7 +87,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'growth',
     description: 'Identifies prospective buyers/leads and recommends sales priorities.',
     capabilities: [{ action: 'identify_leads', description: 'Find prospective buyers for a seller' }],
-    allowedTools: READ_TOOLS,
+    // G5 Phase 2 (A3): the sales reads moved behind the gateway. `READ_TOOLS` is
+    // kept (it is the shared group and other agents depend on it) and the three
+    // sales tools are appended: the owner order book, the platform order book
+    // (admin-only at the gateway), and the public market totals.
+    allowedTools: [...READ_TOOLS, 'sales.read_orders_owned', 'sales.read_orders_platform', 'sales.read_market_totals'],
     approvalActions: ['finance.refund', 'commission.change'],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['sales.qualify_lead', 'sales.update_pipeline'],

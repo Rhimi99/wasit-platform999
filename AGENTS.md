@@ -85,7 +85,7 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
 - ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
-- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **12 داخل** البوابة و**8 خارجها** (بعد G5 Phase 2 — A1 وA2). الخارجون: 7 وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **13 داخل** البوابة و**7 خارجها** (بعد G5 Phase 2 — A1/A2/A3). الخارجون: 6 وكلاء بنطاق مالك/مزدوج (`marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
 
 ## الحالة الحالية (2026-11-01) — G5 Phase 2 (A1): توحيد Supplier Agent عبر بوابة الأدوات
 
@@ -107,6 +107,18 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **حفظ السلوك القديم**: بنية المخرجات ومفاتيحها، شكل عناصر `merchants`، `scopedToOwned = !requestedId`، رسالة `'Merchant not found in your scope.'`، `reasonAboutAgent`، و`withProposal` — كلها دون تغيير.
 - ✅ **الاختبارات**: `tests/g5-phase2-merchant-tool.test.ts` (جديد، **23/23**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**22/22**) — انظر قسم الاختبارات أدناه.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §25 (+ تحديث §10.4/§10.5/§24.8 والسطر التمهيدي) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A3): توحيد Sales Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A3)**: نُقلت **كل** قراءات `execSalesAgent` إلى البوابة المركزية عبر ثلاث أدوات جديدة **قراءة فقط** (الوكيل **مزدوج النطاق**: مالك + منصّة):
+  - `sales.read_orders_owned` (`permission order:read:own`, `platformScoped: false`) — `{ periodDays?: int(1..365)=30, limit?: int(1..100) }` → طلبات البيع المملوكة للمتصل + مؤشراتها `{ scope:'own', noScope, kpi, recentOrders }`.
+  - `sales.read_orders_platform` (`permission order:read`, `platformScoped: true`) — نفس الوسائط → دفتر الطلبات عبر كل المالكين `{ scope:'platform', kpi, recentOrders }`؛ **`ADMIN`/`SUPER_ADMIN` فقط** عبر فحص صلاحية حقيقي (البوابة ترفض غيره بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`).
+  - `sales.read_market_totals` (`permission ai:use`, بلا نطاق مالك) — بلا وسائط → **مجاميع فقط** `{ activeProducts, suppliers, merchants, companies, avgTrust }` بلا سجلات/معرّفات (نفس سلوك المنفّذ السابق للجميع).
+- ✅ **الهوية من السياق الموثوق فقط**: المعالجات تحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**؛ مخطط `.strict()` يمنع حقن الهوية/النطاق (`INVALID_INPUT`). بلا مالك موثوق (مثل `SYSTEM_PRINCIPAL`) ⇒ `noScope: true` بلا استعلام (حفظًا لسلوك الرفض السابق `NO_SCOPE`).
+- ✅ **حفظ السلوك**: `scope`/`scopedToOwnSales`/`kpi`/`recentOrders`/`leadsPotential`/`readOnly`/`generatedAt`، `reasonAboutAgent`، `withProposal`، ورسالة النظام — كلها دون تغيير. **لا تفشل مفتوحًا**: تُبتلع فقط رفضا النطاق/الصلاحية المعروفان، وأي خطأ آخر يُعاد رميه.
+- ✅ **لا توسيع**: `allowedTools` لـ`sales-agent` فقط صار `[...READ_TOOLS, 'sales.read_orders_owned', 'sales.read_orders_platform', 'sales.read_market_totals']`؛ **لم تُمسّ** `READ_TOOLS` المشتركة (بقية الوكلاء بلا الأدوات)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **الاختبارات**: `tests/g5-phase2-sales-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**27/27**) — **إجمالي A3: 62/62** — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §26 (+ تحديث §10.4/§10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
 
 ## الحالة الحالية (2026-11-01) — G7: سطح الذاكرة التشغيلية للقراءة فقط
 
@@ -313,6 +325,7 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
   و`playwright.config.ts` يمنع فقط إعادة استخدام خادم أجنبي على نفس المنفذ؛ لا يمنع وراثة `DATABASE_URL`. الإصلاح إن حدث التلويث: أعد تشغيل `npx tsx src/scripts/seed-demo.ts` مع `.env.demo` (يستعيد كلمة مرور الـstaff من `DEMO_STAFF_PASSWORD`)، ثم احذف حسابات الاختبار المُقحَمة (`privdel-%`/`adminsub-%`/`e2e-%`/`audit-%`/`demo-signin-%`/`demo-signup-%`/`subui-%`/`mfa.e2e.%`) بشرط `created_at`.
 - **14 فشل E2E متوقّع في وضع Demo**: مواصفات تعتمد `dev/verification-link` (404 في staging) أو locators `getByRole('status')` التي يزاحمها بانر DEMO. تُمرَّر في إعداد dev الأصلي (منافذ معزولة، بلا بانر) — ليست regressions.
 - **فخ خادم يدوي على `:3000` أثناء E2E**: `playwright.config.ts` يضبط `reuseExistingServer: !CI`، فإن كان خادم `npm run dev -w @wasit/server` يعمل فسيُعاد استخدامه **بلا** تجاوزات الـrate-limit الخاصة بالـE2E (`RATE_LIMIT_LOGIN_MAX=500` ...). النتيجة 13 إخفاقة كاذبة سريعة في مكاتب admin (`admin-user-status`/`admin-privacy`/`admin-subscriptions`: `Cannot read properties of undefined (reading 'userId')` من تسجيل 429). أوقف الخادم اليدوي قبل تشغيل `npm run test:e2e` (المنفذ يجب أن يكون حرًّا).
+- **اختبارات DB-free**: بعض مواصفات البوابة (`tests/phase3d-scope-gate.test.ts`، `tests/g5-phase2-sales-tool.test.ts`) لا تفتح اتصال قاعدة بيانات إطلاقًا — تُثبت العزل/البوابة عبر `invokeTool`/`executeAgentTask` مقابل fake عند حدّ drizzle فقط. لكن `globalSetup` الافتراضي يفتح DB ويُفشل `vitest run` بـ`ECONNREFUSED` بلا PostgreSQL. لتشغيلها وحدها بلا DB: استخدم إعدادًا مؤقّتًا `vitest.<name>.config.mts` بلا `globalSetup` (نفس `env` في `vitest.config.ts`) ثم `npx vitest run --config ./vitest.<name>.config.mts`، واحذفه بعد الانتهاء.
 - **منطق كشف التهريب مشترك**: أي مسار يكتب رسالة (لا الردود فقط) يجب أن يستدعي `scanMessageForFeeEvasion` في `modules/messaging/service.ts`. `openDirectThread` كان يتجاوز الكشف على الرسالة الأولى في الخيط الجديد (ثغرة C5 حقيقية أُصلحت 2026-09-24)؛ اختبار الانحدار في `tests/fee-evasion.test.ts`.
 
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)

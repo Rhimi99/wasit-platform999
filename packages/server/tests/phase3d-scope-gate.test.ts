@@ -7,6 +7,9 @@ import { resolvePlatformScope, SYSTEM_PRINCIPAL, deriveScope, NoScopeError } fro
 import {
   SUPPLIER_READ_OWN,
   MERCHANT_READ_OWN,
+  SALES_READ_ORDERS_OWN,
+  SALES_READ_ORDERS_PLATFORM,
+  SALES_READ_MARKET_TOTALS,
   UNBOUND_DECLARED_TOOLS,
   findTool,
   isRegisteredTool,
@@ -291,6 +294,83 @@ describe('G5 Phase 2 (A2) — merchant agent is routed through the gateway (owne
 
   it('the new tool is registered, not left in the unbound list', () => {
     expect(UNBOUND_DECLARED_TOOLS).not.toContain(MERCHANT_READ_OWN);
+  });
+});
+
+describe('G5 Phase 2 (A3) — sales agent is routed through the gateway (dual-scope)', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'src', 'modules', 'ai', 'executors.ts'), 'utf8');
+
+  function bodyOf(name: string): string {
+    const start = SRC.indexOf(`async function ${name}(`);
+    expect(start, `${name} not found`).toBeGreaterThan(-1);
+    const rest = SRC.slice(start + 1);
+    const next = rest.indexOf('\nasync function ');
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it('registers the owner / platform / public-totals tools as read-only with bound handlers', () => {
+    const owner = findTool(SALES_READ_ORDERS_OWN);
+    expect(owner?.effect).toBe('read');
+    expect(owner?.platformScoped).toBe(false);
+    expect(owner?.permission).toBe('order:read:own');
+    const platform = findTool(SALES_READ_ORDERS_PLATFORM);
+    expect(platform?.effect).toBe('read');
+    expect(platform?.platformScoped).toBe(true);
+    expect(platform?.permission).toBe('order:read');
+    const totals = findTool(SALES_READ_MARKET_TOTALS);
+    expect(totals?.effect).toBe('read');
+    expect(totals?.platformScoped).toBe(false);
+    expect(totals?.permission).toBe('ai:use');
+    for (const id of [SALES_READ_ORDERS_OWN, SALES_READ_ORDERS_PLATFORM, SALES_READ_MARKET_TOTALS]) {
+      expect(isRegisteredTool(id), id).toBe(true);
+      expect(registeredToolIds(), id).toContain(id);
+      expect(getToolHandler(id), id).toBeTruthy();
+      expect(UNBOUND_DECLARED_TOOLS, id).not.toContain(id);
+    }
+  });
+
+  it('grants the sales tools to sales-agent ONLY (no widening)', () => {
+    for (const agent of AGENT_CATALOGUE) {
+      const grant = toolGrantForAgent(agent);
+      for (const id of [SALES_READ_ORDERS_OWN, SALES_READ_ORDERS_PLATFORM, SALES_READ_MARKET_TOTALS]) {
+        if (agent.key === 'sales-agent') expect(grant, `${agent.key}:${id}`).toContain(id);
+        else expect(grant, `${agent.key}:${id}`).not.toContain(id);
+      }
+    }
+  });
+
+  it('does not touch the shared READ_TOOLS group (other consumers unchanged)', () => {
+    const sales = findAgentSpec('sales-agent')!;
+    expect(sales.allowedTools).toEqual([
+      'platform.metrics',
+      'platform.read_orders',
+      'report.generate',
+      SALES_READ_ORDERS_OWN,
+      SALES_READ_ORDERS_PLATFORM,
+      SALES_READ_MARKET_TOTALS,
+    ]);
+    for (const key of ['marketing-agent', 'product-agent', 'customer-intelligence-agent']) {
+      expect(toolGrantForAgent(findAgentSpec(key)!), key).not.toContain(SALES_READ_ORDERS_OWN);
+    }
+  });
+
+  it('execSalesAgent reads ONLY through invokeTool (no direct query, no inline platform gate)', () => {
+    const body = bodyOf('execSalesAgent');
+    expect(body.includes('invokeTool(')).toBe(true);
+    expect(body.includes(SALES_READ_ORDERS_OWN)).toBe(true);
+    expect(body.includes(SALES_READ_ORDERS_PLATFORM)).toBe(true);
+    expect(body.includes(SALES_READ_MARKET_TOTALS)).toBe(true);
+    expect(body.includes('.from(')).toBe(false);
+    expect(body.includes('requirePlatformGate(')).toBe(false);
+    expect(body.includes('resolveOwnedSellerIds(')).toBe(false);
+  });
+
+  it('does not change sales-agent permissions, scope or approval declarations', () => {
+    const sales = findAgentSpec('sales-agent')!;
+    expect(sales.permissionsRequired).toEqual(['ai:use', 'order:read:own']);
+    expect(sales.requiresPlatformScope).not.toBe(true);
+    expect(sales.approvalActions).toEqual(['finance.refund', 'commission.change']);
+    expect(sales.requiresHumanApproval).toBe(true);
   });
 });
 

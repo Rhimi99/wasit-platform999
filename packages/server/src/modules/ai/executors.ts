@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import { ApiError, type UserRole } from '@wasit/shared';
 import type { AgentDefinition } from '../../lib/ai/types';
@@ -26,6 +26,9 @@ import {
   DEVELOPMENT_READ_PLATFORM,
   SUPPLIER_READ_OWN,
   MERCHANT_READ_OWN,
+  SALES_READ_ORDERS_OWN,
+  SALES_READ_ORDERS_PLATFORM,
+  SALES_READ_MARKET_TOTALS,
 } from '../../lib/ai/tool-registry';
 import { products, categories, productVariants, productImages } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
@@ -34,7 +37,7 @@ import { inventoryItems, inventoryMovements } from '../../db/schema/commerce_ext
 import { adCreatives } from '../../db/schema/ads';
 import { riskProfiles, riskEvents } from '../../db/schema/risk';
 import { disputes, disputeMessages } from '../../db/schema/disputes';
-import { trustScores, reviews } from '../../db/schema/trust';
+import { reviews } from '../../db/schema/trust';
 import { messages, threads, threadParticipants } from '../../db/schema/messaging';
 import { users } from '../../db/schema/auth';
 import { agentTasks } from '../../db/schema/agents';
@@ -400,59 +403,54 @@ void countOpenSupportMessages;
 
 async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const periodDays = Number(input.periodDays ?? 30);
-  const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
-  const isPlatform = await canReadPlatformData(db, userId, agent);
 
-  // Least privilege: a non-platform caller only sees orders tied to entities
-  // they own (as buyer or seller). Never fall back to a platform-wide read.
-  // A caller id is always a valid anchor (they are a buyer in their own orders),
-  // so this scope is always determinable; a missing anchor is refused.
-  const ownedSellerIds = isPlatform ? [] : await resolveOwnedSellerIds(db, userId);
-  if (!isPlatform && (!userId || userId === 'system')) {
-    return scopeDenied(agent.key);
+  // Preserve the former refusal exactly: the named scheduler principal reaches an
+  // own-scope agent with no tenant to anchor to, so it was refused (NO_SCOPE) —
+  // even though a trusted scheduled run carries admin roles that would otherwise
+  // pass the platform gate. `system` is never a real user id.
+  if (userId === SYSTEM_PRINCIPAL) return scopeDenied(agent.key);
+
+  // G5 Phase 2 (A3): every read runs ONLY through the Tool Gateway, never a
+  // direct query. The sales agent is dual-scope: `sales.read_orders_platform`
+  // is admin-only (the gateway refuses a non-admin with PLATFORM_SCOPE_DENIED /
+  // PERMISSION_DENIED, and ONLY those refusals are swallowed — any other error is
+  // re-thrown, never a silent fallback), while `sales.read_orders_owned` resolves
+  // the owner from the trusted run context (never the args) and refuses a caller
+  // with no trustworthy owner (`noScope`). `sales.read_market_totals` returns the
+  // public aggregates the agent has always surfaced.
+  const args = { periodDays, ...(input.limit !== undefined ? { limit: input.limit } : {}) };
+  const platform = await invokeTool(db, SALES_READ_ORDERS_PLATFORM, args).catch((err: unknown) => {
+    if (err instanceof ToolGatewayError && (err.code === 'PLATFORM_SCOPE_DENIED' || err.code === 'PERMISSION_DENIED')) {
+      return null;
+    }
+    throw err;
+  });
+  const isPlatform = platform !== null;
+
+  let orders: { kpi: Record<string, unknown>; recentOrders: unknown[] };
+  if (platform) {
+    orders = platform.data as { kpi: Record<string, unknown>; recentOrders: unknown[] };
+  } else {
+    const owned = await invokeTool(db, SALES_READ_ORDERS_OWN, args);
+    if (owned.data.noScope === true) return scopeDenied(agent.key);
+    orders = owned.data as { kpi: Record<string, unknown>; recentOrders: unknown[] };
   }
-  const ownerConds = [eq(orders.buyerId, userId)];
-  if (ownedSellerIds.length > 0) ownerConds.push(inArray(orders.sellerId, ownedSellerIds));
-  const orderScope = isPlatform ? undefined : (ownerConds.length === 1 ? ownerConds[0] : or(...ownerConds));
+  const totals = (await invokeTool(db, SALES_READ_MARKET_TOTALS, {})).data;
 
-  const [orderKpi, recentOrders, activeProducts, suppliersCount, merchantsCount, companiesCount, avgTrust] = await Promise.all([
-    db
-      .select({
-        orders: sql<number>`count(*)::int`,
-        gmv: sql<string>`coalesce(sum(items_total),0)::text`,
-        commission: sql<string>`coalesce(sum(commission),0)::text`,
-        paymentFees: sql<string>`coalesce(sum(payment_fee),0)::text`,
-        net: sql<string>`coalesce(sum(items_total) - sum(commission) - sum(payment_fee),0)::text`,
-      })
-      .from(orders)
-      .where(and(gte(orders.createdAt, since), ...(orderScope ? [orderScope] : []))),
-    db
-      .select({ id: orders.id, orderNumber: orders.orderNumber, itemsTotal: orders.itemsTotal, status: orders.status, createdAt: orders.createdAt })
-      .from(orders)
-      .where(orderScope)
-      .orderBy(desc(orders.createdAt))
-      .limit(Number(input.limit ?? 5)),
-    db.select({ v: sql<number>`count(*)::int` }).from(products).where(eq(products.isPublished, true)),
-    db.select({ v: sql<number>`count(*)::int` }).from(suppliers).where(eq(suppliers.isActive, true)),
-    db.select({ v: sql<number>`count(*)::int` }).from(merchants).where(eq(merchants.isActive, true)),
-    db.select({ v: sql<number>`count(*)::int` }).from(companies).where(eq(companies.isActive, true)),
-    db.select({ v: sql<number>`round(avg(score))::int` }).from(trustScores),
-  ]);
-
-  const kpi = orderKpi[0];
+  const orderKpi = orders.kpi;
   const facts = {
     periodDays,
-    orders: toNum(kpi?.orders),
-    gmv: kpi?.gmv ?? '0',
-    commission: kpi?.commission ?? '0',
-    paymentFees: kpi?.paymentFees ?? '0',
-    net: kpi?.net ?? '0',
-    activeProducts: toNum(activeProducts[0]?.v),
-    suppliers: toNum(suppliersCount[0]?.v),
-    merchants: toNum(merchantsCount[0]?.v),
-    companies: toNum(companiesCount[0]?.v),
-    avgTrust: toNum(avgTrust[0]?.v),
+    orders: toNum(orderKpi.orders),
+    gmv: (orderKpi.gmv as string) ?? '0',
+    commission: (orderKpi.commission as string) ?? '0',
+    paymentFees: (orderKpi.paymentFees as string) ?? '0',
+    net: (orderKpi.net as string) ?? '0',
+    activeProducts: toNum(totals.activeProducts),
+    suppliers: toNum(totals.suppliers),
+    merchants: toNum(totals.merchants),
+    companies: toNum(totals.companies),
+    avgTrust: toNum(totals.avgTrust),
   };
 
   const data: Record<string, unknown> = {
@@ -462,13 +460,7 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
     scopedToOwnSales: !isPlatform,
     periodDays,
     kpi: facts,
-    recentOrders: recentOrders.map((o) => ({
-      id: o.id,
-      orderNumber: o.orderNumber,
-      itemsTotal: String(o.itemsTotal),
-      status: o.status,
-      createdAt: o.createdAt.toISOString(),
-    })),
+    recentOrders: orders.recentOrders,
     leadsPotential: {
       merchants: facts.merchants,
       companies: facts.companies,

@@ -1,4 +1,4 @@
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import { products, categories } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
@@ -10,9 +10,11 @@ import { users } from '../../db/schema/auth';
 import { commissionPolicies } from '../../db/schema/engine';
 import { dailyKpis } from '../../db/schema/analytics';
 import { campaigns, adEvents } from '../../db/schema/ads';
+import { trustScores } from '../../db/schema/trust';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { listOwnedSellerEntities, resolveOwnedSellerIds } from '../../lib/seller-ownership';
 import { getAgentRunContext } from './agent-run-context';
+import { SYSTEM_PRINCIPAL } from '../../modules/ai/scope';
 import {
   ADS_READ_CAMPAIGNS,
   COMPLIANCE_READ_PLATFORM,
@@ -27,6 +29,9 @@ import {
   PLATFORM_METRICS,
   PLATFORM_READ_ORDERS,
   RISK_READ_OVERVIEW,
+  SALES_READ_MARKET_TOTALS,
+  SALES_READ_ORDERS_OWN,
+  SALES_READ_ORDERS_PLATFORM,
   SUPPLIER_READ_OWN,
   registeredToolIds,
 } from './tool-registry';
@@ -473,6 +478,121 @@ const merchantReadOwn: ToolHandler = async (db, args) => {
   };
 };
 
+/** The zeroed order-KPI half for a caller with no readable scope. */
+function emptySalesKpi(): Record<string, unknown> {
+  return { orders: 0, gmv: '0', commission: '0', paymentFees: '0', net: '0' };
+}
+
+/**
+ * Reads the sales order book — the KPI totals and the most recent orders — for
+ * the given window and (optional) owner predicate. `orderScope` is omitted for
+ * the platform-wide read. Mirrors `execSalesAgent`'s former two direct reads
+ * exactly so the routed result is byte-for-byte identical.
+ */
+async function readSalesOrderBook(
+  db: DB,
+  opts: { since: Date; limit: number; orderScope?: SQL },
+): Promise<Record<string, unknown>> {
+  const [orderKpi, recentOrders] = await Promise.all([
+    db
+      .select({
+        orders: sql<number>`count(*)::int`,
+        gmv: sql<string>`coalesce(sum(items_total),0)::text`,
+        commission: sql<string>`coalesce(sum(commission),0)::text`,
+        paymentFees: sql<string>`coalesce(sum(payment_fee),0)::text`,
+        net: sql<string>`coalesce(sum(items_total) - sum(commission) - sum(payment_fee),0)::text`,
+      })
+      .from(orders)
+      .where(and(gte(orders.createdAt, opts.since), ...(opts.orderScope ? [opts.orderScope] : []))),
+    db
+      .select({ id: orders.id, orderNumber: orders.orderNumber, itemsTotal: orders.itemsTotal, status: orders.status, createdAt: orders.createdAt })
+      .from(orders)
+      .where(opts.orderScope)
+      .orderBy(desc(orders.createdAt))
+      .limit(opts.limit),
+  ]);
+  const kpi = orderKpi[0];
+  return {
+    kpi: {
+      orders: toNum(kpi?.orders),
+      gmv: kpi?.gmv ?? '0',
+      commission: kpi?.commission ?? '0',
+      paymentFees: kpi?.paymentFees ?? '0',
+      net: kpi?.net ?? '0',
+    },
+    recentOrders: recentOrders.map((o) => ({
+      id: o.id,
+      orderNumber: o.orderNumber,
+      itemsTotal: String(o.itemsTotal),
+      status: o.status,
+      createdAt: o.createdAt.toISOString(),
+    })),
+  };
+}
+
+/**
+ * Sales Agent (G5 Phase 2 / A3) — the owner-scoped half of the sales read.
+ *
+ * Resolves the owner from the trusted run context, never the args, then reads
+ * only the orders tied to that owner (as buyer, or as the owner of the seller
+ * entity). A caller with no trustworthy owner returns `noScope` WITHOUT running
+ * any query, so the executor can refuse exactly as before.
+ */
+const salesReadOrdersOwn: ToolHandler = async (db, args) => {
+  const owner = getAgentRunContext()?.requestedBy ?? null;
+  const periodDays = Number(args.periodDays ?? 30);
+  const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+  const limit = Number(args.limit ?? 5);
+  const ownedSellerIds = owner && owner !== SYSTEM_PRINCIPAL ? await resolveOwnedSellerIds(db, owner) : [];
+  // A caller with no trustworthy owner (absent, or the scheduler principal) is
+  // refused with `noScope` BEFORE any query — matching `execSalesAgent` exactly.
+  if (!owner || owner === SYSTEM_PRINCIPAL) {
+    return { scope: 'own', noScope: true, kpi: emptySalesKpi(), recentOrders: [] };
+  }
+  const ownerConds: SQL[] = [eq(orders.buyerId, owner)];
+  if (ownedSellerIds.length > 0) ownerConds.push(inArray(orders.sellerId, ownedSellerIds));
+  const orderScope = ownerConds.length === 1 ? ownerConds[0] : or(...ownerConds);
+  return { scope: 'own', noScope: false, ...(await readSalesOrderBook(db, { since, limit, orderScope })) };
+};
+
+/**
+ * Sales Agent (G5 Phase 2 / A3) — the platform-wide half of the sales read.
+ *
+ * Mirrors `execSalesAgent`'s platform branch: every order, no owner predicate.
+ * Admin-only by registration (`platformScoped: true`); the gateway refuses a
+ * non-admin with `PLATFORM_SCOPE_DENIED` before this handler runs.
+ */
+const salesReadOrdersPlatform: ToolHandler = async (db, args) => {
+  const periodDays = Number(args.periodDays ?? 30);
+  const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+  const limit = Number(args.limit ?? 5);
+  return { scope: 'platform', ...(await readSalesOrderBook(db, { since, limit })) };
+};
+
+/**
+ * Sales Agent (G5 Phase 2 / A3) — the public totals the agent always surfaced.
+ *
+ * Active product/supplier/merchant/company counts and the average trust score.
+ * Aggregates only: no rows, ids or per-tenant detail, so it is not
+ * platform-scoped and stays available to every caller (unchanged behaviour).
+ */
+const salesReadMarketTotals: ToolHandler = async (db) => {
+  const [activeProducts, suppliersCount, merchantsCount, companiesCount, avgTrust] = await Promise.all([
+    db.select({ v: sql<number>`count(*)::int` }).from(products).where(eq(products.isPublished, true)),
+    db.select({ v: sql<number>`count(*)::int` }).from(suppliers).where(eq(suppliers.isActive, true)),
+    db.select({ v: sql<number>`count(*)::int` }).from(merchants).where(eq(merchants.isActive, true)),
+    db.select({ v: sql<number>`count(*)::int` }).from(companies).where(eq(companies.isActive, true)),
+    db.select({ v: sql<number>`round(avg(score))::int` }).from(trustScores),
+  ]);
+  return {
+    activeProducts: toNum(activeProducts[0]?.v),
+    suppliers: toNum(suppliersCount[0]?.v),
+    merchants: toNum(merchantsCount[0]?.v),
+    companies: toNum(companiesCount[0]?.v),
+    avgTrust: toNum(avgTrust[0]?.v),
+  };
+};
+
 /**
  * Platform ad book — campaign budget/spend rows plus impression/click/conversion
  * counts. Cross-owner advertising data, so the gateway admits admins only
@@ -572,6 +692,9 @@ const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>(
   [DEVELOPMENT_READ_PLATFORM, developmentReadPlatform],
   [SUPPLIER_READ_OWN, supplierReadOwn],
   [MERCHANT_READ_OWN, merchantReadOwn],
+  [SALES_READ_ORDERS_OWN, salesReadOrdersOwn],
+  [SALES_READ_ORDERS_PLATFORM, salesReadOrdersPlatform],
+  [SALES_READ_MARKET_TOTALS, salesReadMarketTotals],
 ]);
 
 /** Looks up the handler bound to a registered tool. */
