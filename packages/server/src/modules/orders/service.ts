@@ -19,6 +19,8 @@ import { writeAudit } from '../../lib/audit.js';
 import { createNotification } from '../../lib/notifications-service.js';
 import { reserveStock, commitReservationToSale, restoreStockForCancelledOrder, releaseReservation } from '../../lib/inventory-engine.js';
 import { resolveCommission } from '../../lib/commission.js';
+import { resolveSellerUserId } from '../../lib/seller-ownership.js';
+import { enqueueEvent } from '../ai/outbox-repo.js';
 
 export interface OrderItemInput {
   productId: string;
@@ -53,8 +55,26 @@ async function getPaymentFeeRate(db: DB, opts: { currencyCode: string }): Promis
   return { percentRate: '0', flatFee: '0', policyId: null };
 }
 
-/** Creates an order, calculates commission and payment fees via the Policy Engine, and records the transaction + ledger. */
+/**
+ * Creates an order, calculates commission and payment fees via the Policy Engine,
+ * and records the transaction + ledger.
+ *
+ * AI-08.0: every write this produces — stock reservation, the order and its
+ * items, the transaction and ledger entries, the audit entry, the seller
+ * notification and the `order.placed` outbox row — happens in ONE transaction.
+ * Either all of it commits or none does, so a failure at any step (including a
+ * stock conflict discovered late) rolls the order back completely and leaves
+ * neither a partial order nor a stray event.
+ */
 export async function createOrder(
+  db: DB,
+  input: CreateOrderInput,
+  ctx: { actorId: string; ipAddress?: string | null },
+) {
+  return db.transaction(async (tx) => createOrderWithin(tx as unknown as DB, input, ctx));
+}
+
+async function createOrderWithin(
   db: DB,
   input: CreateOrderInput,
   ctx: { actorId: string; ipAddress?: string | null },
@@ -253,13 +273,35 @@ export async function createOrder(
     },
   });
 
-  // Notify seller
+  // Notify the seller. `products.sellerId` is the *entity* id, so it is resolved
+  // to the owning user: the notification feed and every delivery channel address
+  // a user id, and a seller entity id would be invisible to the person who owns
+  // it. Falls back to the entity id only for the legacy orders that stored a user
+  // id directly.
+  const sellerUserId = (await resolveSellerUserId(db, firstProduct.sellerId)) ?? firstProduct.sellerId;
   await createNotification(db, {
-    userId: firstProduct.sellerId,
+    userId: sellerUserId,
     type: 'ORDER_CREATED',
     title: 'New order',
     body: `Order ${orderNumber} received`,
     data: { orderId },
+    entityType: 'ORDER',
+    entityId: orderId,
+    idempotencyKey: orderId,
+    vars: { orderNumber },
+  });
+
+  // AI-08.0: enqueue the `order.placed` domain event INSIDE this transaction, so
+  // it commits exactly with the order it describes. The unique dedupe key makes a
+  // retried create path idempotent (no second event). Delivery is deferred to the
+  // outbox worker, which routes it after commit — so routing can never run before
+  // the order is durable, and a routing failure can never roll the order back.
+  await enqueueEvent(db, {
+    eventType: 'order.placed',
+    aggregateType: 'ORDER',
+    aggregateId: orderId,
+    payload: { orderId, orderNumber, buyerId: input.buyerId, currencyCode, grandTotal },
+    dedupeKey: `order.placed:${orderId}`,
   });
 
   return {
@@ -379,6 +421,19 @@ export async function updateOrderStatus(
     throw ApiError.validation([{ field: 'status', message: `Invalid status: ${status}`, code: 'VALIDATION_FAILED' }]);
   }
 
+  // Confirmation is a money-gated transition. `paymentStatus = PAID` is written
+  // only by the payment kernel (`applyPaymentSucceeded`), which runs off
+  // provider-verified evidence — a signed webhook, or the offline desk's
+  // completion of a real intent, itself refused outside demo mode. Selecting a
+  // rail, creating an intent, or requesting payment are not payment: they leave
+  // the order PENDING/UNPAID. Without this gate a buyer or seller could confirm
+  // an unpaid order, which commits the reservation to a sale (see below) and
+  // hands over stock for money that never arrived. Mirrors the settlement layer,
+  // which already refuses to settle a payment that is not confirmed.
+  if (status === 'CONFIRMED' && order[0].paymentStatus !== 'PAID') {
+    throw ApiError.conflict('Cannot confirm an order whose payment has not been confirmed');
+  }
+
   // Inventory side-effects are applied atomically on confirmation/cancellation.
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
   const productRows = items.length
@@ -415,4 +470,23 @@ export async function updateOrderStatus(
     before: { status: order[0].status },
     after: { status },
   });
+
+  // Notify the counterparty — the party who did not make the change — so a buyer
+  // sees seller-side progress (shipped/delivered) and a seller sees a buyer
+  // cancellation. The actor never notifies themselves. `idempotencyKey` pairs the
+  // new status with the transition, so re-applying the same status is silent.
+  const counterparty = isBuyer ? order[0].sellerId : order[0].buyerId;
+  if (counterparty && counterparty !== actorId) {
+    await createNotification(db, {
+      userId: counterparty,
+      type: 'ORDER_STATUS_CHANGED',
+      title: 'Order status updated',
+      body: `Order ${order[0].orderNumber} is now ${status}.`,
+      data: { orderId, status },
+      entityType: 'ORDER',
+      entityId: orderId,
+      idempotencyKey: `${orderId}:${order[0].status}->${status}`,
+      vars: { orderNumber: order[0].orderNumber, status },
+    });
+  }
 }

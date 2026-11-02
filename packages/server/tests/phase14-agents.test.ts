@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createApp } from '../src/app.js';
-import { createAgentTask, decideAgentTask, listAgents, getTask, AGENT_CATALOGUE } from '../src/modules/ai/agents.js';
+import { createAgentTask, decideAgentTask, executeDueTasks, listAgents, getTask, AGENT_CATALOGUE } from '../src/modules/ai/runner.js';
 import { db } from '../src/db/client.js';
 import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
@@ -69,24 +69,26 @@ async function runTask(agentKey: string, input: Record<string, unknown>, request
 }
 
 describe('Phase 14 — specialised agent executors (real DB-backed capabilities)', () => {
-  it('registers exactly the 11 specialised agents with their capabilities', async () => {
+  it('registers the specialised agents with their capabilities', async () => {
     const agents = await listAgents(db);
     const keys = agents.map((a) => a.key).sort();
-    expect(keys).toEqual(
-      [
-        'ads-agent',
-        'analytics-agent',
-        'b2b-agent',
-        'development-agent',
-        'dispute-assistant',
-        'marketing-agent',
-        'market-research-agent',
-        'product-agent',
-        'risk-agent',
-        'sales-agent',
-        'support-agent',
-      ].sort(),
-    );
+    // The Phase 19 layer grows the catalogue; the original eleven must all
+    // still be registered alongside the additions.
+    const original = [
+      'ads-agent',
+      'analytics-agent',
+      'b2b-agent',
+      'development-agent',
+      'dispute-assistant',
+      'marketing-agent',
+      'market-research-agent',
+      'product-agent',
+      'risk-agent',
+      'sales-agent',
+      'support-agent',
+    ].sort();
+    for (const k of original) expect(keys).toContain(k);
+    expect(keys).toContain('agent-supervisor');
     // Every catalogue entry must carry a capability + permissions.
     for (const def of agents) {
       expect(def.capabilities.length).toBeGreaterThan(0);
@@ -94,12 +96,18 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
     }
   });
 
-  /** Runs a task and, for gated agents, approves it as a SUPER_ADMIN. */
+  /**
+   * Runs a task and, for gated agents, approves it as a SUPER_ADMIN and lets the
+   * scheduler dispatch it. Approval is recorded separately from execution, so
+   * the caller must drive the scheduler to observe the real outcome.
+   */
   async function runAndComplete(agentKey: string, input: Record<string, unknown>, staffId: string) {
     const created = await createAgentTask(db, ['SUPER_ADMIN'], staffId, { agentKey, requestedBy: staffId, input }, AUDIT);
     if (created.status === 'awaiting_approval') {
       // Human approval path — SUPER_ADMIN may approve (they hold AI_MANAGE).
-      return decideAgentTask(db, created.id, staffId, 'APPROVE', 'auto test approval', AUDIT);
+      await decideAgentTask(db, created.id, staffId, 'APPROVE', 'auto test approval', AUDIT);
+      await executeDueTasks(db);
+      return getTask(db, created.id);
     }
     return created;
   }
@@ -305,7 +313,8 @@ describe('Phase 14 — agent API integration (HTTP)', () => {
     });
     expect(denied.status).toBe(403);
 
-    // Admin (AI_MANAGE) can approve and then the task runs to 'approved'.
+    // Admin (AI_MANAGE) can approve; the approval is recorded as its own
+    // transition ('approved'), distinct from execution.
     const admin = await makeClient();
     await admin.req('/api/auth/register', {
       method: 'POST',

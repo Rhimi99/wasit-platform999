@@ -105,6 +105,38 @@ const envSchema = z.object({
   SMS_HTTP_TO_FIELD: z.string().default('to'),
   SMS_HTTP_TEXT_FIELD: z.string().default('text'),
   SMS_HTTP_SENDER_FIELD: z.string().default('from'),
+  // Notification webhook — an integration sink that receives lifecycle events
+  // (order/payment/refund) as JSON. Off unless a URL is configured, so the
+  // engine never opens an outbound connection by accident. The URL/token come
+  // only from the environment, never the repository.
+  NOTIFICATION_WEBHOOK_URL: z.string().default(''),
+  NOTIFICATION_WEBHOOK_TOKEN: z.string().optional(),
+  NOTIFICATION_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  // Device-push gateway (FCM-style HTTP endpoint). Addressable by a per-user
+  // topic name, so no device-token registry is required to deliver. Off unless
+  // a URL is configured. Credentials come only from the environment.
+  NOTIFICATION_PUSH_URL: z.string().default(''),
+  NOTIFICATION_PUSH_TOKEN: z.string().optional(),
+  NOTIFICATION_PUSH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  // Bounded retry for a single channel send. A transient provider outage is
+  // retried in-process; the durable audit row is what marks a message as still
+  // needing a re-send once the attempts are exhausted.
+  NOTIFICATION_RETRY_ATTEMPTS: z.coerce.number().int().min(1).max(5).default(2),
+  NOTIFICATION_RETRY_BACKOFF_MS: z.coerce.number().int().min(0).default(200),
+  /** How often the scheduler drains queued deliveries, in minutes. */
+  NOTIFICATION_DISPATCH_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1),
+  /**
+   * Formal approval gate for real (non-sandbox) external delivery in production.
+   * Email over SMTP, SMS over HTTP and the notification webhook are external
+   * integrations: they must not be switched on in production until the provider
+   * and its contract are approved. Left off, the engine degrades those channels
+   * to SKIPPED (recorded, not sent) instead of reaching the network. The `log`
+   * transports are sandbox-only and are unaffected by this gate.
+   */
+  NOTIFICATION_EXTERNAL_APPROVED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   /** Lifetime of a phone-verification code, in minutes. */
   PHONE_VERIFY_TTL_MINUTES: z.coerce.number().int().positive().default(10),
   /** Max wrong-code attempts before the code is dead and a new one is required. */
@@ -320,6 +352,18 @@ if (env.NODE_ENV === 'production' && env.DEMO_PAYMENT_MODE) {
 
 export function demoPaymentMode(): boolean {
   return env.NODE_ENV !== 'production' && env.DEMO_PAYMENT_MODE;
+}
+
+/**
+ * Whether real (non-sandbox) external notification delivery may run. Production
+ * is the only environment that requires formal approval: dev/test/staging run
+ * against the sandbox `log` transports (or an operator-configured sandbox
+ * endpoint) and are never real money or real recipients. In production the
+ * `NOTIFICATION_EXTERNAL_APPROVED` flag must be set explicitly; until it is, the
+ * engine records those sends as SKIPPED rather than reaching the network.
+ */
+export function notificationExternalApproved(): boolean {
+  return env.NODE_ENV !== 'production' || env.NOTIFICATION_EXTERNAL_APPROVED;
 }
 
 /**

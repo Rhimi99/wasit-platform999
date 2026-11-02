@@ -755,9 +755,30 @@ export interface AgentRegistryRow {
   id: string;
   key: string;
   name: string;
+  nameAr: string | null;
+  mission: string | null;
+  category: string;
   description: string | null;
+  allowedTools: string[];
+  approvalActions: string[];
+  limits: Record<string, number | string | boolean>;
+  taskTypes: string[];
   requiresHumanApproval: boolean;
+  status: 'ACTIVE' | 'PAUSED' | 'DISABLED';
+  isCopilot: boolean;
   isActive: boolean;
+  createdAt: string;
+}
+
+export interface AgentScheduleRow {
+  id: string;
+  agentKey: string;
+  taskType: string;
+  intervalSeconds: number;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastTaskId: string | null;
   createdAt: string;
 }
 
@@ -765,14 +786,23 @@ export interface AgentTaskRow {
   id: string;
   agentKey: string;
   requestedBy: string;
+  taskType: string | null;
   input: Record<string, unknown>;
   status: AgentTaskStatus;
   result: unknown;
   error: { message?: string } | null;
   requiresApproval: boolean;
+  approvalAction: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   rejectionReason: string | null;
+  dedupeKey: string | null;
+  correlationId: string | null;
+  triggeredBy: string;
+  priority: number;
+  attempts: number;
+  maxAttempts: number;
+  scheduledFor: string | null;
   cost: string;
   model: string;
   latencyMs: number;
@@ -782,6 +812,359 @@ export interface AgentTaskRow {
 export interface AgentTaskDecision {
   id: string;
   status: AgentTaskStatus;
+}
+
+/** One event's routing preview (AI-02.2). No task is created by a preview. */
+export interface CopilotRoutingPreview {
+  event: string;
+  agentKey: string | null;
+  taskType: string | null;
+  runnable: boolean;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  reason: string | null;
+}
+
+export interface CopilotRouteResult {
+  correlationId: string;
+  routed: { event: string; agentKey: string; taskId: string; status: string }[];
+  skipped: { event: string; reason: string }[];
+}
+
+export interface CopilotRunDetail {
+  correlationId: string;
+  total: number;
+  byStatus: Record<string, number>;
+  tasks: Array<{
+    id: string;
+    agentKey: string;
+    taskType: string | null;
+    status: string;
+    requiresApproval: boolean;
+    approvalAction: string | null;
+  }>;
+  needsHumanAction: number;
+  cost: { totalCost: string; tokensInput: number; tokensOutput: number };
+}
+
+export interface CopilotAuditRow {
+  id: string;
+  action: string;
+  actorId: string | null;
+  entityType: string | null;
+  entityId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+// ---- General Manager (GM) orchestrator desk (AI-05.0 / AI-07.0) ----
+// Mirrors the server types in `modules/ai/orchestrator.ts`. The retrieved run is
+// the persisted snapshot replayed verbatim, so these fields are always present.
+
+export type GmStepOutcome = 'succeeded' | 'failed' | 'awaiting_approval' | 'blocked' | 'skipped' | 'not_run';
+
+export interface GmStepResultRow {
+  stepId: string;
+  agentKey: string;
+  taskType: string;
+  intent: string;
+  intentAr: string;
+  outcome: GmStepOutcome;
+  taskId: string | null;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  evidenceKeys: string[];
+  evidence: Record<string, string>;
+  error: string | null;
+  skippedReason: string | null;
+}
+
+export interface GmConflictRow {
+  key: string;
+  values: { stepId: string; value: string }[];
+}
+
+export interface GmReviewRow {
+  failed: string[];
+  blocked: string[];
+  notRun: string[];
+  pendingApproval: string[];
+  skipped: { stepId: string; reason: string }[];
+  insufficientEvidence: string[];
+  conflicts: GmConflictRow[];
+  evidenceCount: number;
+  hasBlockingIssues: boolean;
+}
+
+export interface GmReportRow {
+  goal: string;
+  playbookId: string;
+  playbookLabel: string;
+  playbookLabelAr: string;
+  summaryAr: string;
+  summaryEn: string;
+  steps: GmStepResultRow[];
+  risks: string[];
+  priorities: string[];
+  recommendations: string[];
+}
+
+/** A follow-up the GM *proposes* only — never executed by the orchestrator. */
+export interface GmProposedActionRow {
+  action: string;
+  description: string;
+  descriptionAr: string;
+  agentKey: string | null;
+  requiresApproval: boolean;
+  executed: false;
+}
+
+/** Why a proposed action cannot be executed (G4). */
+export type GmActionReason =
+  | 'UNKNOWN_ACTION'
+  | 'NO_AGENT'
+  | 'AGENT_UNAVAILABLE'
+  | 'NOT_AUTHORIZED'
+  | 'AGENT_STOPPED'
+  | 'AGENT_NOT_ACTIVE'
+  | 'CONFLICT';
+
+/** The real outcome of `POST /runs/:id/actions/execute` (G4). */
+export interface GmActionResultRow {
+  runId: string;
+  action: string;
+  status: 'task_created' | 'blocked';
+  reason: GmActionReason | null;
+  agentKey: string | null;
+  taskId: string | null;
+  taskStatus: string | null;
+  requiresApproval: boolean;
+  approvalAction: string | null;
+  deduplicated: boolean;
+  message: string | null;
+}
+
+/** One proposed action of a run, annotated for the desk (G4, read-only). */
+export interface GmRunActionRow {
+  action: string;
+  description: string;
+  descriptionAr: string;
+  agentKey: string | null;
+  requiresApproval: boolean;
+  executable: boolean;
+  reason: GmActionReason | null;
+  taskId: string | null;
+  taskStatus: string | null;
+}
+
+export interface GmPlaybookRow {
+  id: string;
+  label: string;
+  labelAr: string;
+  steps: number;
+  agents: string[];
+}
+
+/** A completed run as returned by `POST /orchestrate` and `GET /runs/:id`. */
+export interface GmRunRecord {
+  runId: string;
+  correlationId: string;
+  requestedBy: string;
+  role: string[];
+  playbookId: string;
+  matchedKeywords: string[];
+  plan: { waves: string[][]; dropped: string[] };
+  results: GmStepResultRow[];
+  review: GmReviewRow;
+  report: GmReportRow;
+  proposedActions: GmProposedActionRow[];
+  createdAt?: string;
+  capturedAt?: string;
+}
+
+/** One row of the GM run log (`GET /api/admin/gm/runs`). */
+export interface GmRunSummaryRow {
+  runId: string;
+  goal: string | null;
+  playbookId: string | null;
+  createdAt: string;
+  succeeded: number;
+  failed: number;
+  pendingApproval: number;
+  skipped: number;
+  hasSnapshot: boolean;
+}
+
+// ---- On-demand AI agent cycle (G8) ----
+// Mirrors the server types in `modules/ai/cycle.ts`. The status is the real
+// outcome the server reported; `blocked`/`failed` are never rendered as success.
+
+export type AgentCycleStatus = 'completed' | 'blocked' | 'failed';
+export type AgentCycleLifecycle = 'started' | 'completed' | 'blocked' | 'failed';
+
+export interface AgentCycleSteps {
+  schedulesDispatched: number;
+  tasksRan: number;
+  tasksFailed: number;
+  tasksRefused: number;
+  staleReaped: number;
+  outboxClaimed: number;
+  outboxProcessed: number;
+  outboxFailed: number;
+  outboxReaped: number;
+}
+
+/** The result of `POST /api/admin/gm/cycle`. */
+export interface AgentCycleResult {
+  correlationId: string;
+  status: AgentCycleStatus;
+  reason: string | null;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  budget: { spentUsd: string; limitUsd: string | null; source: string; currencyCode: string };
+  steps: AgentCycleSteps;
+}
+
+/** One row of the cycle log (`GET /api/admin/gm/cycles`). */
+export interface AgentCycleSummary {
+  correlationId: string;
+  status: AgentCycleLifecycle;
+  reason: string | null;
+  actorId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  steps: AgentCycleSteps | null;
+}
+
+// ---- Agent Operations desk (AI-06.0 / AI-06.1) ----
+// Mirrors the server types in `modules/ai/agent-monitor.ts` and
+// `modules/ai/supervisor.ts`. Every field is derived server-side from real
+// operational rows; nothing here is a placeholder.
+
+/** One row of `GET /api/admin/agent-ops/performance` — per-agent, per-scope. */
+export interface AgentPerformanceRow {
+  agentKey: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  blocked: number;
+  refused: number;
+  successRate: number;
+  failureRate: number;
+  avgLatencyMs: number;
+  awaitingApproval: number;
+  running: number;
+  queued: number;
+  overdue: number;
+  costUsd: string;
+  tokensInput: number;
+  tokensOutput: number;
+  providerFailures: number;
+  localRuns: number;
+  toolCalls: number;
+  toolFailures: number;
+  lastActivityAt: string | null;
+}
+
+export type MonitorAlertKind = 'budget' | 'failures' | 'unhealthy' | 'overdue' | 'system-overdue' | 'system-failures';
+
+/** A structured alert the GM should see (`GET /api/admin/agent-ops/health`). */
+export interface MonitorAlert {
+  kind: MonitorAlertKind;
+  severity: 'warning' | 'critical';
+  agentKey?: string;
+  message: string;
+}
+
+/**
+ * The unified team-health picture. `system` is present only in the platform
+ * view and reports the scheduler's telemetry **separately** from human activity,
+ * so the two are never merged.
+ */
+export interface TeamHealth {
+  generatedAt: string;
+  scope: 'platform' | 'owner';
+  agents: { total: number; active: number; paused: number; disabled: number; unhealthy: number };
+  tasks: {
+    queued: number;
+    running: number;
+    awaitingApproval: number;
+    overdue: number;
+    succeeded24h: number;
+    failed24h: number;
+    refused24h: number;
+  };
+  budget: { spentUsd24h: string; runsOverCap24h: number };
+  system?: { succeeded24h: number; failed24h: number; refused24h: number; overdue: number };
+  alerts: MonitorAlert[];
+  needsHumanAttention: Array<{ agentKey: string; reason: string }>;
+}
+
+/** One row of `GET /api/admin/agent-ops/activity`. */
+export interface AgentActivityRow {
+  id: string;
+  agentKey: string;
+  taskType: string | null;
+  status: string;
+  requestedBy: string;
+  triggeredBy: string;
+  latencyMs: number | null;
+  cost: string;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+/**
+ * One row of `GET /api/admin/agent-ops/memory` (G7). A bounded, already-validated
+ * projection of a stored operational-memory note — never the raw content jsonb.
+ * All fields are display-only and are rendered as plain text (never as markup).
+ */
+export interface AgentMemoryRow {
+  id: string;
+  agentKey: string;
+  kind: string;
+  taskId: string | null;
+  source: string | null;
+  tags: string[];
+  outcome: string | null;
+  latencyMs: number | null;
+  errorCode: string | null;
+  createdAt: string;
+}
+
+/** A supervisor alert (`GET /api/admin/ai/supervisor/report`). */
+export interface SupervisorAlertRow {
+  agentKey: string;
+  taskId: string | null;
+  severity: 'WARNING' | 'CRITICAL';
+  reason: string;
+  action: string;
+}
+
+/** One contained (failed/blocked) task in the supervisor's escalation queue. */
+export interface SupervisorContainedTaskRow {
+  id: string;
+  agentKey: string;
+  taskType: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/** Read-only supervisor report (`GET /api/admin/ai/supervisor/report`). */
+export interface SupervisorReportRow {
+  generatedAt: string;
+  total: number;
+  loopDetected: boolean;
+  runawayDetected: boolean;
+  stuckTasks: number;
+  expiredQueued: number;
+  failureRateFlagged: boolean;
+  interventions: Array<{ taskId: string; agentKey: string; reason: string; action: string }>;
+  alerts: SupervisorAlertRow[];
+  haltedAgents: Array<{ key: string; status: string }>;
+  contained: SupervisorContainedTaskRow[];
 }
 
 
@@ -1290,4 +1673,217 @@ export interface DirectoryMerchantRow {
 export interface DirectoryListResponse<T> {
   items: T[];
   pagination: PaginationInfo;
+}
+
+// ---- Own-data privacy consent (server: modules/privacy) ----
+export interface ConsentItem {
+  type: string;
+  label: string;
+  granted: boolean;
+}
+
+export interface ConsentDefault {
+  type: string;
+  label: string;
+  grantedByDefault: boolean;
+}
+
+/**
+ * Shape of `GET /api/privacy/me`. `consents` is normalised server-side: every
+ * `CONSENT_TYPES` entry is present, so a missing row and an explicit `false`
+ * both surface as `granted: false` — the client cannot tell "never decided"
+ * from "declined". `defaults` marks the types the server treats as baseline.
+ */
+export interface PrivacyConsentState {
+  consents: ConsentItem[];
+  defaults: ConsentDefault[];
+  settings: {
+    require2FA: boolean;
+    loginNotifications: boolean;
+    deviceTracking: boolean;
+  } | null;
+}
+
+// ---- Admin trade desk (server: modules/admin/trade-routes) ----
+export type TradeKind = 'suppliers' | 'merchants' | 'companies';
+
+/**
+ * One seller entity on the admin vetting desk. Unlike the public directory rows,
+ * `name` is normalised server-side across the three tables (companyName /
+ * storeName / legalName) and inactive entities are included so they can be
+ * reactivated.
+ */
+export interface AdminTradeRow {
+  id: string;
+  kind: TradeKind;
+  name: string;
+  slug: string;
+  userId: string;
+  countryId: string | null;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminTradeListResponse {
+  items: AdminTradeRow[];
+  pagination: PaginationInfo;
+}
+
+// ---- Admin finance (settlement / payout money-movement surface) ----
+// Mirrors the shapes returned by `/api/admin/finance/*`; the server stays the
+// only writer of SETTLED/COMPLETED, so these are read/action views, not state.
+
+export type PayoutStatus = 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'HELD';
+
+/** One configured payout rail and what it can prove. Never carries credentials. */
+export interface PayoutRail {
+  id: string;
+  functional: boolean;
+  available: boolean;
+  demo: boolean;
+  transferReference: boolean;
+}
+
+export interface PayoutRails {
+  active: string;
+  providers: PayoutRail[];
+}
+
+/** The seller payout record as persisted (net amount is derived, never supplied). */
+export interface PayoutRecord {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+}
+
+/** Result of `POST /settlements/confirm`: whether it applied, or was a replay. */
+export interface SettlementResult {
+  applied: boolean;
+  duplicate: boolean;
+  settlementEntryId: string | null;
+}
+
+/** One row of the admin payout list (`GET /payouts`). Read-only projection. */
+export interface PayoutListRow {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+/** Paginated payout list as returned by `GET /payouts`. */
+export interface PayoutListResult {
+  items: PayoutListRow[];
+  pagination: { page: number; pageSize: number; total: number };
+}
+
+// ---- Reconciliation (PS-04 three-way matching) ----
+
+export type ReconciliationStatus = 'MATCHED' | 'MISMATCH';
+
+/** Why a reference did not reconcile; the engine classifies, never guesses. */
+export type MismatchKind =
+  | 'MISSING_IN_LEDGER'
+  | 'MISSING_IN_PROVIDER'
+  | 'MISSING_IN_BANK'
+  | 'AMOUNT_MISMATCH'
+  | 'FEE_MISMATCH'
+  | 'NET_MISMATCH'
+  | 'CURRENCY_MISMATCH'
+  | 'NOT_SETTLED_IN_LEDGER'
+  | 'DUPLICATE_REFERENCE';
+
+export interface ProviderFeedLine {
+  reference: string;
+  settlementRef?: string | null;
+  payoutRef?: string | null;
+  grossAmount: string;
+  providerFee: string;
+  netAmount: string;
+  currencyCode: string;
+  occurredAt?: string | null;
+}
+
+export interface BankFeedLine {
+  reference: string;
+  settlementRef?: string | null;
+  payoutRef?: string | null;
+  amount: string;
+  currencyCode: string;
+  occurredAt?: string | null;
+}
+
+export interface LedgerFeedLine {
+  reference: string;
+  grossAmount: string;
+  providerFee: string;
+  netAmount: string;
+  currencyCode: string;
+  settled: boolean;
+}
+
+export interface ReconciliationDecision {
+  reference: string;
+  status: ReconciliationStatus;
+  mismatches: MismatchKind[];
+  provider: ProviderFeedLine | null;
+  bank: BankFeedLine | null;
+  ledger: LedgerFeedLine | null;
+}
+
+export interface ReconciliationReport {
+  currencyCode: string;
+  decisions: ReconciliationDecision[];
+  matched: number;
+  mismatched: number;
+}
+
+/** Result of `POST /reconciliation/import`: the persisted report, or a replay. */
+export interface ReconciliationImportResult {
+  importId: string;
+  duplicate: boolean;
+  insertedLines: number;
+  report: ReconciliationReport;
+}
+
+/** Result of `POST /reconciliation/preview-file`: the report, nothing written. */
+export interface ReconciliationPreviewResult {
+  format: 'csv' | 'tsv' | 'json';
+  source: 'PROVIDER' | 'BANK';
+  currencyCode: string;
+  rowCount: number;
+  report: ReconciliationReport;
+}
+
+export type ReceiptSource = 'BANK_STATEMENT' | 'ACQUIRER' | 'PROVIDER';
+
+/** Result of `POST /receipts`: WASIT's commission funds proven received. */
+export interface ReceiptResult {
+  id: string;
+  status: 'RECEIVED';
+  reference: string;
+  amount: string;
+  currencyCode: string;
+  source: ReceiptSource;
+  duplicate: boolean;
 }

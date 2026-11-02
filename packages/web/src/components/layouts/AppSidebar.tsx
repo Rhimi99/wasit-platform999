@@ -12,6 +12,8 @@ export interface NavItem {
   key: string;
   icon: string;
   feature?: Feature;
+  /** Renders only for SUPER_ADMIN (server enforces the same on the route). */
+  superAdminOnly?: boolean;
 }
 
 function baseNav(roleKey: string): NavItem[] {
@@ -107,9 +109,11 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/reports', key: 'admin.reports', icon: '📄' },
   { to: '/admin/users', key: 'admin.users', icon: '👥' },
   { to: '/admin/products', key: 'admin.products', icon: '📦' },
+  { to: '/admin/trade', key: 'admin.trade', icon: '🏷️' },
   { to: '/admin/orders', key: 'admin.orders', icon: '🧾' },
   { to: '/admin/transactions', key: 'admin.transactions', icon: '💳' },
   { to: '/admin/ledger', key: 'admin.ledger', icon: '📒' },
+  { to: '/admin/finance', key: 'admin.finance', icon: '💰' },
   { to: '/admin/verification', key: 'admin.verification', icon: '✅' },
   { to: '/admin/trust', key: 'admin.trust', icon: '🛡️' },
   { to: '/admin/risk', key: 'admin.risk', icon: '⚠️' },
@@ -118,6 +122,9 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/ads', key: 'admin.ads', icon: '📣' },
   { to: '/admin/subscriptions', key: 'admin.subscriptions', icon: '🔁' },
   { to: '/admin/ai', key: 'admin.aiGovernance', icon: '🤖' },
+  { to: '/admin/agent-ops', key: 'admin.agentOps', icon: '🛰️' },
+  { to: '/admin/copilot', key: 'admin.copilot', icon: '🧭', superAdminOnly: true },
+  { to: '/admin/gm', key: 'admin.gm', icon: '🎯', superAdminOnly: true },
   { to: '/admin/observability', key: 'admin.observability', icon: '📈' },
   { to: '/admin/privacy', key: 'admin.privacy', icon: '🔒' },
   { to: '/admin/audit', key: 'admin.audit', icon: '🔎' },
@@ -128,11 +135,14 @@ export function AppSidebar() {
   const { user, role, can, logout } = useAuth();
   const navigate = useNavigate();
 
-  const items = user?.roles.includes('ADMIN') || user?.roles.includes('SUPER_ADMIN')
+  const isSuperAdmin = user?.roles.includes('SUPER_ADMIN') ?? false;
+  const items = user?.roles.includes('ADMIN') || isSuperAdmin
     ? [...ADMIN_NAV, ...baseNav(role)]
     : baseNav(role);
 
-  const visible = items.filter((i) => !i.feature || can(i.feature));
+  const visible = items.filter(
+    (i) => (!i.feature || can(i.feature)) && (!i.superAdminOnly || isSuperAdmin),
+  );
 
   const handleLogout = async () => {
     await logout();

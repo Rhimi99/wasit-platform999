@@ -25,17 +25,23 @@ import { DashboardInventoryPage, DashboardComparisonPage, DashboardSalesPage } f
 import { DashboardListPage, DashboardFinancePage, DashboardReportsPage, DashboardCustomersPage, DashboardBuyersPage, DashboardSuppliersPage, DashboardMerchantsListPage, DashboardMySuppliersPage, DashboardMyMerchantsPage } from './pages/DashboardListPages';
 import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
-import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
+import { AdminOnly, StaffOnly, SuperAdminOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
 import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
 import { AdminAiPage } from './pages/AdminAiPage';
+import { AdminCopilotPage } from './pages/AdminCopilotPage';
+import { AdminGmPage } from './pages/AdminGmPage';
+import { AdminAgentOpsPage } from './pages/AdminAgentOpsPage';
 import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
+import { AdminTradePage } from './pages/AdminTradePage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
+import { AdminFinancePage } from './pages/AdminFinancePage';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
+import { CookieConsentBanner } from './components/CookieConsent';
 import { DemoCustomerEntryPage } from './pages/DemoCustomerEntryPage';
 import { DemoOwnerAuditPage } from './pages/DemoOwnerAuditPage';
 
@@ -123,9 +129,11 @@ export default function App() {
       <Route path="/admin/reports" element={<RequireAuth><AdminOnly><AdminReportsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/users" element={<RequireAuth><AdminOnly><AdminUsersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/products" element={<RequireAuth><AdminOnly><AdminProductsPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/trade" element={<RequireAuth><AdminOnly><AdminTradePage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ledger" element={<RequireAuth><AdminOnly><AdminLedgerPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/finance" element={<RequireAuth><AdminOnly><AdminFinancePage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/audit" element={<RequireAuth><AdminOnly><AdminAuditPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/verification" element={<RequireAuth><StaffOnly><AdminVerificationPage /></StaffOnly></RequireAuth>} />
       <Route path="/admin/trust" element={<RequireAuth><StaffOnly><AdminTrustPage /></StaffOnly></RequireAuth>} />
@@ -134,12 +142,16 @@ export default function App() {
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ai" element={<RequireAuth><AdminOnly><AdminAiPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/agent-ops" element={<RequireAuth><AdminOnly><AdminAgentOpsPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/copilot" element={<RequireAuth><SuperAdminOnly><AdminCopilotPage /></SuperAdminOnly></RequireAuth>} />
+      <Route path="/admin/gm" element={<RequireAuth><SuperAdminOnly><AdminGmPage /></SuperAdminOnly></RequireAuth>} />
       <Route path="/admin/observability" element={<RequireAuth><AdminOnly><AdminObservabilityPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/privacy" element={<RequireAuth><AdminOnly><AdminPrivacyPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ads" element={<RequireAuth><AdminOnly><AdminAdsPage /></AdminOnly></RequireAuth>} />
 
       <Route path="*" element={<NotFoundPage />} />
       </Routes>
+      <CookieConsentBanner />
     </>
   );
 }

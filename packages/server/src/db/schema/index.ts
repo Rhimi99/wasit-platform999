@@ -14,6 +14,7 @@ export * from './ads';
 export * from './subscriptions';
 export * from './ai';
 export * from './agents';
+export * from './outbox';
 export * from './media';
 export * from './analytics';
 export * from './revenue';

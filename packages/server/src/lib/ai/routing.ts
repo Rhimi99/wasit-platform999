@@ -26,6 +26,12 @@ const CAPABILITY_MODEL_POLICY: Record<string, string> = {
   SALES_INTELLIGENCE: 'anthropic-claude-sonnet-4',
   SUPPORT_REPLY: 'openai-gpt-4o-mini',
   AGENT_TASK: 'local-heuristic',
+  // Optional natural-language reasoning for specialised agents (AI-02.0). A
+  // cheap default so enabling a vendor does not silently run every agent on the
+  // priciest catalogue entry; the admin can repoint it via `ai_models` or
+  // `AI_DEFAULT_MODEL`. When no vendor is configured the route degrades to the
+  // deterministic local engine, so agent facts are unchanged.
+  AGENT_REASONING: 'openai-gpt-4o-mini',
 };
 
 /**
@@ -58,6 +64,24 @@ const VENDOR_MODEL_NAMES: Record<string, string> = {
 };
 
 /**
+ * The catalogue model a provider serves by default.
+ *
+ * Used by capabilities that must follow whichever vendor is configured (e.g.
+ * agent reasoning, AI-02.0) so a call is placed on the provider's OWN model
+ * instead of a capability policy pinned to a different vendor. Without this, an
+ * Anthropic deployment would send an OpenAI model name to the Anthropic API.
+ */
+const PROVIDER_DEFAULT_CATALOGUE_MODEL: Record<string, string> = {
+  openai: 'openai-gpt-4o-mini',
+  anthropic: 'anthropic-claude-sonnet-4',
+};
+
+/** The catalogue model key for a configured provider id, or `undefined`. */
+export function defaultModelForProvider(providerId: string): string | undefined {
+  return PROVIDER_DEFAULT_CATALOGUE_MODEL[providerId];
+}
+
+/**
  * Resolves a routable provider+model for a capability (task type).
  *
  * Precedence for the model key, highest first:
@@ -77,18 +101,36 @@ export async function resolveAiRoute(
   roles: UserRole[],
   requestedModel?: string,
 ): Promise<ResolvedRoute> {
-  const preferred = requestedModel && requestedModel.length > 0
-    ? requestedModel
-    : (CAPABILITY_MODEL_POLICY[requestType] ?? env.AI_MODEL ?? env.AI_DEFAULT_MODEL ?? 'openai-gpt-4o-mini');
-
-  const allowedMax = maxAllowedModelForRoles(roles);
-  const targetKey = allowedMax && preferred !== 'local-heuristic' && preferred !== 'noop'
-    ? (preferred === allowedMax ? preferred : allowedMax)
-    : preferred;
-
   // Prefer a live (configured) provider for the target model.
   const provider = resolveProvider();
   const targetProviderId = provider.id;
+
+  // Capabilities that must FOLLOW the configured provider rather than a fixed
+  // capability policy (agent reasoning, AI-02.0): an Anthropic deployment must
+  // not be handed an OpenAI model name. An explicit caller model or an admin
+  // `AI_MODEL` override still wins, so routing stays data-driven.
+  const envModel = env.AI_MODEL?.trim();
+  const followsProvider = requestType === 'AGENT_REASONING';
+  const providerModel = defaultModelForProvider(targetProviderId);
+
+  const preferred = requestedModel && requestedModel.length > 0
+    ? requestedModel
+    : (followsProvider && providerModel !== undefined && !envModel
+        ? providerModel
+        : (CAPABILITY_MODEL_POLICY[requestType] ?? envModel ?? env.AI_DEFAULT_MODEL ?? 'openai-gpt-4o-mini'));
+
+  const allowedMax = maxAllowedModelForRoles(roles);
+  let targetKey = allowedMax && preferred !== 'local-heuristic' && preferred !== 'noop'
+    ? (preferred === allowedMax ? preferred : allowedMax)
+    : preferred;
+
+  // Keep a provider-following capability on the configured vendor: the role
+  // ceiling (a non-admin is clamped to `AI_DEFAULT_MODEL`, an OpenAI key by
+  // default) must not hand an Anthropic deployment an OpenAI model name.
+  if (followsProvider && providerModel !== undefined && targetKey !== 'local-heuristic' && targetKey !== 'noop'
+    && !targetKey.startsWith(`${targetProviderId}-`)) {
+    targetKey = providerModel;
+  }
   const wantsPaid = targetKey !== 'local-heuristic' && targetKey !== 'noop';
 
   if (wantsPaid && provider.isAvailable() && targetProviderId !== 'local-heuristic' && targetProviderId !== 'noop') {

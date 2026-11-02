@@ -5,6 +5,11 @@ import { auditLogs } from '../../db/schema/audit';
 import { resolveMailTransport } from './resolve';
 import type { MailMessage } from './port';
 
+export interface SendResult {
+  ok: boolean;
+  error?: string;
+}
+
 /**
  * Sends a transactional email and records the attempt in the audit log.
  *
@@ -12,8 +17,11 @@ import type { MailMessage } from './port';
  * outage must not fail a registration or a password-reset request that has
  * already been persisted, otherwise the user is locked out with no recourse.
  * The audit row is the durable signal that a message needs to be re-sent.
+ *
+ * The outcome is returned so a caller that owns its own delivery ledger (the
+ * notifications engine) can record SENT/FAILED accurately instead of guessing.
  */
-export async function sendMail(db: DB, message: MailMessage): Promise<void> {
+export async function sendMail(db: DB, message: MailMessage): Promise<SendResult> {
   const transport = resolveMailTransport();
   try {
     await transport.send(message);
@@ -29,6 +37,7 @@ export async function sendMail(db: DB, message: MailMessage): Promise<void> {
       userAgent: null,
       metadata: { transport: transport.id, environment: env.NODE_ENV },
     });
+    return { ok: true };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`[mail] delivery failed via ${transport.id}:`, (err as Error).message);
@@ -44,5 +53,6 @@ export async function sendMail(db: DB, message: MailMessage): Promise<void> {
       userAgent: null,
       metadata: { transport: transport.id, error: (err as Error).message },
     });
+    return { ok: false, error: (err as Error).message };
   }
 }

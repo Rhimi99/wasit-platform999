@@ -27,6 +27,7 @@ if (env.SCHEDULER_ENABLED) {
     rateLimitPurgeIntervalMinutes: env.RATE_LIMIT_PURGE_INTERVAL_MINUTES,
     alertsEnabled: env.OBS_ALERTS_ENABLED,
     alertIntervalMinutes: env.OBS_ALERT_INTERVAL_MINUTES,
+    notificationIntervalMinutes: env.NOTIFICATION_DISPATCH_INTERVAL_MINUTES,
   });
   const shutdown = (): void => {
     handle.stop();

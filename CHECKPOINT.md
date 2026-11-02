@@ -2149,7 +2149,7 @@ workaround داخل login. الـseed هو المصدر الوحيد: أي إع�
 | **Endpoints / Consumption** | ✅ `src/lib/ai/endpoints.ts` — `runMarketAnalysis`, `runRecommendations`, `runSupplierRecommendations`, `runPriceIntelligence` — حقيقية (DB-backed) |
 | **Self Endpoints** | ✅ `src/lib/ai/self-endpoints.ts` — `runSmartSearch`, `runSalesIntelligence`, `myActivity` |
 | **Product Agent** | ✅ `src/modules/ai/service.ts` — `analyzeProduct` (تحليل listing حقيقي) |
-| **Specialized Agents (Phase 13 catalog)** | ✅ `src/modules/ai/agents.ts` — كتالوج 11 وكيلاً (`agent_registry` auto-seed) + تنفيذ tasks (gated بموافقة بشرية لـ 6) + audit + notifications |
+| **Specialized Agents (Phase 13 catalog)** | ✅ `src/modules/ai/agents.ts` — كتالوج 11 وكيلاً (`agent_registry` auto-seed) + تنفيذ tasks (gated بموافقة بشرية لـ 6) + audit + notifications *(مرجع تاريخي — الملف أُزيل في `4af09b7`؛ الكتالوج الحالي `src/modules/ai/catalogue.ts` والمنفّذون `src/modules/ai/executors.ts`)* |
 | **Phase 14 — Specialized Executors** | ✅ **جديد** `src/modules/ai/executors.ts` — منفّذ DB-backed خاص لكل وكيل من الـ11 (بدلاً من executor عام واحد)؛ الـ `createAgentTask`/`decideAgentTask` يوجهان إليه |
 | **AI Routes API** | ✅ `src/modules/ai/routes.ts` — 20+ endpoint محمية بـ `AI_USE` / `AI_MANAGE` / `ADMIN_AI` + validation + audit |
 | **RBAC** | ✅ `AI_USE` ممنوح لـ CUSTOMER + `AI_MANAGE`/`ADMIN_AI` للإدارة فقط؛ الـ executors تُفرض capabilities لكل وكيل |

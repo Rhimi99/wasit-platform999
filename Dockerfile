@@ -19,6 +19,30 @@ COPY packages/server packages/server
 WORKDIR /app/packages/server
 RUN npm run build:prod
 
+# Repair sandbox image (Development Agent self-repair).
+#
+# Carries the full, pre-installed dependency closure from `deps` — including the
+# devDependencies (`vitest`) the generated DB-free repair config needs — so a
+# repair test runs against `/app/node_modules` inside this image and NEVER
+# against the host repository's tree. It runs read-only, with no network, no
+# added capabilities, no privilege escalation and as the unprivileged `node`
+# user; only the mounted repair workspace is writable. The server image below is
+# unchanged and does not build on this stage.
+FROM deps AS repair
+ENV NODE_ENV=test
+# The repair workspace is mounted under /app (see REPAIR_WORKSPACE_MOUNT), so the
+# tests resolve the workspace's `../src/...` imports and the image's
+# `/app/node_modules`. That node_modules contains an `@wasit/shared` symlink to
+# /app/packages/shared, so the shared sources MUST be present here or the link
+# dangles and any repair test reaching server code that imports @wasit/shared
+# fails to resolve. (This stage does not build shared to dist: the runtime image
+# gets shared inlined by the esbuild bundle.)
+COPY packages/shared packages/shared
+RUN chown -R node:node /app
+USER node
+WORKDIR /app/repair-ws
+CMD ["node", "/app/node_modules/vitest/vitest.mjs", "--help"]
+
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app

@@ -297,12 +297,59 @@ sha256sum -c WASIT-BUSINESS-GLOBAL-COMMERCIAL-RELEASE-2026-09-26.zip.sha256
 
 ---
 
-## 11. Known non-blocker
+## 11. Admin Trust empty state — resolved
 
-**Admin Trust empty state.** When the Trust table is empty, the page shows a
-message telling the operator to recompute scores, but the recompute button is not
-rendered, so the instruction cannot be followed from that screen. This is a real
-UX/functional gap, recorded here and in `FINAL-AUDIT.md`. It does not block the
-commercial release: the merchant self-service recompute path
-(`/dashboard/trust`) and the admin console (`/admin/trust`) both work on
-non-empty data.
+When the Trust table is empty, the desk used to show a message telling the
+operator to recompute scores, but the recompute button was only rendered inside
+existing rows, so the instruction could not be followed from that screen. The
+empty state now renders a user picker and a recompute control that call the same
+`POST /api/admin/trust/:userId/recompute` endpoint (permission `TRUST_READ_ALL`)
+as a row action, so the first score can be created from the desk. Covered by the
+E2E test "trust desk creates the first score from an empty table (picker path)"
+in `e2e/functional-audit.spec.ts`; recorded in `FINAL-AUDIT.md`.
+
+---
+
+## 12. Manual/offline payment completion — resolved
+
+The `manual` (offline desk) rail produces no signed provider callback, so an
+offline order could never leave `PENDING`: only the webhook handler set
+`paymentStatus = PAID`. The desk now has an operator-only completion path,
+`POST /api/payments/orders/:orderId/complete-manual`, surfaced on `/admin/orders`
+when the active rail is `manual` and the order is `PENDING`. It reuses the same
+internal `applyPaymentSucceeded` transition as the webhook, inside a transaction
+with a row lock so concurrent completions yield exactly one transition. It is
+refused server-side for anyone without `REFUND_MANAGE`, for a non-offline rail,
+for an order with no payment in progress, and outside demo mode (the `manual`
+harness is a demo provider, so this is a demonstration path, not a production
+payment integration). It records the **payment only** — never a settlement.
+Covered by `packages/server/tests/manual-payment-completion.test.ts` and the E2E
+`e2e/manual-payment.spec.ts`; recorded in `FINAL-AUDIT.md`.
+
+---
+
+## 13. Cookie/GDPR consent from the UI — resolved
+
+`PUT /api/privacy/consents` and `GET /api/privacy/me` existed, but the web app
+never called them, so a user could not record a cookie/GDPR decision. The app now
+renders a first-visit consent notice (`CookieConsentBanner`) and a permanent card
+on `/dashboard/settings` (`CookieConsentSettingsCard`), both writing through the
+real endpoint.
+
+The notice is scoped to a signed-in account because the platform exposes no
+anonymous consent endpoint (both routes are behind `requireAuth`). That is not a
+practical gap: the only cookie set is the essential session cookie
+(`wasit_session`) and the SPA ships no tracker. The read model normalises every
+`CONSENT_TYPES` entry to `granted: current.get(type) ?? false`, so "undecided"
+and "declined" are indistinguishable through the API; the notice therefore keeps
+its own device-local marker (`wasit.cookieConsent.decided`) to know it has run,
+while the decision itself lives in the server's consent rows. The UI persists
+only the optional types — the actual cookie/GDPR decision. The baseline types
+(`TERMS`, `PRIVACY_POLICY`, `DATA_PROCESSING`) are shown as always-required under
+the application's `grantedByDefault` policy and are not written as granted
+consents; their read-back state follows that policy, not a stored row. Controls:
+accept-all, reject-non-essential, granular per-type save; a failed write surfaces
+the server's reason rather than a false success. This closes the UI capture gap
+only — it is not a claim of full GDPR compliance, and LC-01 (legal policy text)
+remains open. Covered by two new server tests in `security-privacy.test.ts` and
+the E2E `e2e/cookie-consent.spec.ts`; recorded in `FINAL-AUDIT.md`.

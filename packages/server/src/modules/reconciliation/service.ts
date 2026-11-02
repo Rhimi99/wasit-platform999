@@ -20,6 +20,10 @@ import {
   type ReconciliationReport,
 } from './engine';
 import {
+  parseReconciliationFile,
+  type ParsedFeed,
+} from './file-import';
+import {
   resolveReportProvenance,
   type LedgerEntryRow,
   type ProvenanceContext,
@@ -247,4 +251,80 @@ export async function importReconciliationFeed(db: DB, input: ImportFeedsInput):
   });
 
   return { importId, duplicate: false, insertedLines: sourceLines.length, report };
+}
+
+export interface ImportFileInput {
+  filename: string;
+  bytes: Uint8Array;
+  source: 'PROVIDER' | 'BANK';
+  currencyCode: string;
+  importKey?: string | null;
+  providerId?: string | null;
+  actorId?: string | null;
+  ipAddress?: string | null;
+}
+
+export interface PreviewFileResult {
+  format: ParsedFeed['format'];
+  source: 'PROVIDER' | 'BANK';
+  currencyCode: string;
+  rowCount: number;
+  report: ReconciliationReport;
+}
+
+/**
+ * Validates an uploaded statement and returns the match report **without
+ * persisting anything**. This is the safe default: the operator sees exactly what
+ * would be recorded (including MISMATCH decisions) before committing.
+ *
+ * The ledger side is always empty here — a file may only carry external evidence,
+ * so a preview can never assert a ledger fact. `reconcile` therefore reports
+ * MISSING_IN_LEDGER for every row, which is the honest answer until an import
+ * links the evidence to real ledger rows.
+ */
+export async function previewReconciliationFile(
+  db: DB,
+  input: ImportFileInput,
+): Promise<PreviewFileResult> {
+  const parsed = parseReconciliationFile({
+    filename: input.filename,
+    bytes: input.bytes,
+    source: input.source,
+    currencyCode: input.currencyCode,
+  });
+  const report = reconcile(parsed.currencyCode, parsed.provider, parsed.bank, []);
+  return {
+    format: parsed.format,
+    source: parsed.source,
+    currencyCode: parsed.currencyCode,
+    rowCount: parsed.rowCount,
+    report,
+  };
+}
+
+/**
+ * Parses an uploaded statement and records it through the existing
+ * `importReconciliationFeed`, so file and JSON ingestion share one persistence
+ * path (same checksum/idempotency, same MISMATCH handling, same audit). It adds
+ * no new financial effect: an import still only stores evidence + decisions and
+ * never moves settlement/payout state.
+ */
+export async function importReconciliationFile(db: DB, input: ImportFileInput): Promise<ImportResult> {
+  const parsed = parseReconciliationFile({
+    filename: input.filename,
+    bytes: input.bytes,
+    source: input.source,
+    currencyCode: input.currencyCode,
+  });
+  return importReconciliationFeed(db, {
+    source: parsed.source,
+    currencyCode: parsed.currencyCode,
+    importKey: input.importKey ?? null,
+    providerId: input.providerId ?? null,
+    provider: parsed.provider,
+    bank: parsed.bank,
+    ledger: [],
+    actorId: input.actorId ?? null,
+    ipAddress: input.ipAddress ?? null,
+  });
 }

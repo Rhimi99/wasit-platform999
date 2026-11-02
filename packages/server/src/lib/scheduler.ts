@@ -5,6 +5,12 @@ import { advanceDueDeletionRetentions } from '../modules/privacy/service';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
+import { dispatchDueSchedules, ensureSchedules } from '../modules/ai/copilot';
+import { executeDueTasks, reapStaleTasks } from '../modules/ai/runner';
+import { pruneMemoryByAge } from '../modules/ai/memory-repo';
+import { DEFAULT_MEMORY_MAX_AGE_DAYS } from '../modules/ai/memory-service';
+import { dispatchPendingDeliveries } from './notifications/engine';
+import { dispatchOutboxEvents } from '../modules/ai/outbox-worker';
 
 export interface SchedulerHandle {
   stop: () => void;
@@ -25,6 +31,7 @@ export function startScheduler(options: {
   rateLimitPurgeIntervalMinutes?: number;
   alertsEnabled?: boolean;
   alertIntervalMinutes?: number;
+  notificationIntervalMinutes?: number;
 }): SchedulerHandle {
   const intervalMs = options.rolloverIntervalMinutes * 60 * 1000;
   const purgeIntervalMs = (options.rateLimitPurgeIntervalMinutes ?? 15) * 60 * 1000;
@@ -91,10 +98,74 @@ export function startScheduler(options: {
     }
   };
 
+  /**
+   * Agent automation: dispatch any due agent schedules (the Copilot delegates
+   * them), run their queued tasks, then fail stale running tasks via the
+   * watchdog. All three are idempotent, so a duplicate tick is a no-op.
+   */
+  const runAgentWork = async (): Promise<void> => {
+    try {
+      const { dispatched } = await dispatchDueSchedules(db);
+      const { ran, failed, refused } = await executeDueTasks(db);
+      const reaped = await reapStaleTasks(db);
+      if (dispatched || ran || reaped) {
+        logger.info('agent cycle', { dispatched, ran, failed, refused, reaped });
+      }
+    } catch (err) {
+      logger.error('agent cycle failed', { error: (err as Error).message });
+    }
+  };
+
+  /**
+   * Drains queued notification deliveries (email/SMS/push/webhook) that were
+   * recorded inside business transactions. Runs on its own fast cadence so a
+   * transient provider outage is retried promptly rather than on the hourly
+   * rollover. Idempotent: a row is sent once and then leaves the PENDING set.
+   */
+  const runNotifications = async (): Promise<void> => {
+    try {
+      await dispatchPendingDeliveries(db);
+    } catch (err) {
+      logger.error('notification dispatch failed', { error: (err as Error).message });
+    }
+  };
+
+  /**
+   * AI-06.0 retention: age-based sweep of agent memory notes (never the audit
+   * trail). Idempotent, so a duplicate tick is a no-op.
+   */
+  const runMemoryRetention = async (): Promise<void> => {
+    try {
+      const pruned = await pruneMemoryByAge(db, DEFAULT_MEMORY_MAX_AGE_DAYS);
+      if (pruned > 0) logger.info('agent memory retention sweep', { pruned });
+    } catch (err) {
+      logger.error('agent memory retention sweep failed', { error: (err as Error).message });
+    }
+  };
+
+  /**
+   * AI-08.0: drains the transactional outbox — routes committed domain events
+   * (e.g. `order.placed`) to their owning agents. Idempotent: the claim is
+   * single-flight and each event is routed once, so a duplicate tick is a no-op.
+   * Runs on the same fast cadence as notification dispatch so a committed event
+   * is picked up promptly rather than waiting for the hourly rollover.
+   */
+  const runOutbox = async (): Promise<void> => {
+    try {
+      const { claimed, processed, failed } = await dispatchOutboxEvents(db);
+      if (claimed > 0) logger.info('outbox dispatch', { claimed, processed, failed });
+    } catch (err) {
+      logger.error('outbox dispatch failed', { error: (err as Error).message });
+    }
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
     await runRetentionSweep();
+    await runAgentWork();
+    await runMemoryRetention();
+    await runOutbox();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
       await runRateLimitPurge();
@@ -111,10 +182,17 @@ export function startScheduler(options: {
   const alertTimer = options.alertsEnabled ? setInterval(runAlerts, alertIntervalMs) : null;
   alertTimer?.unref();
 
+  // Notification dispatch runs on its own fast cadence (default 1 minute): a
+  // queued email/SMS/push should go out promptly, not wait for the hourly tick.
+  const notifyIntervalMs = (options.notificationIntervalMinutes ?? 1) * 60 * 1000;
+  const notifyTimer = setInterval(runNotifications, notifyIntervalMs);
+  notifyTimer.unref();
+
   return {
     stop: () => {
       clearInterval(timer);
       if (alertTimer) clearInterval(alertTimer);
+      clearInterval(notifyTimer);
     },
   };
 }

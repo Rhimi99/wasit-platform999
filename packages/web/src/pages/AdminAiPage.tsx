@@ -5,6 +5,7 @@ import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import type {
   AgentRegistryRow,
+  AgentScheduleRow,
   AgentTaskRow,
   AiAdminBudget,
   AiAdminModel,
@@ -12,7 +13,7 @@ import type {
   AiAdminUsage,
 } from '@/lib/types';
 
-type Tab = 'overview' | 'requests' | 'models' | 'budgets' | 'agents' | 'tasks';
+type Tab = 'overview' | 'requests' | 'models' | 'budgets' | 'agents' | 'tasks' | 'schedules';
 
 const STATUS_COLOR: Record<string, 'green' | 'amber' | 'red' | 'teal' | 'slate' | 'indigo'> = {
   SUCCESS: 'green',
@@ -38,6 +39,7 @@ export function AdminAiPage() {
   const [budgets, setBudgets] = useState<AiAdminBudget[]>([]);
   const [agents, setAgents] = useState<AgentRegistryRow[]>([]);
   const [tasks, setTasks] = useState<AgentTaskRow[]>([]);
+  const [schedules, setSchedules] = useState<AgentScheduleRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -58,13 +60,14 @@ export function AdminAiPage() {
 
   const load = async () => {
     setError(null);
-    const [usageRes, reqRes, modelRes, budgetRes, agentRes, taskRes] = await Promise.all([
+    const [usageRes, reqRes, modelRes, budgetRes, agentRes, taskRes, scheduleRes] = await Promise.all([
       apiCall(() => api.adminAiUsage()),
       apiCall(() => api.adminAiRequests()),
       apiCall(() => api.adminAiModels()),
       apiCall(() => api.adminAiBudgets()),
       apiCall(() => api.adminAiAgents()),
       apiCall(() => api.adminAiTasks()),
+      apiCall(() => api.adminAiSchedules()),
     ]);
     setUsage(usageRes.data ?? null);
     setRequests(reqRes.data?.items ?? []);
@@ -72,7 +75,8 @@ export function AdminAiPage() {
     setBudgets(budgetRes.data?.items ?? []);
     setAgents(agentRes.data?.items ?? []);
     setTasks(taskRes.data?.items ?? []);
-    setError(usageRes.error ?? reqRes.error ?? modelRes.error ?? budgetRes.error ?? agentRes.error ?? taskRes.error);
+    setSchedules(scheduleRes.data?.items ?? []);
+    setError(usageRes.error ?? reqRes.error ?? modelRes.error ?? budgetRes.error ?? agentRes.error ?? taskRes.error ?? scheduleRes.error);
     setLoading(false);
   };
 
@@ -210,7 +214,22 @@ export function AdminAiPage() {
     { id: 'budgets', label: t('adminAi.tab.budgets') },
     { id: 'agents', label: t('adminAi.tab.agents') },
     { id: 'tasks', label: t('adminAi.tab.tasks') },
+    { id: 'schedules', label: t('adminAi.tab.schedules') },
   ];
+
+  const setAgentStatus = (agentKey: string, status: 'ACTIVE' | 'PAUSED' | 'DISABLED') =>
+    run(
+      `agent-status:${agentKey}`,
+      () => api.adminSetAgentStatus(agentKey, status),
+      'adminAi.agent.statusChanged',
+    );
+
+  const toggleSchedule = (s: AgentScheduleRow) =>
+    run(
+      `schedule:${s.id}`,
+      () => api.adminSetScheduleEnabled(s.id, !s.enabled),
+      'adminAi.agent.statusChanged',
+    );
 
   const pendingApproval = tasks.filter((x) => x.status === 'awaiting_approval');
 
@@ -652,14 +671,94 @@ export function AdminAiPage() {
                         <h3 className="font-bold text-slate-800">{a.name}</h3>
                         <p className="text-xs text-slate-400" dir="ltr">{a.key}</p>
                       </div>
-                      <Badge color={a.requiresHumanApproval ? 'amber' : 'teal'}>
-                        {a.requiresHumanApproval ? t('adminAi.agent.gated') : t('adminAi.agent.auto')}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        {a.isCopilot && <Badge color="indigo">{t('adminAi.agent.copilot')}</Badge>}
+                        <Badge color={a.status === 'ACTIVE' ? 'green' : a.status === 'PAUSED' ? 'amber' : 'red'}>
+                          {a.status}
+                        </Badge>
+                        <Badge color={a.requiresHumanApproval ? 'amber' : 'teal'}>
+                          {a.requiresHumanApproval ? t('adminAi.agent.gated') : t('adminAi.agent.auto')}
+                        </Badge>
+                      </div>
                     </div>
                     {a.description && <p className="mt-2 text-xs text-slate-500">{a.description}</p>}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {a.status !== 'ACTIVE' && (
+                        <button
+                          type="button"
+                          data-testid={`admin-ai-agent-resume-${a.key}`}
+                          disabled={busy !== null}
+                          onClick={() => void setAgentStatus(a.key, 'ACTIVE')}
+                          className="rounded-md bg-wasit-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-wasit-700 disabled:opacity-50"
+                        >
+                          {t('adminAi.agent.resume')}
+                        </button>
+                      )}
+                      {a.status === 'ACTIVE' && (
+                        <button
+                          type="button"
+                          data-testid={`admin-ai-agent-pause-${a.key}`}
+                          disabled={busy !== null}
+                          onClick={() => void setAgentStatus(a.key, 'PAUSED')}
+                          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {t('adminAi.agent.pause')}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        data-testid={`admin-ai-agent-disable-${a.key}`}
+                        disabled={busy !== null}
+                        onClick={() => void setAgentStatus(a.key, 'DISABLED')}
+                        className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {t('adminAi.agent.disable')}
+                      </button>
+                    </div>
                   </Card>
                 ))}
               </div>
+            )
+          )}
+
+          {tab === 'schedules' && (
+            schedules.length === 0 ? <EmptyState title={t('common.noData')} hint={t('adminAi.tab.schedules')} /> : (
+              <Card className="overflow-x-auto" testId="admin-ai-schedules">
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th>{t('adminAi.schedule.agent')}</th>
+                      <th>{t('adminAi.schedule.task')}</th>
+                      <th>{t('adminAi.schedule.interval')}</th>
+                      <th>{t('adminAi.schedule.enabled')}</th>
+                      <th>{t('adminAi.schedule.nextRun')}</th>
+                      <th>{t('common.actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schedules.map((s) => (
+                      <tr key={s.id} data-testid={`admin-ai-schedule-${s.id}`}>
+                        <td className="text-xs" dir="ltr">{s.agentKey}</td>
+                        <td className="text-xs" dir="ltr">{s.taskType}</td>
+                        <td className="text-xs" dir="ltr">{s.intervalSeconds}</td>
+                        <td><Badge color={s.enabled ? 'green' : 'slate'}>{s.enabled ? 'ON' : 'OFF'}</Badge></td>
+                        <td className="text-xs">{s.nextRunAt ? formatDate(s.nextRunAt) : '—'}</td>
+                        <td>
+                          <button
+                            type="button"
+                            data-testid={`admin-ai-schedule-toggle-${s.id}`}
+                            disabled={busy !== null}
+                            onClick={() => void toggleSchedule(s)}
+                            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {t('adminAi.schedule.toggle')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
             )
           )}
 

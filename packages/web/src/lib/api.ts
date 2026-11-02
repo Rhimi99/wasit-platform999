@@ -16,9 +16,17 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
+  AgentScheduleRow, CopilotRoutingPreview, CopilotRouteResult, CopilotRunDetail, CopilotAuditRow,
+  GmRunRecord, GmRunSummaryRow, GmPlaybookRow, GmActionResultRow, GmRunActionRow,
+  AgentCycleResult, AgentCycleSummary,
+  AgentPerformanceRow, TeamHealth, AgentActivityRow, AgentMemoryRow, SupervisorReportRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
+  PrivacyConsentState,
+  AdminTradeRow, AdminTradeListResponse, TradeKind,
+  PayoutRails, PayoutRecord, SettlementResult, PayoutStatus, PayoutListResult,
+  ReconciliationImportResult, ReconciliationPreviewResult, ProviderFeedLine, BankFeedLine, LedgerFeedLine, ReceiptResult, ReceiptSource,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -77,6 +85,32 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     );
   }
 
+  return body.data as T;
+}
+
+/**
+ * Same envelope/error handling as `request`, but for a FormData body. The
+ * browser sets the multipart Content-Type (with boundary) itself, so we must not
+ * set it by hand.
+ */
+async function multipart<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, { method: 'POST', body: form, credentials: 'include' });
+  let body: ApiResponse<T> | null = null;
+  try {
+    body = (await res.json()) as ApiResponse<T>;
+  } catch {
+    // no JSON
+  }
+  if (!res.ok || !body?.success) {
+    const err = body?.error;
+    throw new ApiClientError(
+      err?.message ?? 'Request failed',
+      err?.code ?? 'UNKNOWN',
+      err?.statusCode ?? res.status,
+      err?.fieldErrors,
+      err?.traceId,
+    );
+  }
   return body.data as T;
 }
 
@@ -328,6 +362,7 @@ export const api = {
         id: string;
         functional: boolean;
         available: boolean;
+        payout: boolean;
         methods: { method: { type: 'CARD' | 'MOBILE_WALLET'; scheme?: string }; available: boolean; reason?: string }[];
       }[];
     }>('/api/payments/methods');
@@ -352,6 +387,14 @@ export const api = {
     return request<{ refund: { id: string; status: string; amount: string; currencyCode: string }; reused: boolean }>(
       `/api/payments/orders/${orderId}/refunds`,
       { method: 'POST', body: JSON.stringify(data) },
+    );
+  },
+  // Operator completion of an offline/`manual` payment. Only the offline
+  // rail qualifies; the server refuses anything else.
+  async completeManualPayment(orderId: string) {
+    return request<{ orderId: string; paymentStatus: string; provider: string }>(
+      `/api/payments/orders/${orderId}/complete-manual`,
+      { method: 'POST', body: JSON.stringify({}) },
     );
   },
   async listMyOrders() {
@@ -413,6 +456,119 @@ export const api = {
   async adminLedger() {
     return request<{ items: LedgerEntry[] }>('/api/admin/ledger');
   },
+  // ---- Admin finance (money movement: settlement / payout) ----
+  // These wrap the existing `/api/admin/finance/*` routes. The server keeps every
+  // invariant (evidence-gated settlement, derived payout amount, no forced
+  // COMPLETED); the UI only exposes the operations the routes actually support.
+  async adminPayoutRails() {
+    return request<PayoutRails>('/api/admin/finance/payout-providers');
+  },
+  // Paginated payout list (read-only). Only whitelisted, validated params are
+  // forwarded; the server re-validates and bounds the page size.
+  async adminListPayouts(params: { status?: PayoutStatus; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString();
+    return request<PayoutListResult>(`/api/admin/finance/payouts${suffix ? `?${suffix}` : ''}`);
+  },
+  async adminConfirmSettlement(data: {
+    externalRef: string;
+    amount: string;
+    currencyCode: string;
+    providerId: string;
+    settlementRef: string;
+    providerRef?: string;
+    occurredAt?: string;
+  }) {
+    return request<SettlementResult>('/api/admin/finance/settlements/confirm', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminCreatePayout(data: { transactionId: string; providerId: string; idempotencyKey?: string }) {
+    return request<PayoutRecord>('/api/admin/finance/payouts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminGetPayout(id: string) {
+    return request<PayoutRecord>(`/api/admin/finance/payouts/${id}`);
+  },
+  async adminDispatchPayout(id: string, beneficiaryRef: string) {
+    return request<{ payout: PayoutRecord; providerRef: string }>(`/api/admin/finance/payouts/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify({ beneficiaryRef }),
+    });
+  },
+  async adminSyncPayout(id: string) {
+    return request<{ payout: PayoutRecord; providerStatus: string }>(`/api/admin/finance/payouts/${id}/sync`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+  // Reconciliation import (PS-04). The engine classifies each reference; the UI
+  // only renders the report it returns and never reinterprets a MISMATCH.
+  async adminImportReconciliation(data: {
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+    importKey?: string;
+    providerId?: string;
+    provider?: ProviderFeedLine[];
+    bank?: BankFeedLine[];
+    ledger?: LedgerFeedLine[];
+  }) {
+    return request<ReconciliationImportResult>('/api/admin/finance/reconciliation/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  /**
+   * File-based reconciliation ingestion (appendix a.5-1). The server validates
+   * the file (type/size/encoding/columns) and returns the match report. Preview
+   * writes nothing; import records evidence + decisions and never moves money.
+   */
+  async adminPreviewReconciliationFile(params: {
+    file: File;
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+  }) {
+    const fd = new FormData();
+    fd.set('file', params.file);
+    const qs = new URLSearchParams({ source: params.source, currencyCode: params.currencyCode });
+    return multipart<ReconciliationPreviewResult>(
+      `/api/admin/finance/reconciliation/preview-file?${qs.toString()}`,
+      fd,
+    );
+  },
+  async adminImportReconciliationFile(params: {
+    file: File;
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+    importKey?: string;
+    providerId?: string;
+  }) {
+    const fd = new FormData();
+    fd.set('file', params.file);
+    const qs = new URLSearchParams({ source: params.source, currencyCode: params.currencyCode });
+    if (params.importKey) qs.set('importKey', params.importKey);
+    if (params.providerId) qs.set('providerId', params.providerId);
+    return multipart<ReconciliationImportResult>(
+      `/api/admin/finance/reconciliation/import-file?${qs.toString()}`,
+      fd,
+    );
+  },
+  // WASIT receipt (commission funds actually received). Independent of settlement.
+  async adminRecordReceipt(data: {
+    transactionId: string;
+    evidence: { source: ReceiptSource; reference: string; amount: string; currencyCode: string };
+  }) {
+    return request<ReceiptResult>('/api/admin/finance/receipts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
   async adminAuditLogs() {
     return request<{ items: Array<Record<string, unknown>> }>('/api/admin/audit-logs');
   },
@@ -427,6 +583,22 @@ export const api = {
   },
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
+  },
+  async adminTradeList(kind: TradeKind, params: { q?: string; verified?: boolean; isActive?: boolean; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.verified !== undefined) qs.set('verified', String(params.verified));
+    if (params.isActive !== undefined) qs.set('isActive', String(params.isActive));
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<AdminTradeListResponse>(`/api/admin/trade/${kind}${suffix}`);
+  },
+  async adminTradeUpdate(kind: TradeKind, id: string, patch: { verified?: boolean; isActive?: boolean }) {
+    return request<{ id: string; verified: boolean; isActive: boolean }>(`/api/admin/trade/${kind}/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
   },
 
   // ---- Phase 9: Verification ----
@@ -994,6 +1166,26 @@ export const api = {
   async adminAiAgents() {
     return request<{ items: AgentRegistryRow[] }>('/api/admin/ai/agents');
   },
+  async adminAiAgentSummary() {
+    return request<{ total: number; byStatus: Record<string, number>; pendingApprovals: number }>(
+      '/api/admin/ai/agents/summary',
+    );
+  },
+  async adminSetAgentStatus(agentKey: string, status: 'ACTIVE' | 'PAUSED' | 'DISABLED', reason?: string) {
+    return request<AgentRegistryRow>(`/api/admin/ai/agents/${agentKey}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason: reason ?? null }),
+    });
+  },
+  async adminAiSchedules() {
+    return request<{ items: AgentScheduleRow[] }>('/api/admin/ai/schedules');
+  },
+  async adminSetScheduleEnabled(scheduleId: string, enabled: boolean) {
+    return request<{ items: AgentScheduleRow[] }>(`/api/admin/ai/schedules/${scheduleId}/enabled`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+  },
   async adminAiTasks(params: { status?: string; agentKey?: string; limit?: number } = {}) {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
@@ -1007,6 +1199,169 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
     });
+  },
+
+  // ---- Admin Copilot desk (SUPER_ADMIN only; server enforces requireRole) ----
+  async adminCopilotSpec() {
+    return request<AgentRegistryRow>('/api/admin/copilot');
+  },
+  async adminCopilotAgents() {
+    return request<{ items: AgentRegistryRow[] }>('/api/admin/copilot/agents');
+  },
+  async adminCopilotAgentSummary() {
+    return request<{ total: number; byStatus: Record<string, number>; pendingApprovals: number }>(
+      '/api/admin/copilot/agents/summary',
+    );
+  },
+  async adminCopilotSetAgentStatus(agentKey: string, status: 'ACTIVE' | 'PAUSED' | 'DISABLED', reason?: string) {
+    return request<AgentRegistryRow>(`/api/admin/copilot/agents/${agentKey}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason: reason ?? null }),
+    });
+  },
+  async adminCopilotCreateTask(agentKey: string, input: Record<string, unknown> = {}, taskType?: string) {
+    return request<AgentTaskRow>(`/api/admin/copilot/agents/${agentKey}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify({ input, taskType: taskType ?? undefined }),
+    });
+  },
+  async adminCopilotPreviewRoute(events: string[]) {
+    return request<{ preview: CopilotRoutingPreview[]; routable: number; gated: number }>(
+      '/api/admin/copilot/route/preview',
+      { method: 'POST', body: JSON.stringify({ events }) },
+    );
+  },
+  async adminCopilotConfirmRoute(events: Array<{ event: string; payload?: Record<string, unknown> }>) {
+    return request<CopilotRouteResult>('/api/admin/copilot/route', {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    });
+  },
+  async adminCopilotRunDetail(correlationId: string) {
+    return request<CopilotRunDetail>(`/api/admin/copilot/runs/${correlationId}`);
+  },
+  async adminCopilotTasks(params: { status?: string; agentKey?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentTaskRow[] }>(`/api/admin/copilot/tasks${suffix}`);
+  },
+  async adminCopilotTask(taskId: string) {
+    return request<AgentTaskRow>(`/api/admin/copilot/tasks/${taskId}`);
+  },
+  async adminCopilotDecideTask(taskId: string, decision: 'APPROVE' | 'REJECT', reason?: string) {
+    return request<AgentTaskDecision>(`/api/admin/copilot/tasks/${taskId}/${decision === 'APPROVE' ? 'approve' : 'reject'}`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, reason: reason ?? null }),
+    });
+  },
+  async adminCopilotRunTask(taskId: string) {
+    return request<AgentTaskRow>(`/api/admin/copilot/tasks/${taskId}/run`, { method: 'POST' });
+  },
+  async adminCopilotAudit(params: { action?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.action) qs.set('action', params.action);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: CopilotAuditRow[] }>(`/api/admin/copilot/audit${suffix}`);
+  },
+
+  // ---- GM orchestrator desk (SUPER_ADMIN only; server enforces requireRole) ----
+  // The run log and run detail are read-only: retrieval replays the persisted
+  // snapshot and never recomputes a report or writes a record.
+  async adminGmPlaybooks() {
+    return request<{ items: GmPlaybookRow[] }>('/api/admin/gm/playbooks');
+  },
+  async adminGmRuns(params: { limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: GmRunSummaryRow[] }>(`/api/admin/gm/runs${suffix}`);
+  },
+  async adminGmRun(correlationId: string) {
+    return request<GmRunRecord>(`/api/admin/gm/runs/${correlationId}`);
+  },
+  async adminGmOrchestrate(goal: string, maxSteps?: number) {
+    return request<GmRunRecord>('/api/admin/gm/orchestrate', {
+      method: 'POST',
+      body: JSON.stringify({ goal, ...(maxSteps ? { maxSteps } : {}) }),
+    });
+  },
+  // ---- GM proposed-action execution (G4) ----
+  // `actions` is a read-only, annotated view of a run's proposals (executability
+  // + any task already created). `executeAction` turns one proposal into a real
+  // Agent Task through the server's single execution gate; the response carries
+  // the real outcome (`task_created`/`blocked`), never an assumed success, and is
+  // idempotent on (runId, action).
+  async adminGmRunActions(correlationId: string) {
+    return request<{ items: GmRunActionRow[] }>(`/api/admin/gm/runs/${correlationId}/actions`);
+  },
+  async adminGmExecuteAction(correlationId: string, action: string) {
+    return request<GmActionResultRow>(`/api/admin/gm/runs/${correlationId}/actions/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    });
+  },
+
+  // ---- On-demand AI agent cycle (G8) ----
+  // The manual counterpart to the scheduler tick. `run` returns the real outcome
+  // (`completed`/`blocked`/`failed`); the log is read-only and replayed from the
+  // cycle audit rows.
+  async adminGmRunCycle(limit?: number) {
+    return request<AgentCycleResult>('/api/admin/gm/cycle', {
+      method: 'POST',
+      body: JSON.stringify({ ...(limit ? { limit } : {}) }),
+    });
+  },
+  async adminGmCycles(params: { limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentCycleSummary[] }>(`/api/admin/gm/cycles${suffix}`);
+  },
+
+  // ---- Agent Operations desk (AI-06.2) ----
+  // Read-only views over `agent-monitor.ts`. The server resolves the caller's
+  // scope itself (platform vs owner) — the client never sends a scope. Nothing
+  // here writes or mutates a task; budget figures are informational only.
+  async adminAgentOpsHealth(params: { overdueSeconds?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.overdueSeconds) qs.set('overdueSeconds', String(params.overdueSeconds));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<TeamHealth>(`/api/admin/agent-ops/health${suffix}`);
+  },
+  async adminAgentOpsPerformance(params: { overdueSeconds?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.overdueSeconds) qs.set('overdueSeconds', String(params.overdueSeconds));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ scope: 'platform' | 'owner'; items: AgentPerformanceRow[] }>(
+      `/api/admin/agent-ops/performance${suffix}`,
+    );
+  },
+  async adminAgentOpsActivity(params: { limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentActivityRow[] }>(`/api/admin/agent-ops/activity${suffix}`);
+  },
+  // G7 — read-only operational memory for the caller's own scope. The server
+  // resolves the scope from the session; the client never sends one. `agentKey`
+  // and `taskId` only narrow the caller's own notes.
+  async adminAgentOpsMemory(params: { agentKey?: string; taskId?: string; limit?: number; offset?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.taskId) qs.set('taskId', params.taskId);
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: AgentMemoryRow[]; total: number; limit: number; offset: number }>(
+      `/api/admin/agent-ops/memory${suffix}`,
+    );
+  },
+  async adminAiSupervisorReport() {
+    return request<SupervisorReportRow>('/api/admin/ai/supervisor/report');
   },
 
   // ---- Admin observability (server enforces ADMIN_SYSTEM) ----
@@ -1071,6 +1426,22 @@ export const api = {
   },
   async directoryMerchants(params: { q?: string; page?: number; pageSize?: number } = {}) {
     return request<DirectoryListResponse<DirectoryMerchantRow>>(`/api/directory/merchants?${directoryQuery(params)}`);
+  },
+
+  // ---- Own-data privacy consent (server enforces authentication) ----
+  /**
+   * Reads the caller's consent state. Both this and `setConsent` require a
+   * session: the server has no anonymous consent endpoint, so the cookie banner
+   * only persists a decision for a signed-in account.
+   */
+  async privacyMe() {
+    return request<PrivacyConsentState>('/api/privacy/me');
+  },
+  async setConsent(consentType: string, granted: boolean) {
+    return request<{ success: boolean }>('/api/privacy/consents', {
+      method: 'PUT',
+      body: JSON.stringify({ consentType, granted }),
+    });
   },
 };
 

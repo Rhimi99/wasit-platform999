@@ -179,6 +179,9 @@ export async function emitStockNotifications(
   if (!userId) return;
 
   const { productId, productVariantId } = item[0];
+  // The ledger row records the product so the delivery is auditable. The
+  // transition check above is the dedupe: a status that did not change never
+  // reaches this point, so no idempotency key is needed here.
   if (nextStatus === 'OUT_OF_STOCK') {
     await createNotification(db, {
       userId,
@@ -186,6 +189,8 @@ export async function emitStockNotifications(
       title: 'Out of stock',
       body: `Product ${productId} is out of stock`,
       data: { productId, productVariantId, quantity: newQuantity, threshold, status: nextStatus },
+      entityType: 'PRODUCT',
+      entityId: productId,
     });
   } else {
     await createNotification(db, {
@@ -194,6 +199,8 @@ export async function emitStockNotifications(
       title: 'Low stock',
       body: `Product ${productId} is low on stock (${newQuantity} left, threshold ${threshold})`,
       data: { productId, productVariantId, quantity: newQuantity, threshold, status: nextStatus },
+      entityType: 'PRODUCT',
+      entityId: productId,
     });
   }
 }

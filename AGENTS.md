@@ -75,6 +75,102 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - **`src/modules/geo/service.ts`**: أُصلحت 3 أخطاء — `conditions: (SQL | undefined)[]` صريحة في `listCountries/listCurrencies/listLanguages` + `import type { SQL }` — سلوك الاستعلامات لم يتغير.
 - **أمر التحقق**: `cd packages/server && npx tsc --noEmit` → **exit 0**. لا توجد أخطاء متبقية في Geo/Revenue/Subscriptions.
 
+## الحالة الحالية (2026-11-01) — G5 Phase 1: توحيد Ads + Development عبر بوابة الأدوات — 1394/1397 Tests
+
+- ✅ **G5 Phase 1 (تدريجي)**: نُقلت قراءات `execAdsAgent` و`execDevelopmentAgent` (آخر منفّذين بنطاق المنصّة ولهما بوّابة داخلية) إلى بوابة الأدوات المركزية عبر أداتين جديدتين **قراءة فقط** و`platformScoped`:
+  - `ads.read_campaigns` (permission `ad:manage`) — دفتر الإعلانات: عدّ الحملات/النشطة + انطباعات/نقرات/تحويلات + CTR + أول 5 حملات.
+  - `development.read_platform` (permission `analytics:read:all`) — عدّ المستخدمين/المنتجات/الطلبات/الحملات + أحدث مؤشر يومي.
+- ✅ **لا توسيع**: `requirePlatformGate` باقٍ كما هو (دفاع في العمق)، و`requiresPlatformScope`/`permissionsRequired`/`approvalActions` لم تُمسّ. `allowedTools` أُضيف لها معرّف واحد لكل وكيل فقط. لا كتابة، لا migrations، لا تفعيل لـ`UNBOUND_DECLARED_TOOLS`.
+- ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `PLATFORM_SCOPE_DENIED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق).
+- ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
+- ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **15 داخل** البوابة و**5 خارجها** (بعد G5 Phase 2 — A1/A2/A3/A4/A5). الخارجون: 4 وكلاء بنطاق مالك/مزدوج (`support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A5): توحيد Marketing Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A5)**: نُقلت **كل** قراءات `execMarketingAgent` إلى البوابة المركزية عبر ثلاث أدوات جديدة **قراءة فقط** (الوكيل **مزدوج النطاق**: مالك + منصّة):
+  - `marketing.read_catalogue_owned` (`permission ai:use`, `platformScoped: false`) — `{ limit?: int(1..10)=5 }` → مجاميع الكتالوج **المنشور** المملوك للمتصل `{ scope:'own', noScope, snapshot:{ published, topCategories, topBrands } }`؛ **المالك من السياق الموثوق**، وبلا كيان بائع ⇒ `noScope: true` بلا استعلام.
+  - `marketing.read_catalogue_platform` (`permission analytics:read:all`, `platformScoped: true`) — نفس الوسائط → المجاميع ذاتها عبر كل البائعين (منشور فقط) `{ scope:'platform', snapshot }`؛ **`ADMIN`/`SUPER_ADMIN` فقط** (البوابة ترفض غيره بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`).
+  - `marketing.read_videos_owned` (`permission ai:use`, `platformScoped: false`) — `{ limit?: int(1..10)=5 }` → فيديوهات التسويق **المملوكة للمتصل** (`media_assets` من نوع `MARKETING_VIDEO`) `{ scope:'own', noScope, videos }`؛ يعيد استخدام `listRecentMarketingVideos` نفسها (مخرجات مطابقة) و**المالك من السياق الموثوق**.
+- ✅ **الهوية من السياق الموثوق فقط**: `marketingReadCatalogueOwned`/`marketingReadVideosOwned` يحلّان المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**؛ مخطط `.strict()` يمنع حقن الهوية/النطاق (`INVALID_INPUT`).
+- ✅ **حفظ السلوك**: البوابة تحاول أولًا `marketing.read_catalogue_platform` (للمشرف فقط) ثم `marketing.read_catalogue_owned`؛ غير المشرف **لا يرى بيانات المنصّة أبدًا** (بلا كيان ⇒ لقطة فارغة كما كان `sql\`false\``)، و`SYSTEM_PRINCIPAL` لا يبلغ طبقة المنصّة. **لا تفشل مفتوحًا**: تُبتلع فقط رفضا النطاق/الصلاحية المعروفان، وأي خطأ آخر **يُعاد رميه**. المخرجات (`agentKey`/`action`/`snapshot`/`campaignSuggestion`/`marketingVideos`/`marketingVideosHint`/`readOnly`/`generatedAt`)، `reasonAboutAgent`، `withProposal`، ورسالة النظام — دون تغيير.
+- ✅ **لا توسيع**: `allowedTools` لـ`marketing-agent` فقط صار `[...CATALOG_TOOLS, 'marketing.read_catalogue_owned', 'marketing.read_catalogue_platform', 'marketing.read_videos_owned']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`product`/`supplier`/`merchant`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **الاختبارات**: `tests/g5-phase2-marketing-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**37/37**) — **إجمالي A5: 72/72** — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §28 (+ تحديث §10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A1): توحيد Supplier Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A1)**: نُقلت قراءة `execSupplierAgent` (كيانات الموردين المملوكة) إلى البوابة المركزية عبر أداة جديدة **قراءة فقط** و**نطاق المالك**:
+  - `supplier.read_owned` (`permission ai:use`, `platformScoped: false`) — `{ supplierId?: string(1..64), limit?: int(1..100) }` → كيانات الموردين المملوكة للمتصل (`id`, `name`, `countryId`, `verified`, `isActive`).
+- ✅ **الهوية من السياق الموثوق فقط**: المعالج `supplierReadOwn` يحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**. `supplierId` يُحترم فقط إن كان مملوكًا للمتصل وإلا نطاق فارغ (`found: false`) — لا تسرّب عبر الحسابات.
+- ✅ **لا توسيع**: `allowedTools` لـ`supplier-agent` فقط صار `[...CATALOG_TOOLS, 'supplier.read_owned']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`marketing`/`product`/`merchant`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق). لا `PLATFORM_SCOPE_DENIED` (الأداة غير منصّية).
+- ✅ **الاختبارات**: `tests/g5-phase2-supplier-tool.test.ts` (جديد) + `tests/phase3d-scope-gate.test.ts` محدَّث — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §24 (+ تحديث §10.4/§10.5 والسطر التمهيدي) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A2): توحيد Merchant Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A2)**: نُقلت قراءة `execMerchantAgent` (كيانات التجّار المملوكة) إلى البوابة المركزية عبر أداة جديدة **قراءة فقط** و**نطاق المالك**:
+  - `merchant.read_owned` (`permission ai:use`, `platformScoped: false`) — `{ merchantId?: string(1..64), limit?: int(1..100) }` → كيانات التجّار المملوكة للمتصل (`id`, `name`, `countryId`, `verified`, `isActive`، مع `name` مشتقّ من `storeName`).
+- ✅ **الهوية من السياق الموثوق فقط**: المعالج `merchantReadOwn` يحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**. `merchantId` يُحترم فقط إن كان مملوكًا للمتصل وإلا نطاق فارغ (`found: false`) — لا تسرّب عبر الحسابات.
+- ✅ **لا توسيع**: `allowedTools` لـ`merchant-agent` فقط صار `[...CATALOG_TOOLS, 'merchant.read_owned']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`marketing`/`product`/`supplier`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق). لا `PLATFORM_SCOPE_DENIED` (الأداة غير منصّية).
+- ✅ **حفظ السلوك القديم**: بنية المخرجات ومفاتيحها، شكل عناصر `merchants`، `scopedToOwned = !requestedId`، رسالة `'Merchant not found in your scope.'`، `reasonAboutAgent`، و`withProposal` — كلها دون تغيير.
+- ✅ **الاختبارات**: `tests/g5-phase2-merchant-tool.test.ts` (جديد، **23/23**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**22/22**) — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §25 (+ تحديث §10.4/§10.5/§24.8 والسطر التمهيدي) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A3): توحيد Sales Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A3)**: نُقلت **كل** قراءات `execSalesAgent` إلى البوابة المركزية عبر ثلاث أدوات جديدة **قراءة فقط** (الوكيل **مزدوج النطاق**: مالك + منصّة):
+  - `sales.read_orders_owned` (`permission order:read:own`, `platformScoped: false`) — `{ periodDays?: int(1..365)=30, limit?: int(1..100) }` → طلبات البيع المملوكة للمتصل + مؤشراتها `{ scope:'own', noScope, kpi, recentOrders }`.
+  - `sales.read_orders_platform` (`permission order:read`, `platformScoped: true`) — نفس الوسائط → دفتر الطلبات عبر كل المالكين `{ scope:'platform', kpi, recentOrders }`؛ **`ADMIN`/`SUPER_ADMIN` فقط** عبر فحص صلاحية حقيقي (البوابة ترفض غيره بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`).
+  - `sales.read_market_totals` (`permission ai:use`, بلا نطاق مالك) — بلا وسائط → **مجاميع فقط** `{ activeProducts, suppliers, merchants, companies, avgTrust }` بلا سجلات/معرّفات (نفس سلوك المنفّذ السابق للجميع).
+- ✅ **الهوية من السياق الموثوق فقط**: المعالجات تحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**؛ مخطط `.strict()` يمنع حقن الهوية/النطاق (`INVALID_INPUT`). بلا مالك موثوق (مثل `SYSTEM_PRINCIPAL`) ⇒ `noScope: true` بلا استعلام (حفظًا لسلوك الرفض السابق `NO_SCOPE`).
+- ✅ **حفظ السلوك**: `scope`/`scopedToOwnSales`/`kpi`/`recentOrders`/`leadsPotential`/`readOnly`/`generatedAt`، `reasonAboutAgent`، `withProposal`، ورسالة النظام — كلها دون تغيير. **لا تفشل مفتوحًا**: تُبتلع فقط رفضا النطاق/الصلاحية المعروفان، وأي خطأ آخر يُعاد رميه.
+- ✅ **لا توسيع**: `allowedTools` لـ`sales-agent` فقط صار `[...READ_TOOLS, 'sales.read_orders_owned', 'sales.read_orders_platform', 'sales.read_market_totals']`؛ **لم تُمسّ** `READ_TOOLS` المشتركة (بقية الوكلاء بلا الأدوات)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **الاختبارات**: `tests/g5-phase2-sales-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**27/27**) — **إجمالي A3: 62/62** — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §26 (+ تحديث §10.4/§10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A4): توحيد Product Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A4)**: نُقلت **كل** قراءات `execProductAgent` إلى البوابة المركزية عبر ثلاث أدوات جديدة **قراءة فقط** (الوكيل **ثلاثي النطاق**: عام + مالك + منصّة):
+  - `product.read_public` (`permission ai:use`, بلا نطاق مالك) — `{ productId?: string(1..64) }` → إدراج **منشور/نشط** واحد (أو عيّنة منشورة) مع تصنيف/متغيّرات/صور/مخزون `{ scope:'public', found, product }`. لا يكشف إدراجًا غير منشور حتى بمعرّفه.
+  - `product.read_owned` (`permission ai:use`, `platformScoped: false`) — نفس الوسائط → إدراجات المتّصل المملوكة (أي حالة) `{ scope:'own', found, noScope, product }`؛ **المالك من السياق الموثوق**، وبلا مالك موثوق/بلا كيان بائع ⇒ `noScope: true` بلا استعلام.
+  - `product.read_platform` (`permission product:read`, `platformScoped: true`) — نفس الوسائط → أي إدراج لأي مالك وأي حالة `{ scope:'platform', found, product }`؛ **`ADMIN`/`SUPER_ADMIN` فقط** (البوابة ترفض غيره بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`).
+- ✅ **الهوية من السياق الموثوق فقط**: `productReadOwned` يحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**؛ مخطط `.strict()` يمنع حقن الهوية/النطاق (`INVALID_INPUT`).
+- ✅ **حفظ السلوك**: دمج الطبقات مطابق لـ`pickProduct` السابق (معرّف محدّد = مالك ثم عام؛ بلا معرّف = تفضيل إدراج منشور)؛ `product`/`completeness{score,issues,recommendation}`/`readOnly`/`generatedAt`، `reasonAboutAgent`، `withProposal`، ورسالة النظام — دون تغيير. **لا تفشل مفتوحًا**: تُبتلع فقط رفضا النطاق/الصلاحية المعروفان، وأي خطأ آخر يُعاد رميه. `SYSTEM_PRINCIPAL` لا يبلغ طبقة المنصّة (كما كان `canReadPlatformData('system') === false`).
+- ✅ **لا توسيع**: `allowedTools` لـ`product-agent` فقط صار `[...CATALOG_TOOLS, 'product.read_public', 'product.read_owned', 'product.read_platform']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`marketing`/`supplier`/`merchant`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **الاختبارات**: `tests/g5-phase2-product-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**32/32**) — **إجمالي A4: 67/67** — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §27 (+ تحديث §10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G7: سطح الذاكرة التشغيلية للقراءة فقط
+
+- ✅ **G7 — سطح قراءة فقط للذاكرة التشغيلية (مغلق)**: مسار واحد `GET /api/admin/agent-ops/memory` تحت `agentMonitorRoutes`. يعرض ملاحظات الذاكرة التشغيلية (AI-06.0/AI-06.1) لنطاق **المتصل نفسه فقط**، دون أي كتابة.
+- ✅ **الصلاحيات (لا تغيير)**: `requireAuth` + `requirePermission(AI_MANAGE, ADMIN_AI)` — كلاهما لـ`ADMIN`/`SUPER_ADMIN` فقط. غير موثّق ⇒ 401، دور غير مخوّل ⇒ 403.
+- ✅ **عزل النطاق**: `callerScope` يحلّ النطاق خادميًا (`userHasPlatformScope` → `derivePlatformScope`/`deriveScope`)، **لا من الطلب**. الفلاتر (`agentKey`, `taskId`, `limit`, `offset`) تضيّق فقط؛ النطاق المنصّي **لا يمنح** قراءة ذاكرة عبر المالكين؛ `taskId` لمهمة خارج النطاق ⇒ **404**.
+- ✅ **إسقاط محدود**: `toMemoryView` يُرجع الحقول المسموحة فقط (`id`, `agentKey`, `kind`, `taskId`, `source`, `tags`, `outcome`, `latencyMs`, `errorCode`, `createdAt`) — **لا `content` خام ولا `scope_owner`**.
+- ✅ **الواجهة**: `api.adminAgentOpsMemory(...)` + تبويب «الذاكرة التشغيلية» في `AdminAgentOpsPage.tsx`، ومفاتيح `adminAgentOps.memory.*` في اللغات الأربع (ar/en/fr/zh).
+- ✅ **الاختبارات**: `tests/g7-memory-read.test.ts` (إسقاط نقي + RBAC 401/403/200 + عزل النطاق + 404 + سلامة القراءة) + حالتان في `e2e/admin-agent-ops.spec.ts`.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §23 + `docs/API_SPECIFICATION.md` (كتلة `/api/admin/agent-ops`).
+- ⚠️ **حدود**: حقل `refs` في محتوى الذاكرة معطَّل مؤقتًا (`REF_OWNERSHIP_VERIFIABLE = false`)؛ لا مسار كتابة من الواجهة؛ لا migrations.
+
+## الحالة الحالية (2026-10-29) — G8: دورة الوكلاء عند الطلب (GM On-Demand AI Cycle) — 1337/1340 Tests
+
+- ✅ **G8 — تشغيل دورة الوكلاء يدويًا (مغلق)**: مساران جديدان `POST /api/admin/gm/cycle` و`GET /api/admin/gm/cycles` (`SUPER_ADMIN` فقط). `modules/ai/cycle.ts` (`runAgentCycle`/`listAgentCycles`) يركّب نفس دوال المجدول بالترتيب (`dispatchDueSchedules` → `executeDueTasks` → `reapStaleTasks` → `dispatchOutboxEvents`) — **لا محرّك تنفيذ جديد** ولا صلاحيات جديدة، فتبقى RBAC والنطاق ومفتاح الإيقاف وبوابة الموافقة وميزانية التشغيل الواحد ومسار `AI.*` كما هي. بوابتان على مستوى الدورة: أحادية المسار (قفل Postgres استشاري → `blocked/ALREADY_RUNNING`) وبوابة الميزانية (منصّة/مشغّل → `blocked/BUDGET_EXHAUSTED`). النتيجة صادقة: خطوة تفشل ⇒ `AI.AGENT_CYCLE_FAILED` بلا `COMPLETED`؛ عملية تموت في المنتصف ⇒ يبقى `AI.AGENT_CYCLE_STARTED` (حالة «بدأ، النتيجة مجهولة»). الهوية من الجلسة (`ctx.user.id`) لا من الجسم. الواجهة: تبويب «دورة الوكلاء» في `AdminGmPage` + مفاتيح `adminGm.cycle.*` في اللغات الأربع. **لا تُنفّذ أي إجراء تجاري/مالي تلقائي**، والمهام المحتاجة موافقة تبقى `awaiting_approval`.
+- ✅ **اختبارات G8**: `tests/gm-agent-cycle.test.ts` — **16/16** (RBAC 401/403/200 + 422، دورة تُنفّذ مهمة حقيقية وتستنزف حدث صادر حقيقيًا، عدم تنفيذ `awaiting_approval`، احترام مفتاح الإيقاف (`blocked` لا يُنفَّذ)، لا كتابة على مسار الأموال (لا طلب/دفع/حركة)، `ALREADY_RUNNING`، `BUDGET_EXHAUSTED`، فشل خطوة ⇒ `failed`، سجل الدورات قراءة فقط وعبر HTTP، سلامة السجل) + `e2e/admin-gm.spec.ts` (**10/10**: دورة من الواجهة + RBAC).
+- ✅ **المجموعة الكاملة**: **103 Test Files · 1337/1340 Tests (3 متخطّاة) · Exit 0** — لا كسر في أي module سابق.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §20 + `docs/API_SPECIFICATION.md` (قسم `/api/admin/gm`).
+- ⚠️ **حدود**: تشغيل يدوي فقط (لا يُفعّل المجدول)؛ القفل استشاري لكل قاعدة بيانات؛ لا ضمان «بالضبط مرة» على مستوى نقل صف الـoutbox (كما في AI-08.0).
+
+## الحالة الحالية (2026-10-29) — استيراد ملفات المطابقة (N7) + i18n parity (N6) — 1067/1070 Tests
+
+- ✅ **N7 — استيراد ملفات المطابقة المالية (الملحق أ.5-1، مغلق)**: مساران جديدان `POST /api/admin/finance/reconciliation/preview-file` (لا يكتب) و`/import-file`، يستقبلان `multipart/form-data` (حقل `file`) بصيغ `.csv`/`.tsv`/`.json` (UTF-8، ≤1 ميجابايت، ≤5000 صف)، ويحوّلانها عبر `modules/reconciliation/file-import.ts` إلى نفس `ProviderFeedLine`/`BankFeedLine` ثم بنفس `importReconciliationFeed` (نفس checksum/idempotency ونفس حفظ `MISMATCH`). الجانب الدفتري **لا يُقبل من ملف**، والمعاينة **لا تكتب شيئًا**. الواجهة في `AdminFinancePage.tsx`، والتوثيق في `docs/RECONCILIATION_FILE_IMPORT.md`.
+- ✅ **اختبارات N7**: `tests/reconciliation-file-import.test.ts` — **33/33** (محلّل نقي + مسارات حقيقية: 401/403، معاينة بلا كتابة، idempotency، `MISMATCH` محفوظ، رفض التكرار/تهريب عمود).
+- ✅ **N6 — إصلاح `common.date` المفقود في zh**: أُضيف المفتاح + `tests/i18n-locale-parity.test.ts` (3 حالات).
+- ✅ **المجموعة الكاملة**: **87 Test Files · 1067/1070 Tests (3 متخطّاة) · Exit 0** — لا كسر في أي module سابق.
+- ⚠️ **الحالة الإنتاجية**: الإغلاق **منطقي برمجي**؛ لا يُثبت حركة أموال حقيقية في الإنتاج (يتطلّب مزوّدًا فعليًا + حساب تسوية).
+
 ## الحالة الحالية(2026-09-17) — Revenue & Profitability — 139/139 Tests
 
 - ✅ **Revenue module مكتمل ومدمج في createApp() الحقيقي**: `app.route('/api/revenue', revenueRoutes)` في `packages/server/src/app.ts` (بين analytics وprivacy.
@@ -253,6 +349,7 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
   و`playwright.config.ts` يمنع فقط إعادة استخدام خادم أجنبي على نفس المنفذ؛ لا يمنع وراثة `DATABASE_URL`. الإصلاح إن حدث التلويث: أعد تشغيل `npx tsx src/scripts/seed-demo.ts` مع `.env.demo` (يستعيد كلمة مرور الـstaff من `DEMO_STAFF_PASSWORD`)، ثم احذف حسابات الاختبار المُقحَمة (`privdel-%`/`adminsub-%`/`e2e-%`/`audit-%`/`demo-signin-%`/`demo-signup-%`/`subui-%`/`mfa.e2e.%`) بشرط `created_at`.
 - **14 فشل E2E متوقّع في وضع Demo**: مواصفات تعتمد `dev/verification-link` (404 في staging) أو locators `getByRole('status')` التي يزاحمها بانر DEMO. تُمرَّر في إعداد dev الأصلي (منافذ معزولة، بلا بانر) — ليست regressions.
 - **فخ خادم يدوي على `:3000` أثناء E2E**: `playwright.config.ts` يضبط `reuseExistingServer: !CI`، فإن كان خادم `npm run dev -w @wasit/server` يعمل فسيُعاد استخدامه **بلا** تجاوزات الـrate-limit الخاصة بالـE2E (`RATE_LIMIT_LOGIN_MAX=500` ...). النتيجة 13 إخفاقة كاذبة سريعة في مكاتب admin (`admin-user-status`/`admin-privacy`/`admin-subscriptions`: `Cannot read properties of undefined (reading 'userId')` من تسجيل 429). أوقف الخادم اليدوي قبل تشغيل `npm run test:e2e` (المنفذ يجب أن يكون حرًّا).
+- **اختبارات DB-free**: بعض مواصفات البوابة (`tests/phase3d-scope-gate.test.ts`، `tests/g5-phase2-sales-tool.test.ts`) لا تفتح اتصال قاعدة بيانات إطلاقًا — تُثبت العزل/البوابة عبر `invokeTool`/`executeAgentTask` مقابل fake عند حدّ drizzle فقط. لكن `globalSetup` الافتراضي يفتح DB ويُفشل `vitest run` بـ`ECONNREFUSED` بلا PostgreSQL. لتشغيلها وحدها بلا DB: استخدم إعدادًا مؤقّتًا `vitest.<name>.config.mts` بلا `globalSetup` (نفس `env` في `vitest.config.ts`) ثم `npx vitest run --config ./vitest.<name>.config.mts`، واحذفه بعد الانتهاء.
 - **منطق كشف التهريب مشترك**: أي مسار يكتب رسالة (لا الردود فقط) يجب أن يستدعي `scanMessageForFeeEvasion` في `modules/messaging/service.ts`. `openDirectThread` كان يتجاوز الكشف على الرسالة الأولى في الخيط الجديد (ثغرة C5 حقيقية أُصلحت 2026-09-24)؛ اختبار الانحدار في `tests/fee-evasion.test.ts`.
 
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
@@ -345,3 +442,17 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - Hero artwork is pure SVG in `components/brand/CorporateHero.tsx`, split by `part="map"` (dotted world map + trade network) and `part="skyline"` (illuminated city + water reflection). No external images, no network requests.
 - `PublicHeader`/`PublicLayout` take a `dark`/`darkHeader` prop. The header is `sticky top-[var(--demo-banner-h,0px)]`, and `DemoBanner` publishes its measured height as `--demo-banner-h` so the two sticky bars never overlap.
 - Design tokens live in `tailwind.config.js` (`ink-950`, `brand-*`) and `index.css` (`.lp-dark-section`, `.lp-dark-card`, `.lp-btn-ghost-dark`). Hero copy keys are `lp.hero.headline/subtitle/ctaPrimary/ctaSecondary` in all four locales.
+
+## Notification delivery engine (PR-09, 2026-10-30)
+
+- **Single fan-out point**: every module already calls `createNotification(db, {...})` (`lib/notifications-service.ts`); it now delegates to `notify()` in `lib/notifications/engine.ts`. Adding a channel never touches a call site.
+- **Registry** `lib/notifications/types.ts`: `NOTIFICATION_EVENTS` maps an event type to `{ category, channels }`. Order/payment/refund fan out to `IN_APP,EMAIL,SMS,PUSH,WEBHOOK`; `INVENTORY_*` is `IN_APP` only (operator alert, not a customer page).
+- **Ledger** `notification_deliveries` (migration `0031`, hand-written — migrations 0027–0030 have SQL + journal entries but no snapshots, so `drizzle-kit generate` would emit spurious drift; follow the repo convention). One row per (event, entity, recipient, channel). `dedupe_key` is UNIQUE → the DB enforces idempotency, not a read-then-write race. Status: `PENDING → SENT | FAILED | SKIPPED`.
+- **No network I/O in the business transaction**: `notify()` only writes rows (in-app row + PENDING ledger rows). `dispatchPendingDeliveries()` sends later, driven by the scheduler (`NOTIFICATION_DISPATCH_INTERVAL_MINUTES`, default 1 min) or called directly in tests. Delivery is at-least-once.
+- **External-approval gate**: `notificationExternalApproved()` in `env.ts` is false in production unless `NOTIFICATION_EXTERNAL_APPROVED=true`. A real (non-`log`) transport is recorded `SKIPPED`, not sent, until approved. The `log` transports are sandbox-only and exempt.
+- **Recipient ids must be user ids**: `products.sellerId` / `inventoryItems.merchantId` are *entity* ids. Resolve to the owning user with `resolveSellerUserId()` (`lib/seller-ownership.ts`) before notifying — the feed and every channel address a user id. The same helper is used by the inventory engine.
+- **Preferences**: `notification_preferences` (channel × category, absent row = enabled). `IN_APP`+`SECURITY`/`SYSTEM` cannot be disabled (422). Routes: `GET/PUT /api/notifications/preferences`, `GET /api/notifications/deliveries` (own rows only).
+- **Env**: `NOTIFICATION_{WEBHOOK,PUSH}_{URL,TOKEN,TIMEOUT_MS}`, `NOTIFICATION_RETRY_ATTEMPTS` (1–5), `NOTIFICATION_RETRY_BACKOFF_MS`, `NOTIFICATION_DISPATCH_INTERVAL_MINUTES`, `NOTIFICATION_EXTERNAL_APPROVED` — documented in `packages/server/.env.example`.
+- **Template variables are mandatory, not cosmetic (PR-09 fix)**: a call site must pass `vars` for every `{placeholder}` its event template needs (`orderNumber`, `amount`, `currency`, `status`). `notify()` calls `assertTemplateVars()` and throws `NotificationTemplateError` naming the missing keys rather than queueing a body of blank fields. `templatePlaceholders(type)` derives the required set from the template itself (render-against-echo-proxy), so it cannot drift from the wording. Never "fix" a blank message by relaxing this check — pass the value.
+- **The delivered copy is captured at queue time**: `notify()` stores the resolved title/body in the ledger `vars` under `__title`/`__body` (`STORED_TITLE`/`STORED_BODY`), and `dispatchPendingDeliveries()` replays them verbatim instead of re-rendering. Re-rendering from `vars` under the recipient locale would drop the amount/status that only the call site knew (the original PR-09 defect). Rows queued before the fix fall back to a render.
+- **Tests**: `tests/notifications-engine.test.ts` (15 cases: registry/templates, template-variable validation + ar/fr/en content, ledger rows, dedupe, dispatch, preferences, ownership isolation, approval gate). Run the suite with a disposable `_test` DB; `sudo docker run -d --name wasit-test-pg -e POSTGRES_USER=wasit -e POSTGRES_PASSWORD=wasit_dev_password -e POSTGRES_DB=wasit_test -p 5432:5432 postgres:16` is enough when no local Postgres is installed.

@@ -1,6 +1,42 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-23**
+آخر تحديث: **2026-10-29**
+
+## Milestone G4 — تنفيذ توصيات المدير العام كمهام فعلية بموافقة مضبوطة (هذه الجلسة — مكتمل)
+
+- **الفجوة**: كانت توصيات المدير العام «مقترحة» فقط (`executed: false`) — عرض للقراءة بلا أي وسيلة لتحويلها إلى مهمة وكيل حقيقية. G4 يسدّ «قدرة خلفية بلا واجهة» في هذه النقطة تحديدًا.
+- **البوابة الواحدة**: `packages/server/src/modules/ai/gm-actions.ts` (جديد) — `executeGmAction` يتحقق من الإجراء مقابل **لقطة التشغيل** ثم يستدعي `createAgentTask` نفسه، فترث المهمة RBAC والنطاق ومفتاح الإيقاف وبوابة الموافقة والميزانية والتدقيق. لا محرّك تنفيذ ثانٍ ولا كتابة على مسار الأموال ولا تغيير مخطط/ترحيلات.
+- **قائمة السماح والتحقق**: `GM_ACTION_ROUTES` تربط كل إجراء بوكيله ونوع مهمته؛ أي إجراء غير مُسجَّل ⇒ `NO_AGENT`. أسباب الحجب مُنمّطة: `UNKNOWN_ACTION`/`NO_AGENT`/`AGENT_UNAVAILABLE`/`NOT_AUTHORIZED`/`AGENT_STOPPED`/`AGENT_NOT_ACTIVE`/`CONFLICT`.
+- **الموافقة البشرية**: الإجراءات الحساسة (`ads.spend_increase`, `risk.block_account`, `compliance.final_ruling`, `outreach.send`) تُنشئ مهمة `awaiting_approval` ولا تُنفَّذ تلقائيًا.
+- **الأحادية**: `dedupe_key = gm-action:{runId}:{action}` + الفهرس الفريد الجزئي ⇒ المتكرر/المتزامن يعيد نفس المهمة (`deduplicated: true`). `triggered_by` يحمل الوسم الخشن `gm-action` لأن الزوج أطول من varchar(64). الهوية من الجلسة لا من الجسم.
+- **التدقيق**: `AI.GM_ACTION_REQUESTED` ثم `AI.GM_ACTION_EXECUTED` أو `AI.GM_ACTION_BLOCKED` (`entity_id` = runId، الإجراء في `metadata`).
+- **المسارات**: `GET /api/admin/gm/runs/:correlationId/actions` (قراءة فقط) و`POST .../actions/execute` — كلاهما SUPER_ADMIN.
+- **الواجهة**: عمود «الحالة» + زر «تنفيذ» في بطاقة الإجراءات المقترحة بـ`AdminGmPage`؛ الزر معطّل حتى تُعرف قابلية التنفيذ من العرض المُعلَّق ويعرض سبب الحجب عند التعذّر. مفاتيح `adminGm.actions.*` و`adminGm.actionReason.*` في ar/en/fr/zh.
+- **الاختبارات**: `packages/server/tests/gm-action-execution.test.ts` — **23/23**؛ حراسة الترجمة في `i18n-locale-parity.test.ts`؛ E2E في `e2e/admin-gm.spec.ts`.
+
+## Milestone PS-08A — منع تأكيد الطلب قبل إثبات الدفع (مغلق)
+
+- **الفجوة**: كان `PATCH /api/orders/:id/status` يقبل `status='CONFIRMED'` دون أي فحص على `paymentStatus`. أي طلب غير مدفوع (حتى قبل إنشاء نيّة دفع) كان يمكن تأكيده، ما **يحوّل الحجز إلى بيع** ويخصم المخزون مقابل مالٍ لم يصل. (كانت التسوية `confirmSettlement` مُقادة بالدفع، أمّا التأكيد فلم يكن.)
+- **الإصلاح**: بوابة مال في `modules/orders/service.ts:updateOrderStatus` — يُرفض `CONFIRMED` بـ**409 `CONFLICT`** ما لم يكن `orders.payment_status = 'PAID'`. و`PAID` لا يُكتب إلا من نواة الدفع (`applyPaymentSucceeded`) عن دليل موثَّق (webhook موقَّع، أو إتمام المكتب اليدوي لنيّة حقيقية — وهو نفسه مرفوض خارج الوضع التجريبي). لا يُشترط `paymentStatus` لأي انتقال آخر (`PROCESSING/SHIPPED/DELIVERED/COMPLETED/CANCELLED` تبقى كما هي).
+- **الحماية**: الفحص **قبل** أي أثر جانبي على المخزون، فالتأكيد المرفوض لا يخصم كمية ولا يحرّر حجزًا ولا يكتب تدقيق تغيير حالة.
+- **الاختبارات**: `packages/server/tests/order-confirmation-gate.test.ts` — **7 حالات** (رفض غير المدفوع بلا نيّة، رفض النيّة `PENDING`، نجاح المؤكَّد المدفوع + خصم المخزون، لا حركة مخزون/تدقيق عند الرفض، عدم تجاوز البوابة بأي دور، بقاء مسار العرض التوضيحي `complete-manual → PAID → CONFIRMED`، وبقاء `CANCELLED` بلا قيد دفع). حُدِّث `inventory.test.ts` (يدفع الطلب قبل التأكيد عبر النواة الحقيقية) و`e2e/order-lifecycle.spec.ts` (+حالة رفض 409، ودفع الطلب قبل تقدّم البائع).
+- **التحقق**: حزمة الخادم **1074/1077** (3 متخطّاة)، `typecheck` (server+web) نظيف، و`e2e/order-lifecycle.spec.ts` (3/3) و`e2e/manual-payment.spec.ts` + `e2e/dispute-refund.spec.ts` (5/5) خضراء.
+
+## Milestone N7 — استيراد ملفات المطابقة المالية (الملحق أ.5-1 — مغلق)
+
+- **الفجوة**: تغذيات المطابقة كانت تُدخَل يدويًا كـJSON فقط (`POST /api/admin/finance/reconciliation/import`)؛ لا استيراد ملف. (كانت آخر بنود أ.5-1 المفتوحة.)
+- **المحلّل النقي**: `packages/server/src/modules/reconciliation/file-import.ts` — `parseReconciliationFile()` يقبل **`.csv`/`.tsv`/`.json`** (UTF-8، ≤1 ميجابايت، ≤5000 صف)، مع RFC-4180 (اقتباس/`CRLF`/`BOM`)، تحقّق ترويسة/أعمدة (مطلوب/مجهول/مكرّر)، أرقام غير سالبة، مراجع فريدة غير صيغية، وعملة ISO. **أي سطر مخالف يرفض الملف بالكامل**.
+- **الخدمة**: `previewReconciliationFile()` (لا يكتب) و`importReconciliationFile()` — كلاهما يمرّ بـ`importReconciliationFeed` نفسه (نفس checksum/idempotency ونفس حفظ `MISMATCH`). الجانب الدفتري **لا يُقبل من ملف**.
+- **المسارات**: `POST /reconciliation/preview-file` و`POST /reconciliation/import-file` (multipart، حقل `file`؛ `source`/`currencyCode` في query)، بصلاحية `commission:manage`/`payment:read`.
+- **الواجهة**: `AdminFinancePage.tsx` — منتقي ملف + معاينة + استيراد وملخّص، ومفاتيح `adminFinance.reconFile*` في ar/en/fr/zh.
+- **التوثيق**: `docs/RECONCILIATION_FILE_IMPORT.md` (الصيغ/الحدود/الأعمدة/الرفض/Idempotency/الأثر)، وتحديث `API_SPECIFICATION.md` و`MASTER_GAP_AUDIT.md` (إغلاق أ.5-1).
+- **التحقق**: `reconciliation-file-import.test.ts` — **33 حالة** (محلّل نقي + مسارات حقيقية: 401/403، معاينة بلا كتابة، idempotency، `MISMATCH` محفوظ، رفض التكرار/تهريب عمود). الخادم **1067/1070** (87 ملفًا، 3 متخطّاة) و`typecheck` نظيف.
+
+## Milestone N6 — إصلاح مفتاح i18n المفقود `common.date` (zh)
+
+- **الفجوة**: قاموس `zh` في `packages/web/src/lib/i18n.ts` كان ينقصه `'common.date'` الموجود في ar/en/fr.
+- **الإصلاح**: أُضيف `'common.date': '日期'` بين `common.search`/`common.status` مطابقًا لبقية اللغات، مع اختبار **`packages/server/tests/i18n-locale-parity.test.ts`** (3 حالات؛ يفشل 3/3 عند غياب المفتاح ويمرّ عند وجوده).
+- **التحقق**: `typecheck` = 0، وحزمة الخادم كاملة نظيفة. Commit `b48372e`.
 
 ## Milestone M8 — Role-scoped Customer/Partner Directories (6 أسطح) + إصلاح أعطال الواجهة الحقيقية
 
@@ -424,7 +460,7 @@
   - كل عملية عرض رسالة نجاح/خطأ عبر `ErrorState`/شريط حالة — لا إخفاء أخطاء ولا تعطيل أزرار للتغطية.
 - **التسجيل**: مسار `/admin/ai` داخل `AdminOnly` في `App.tsx` + عنصر `admin.aiGovernance` في `ADMIN_NAV`.
 - **طبقة API/الأنواع**: `adminAiUsage`, `adminAiRequests`, `adminAiBudgets`, `adminUpsertAiBudget`, `adminAiModels`, `adminUpsertAiModel`, `adminAiAgents`, `adminAiTasks`, `decideAgentTask` + أنواع `AiAdminUsage`, `AiAdminModel`, `AiAdminBudget`, `AiAdminRequestRow`, `AgentRegistryRow`, `AgentTaskRow`, `AgentTaskDecision`.
-- **إصلاح سبب حقيقي (لا إخفاء)**: مسار `GET /admin/ai/agents` كان يقرأ جدول `agent_registry` مباشرة، بينما التهيئة (`ensureAgentRegistrySeeded`) تحدث فقط في المسار الموجّه للمستخدم `/api/ai/agents`. على قاعدة لم يستدعِ فيها أي مستخدم وكيلًا، **تبويب الوكلاء يظهر فارغًا**. أُضيفت `listRegistryAgents()` في `modules/ai/agents.ts` (تُهيّئ ثم تقرأ) واستُخدمت في المسار الإداري — فأصبح الكتالوج مضمونًا دائمًا.
+- **إصلاح سبب حقيقي (لا إخفاء)**: مسار `GET /admin/ai/agents` كان يقرأ جدول `agent_registry` مباشرة، بينما التهيئة (`ensureAgentRegistrySeeded`) تحدث فقط في المسار الموجّه للمستخدم `/api/ai/agents`. على قاعدة لم يستدعِ فيها أي مستخدم وكيلًا، **تبويب الوكلاء يظهر فارغًا**. أُضيفت `listRegistryAgents()` في `modules/ai/agents.ts` (تُهيّئ ثم تقرأ) واستُخدمت في المسار الإداري — فأصبح الكتالوج مضمونًا دائمًا. *(مرجع تاريخي: هذا الملف أُزيل في `4af09b7`؛ `listRegistryAgents()` توجد حاليًا في `modules/ai/runner.ts` والكتالوج في `modules/ai/catalogue.ts`.)*
 - **التوطين**: مفاتيح `adminAi.*` + `admin.aiGovernance` في `ar/en/fr/zh` (لا نصوص داخل المكوّن، وسقوط آمن للعربية كما هو نمط الملف).
 
 ### الاختبارات والتحقق
@@ -837,7 +873,7 @@
 
 ### النتائج
 - ✅ **208/208** اختبار خادم (`packages/server`) — 24 ملفًا.
-- ✅ **32/32** E2E (Playwright) — دورتان متتاليتان متطابقتان بعد إصلاح الـ fixture.
+- ✅ **33/33** E2E (Playwright) — دورتان متتاليتان متطابقتان بعد إصلاح الـ fixture.
 - ✅ `npm run build` (server + web) ناجح؛ `tsc --noEmit` نظيف.
 - ✅ Docs محدّثة: `PRODUCTION_GAP_LIST.md` (A1/A2/A3 → ✅).
 
@@ -1287,3 +1323,16 @@ npm run test:e2e          # Playwright، يشغّل server + web تلقائيا�
 - **Health/Ops**: `GET /api/health/channels` يعرض `media.storage` و`media.video` (id/available/reason/async) بلا أسرار. `.wasit-media/` في `.gitignore`.
 - **الاختبارات**: `tests/marketing-video.test.ts` — 13 حالة: 401 غير مصادق، 403 لـCUSTOMER (RBAC)، 403 لمنتج تاجر آخر، 422 لمنتج غير ACTIVE، **MP4 حقيقي** (تحقق ftyp + حفظ DB + ظهور في المكتبة)، تشكيل عربي، عزل بين المستخدمين، توكن غير صالح، حذف ناعم، تعرّض Agent للوسائط الحقيقية، و`/mine` (ملكية/فارغ/401).
 - **التحقق**: الخادم **434/434** (42 ملفاً)، typecheck للخادم والواجهة نظيف، و`vite build` للواجهة ناجح.
+
+## Milestone — GM Orchestrator: طبقة تنسيق المدير العام (AI-05.0)
+
+> **الفرع**: `ci/repair-sandbox-2u-g-20261020-190057`
+
+- **الفجوة**: لا توجد طبقة **قيادة/تنسيق مركزية** تتيح لمالك المنصة تشغيل هدف إداري واحد يشمل عدة وكلاء، ثم تجميع نتائجهم في تقرير واحد. الـCopilot يوجّه *أحداثًا* فردية؛ لا شيء ينسّق *أهدافًا* إدارية متعددة الخطوات.
+- **الحل**: `packages/server/src/modules/ai/orchestrator.ts` — طبقة تنسيق **حتمية** (بلا LLM في التوجيه) تعمل بصلاحية `SUPER_ADMIN`. تحلّل الهدف مقابل **دفتر تشغيل ثابت** (`GM_PLAYBOOKS`، 6 دفاتر)، تختار الوكلاء، ترتّب الخطوات في **موجات** حسب الاعتماديات (`planWaves` — Kahn + إسقاط الدورة/الاعتمادية المفقودة)، تنسّق التنفيذ، تجمع النتائج، تراجعها (`reviewResults`: نقص أدلة/تعارض/فشل/تخطٍّ)، ثم تُخرج تقريرًا إداريًا (ar/en) وإجراءات مقترحة (`executed: false`).
+- **الأمان (الأهم)**: **لا سلطة تنفيذ خاصة.** كل خطوة تمرّ عبر `createAgentTask` — البوابة التنفيذية الوحيدة — فترث **دور المستدعي الحقيقي** (لا تُصنّع `SUPER_ADMIN`)، RBAC لكل وكيل، نطاق البيانات، **مفتاح الإيقاف** (وكيل `DISABLED`/`PAUSED` يُتخطّى)، **بوّابة الموافقة البشرية** (وكيل حسّاس ⇒ `awaiting_approval` دون تنفيذ)، حدّ الميزانية/المهلة، وسجل `AI.*`. لا نظام صلاحيات موازٍ.
+- **سقوف صلب**: `MAX_STEPS_PER_RUN = 8`، `MAX_WAVES_PER_RUN = 5`.
+- **الـ API**: `GET /api/admin/gm/playbooks`، `POST /api/admin/gm/orchestrate` — كلاهما `requireRole('SUPER_ADMIN')`؛ الأدوار تُحلّ من القاعدة لا من جسم الطلب. مُسجَّلة في `app.ts`.
+- **التدقيق**: كل تشغيل يُسجَّل `AI.GM_ORCHESTRATED` مع عدّادات (نجاح/فشل/انتظار موافقة/تخطٍّ).
+- **الاختبارات**: `tests/ai05-gm-orchestrator.test.ts` — **20 حالة** (تخطيط نقي + تكامل حقيقي + مسار HTTP): تصنيف/موجات/دورة/نقص أدلة/تعارض/تقرير؛ مراجعة صحّة تجمع أدلة فعلية وتُدقَّق وتترابط عبر `correlationId`؛ **عدم تغيير بيانات تجارية**؛ `MERCHANT` يُتخطّى (لا تصعيد)؛ مفتاح الإيقاف؛ اعتماد حسّاس دون تنفيذ؛ سقف `maxSteps`؛ 401/403/201.
+- **التحقق**: `tsc --noEmit` نظيف؛ ملف AI-05 أخضر؛ مجموعات AI المجاورة (ai02/ai03/admin-copilot/ai-core/admin-ai) **72/72**.

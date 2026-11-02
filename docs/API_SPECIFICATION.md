@@ -114,8 +114,8 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 
 - `GET /` — طلباتي (browser)
 - `GET /:id` — تفاصيل (مالك/بائع)
-- `POST /` — إنشاء (buyerId, buyerType, items[{productId, quantity}]) — يتحقق من: وجود المنتج، الحالة ACTIVE، MOQ، المخزون؛ يحسب العمولة من السياسة ورسوم الدفع، ينشئ transaction + ledger + audit
-- `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر)
+- `POST /` — إنشاء (buyerId, buyerType, items[{productId, quantity}]) — يتحقق من: وجود المنتج، الحالة ACTIVE، MOQ، المخزون؛ يحسب العمولة من السياسة ورسوم الدفع، ينشئ transaction + ledger + audit. **ذرّي بالكامل (AI-08.0)**: كل الكتابات — حجز المخزون، الطلب وبنوده، المعاملة والـledger، التدقيق، إشعار البائع، وإدراج حدث `order.placed` في الـoutbox — داخل **معاملة واحدة** (إما كلها أو لا شيء). الحدث يحمل مفتاح تكرار ثابت `order.placed:{orderId}`.
+- `PATCH /:id/status` — تحديث حالة (مقيد بمالك الصفقة أو بائع/مشتر). **`CONFIRMED` يتطلّب `paymentStatus='PAID'`** وإلا **409 `CONFLICT`** — التأكيد يحوّل الحجز إلى بيع، فلا يُسمح به قبل إثبات الدفع (webhook موقَّع أو إتمام `manual` لنيّة حقيقية). بقية الانتقالات بلا قيد دفع.
 
 ## المعاملات (`/api/transactions`)
 
@@ -131,9 +131,20 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `GET /ledger` — سجل الحركات
 - `GET /products` — قائمة منتجات
 - `GET /audit-logs` — سجل المراجعة
+- Trade vetting (`/api/admin/trade`) — `ADMIN/SUPER_ADMIN` + صلاحية لكل نوع (`SUPPLIER|MERCHANT|COMPANY` `_LIST`/`_UPDATE`):
+  - `GET /trade/{suppliers,merchants,companies}?q=&verified=&isActive=&page=&pageSize=` — قائمة كيانات البيع (تشمل غير النشطة، بخلاف الدليل العام) مع `kind` موحّد واسم مُطبَّع
+  - `PATCH /trade/{suppliers,merchants,companies}/:id` — `{verified?, isActive?}` (واحد على الأقل؛ 422 خلاف ذلك، 404 لغير الموجود)؛ يُدقَّق `TRADE.VERIFIED|UNVERIFIED|SUSPENDED|REACTIVATED|STATUS_UNCHANGED` مع before/after وينعكس على `directory`/`search`/`sitemap`
 - Policies (`admin:policies`):
   - `GET /policies/dispute` + `PUT /policies/dispute` + `GET /policies/dispute/resolved` — قواعد النزاع العامة/لكل دولة
   - `GET /policies/retention` + `PUT /policies/retention` + `GET /policies/retention/resolved` — قواعد الاحتفاظ بالبيانات (`PRIVACY/DATA_RETENTION`): `defaultRetentionDays`, `legalHoldFinanciallyRequired`, `preserves`. التجاهز لكل دولة؛ غياب صف الدولة يُسجَّل `DECISION_REQUIRED` ويُحلّ عند الإضافة. كل تعديل Audit (who/what/old/new/when/reason) ويرفع `version`.
+- عمليات الوكلاء (`/api/admin/agent-ops`) — `AI_MANAGE` أو `ADMIN_AI` (ADMIN/SUPER_ADMIN)، **قراءة فقط**:
+  - `GET /performance?overdueSeconds=` — صف لكل وكيل من السجلات الحقيقية؛ النطاق (منصّة/مالك) يُحلّ خادميًا
+  - `GET /health?overdueSeconds=` — `TeamHealth`: وكلاء، مهام حيّة، نتائج 24 ساعة، ميزانية، تنبيهات، `needsHumanAttention`، وكتلة `system` (تليمترية المجدول) **للمنصّة فقط ومنفصلة عن نشاط البشر**
+  - `GET /activity?limit=` — آخر مهام الوكلاء (حدّ أقصى 100)
+  - `GET /memory?agentKey=&taskId=&limit=&offset=` — **G7**: الذاكرة التشغيلية للقراءة فقط. الاستعلام مُتحقَّق (`agentKey` 1..64، `taskId` UUID، `limit` 1..100، `offset` 0..100000)؛ الاستجابة `{ items, total, limit, offset }` حيث كل `item` إسقاط محدود (`id`, `agentKey`, `kind`, `taskId`, `source`, `tags`, `outcome`, `latencyMs`, `errorCode`, `createdAt`) بلا `content` خام ولا `scope_owner`. النطاق **دائمًا** نطاق المتصل نفسه (يُحلّ من الجلسة، لا من الطلب)، والفلاتر تضيّق فقط؛ و`taskId` لمهمة خارج نطاق المتصل ⇒ **404**. لا كتابة.
+- المشرف (`/api/admin/ai`) — `AI_MANAGE` أو `ADMIN_AI`:
+  - `GET /supervisor` — لقطة صحة (عدّادات، وكلاء متوقّفون، تنبيهات مفتوحة)
+  - `GET /supervisor/report` — التقرير الكامل + قائمة المهام المحتَواة (قراءة فقط)
 
 ## الخصوصية (`/api/privacy`) — Auth مطلوب
 
@@ -231,6 +242,128 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `DELETE /assets/:id` — حذف ناعم (DELETED) مع إبقاء السجل للـ Audit
 - `GET /assets/:id/content?token=…` — بث/تنزيل الأصل برابط موقّع قصير العمر + دعم Range
   (`MEDIA_DOWNLOAD_TTL_SECONDS`). لا ملفات ثابتة عامة.
+
+## المالية الإدارية (`/api/admin/finance`) — `commission:manage` أو `payment:read`
+
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/api/admin/finance/payout-providers` | كتالوج مسارات Payout المتاحة |
+| POST | `/api/admin/finance/settlements/confirm` | تأكيد تسوية من دليل المزوّد (idempotent) |
+| POST | `/api/admin/finance/payouts` | إنشاء Payout (يبدأ `CREATED`) |
+| GET | `/api/admin/finance/payouts` | قائمة Payout بترقيم صفحات (افتراضي 20، سقف 100) |
+| GET | `/api/admin/finance/payouts/:id` | قراءة Payout |
+| POST | `/api/admin/finance/payouts/:id/dispatch` | إرسال Payout للمسار (يصل `PROCESSING` فقط) |
+| POST | `/api/admin/finance/payouts/:id/sync` | إعادة فحص Payout مع المسار |
+| POST | `/api/admin/finance/reconciliation/import` | استيراد تغذية مطابقة كـJSON (provider/bank/ledger) |
+| POST | `/api/admin/finance/reconciliation/preview-file` | **معاينة** ملف مطابقة (لا تكتب شيئًا) |
+| POST | `/api/admin/finance/reconciliation/import-file` | استيراد ملف مطابقة (CSV/TSV/JSON) |
+| POST | `/api/admin/finance/receipts` | تسجيل وصول عمولة WASIT من دليل مستقل |
+
+**استيراد ملفات المطابقة** (الملحق أ.5-1): يُرسل الملف كـ`multipart/form-data` تحت الحقل `file`، مع `source=PROVIDER|BANK` و`currencyCode` في سلسلة الاستعلام (`importKey`/`providerId` اختياريان للاستيراد). التفاصيل الكاملة في `docs/RECONCILIATION_FILE_IMPORT.md`.
+
+## الصادر المعاملاتي (`event_outbox`) — AI-08.0
+
+- **لا مسار HTTP عام.** الجدول `event_outbox` داخلي: تُدرَج الصفوف داخل معاملة الحدث التجاري
+  (حاليًا `POST /api/orders` يُدرج `order.placed`)، ويستنزفها العامل الموثوق داخل نبضة المجدول
+  (`src/lib/scheduler.ts` → `dispatchOutboxEvents`) ويوجّهها عبر `createAgentTask`/`runTask`.
+- مفتاح التكرار: `dedupe_key` فريد (مثال `order.placed:{orderId}`) — الإدراج المتكرر لا يُنشئ صفًا.
+- الحالة: `PENDING → PROCESSING → PROCESSED | FAILED` مع Lease (`locked_at`) واستعادة بعد التعطّل
+  (`reapStaleEvents`) وتراجع أُسّي. التوجيه محصور بقائمة سماح صريحة (`outbox-routes.ts`).
+
+## دورة الوكلاء عند الطلب (`/api/admin/gm`) — G8
+
+`SUPER_ADMIN` فقط (requireRole). تشغيل يدوي لدورة الوكلاء دون تفعيل المجدول في الإنتاج.
+
+| Method | Path | الوصف |
+|---|---|---|
+| POST | `/api/admin/gm/cycle` | تشغيل دورة واحدة؛ `{ limit? }` (1..100، الافتراضي 25)؛ يعيد `{ correlationId, status, reason, startedAt, finishedAt, durationMs, budget, steps }` — `status` ∈ `completed`/`blocked`/`failed` (الحقيقة لا تُجمَّل) |
+| GET | `/api/admin/gm/cycles?limit=` | سجل الدورات (قراءة فقط من قيود التدقيق `AI.AGENT_CYCLE_*`) |
+
+- الحالة `blocked` تعني `ALREADY_RUNNING` (دورة أخرى قيد التشغيل) أو `BUDGET_EXHAUSTED` (الميزانية مستنفدة).
+- الدورة تُركّب نفس دوال المجدول (توزيع الجداول → تنفيذ المهام → إفشال العالقة → استنزاف الصادر)، فلا مسار تنفيذ جديد ولا صلاحيات جديدة.
+
+## تنفيذ الإجراءات المقترحة للمدير العام (`/api/admin/gm/runs/:id/actions`) — G4
+
+`SUPER_ADMIN` فقط (requireRole). يحوّل المدير العام توصية **مقترحة** في تقرير تشغيل إلى **مهمة وكيل
+حقيقية**، بموافقة بشرية مضبوطة.
+
+| Method | Path | الوصف |
+|---|---|---|
+| GET | `/api/admin/gm/runs/:correlationId/actions` | عرض الإجراءات المقترحة مع قابليتها للتنفيذ (قراءة فقط): `{ action, description, descriptionAr, agentKey, requiresApproval, executable, reason, taskId, taskStatus }` |
+| POST | `/api/admin/gm/runs/:correlationId/actions/execute` | تنفيذ إجراء واحد؛ الجسم `{ action }` فقط؛ يعيد النتيجة الفعلية `{ status: 'task_created'|'blocked', reason, agentKey, taskId, taskStatus, requiresApproval, approvalAction, deduplicated }` |
+
+- الإجراء يجب أن يكون **مقترحًا فعلًا** في لقطة التشغيل (وإلا `blocked / UNKNOWN_ACTION`)، ومربوطًا
+  بوكيل قادر عبر قائمة سماح صريحة (`GM_ACTION_ROUTES`؛ وإلا `blocked / NO_AGENT`)، ووكيله `ACTIVE`
+  (وإلا `blocked / AGENT_NOT_ACTIVE` — مفتاح الإيقاف).
+- المهمة تُنشأ عبر `createAgentTask` — بوابة التنفيذ الواحدة — فترث RBAC والنطاق ومفتاح الإيقاف وبوابة
+  الموافقة والميزانية والتدقيق. الإجراءات الحساسة (`ads.spend_increase`, `risk.block_account`,
+  `compliance.final_ruling`, `outreach.send`) تُنشئ مهمة `awaiting_approval` ولا تُنفَّذ تلقائيًا.
+- أحادية على `(runId, action)` عبر `dedupe_key` + فهرس فريد جزئي: الطلب المتكرر/المتزامن يعيد نفس
+  المهمة (`deduplicated: true`) ولا يُنشئ ثانية. هوية المشغّل من الجلسة (`ctx.user.id`) لا من الجسم.
+- تدقيق: `AI.GM_ACTION_REQUESTED` ثم `AI.GM_ACTION_EXECUTED` أو `AI.GM_ACTION_BLOCKED` (entityId =
+  runId، والإجراء في `metadata`). لا كتابة على مسار الأموال ولا تغيير مخطط/ترحيلات.
+
+## أدوات بوابة الوكلاء الداخلية (Tool Gateway) — G5
+
+أدوات داخلية **لا تُعرَض كمسارات HTTP**: تُستدعى حصرًا عبر `invokeTool(db, toolId, args, opts)` من
+داخل المنفّذين، وتخضع لسياق تشغيل موثوق + RBAC + نطاق + مخطط `.strict()` + تدقيق. كلها `effect: 'read'`.
+
+| المعرّف | النطاق | الصلاحية | الوصف |
+|---|---|---|---|
+| `ads.read_campaigns` | منصّة (`platformScoped: true`) | `ad:manage` | دفتر الإعلانات (G5 Phase 1) |
+| `development.read_platform` | منصّة (`platformScoped: true`) | `analytics:read:all` | سياق البناء (G5 Phase 1) |
+| `supplier.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات الموردين **المملوكة للمتصل** (G5 Phase 2 — A1) |
+| `merchant.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات التجّار **المملوكة للمتصل** (G5 Phase 2 — A2) |
+| `sales.read_orders_owned` | مالك (`platformScoped: false`) | `order:read:own` | طلبات البيع **المملوكة للمتصل** + مؤشراتها (G5 Phase 2 — A3) |
+| `sales.read_orders_platform` | منصّة (`platformScoped: true`) | `order:read` | دفتر الطلبات على مستوى المنصّة — للمشرفين فقط (G5 Phase 2 — A3) |
+| `sales.read_market_totals` | عام (بلا نطاق مالك) | `ai:use` | مجاميع السوق (أعداد + متوسط الثقة) — بلا سجلات/معرّفات (G5 Phase 2 — A3) |
+| `product.read_public` | عام (بلا نطاق مالك) | `ai:use` | إدراج منشور/نشط واحد (أو عيّنة منشورة) + تصنيف/متغيّرات/صور/مخزون (G5 Phase 2 — A4) |
+| `product.read_owned` | مالك (`platformScoped: false`) | `ai:use` | إدراجات المنتجات **المملوكة للمتصل** (أي حالة) + التفاصيل (G5 Phase 2 — A4) |
+| `product.read_platform` | منصّة (`platformScoped: true`) | `product:read` | أي إدراج لأي مالك وأي حالة — للمشرفين فقط (G5 Phase 2 — A4) |
+| `marketing.read_catalogue_owned` | مالك (`platformScoped: false`) | `ai:use` | مجاميع الكتالوج **المنشور المملوك للمتصل** (أعلى التصنيفات/العلامات) (G5 Phase 2 — A5) |
+| `marketing.read_catalogue_platform` | منصّة (`platformScoped: true`) | `analytics:read:all` | المجاميع ذاتها عبر كل البائعين (منشور فقط) — للمشرفين فقط (G5 Phase 2 — A5) |
+| `marketing.read_videos_owned` | مالك (`platformScoped: false`) | `ai:use` | فيديوهات التسويق **المملوكة للمتصل** (`media_assets` نوع `MARKETING_VIDEO`) (G5 Phase 2 — A5) |
+
+- `supplier.read_owned`: الوسائط `{ supplierId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
+  السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `supplierId` يُحترم فقط إن كان
+  مملوكًا للمتصل وإلا يعيد نطاقًا فارغًا (`found: false`). الأداة ممنوحة لـ`supplier-agent` فقط.
+- `merchant.read_owned`: الوسائط `{ merchantId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
+  السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `merchantId` يُحترم فقط إن كان
+  مملوكًا للمتصل وإلا يعيد نطاقًا فارغًا (`found: false`). الأداة ممنوحة لـ`merchant-agent` فقط.
+- `sales.read_orders_owned`: الوسائط `{ periodDays?: int(1..365) = 30, limit?: int(1..100) }`؛ **المالك يُحلّ
+  من السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ إن لم يوجد مالك موثوق (مثل
+  `SYSTEM_PRINCIPAL`) يعيد `noScope: true` بلا استعلام. يعيد `{ scope:'own', noScope, kpi, recentOrders }`.
+  الأداة ممنوحة لـ`sales-agent` فقط.
+- `sales.read_orders_platform`: الوسائط `{ periodDays?: int(1..365) = 30, limit?: int(1..100) }`؛
+  `platformScoped: true` — تُقبل فقط لدور `ADMIN`/`SUPER_ADMIN` عبر فحص صلاحية حقيقي، ويُرفض غير المشرف
+  بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`. تعيد `{ scope:'platform', kpi, recentOrders }` عبر كل المالكين.
+- `sales.read_market_totals`: بلا وسائط؛ تعيد **مجاميع فقط** `{ activeProducts, suppliers, merchants, companies,
+  avgTrust }` — بلا أي سجلات أو معرّفات أو بيانات فردية؛ متاحة لكل متصل يملك `ai:use` (كسلوك المنفّذ السابق).
+- `product.read_public`: الوسائط `{ productId?: string(1..64) }`؛ تعيد `{ scope:'public', found, product }`
+  حيث `product` إدراج **منشور/نشط فقط** (أو عيّنة منشورة بلا معرّف). لا تكشف إدراجًا غير منشور حتى بمعرّفه.
+  الأداة ممنوحة لـ`product-agent` فقط.
+- `product.read_owned`: الوسائط `{ productId?: string(1..64) }`؛ **المالك يُحلّ من السياق الموثوق**
+  (`getAgentRunContext().requestedBy`) لا من الوسائط؛ يعيد `{ scope:'own', found, noScope, product }`،
+  وإن لم يوجد مالك موثوق أو لم يملك المتصل أي كيان بائع يعيد `noScope: true` بلا استعلام. الأداة ممنوحة
+  لـ`product-agent` فقط.
+- `product.read_platform`: الوسائط `{ productId?: string(1..64) }`؛ `platformScoped: true` — تُقبل فقط
+  لدور `ADMIN`/`SUPER_ADMIN` عبر فحص صلاحية حقيقي، ويُرفض غير المشرف بـ`PLATFORM_SCOPE_DENIED`/
+  `PERMISSION_DENIED`. تعيد `{ scope:'platform', found, product }` لأي مالك وأي حالة.
+- `marketing.read_catalogue_owned`: الوسائط `{ limit?: int(1..10) = 5 }` (يقبل سلسلة رقمية)؛ **المالك
+  يُحلّ من السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ يعيد
+  `{ scope:'own', noScope, snapshot:{ published, topCategories, topBrands } }`، وإن لم يوجد مالك موثوق
+  أو لم يملك المتصل أي كيان بائع يعيد `noScope: true` بلا استعلام. الأداة ممنوحة لـ`marketing-agent` فقط.
+- `marketing.read_catalogue_platform`: الوسائط `{ limit?: int(1..10) = 5 }`؛ `platformScoped: true` —
+  تُقبل فقط لدور `ADMIN`/`SUPER_ADMIN`، ويُرفض غير المشرف بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`.
+  تعيد `{ scope:'platform', snapshot }` (الكتالوج المنشور عبر كل البائعين).
+- `marketing.read_videos_owned`: الوسائط `{ limit?: int(1..10) = 5 }`؛ **المالك يُحلّ من السياق الموثوق**
+  لا من الوسائط؛ يعيد `{ scope:'own', noScope, videos }` (أصول `MARKETING_VIDEO` المملوكة للمتصل مع روابط
+  معاينة/تنزيل موقّعة)، ولا يستعلم عند غياب المالك الموثوق أو كونه `SYSTEM_PRINCIPAL`. الأداة ممنوحة
+  لـ`marketing-agent` فقط.
+- أخطاء البوابة المرتجعة (fail-closed): `TOOL_NOT_REGISTERED`, `NO_RUN_CONTEXT`,
+  `ACTION_NOT_AUTHORIZED`, `PERMISSION_DENIED`, `PLATFORM_SCOPE_DENIED`, `INVALID_INPUT`,
+  `TOOL_TIMEOUT`, `TOOL_EXECUTION_FAILED` — وكل محاولة (مسموحة أو مرفوضة) تُدقَّق (`AI.TOOL_EXECUTED` /
+  `AI.TOOL_REFUSED` / `AI.TOOL_FAILED`).
 
 ## بقية الوحدات (Routes تحت التطوير)
 

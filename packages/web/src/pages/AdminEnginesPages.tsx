@@ -105,16 +105,21 @@ type AdminTrustRow = TrustScoreRow & { email: string | null };
 export function AdminTrustPage() {
   const { t } = useI18n();
   const [items, setItems] = useState<AdminTrustRow[]>([]);
+  const [users, setUsers] = useState<Array<{ id: string; email: string }>>([]);
+  const [selectedUser, setSelectedUser] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const res = await apiCall(() => api.adminTrust());
+    // The picker needs the user list only to create the first score, but the
+    // empty/not-empty decision is not known until trust loads, so fetch both.
+    const [trust, userList] = await Promise.all([apiCall(() => api.adminTrust()), apiCall(() => api.adminUsers())]);
     setLoading(false);
-    if (res.error) { setError(res.error); return; }
-    setItems(res.data!.items);
+    if (trust.error) { setError(trust.error); return; }
+    setItems(trust.data!.items);
+    if (!userList.error) setUsers(userList.data!.items.map((u) => ({ id: u.id, email: u.email })));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -128,36 +133,66 @@ export function AdminTrustPage() {
     <AppLayout>
       <SectionHeader title={t('admin.trust')} />
       {loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={load} /> : (
-        <Card className="overflow-x-auto p-0">
-          <table className="w-full text-sm">
-            <thead className="border-b border-slate-200 text-xs text-slate-500">
-              <tr>
-                <th className="px-4 py-2 text-start">User</th>
-                <th className="px-4 py-2 text-start">{t('trust.score')}</th>
-                <th className="px-4 py-2 text-start">{t('trust.explanationLabel')}</th>
-                <th className="px-4 py-2 text-start">{t('trust.effectiveAt')}</th>
-                <th className="px-4 py-2 text-start">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 && <tr><td colSpan={5} className="px-4 py-6"><EmptyState title={t('trust.noSnapshot')} /></td></tr>}
-              {items.map((r) => (
-                <tr key={r.id} className="border-b border-slate-100 last:border-0">
-                  <td className="px-4 py-2">
-                    <div className="text-slate-700">{r.email ?? r.userId}</div>
-                    <div className="text-xs text-slate-400" dir="ltr">{r.userId}</div>
-                  </td>
-                  <td className="px-4 py-2 font-semibold text-wasit-700">{r.score}</td>
-                  <td className="max-w-56 px-4 py-2 text-xs text-slate-500">{r.summary ?? '—'}</td>
-                  <td className="px-4 py-2 text-slate-500">{formatDate(r.effectiveAt)}</td>
-                  <td className="px-4 py-2">
-                    <button className="btn-secondary px-2 py-1 text-xs" onClick={() => recompute(r.userId)}>{t('trust.recompute')}</button>
-                  </td>
+        <>
+          {items.length === 0 && (
+            // With no rows there is no per-row action, so the desk would show an
+            // instruction it offers no way to follow. Give the operator a picker
+            // to create the first score — same endpoint and permission as a row.
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <select
+                className="input max-w-xs"
+                data-testid="admin-trust-user-select"
+                aria-label={t('trust.recomputeUser')}
+                value={selectedUser}
+                onChange={(e) => setSelectedUser(e.target.value)}
+              >
+                <option value="">{t('trust.recomputeUser')}</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>{u.email}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-xs"
+                data-testid="admin-trust-recompute"
+                disabled={!selectedUser}
+                onClick={() => selectedUser && recompute(selectedUser)}
+              >
+                {t('trust.recompute')}
+              </button>
+            </div>
+          )}
+          <Card className="overflow-x-auto p-0">
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-200 text-xs text-slate-500">
+                <tr>
+                  <th className="px-4 py-2 text-start">User</th>
+                  <th className="px-4 py-2 text-start">{t('trust.score')}</th>
+                  <th className="px-4 py-2 text-start">{t('trust.explanationLabel')}</th>
+                  <th className="px-4 py-2 text-start">{t('trust.effectiveAt')}</th>
+                  <th className="px-4 py-2 text-start">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+              </thead>
+              <tbody>
+                {items.length === 0 && <tr><td colSpan={5} className="px-4 py-6"><EmptyState title={t('trust.noSnapshot')} hint={t('trust.recomputeEmptyHint')} /></td></tr>}
+                {items.map((r) => (
+                  <tr key={r.id} className="border-b border-slate-100 last:border-0">
+                    <td className="px-4 py-2">
+                      <div className="text-slate-700">{r.email ?? r.userId}</div>
+                      <div className="text-xs text-slate-400" dir="ltr">{r.userId}</div>
+                    </td>
+                    <td className="px-4 py-2 font-semibold text-wasit-700">{r.score}</td>
+                    <td className="max-w-56 px-4 py-2 text-xs text-slate-500">{r.summary ?? '—'}</td>
+                    <td className="px-4 py-2 text-slate-500">{formatDate(r.effectiveAt)}</td>
+                    <td className="px-4 py-2">
+                      <button className="btn-secondary px-2 py-1 text-xs" onClick={() => recompute(r.userId)}>{t('trust.recompute')}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
       )}
     </AppLayout>
   );

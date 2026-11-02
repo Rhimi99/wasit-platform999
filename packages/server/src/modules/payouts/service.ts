@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { orders, transactionLedger, transactions } from '../../db/schema/commerce';
@@ -209,6 +209,89 @@ export async function getPayout(db: DB, payoutId: string): Promise<PayoutRecord>
   const rows = await db.select().from(payouts).where(eq(payouts.id, payoutId)).limit(1);
   if (rows.length === 0) throw ApiError.notFound('Payout');
   return toRecord(rows[0]);
+}
+
+/**
+ * A row of the admin payout list. Read-only projection: the list exposes what
+ * the `payouts` table actually holds (status, amounts, timestamps, the linked
+ * order/transaction/provider refs) and nothing derived. It never changes state.
+ */
+export interface PayoutListRow {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}
+
+export interface ListPayoutsQuery {
+  status?: PayoutStatus;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PayoutListResult {
+  items: PayoutListRow[];
+  pagination: { page: number; pageSize: number; total: number };
+}
+
+/** Page size bounds, mirroring the rest of the platform (default 20, cap 100). */
+const PAYOUT_PAGE_SIZE_DEFAULT = 20;
+const PAYOUT_PAGE_SIZE_MAX = 100;
+
+function toListRow(row: typeof payouts.$inferSelect): PayoutListRow {
+  return {
+    id: row.id,
+    orderId: row.orderId,
+    transactionId: row.transactionId,
+    sellerId: row.sellerId,
+    amount: row.amount,
+    currencyCode: row.currencyCode,
+    providerId: row.provider,
+    status: row.status as PayoutStatus,
+    payoutRef: row.payoutRef,
+    providerRef: row.providerRef,
+    failureReason: row.failureReason,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    completedAt: row.completedAt,
+  };
+}
+
+/**
+ * Lists payouts for the admin desk, newest first. The order is total and stable
+ * (`created_at desc, id desc`) so paging can never repeat or skip a row when two
+ * payouts share a timestamp. Read-only: this never mutates a payout or advances a
+ * status — completion still requires the provider's transfer reference.
+ */
+export async function listPayouts(db: DB, query: ListPayoutsQuery = {}): Promise<PayoutListResult> {
+  const page = Math.max(1, Math.floor(query.page ?? 1));
+  const pageSize = Math.min(PAYOUT_PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize ?? PAYOUT_PAGE_SIZE_DEFAULT)));
+  const where = query.status ? eq(payouts.status, query.status) : undefined;
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(payouts)
+    .where(where);
+
+  const rows = await db
+    .select()
+    .from(payouts)
+    .where(where)
+    .orderBy(desc(payouts.createdAt), desc(payouts.id))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
+
+  return { items: rows.map(toListRow), pagination: { page, pageSize, total } };
 }
 
 /** Reads the payout for a transaction, if any (used by callers/tests). */
