@@ -2,8 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { UserRole } from '@wasit/shared';
-import { allAgentSpecs, findAgentSpec } from '../src/modules/ai/catalogue.js';
+import { AGENT_CATALOGUE, allAgentSpecs, findAgentSpec } from '../src/modules/ai/catalogue.js';
 import { resolvePlatformScope, SYSTEM_PRINCIPAL, deriveScope, NoScopeError } from '../src/modules/ai/scope.js';
+import {
+  SUPPLIER_READ_OWN,
+  UNBOUND_DECLARED_TOOLS,
+  findTool,
+  isRegisteredTool,
+  registeredToolIds,
+  toolGrantForAgent,
+} from '../src/lib/ai/tool-registry.js';
+import { getToolHandler } from '../src/lib/ai/tool-handlers.js';
 
 /**
  * Phase 3D — platform-scope gate for agent executors.
@@ -157,6 +166,68 @@ describe('executors enforce the gate in code (defence in depth)', () => {
     // requirePlatformGate delegates to canReadPlatformData, which is admin-only.
     expect(SRC.includes('async function requirePlatformGate(')).toBe(true);
     expect(SRC.includes('await canReadPlatformData(db, userId, agent)')).toBe(true);
+  });
+});
+
+describe('G5 Phase 2 (A1) — supplier agent is routed through the gateway (owner-scoped)', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'src', 'modules', 'ai', 'executors.ts'), 'utf8');
+
+  function bodyOf(name: string): string {
+    const start = SRC.indexOf(`async function ${name}(`);
+    expect(start, `${name} not found`).toBeGreaterThan(-1);
+    const rest = SRC.slice(start + 1);
+    const next = rest.indexOf('\nasync function ');
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it('registers supplier.read_owned as a read-only, owner-scoped tool with a bound handler', () => {
+    const tool = findTool(SUPPLIER_READ_OWN);
+    expect(tool, SUPPLIER_READ_OWN).toBeTruthy();
+    expect(tool?.effect).toBe('read');
+    // Owner-scoped: NOT platform-scoped, so the gateway does not require an admin.
+    expect(tool?.platformScoped).toBe(false);
+    expect(isRegisteredTool(SUPPLIER_READ_OWN)).toBe(true);
+    expect(registeredToolIds()).toContain(SUPPLIER_READ_OWN);
+    expect(getToolHandler(SUPPLIER_READ_OWN)).toBeTruthy();
+  });
+
+  it('grants supplier.read_owned to supplier-agent ONLY (no widening)', () => {
+    for (const agent of AGENT_CATALOGUE) {
+      const grant = toolGrantForAgent(agent);
+      if (agent.key === 'supplier-agent') expect(grant, agent.key).toContain(SUPPLIER_READ_OWN);
+      else expect(grant, agent.key).not.toContain(SUPPLIER_READ_OWN);
+    }
+  });
+
+  it('does not touch the shared CATALOG_TOOLS group (marketing/product/merchant unchanged)', () => {
+    // supplier-agent keeps its catalogue tools PLUS the new own-scoped read.
+    const supplier = findAgentSpec('supplier-agent')!;
+    expect(supplier.allowedTools).toEqual(['platform.read_catalog', 'platform.metrics', 'report.generate', SUPPLIER_READ_OWN]);
+    // The sibling CATALOG_TOOLS consumers are untouched (still no supplier tool).
+    for (const key of ['marketing-agent', 'product-agent', 'merchant-agent']) {
+      expect(toolGrantForAgent(findAgentSpec(key)!), key).not.toContain(SUPPLIER_READ_OWN);
+    }
+  });
+
+  it('execSupplierAgent reads ONLY through invokeTool (no direct query, no inline platform gate)', () => {
+    const body = bodyOf('execSupplierAgent');
+    expect(body.includes('invokeTool(')).toBe(true);
+    expect(body.includes('.from(')).toBe(false);
+    expect(body.includes('listOwnedSellerEntities(')).toBe(false);
+    // The supplier agent is owner-scoped, never platform-gated.
+    expect(body.includes('requirePlatformGate(')).toBe(false);
+  });
+
+  it('does not change supplier-agent permissions, scope or approval declarations', () => {
+    const supplier = findAgentSpec('supplier-agent')!;
+    expect(supplier.permissionsRequired).toEqual(['ai:use']);
+    expect(supplier.requiresPlatformScope).not.toBe(true);
+    expect(supplier.approvalActions).toEqual([]);
+    expect(supplier.requiresHumanApproval).toBe(false);
+  });
+
+  it('the new tool is registered, not left in the unbound list', () => {
+    expect(UNBOUND_DECLARED_TOOLS).not.toContain(SUPPLIER_READ_OWN);
   });
 });
 

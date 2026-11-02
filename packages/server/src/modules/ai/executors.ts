@@ -24,6 +24,7 @@ import {
   MARKET_READ_OWN,
   ADS_READ_CAMPAIGNS,
   DEVELOPMENT_READ_PLATFORM,
+  SUPPLIER_READ_OWN,
 } from '../../lib/ai/tool-registry';
 import { products, categories, productVariants, productImages } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
@@ -1168,32 +1169,32 @@ async function execComplianceAgent(db: DB, agent: AgentDefinition, input: Record
  */
 async function execSupplierAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
-  const owned = await listOwnedSellerEntities(db, userId);
-  const ownedSupplierIds = owned.filter((e) => e.sellerType === 'SUPPLIER').map((e) => e.id);
   const requestedId = typeof input.supplierId === 'string' ? (input.supplierId as string) : undefined;
 
-  const baseQuery = db
-    .select({ id: suppliers.id, companyName: suppliers.companyName, countryId: suppliers.countryId, verified: suppliers.verified, isActive: suppliers.isActive })
-    .from(suppliers);
-  // Isolation: an explicit id is honoured only when the caller owns it. A
-  // requested id the caller does not own yields an empty scope, never another
-  // tenant's record.
-  const ownsRequested = requestedId ? ownedSupplierIds.includes(requestedId) : false;
-  const rows = requestedId
-    ? ownsRequested
-      ? await baseQuery.where(eq(suppliers.id, requestedId)).limit(1)
-      : []
-    : ownedSupplierIds.length > 0
-      ? await baseQuery.where(inArray(suppliers.id, ownedSupplierIds)).limit(Number(input.limit ?? 10))
-      : [];
+  // G5 Phase 2 (A1): the owned-supplier read runs ONLY through the Tool Gateway,
+  // never a direct query. `supplier.read_owned` resolves the owner from the
+  // trusted run context (never from the args) and honours an explicit id only
+  // when the caller owns it — so a caller can never widen the read to another
+  // tenant. The gateway validates the args and audits the invocation.
+  const { data } = await invokeTool(db, SUPPLIER_READ_OWN, {
+    ...(requestedId ? { supplierId: requestedId } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  });
+  const rows = (data.suppliers ?? []) as Array<{
+    id: string;
+    name: string;
+    countryId: string | null;
+    verified: boolean;
+    isActive: boolean;
+  }>;
 
-  const data: Record<string, unknown> = {
+  const data_out: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'onboard',
     scopedToOwned: !requestedId,
     suppliers: rows.map((s) => ({
       id: s.id,
-      name: s.companyName,
+      name: s.name,
       countryId: s.countryId,
       verified: s.verified,
       isActive: s.isActive,
@@ -1213,7 +1214,7 @@ async function execSupplierAgent(db: DB, agent: AgentDefinition, input: Record<s
     metadata: { agentKey: agent.key, action: input.action, scopedToOwned: !requestedId },
   });
 
-  return { content: JSON.stringify(withProposal(data, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
+  return { content: JSON.stringify(withProposal(data_out, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
 }
 
 /** Merchant Agent — same isolation rule as the Supplier Agent, for merchants. */

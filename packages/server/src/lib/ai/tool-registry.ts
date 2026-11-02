@@ -53,6 +53,11 @@ export const MARKET_READ_OWN = 'market.read_own';
 // through the gateway changes no result and grants no new authority.
 export const ADS_READ_CAMPAIGNS = 'ads.read_campaigns';
 export const DEVELOPMENT_READ_PLATFORM = 'development.read_platform';
+// G5 Phase 2 (A1): the supplier agent's owned-entity read moved behind the
+// gateway. It mirrors the exact owner-scoped query `execSupplierAgent` already
+// ran (owned supplier entities only), so routing it changes no result and grants
+// no new authority — the owner is resolved from the trusted run context.
+export const SUPPLIER_READ_OWN = 'supplier.read_owned';
 
 /** `{ limit?: int }` — a bounded page size, the only knob the read tools take. */
 const limit = (max: number) => z.number().int().min(1).max(max).optional();
@@ -153,6 +158,27 @@ const TOOL_LIST: readonly ToolDefinition[] = [
     inputSchema: z.object({}).strict(),
     permission: 'analytics:read:all',
     platformScoped: true,
+  },
+  {
+    id: SUPPLIER_READ_OWN,
+    description:
+      "The caller's own supplier entities — id, name, country, verification and active flag. Owner-scoped: the owner is resolved from the trusted run context, never from the args.",
+    effect: 'read',
+    // Owner-scoped: any caller permitted to use AI may read their OWN entities.
+    // `platformScoped: false` means the gateway does NOT require an admin; the
+    // owner is taken from the trusted run context, so a caller can only ever
+    // read the supplier entities they own.
+    inputSchema: z
+      .object({
+        // Tolerant of a non-UUID id on purpose: an id the caller does not own
+        // yields an empty scope (a "not found in your scope" note), never a
+        // validation error and never another tenant's record.
+        supplierId: z.string().min(1).max(64).optional(),
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+      })
+      .strict(),
+    permission: 'ai:use',
+    platformScoped: false,
   },
 ];
 

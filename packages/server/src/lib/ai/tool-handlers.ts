@@ -11,7 +11,7 @@ import { commissionPolicies } from '../../db/schema/engine';
 import { dailyKpis } from '../../db/schema/analytics';
 import { campaigns, adEvents } from '../../db/schema/ads';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
-import { resolveOwnedSellerIds } from '../../lib/seller-ownership';
+import { listOwnedSellerEntities, resolveOwnedSellerIds } from '../../lib/seller-ownership';
 import { getAgentRunContext } from './agent-run-context';
 import {
   ADS_READ_CAMPAIGNS,
@@ -26,6 +26,7 @@ import {
   PLATFORM_METRICS,
   PLATFORM_READ_ORDERS,
   RISK_READ_OVERVIEW,
+  SUPPLIER_READ_OWN,
   registeredToolIds,
 } from './tool-registry';
 
@@ -370,6 +371,57 @@ const marketReadOwn: ToolHandler = async (db) => {
 };
 
 /**
+ * The caller's own supplier entities — id, name, country, verification and active
+ * flag. The owner is resolved from the TRUSTED run context
+ * (`getAgentRunContext().requestedBy`), never from the tool args, so a caller
+ * cannot name another tenant. An explicit `supplierId` is honoured only when the
+ * caller owns it; otherwise the result is an empty scope (`found: false`), never
+ * another tenant's record. Read-only and bounded by `limit`.
+ */
+const supplierReadOwn: ToolHandler = async (db, args) => {
+  const owner = getAgentRunContext()?.requestedBy ?? null;
+  const owned = owner ? await listOwnedSellerEntities(db, owner) : [];
+  const ownedSupplierIds = owned.filter((e) => e.sellerType === 'SUPPLIER').map((e) => e.id);
+  const requestedId = typeof args.supplierId === 'string' ? (args.supplierId as string) : undefined;
+  const limit = Number(args.limit ?? 10);
+
+  const baseQuery = db
+    .select({
+      id: suppliers.id,
+      companyName: suppliers.companyName,
+      countryId: suppliers.countryId,
+      verified: suppliers.verified,
+      isActive: suppliers.isActive,
+    })
+    .from(suppliers);
+
+  // Isolation: an explicit id is honoured only when the caller owns it. A
+  // requested id the caller does not own yields an empty scope, never another
+  // tenant's record. Mirrors `execSupplierAgent`'s former direct read exactly.
+  const ownsRequested = requestedId ? ownedSupplierIds.includes(requestedId) : false;
+  const rows = requestedId
+    ? ownsRequested
+      ? await baseQuery.where(eq(suppliers.id, requestedId)).limit(1)
+      : []
+    : ownedSupplierIds.length > 0
+      ? await baseQuery.where(inArray(suppliers.id, ownedSupplierIds)).limit(limit)
+      : [];
+
+  return {
+    scope: 'own',
+    scopedToOwned: !requestedId,
+    found: requestedId ? rows.length > 0 : undefined,
+    suppliers: rows.map((s) => ({
+      id: s.id,
+      name: s.companyName,
+      countryId: s.countryId,
+      verified: s.verified,
+      isActive: s.isActive,
+    })),
+  };
+};
+
+/**
  * Platform ad book — campaign budget/spend rows plus impression/click/conversion
  * counts. Cross-owner advertising data, so the gateway admits admins only
  * (`platformScoped: true`). The payload mirrors `execAdsAgent`'s former direct
@@ -466,6 +518,7 @@ const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>(
   [MARKET_READ_OWN, marketReadOwn],
   [ADS_READ_CAMPAIGNS, adsReadCampaigns],
   [DEVELOPMENT_READ_PLATFORM, developmentReadPlatform],
+  [SUPPLIER_READ_OWN, supplierReadOwn],
 ]);
 
 /** Looks up the handler bound to a registered tool. */

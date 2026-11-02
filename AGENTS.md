@@ -85,7 +85,17 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
 - ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
-- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **10 داخل** البوابة و**10 خارجها**. الخارجون: 9 وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`, `supplier`, `merchant`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **11 داخل** البوابة و**9 خارجها** (بعد G5 Phase 2 — A1). الخارجون: 8 وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`, `merchant`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A1): توحيد Supplier Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A1)**: نُقلت قراءة `execSupplierAgent` (كيانات الموردين المملوكة) إلى البوابة المركزية عبر أداة جديدة **قراءة فقط** و**نطاق المالك**:
+  - `supplier.read_owned` (`permission ai:use`, `platformScoped: false`) — `{ supplierId?: string(1..64), limit?: int(1..100) }` → كيانات الموردين المملوكة للمتصل (`id`, `name`, `countryId`, `verified`, `isActive`).
+- ✅ **الهوية من السياق الموثوق فقط**: المعالج `supplierReadOwn` يحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**. `supplierId` يُحترم فقط إن كان مملوكًا للمتصل وإلا نطاق فارغ (`found: false`) — لا تسرّب عبر الحسابات.
+- ✅ **لا توسيع**: `allowedTools` لـ`supplier-agent` فقط صار `[...CATALOG_TOOLS, 'supplier.read_owned']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`marketing`/`product`/`merchant`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **البوابة تفشل مغلقًا**: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `INVALID_INPUT` (مخطط `.strict()` يمنع حقن الهوية/النطاق). لا `PLATFORM_SCOPE_DENIED` (الأداة غير منصّية).
+- ✅ **الاختبارات**: `tests/g5-phase2-supplier-tool.test.ts` (جديد) + `tests/phase3d-scope-gate.test.ts` محدَّث — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §24 (+ تحديث §10.4/§10.5 والسطر التمهيدي) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
 
 ## الحالة الحالية (2026-11-01) — G7: سطح الذاكرة التشغيلية للقراءة فقط
 

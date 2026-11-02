@@ -303,6 +303,25 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - تدقيق: `AI.GM_ACTION_REQUESTED` ثم `AI.GM_ACTION_EXECUTED` أو `AI.GM_ACTION_BLOCKED` (entityId =
   runId، والإجراء في `metadata`). لا كتابة على مسار الأموال ولا تغيير مخطط/ترحيلات.
 
+## أدوات بوابة الوكلاء الداخلية (Tool Gateway) — G5
+
+أدوات داخلية **لا تُعرَض كمسارات HTTP**: تُستدعى حصرًا عبر `invokeTool(db, toolId, args, opts)` من
+داخل المنفّذين، وتخضع لسياق تشغيل موثوق + RBAC + نطاق + مخطط `.strict()` + تدقيق. كلها `effect: 'read'`.
+
+| المعرّف | النطاق | الصلاحية | الوصف |
+|---|---|---|---|
+| `ads.read_campaigns` | منصّة (`platformScoped: true`) | `ad:manage` | دفتر الإعلانات (G5 Phase 1) |
+| `development.read_platform` | منصّة (`platformScoped: true`) | `analytics:read:all` | سياق البناء (G5 Phase 1) |
+| `supplier.read_owned` | مالك (`platformScoped: false`) | `ai:use` | كيانات الموردين **المملوكة للمتصل** (G5 Phase 2 — A1) |
+
+- `supplier.read_owned`: الوسائط `{ supplierId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
+  السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `supplierId` يُحترم فقط إن كان
+  مملوكًا للمتصل وإلا يعيد نطاقًا فارغًا (`found: false`). الأداة ممنوحة لـ`supplier-agent` فقط.
+- أخطاء البوابة المرتجعة (fail-closed): `TOOL_NOT_REGISTERED`, `NO_RUN_CONTEXT`,
+  `ACTION_NOT_AUTHORIZED`, `PERMISSION_DENIED`, `PLATFORM_SCOPE_DENIED`, `INVALID_INPUT`,
+  `TOOL_TIMEOUT`, `TOOL_EXECUTION_FAILED` — وكل محاولة (مسموحة أو مرفوضة) تُدقَّق (`AI.TOOL_EXECUTED` /
+  `AI.TOOL_REFUSED` / `AI.TOOL_FAILED`).
+
 ## بقية الوحدات (Routes تحت التطوير)
 
 `/users`, `/ads`, `/ai`, `/analytics`, `/geo`, `/policies`, `/subscriptions`, `/subscriptions/plans`, `/refunds`, `/commissions`

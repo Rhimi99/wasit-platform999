@@ -401,7 +401,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'network',
     description: 'Reviews supplier records for completeness; scoped to the caller\'s own entity.',
     capabilities: [{ action: 'onboard', description: 'Validate a supplier record' }],
-    allowedTools: CATALOG_TOOLS,
+    // G5 Phase 2 (A1): the supplier agent's owned-entity read now runs through the
+    // gateway's `supplier.read_owned`. Declared as an explicit list (NOT by
+    // mutating the shared CATALOG_TOOLS, which marketing/product/merchant also
+    // use) so the new tool is granted to this agent alone.
+    allowedTools: [...CATALOG_TOOLS, 'supplier.read_owned'],
     approvalActions: [],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['supplier.onboard'],
