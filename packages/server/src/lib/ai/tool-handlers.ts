@@ -14,6 +14,7 @@ import { campaigns, adEvents } from '../../db/schema/ads';
 import { trustScores } from '../../db/schema/trust';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { listOwnedSellerEntities, resolveOwnedSellerIds } from '../../lib/seller-ownership';
+import { listRecentMarketingVideos } from '../../modules/media/service';
 import { getAgentRunContext } from './agent-run-context';
 import { SYSTEM_PRINCIPAL } from '../../modules/ai/scope';
 import {
@@ -24,6 +25,9 @@ import {
   FINANCE_READ_LEDGER,
   MARKET_READ_OVERVIEW,
   MARKET_READ_OWN,
+  MARKETING_READ_CATALOGUE_OWNED,
+  MARKETING_READ_CATALOGUE_PLATFORM,
+  MARKETING_READ_VIDEOS_OWNED,
   MERCHANT_READ_OWN,
   OPERATIONS_READ_HEALTH,
   PAYMENTS_READ_SETTLEMENTS,
@@ -598,6 +602,47 @@ const salesReadMarketTotals: ToolHandler = async (db) => {
 };
 
 /**
+ * Marketing Agent (G5 Phase 2 / A5) — the shared published-catalogue aggregate
+ * behind both marketing catalogue tools. `ownedSellerIds` is present only for the
+ * owner tier; the platform tier omits it and sees every seller. Mirrors
+ * `execMarketingAgent`'s former direct query exactly (same three aggregates, same
+ * `is_published = true` filter, same ordering and limit), so the routed snapshot
+ * is identical.
+ */
+async function readPublishedCatalogue(
+  db: DB,
+  limitArg: unknown,
+  ownedSellerIds?: string[],
+): Promise<{ published: number; topCategories: { name: string; products: number }[]; topBrands: { name: string; products: number }[] }> {
+  const limit = Math.min(Number(limitArg ?? 5), 10);
+  const scope = ownedSellerIds ? inArray(products.sellerId, ownedSellerIds) : undefined;
+  const productWhere = scope ? and(eq(products.isPublished, true), scope) : eq(products.isPublished, true);
+  const [published, topCategories, brands] = await Promise.all([
+    db.select({ v: sql<number>`count(*)::int` }).from(products).where(productWhere),
+    db
+      .select({ category: categories.name, p: sql<number>`count(*)::int` })
+      .from(products)
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .where(productWhere)
+      .groupBy(categories.name)
+      .orderBy(sql`count(*) desc`)
+      .limit(limit),
+    db
+      .select({ brand: products.brand, p: sql<number>`count(*)::int` })
+      .from(products)
+      .where(and(sql`${products.brand} is not null`, productWhere))
+      .groupBy(products.brand)
+      .orderBy(sql`count(*) desc`)
+      .limit(limit),
+  ]);
+  return {
+    published: toNum(published[0]?.v),
+    topCategories: topCategories.map((c) => ({ name: c.category ?? 'Uncategorised', products: toNum(c.p) })),
+    topBrands: brands.filter((b) => b.brand !== null).map((b) => ({ name: b.brand ?? '', products: toNum(b.p) })),
+  };
+}
+
+/**
  * Product Agent (G5 Phase 2 / A4) — the shared catalogue read behind all three
  * product tools. `visibility` is the tier's WHERE predicate (or `undefined` for
  * the platform tier, which sees every row). Mirrors `execProductAgent`'s former
@@ -706,6 +751,52 @@ const productReadPlatform: ToolHandler = async (db, args) => {
 };
 
 /**
+ * Marketing Agent (G5 Phase 2 / A5) — the OWNER catalogue snapshot.
+ *
+ * Published-listing count and top categories/brands, scoped to seller entities
+ * the caller owns. The owner is resolved from the TRUSTED run context
+ * (`getAgentRunContext().requestedBy`), never the args. A caller who owns no
+ * seller entity returns an empty snapshot WITHOUT running a query, so the
+ * executor can fall through to the public (platform) tier exactly as before.
+ */
+const marketingReadCatalogueOwned: ToolHandler = async (db, args) => {
+  const owner = getAgentRunContext()?.requestedBy ?? null;
+  const ownedSellerIds = owner && owner !== SYSTEM_PRINCIPAL ? await resolveOwnedSellerIds(db, owner) : [];
+  if (ownedSellerIds.length === 0) {
+    return { scope: 'own', noScope: true, snapshot: { published: 0, topCategories: [], topBrands: [] } };
+  }
+  return { scope: 'own', noScope: false, snapshot: await readPublishedCatalogue(db, args.limit, ownedSellerIds) };
+};
+
+/**
+ * Marketing Agent (G5 Phase 2 / A5) — the PLATFORM catalogue snapshot.
+ *
+ * The same aggregates across every seller's published listings. Admin-only by
+ * registration (`platformScoped: true`); the gateway refuses a non-admin with
+ * `PLATFORM_SCOPE_DENIED` before this handler runs.
+ */
+const marketingReadCataloguePlatform: ToolHandler = async (db, args) => {
+  return { scope: 'platform', snapshot: await readPublishedCatalogue(db, args.limit) };
+};
+
+/**
+ * Marketing Agent (G5 Phase 2 / A5) — the caller's OWN marketing videos.
+ *
+ * Recent `MARKETING_VIDEO` assets with signed preview/download URLs. The owner
+ * is resolved from the TRUSTED run context, never the args, so a caller can
+ * never list another user's media. A caller with no trustworthy identity (or the
+ * named scheduler principal) gets an empty list without a query. Reuses the
+ * media module's own owner-scoped read, so the output is byte-identical to the
+ * executor's former direct call.
+ */
+const marketingReadVideosOwned: ToolHandler = async (db, args) => {
+  const owner = getAgentRunContext()?.requestedBy ?? null;
+  if (!owner || owner === SYSTEM_PRINCIPAL) return { scope: 'own', noScope: true, videos: [] };
+  const videos = await listRecentMarketingVideos(db, owner, Number(args.limit ?? 5));
+  return { scope: 'own', noScope: false, videos };
+};
+
+/**
  * Platform ad book — campaign budget/spend rows plus impression/click/conversion
  * counts. Cross-owner advertising data, so the gateway admits admins only
  * (`platformScoped: true`). The payload mirrors `execAdsAgent`'s former direct
@@ -810,6 +901,9 @@ const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>(
   [PRODUCT_READ_PUBLIC, productReadPublic],
   [PRODUCT_READ_OWNED, productReadOwned],
   [PRODUCT_READ_PLATFORM, productReadPlatform],
+  [MARKETING_READ_CATALOGUE_OWNED, marketingReadCatalogueOwned],
+  [MARKETING_READ_CATALOGUE_PLATFORM, marketingReadCataloguePlatform],
+  [MARKETING_READ_VIDEOS_OWNED, marketingReadVideosOwned],
 ]);
 
 /** Looks up the handler bound to a registered tool. */

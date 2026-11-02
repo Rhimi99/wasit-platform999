@@ -81,9 +81,23 @@ export const SALES_READ_MARKET_TOTALS = 'sales.read_market_totals';
 export const PRODUCT_READ_PUBLIC = 'product.read_public';
 export const PRODUCT_READ_OWNED = 'product.read_owned';
 export const PRODUCT_READ_PLATFORM = 'product.read_platform';
+// G5 Phase 2 (A5): the marketing agent's reads moved behind the gateway. The
+// agent has always surfaced two things: a catalogue snapshot (platform-wide for
+// an admin, otherwise scoped to the entities they own) and the caller's own
+// generated marketing videos. Each is served by a registered, read-only tool so
+// the executor issues no direct query; the owner is resolved from the trusted
+// run context, never the args. No campaign/ad-spend write is introduced.
+export const MARKETING_READ_CATALOGUE_OWNED = 'marketing.read_catalogue_owned';
+export const MARKETING_READ_CATALOGUE_PLATFORM = 'marketing.read_catalogue_platform';
+export const MARKETING_READ_VIDEOS_OWNED = 'marketing.read_videos_owned';
 
 /** `{ limit?: int }` — a bounded page size, the only knob the read tools take. */
 const limit = (max: number) => z.number().int().min(1).max(max).optional();
+/**
+ * Like {@link limit} but coerces a numeric string. The marketing agent has always
+ * read `Number(input.limit ?? 5)`, so a numeric string is accepted as before.
+ */
+const coerceLimit = (max: number) => z.coerce.number().int().min(1).max(max).optional();
 
 const TOOL_LIST: readonly ToolDefinition[] = [
   {
@@ -315,6 +329,42 @@ const TOOL_LIST: readonly ToolDefinition[] = [
         .strict(),
       permission: 'product:read',
       platformScoped: true,
+    },
+    {
+      id: MARKETING_READ_CATALOGUE_OWNED,
+      description:
+        "The caller's own catalogue snapshot — count of published products and top categories/brands, scoped to listings tied to a seller entity the caller owns. Owner-scoped: the owner is resolved from the trusted run context, never the args.",
+      effect: 'read',
+      // Owner-scoped: the caller reads aggregates over only their own published
+      // listings. `platformScoped: false` means the gateway does NOT require an
+      // admin; the owner is taken from the trusted run context, so a caller can
+      // never widen the snapshot to another tenant's catalogue.
+      inputSchema: z.object({ limit: coerceLimit(10) }).strict(),
+      permission: 'ai:use',
+      platformScoped: false,
+    },
+    {
+      id: MARKETING_READ_CATALOGUE_PLATFORM,
+      description:
+        'Platform-wide catalogue snapshot — count of published products and top categories/brands across every seller. Admin-only: the gateway refuses a non-admin requester.',
+      effect: 'read',
+      inputSchema: z.object({ limit: coerceLimit(10) }).strict(),
+      permission: 'analytics:read:all',
+      platformScoped: true,
+    },
+    {
+      id: MARKETING_READ_VIDEOS_OWNED,
+      description:
+        "The caller's own generated marketing videos — recent assets with signed preview/download URLs. Owner-scoped: the owner is resolved from the trusted run context, never the args.",
+      effect: 'read',
+      // Owner-scoped: the caller reads only their own media assets. Like every
+      // other owner-scoped agent tool (market/supplier/product reads), it is
+      // gated by `ai:use` — the permission that already let the agent run — and
+      // the owner still comes from the trusted run context, so a caller can
+      // never read another user's assets.
+      inputSchema: z.object({ limit: coerceLimit(10) }).strict(),
+      permission: 'ai:use',
+      platformScoped: false,
     },
   ];
 

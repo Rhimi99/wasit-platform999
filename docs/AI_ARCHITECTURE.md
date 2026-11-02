@@ -227,7 +227,8 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 | `execProductAgent` | **ثغرة مؤكّدة** → أُصلحت (10.1) |
 | `execComplianceAgent` | **ثغرة مؤكّدة** → أُصلحت (10.2) |
 | `execAdsAgent`, `execDevelopmentAgent` | بوّابة داخلية `requirePlatformGate` (إداري) — **وُحِّدت عبر البوابة في G5 Phase 1 (القسم 22)** |
-| `execMarketingAgent`, `execSupportAgent`, `execB2BAgent`, `execCustomerIntelligenceAgent`, `execOutreachAcquisitionAgent` | وصول مشروع ضمن نطاق المالك / قراءة عامة مسموحة |
+| `execMarketingAgent` | نطاق مالك/مزدوج (كتالوج منشور + فيديوهات المتّصل) — **وُحِّد عبر البوابة في G5 Phase 2 (القسم 28)** |
+| `execSupportAgent`, `execB2BAgent`, `execCustomerIntelligenceAgent`, `execOutreachAcquisitionAgent` | وصول مشروع ضمن نطاق المالك / قراءة عامة مسموحة |
 | `execMarketResearchAgent` | **ثغرة مؤكّدة** (مجاميع منصّة بلا قيد) → أُصلحت في AI-03.6 (القسم 14) |
 | `execSupplierAgent`, `execMerchantAgent`, `execSalesAgent` | وصول مشروع ضمن نطاق المالك — **وُحِّدا عبر البوابة في G5 Phase 2** (`execSupplierAgent` القسم 24، `execMerchantAgent` القسم 25، `execSalesAgent` القسم 26) |
 | `execAgentSupervisor` | حتمي، بلا قراءة صفوف متعدّدة المالكين |
@@ -236,12 +237,12 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 
 ### 10.5 قيود متبقّية
 - البوابة ليست إلزامية لكل الأدوات بعد. عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)،
-  منهم **14 داخل** البوابة و**6 خارجها** (بعد G5 Phase 2، الأقسام 24–27). الخارجون هم خمسة وكلاء
-  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `marketing`, `support`,
+  منهم **15 داخل** البوابة و**5 خارجها** (بعد G5 Phase 2، الأقسام 24–28). الخارجون هم أربعة وكلاء
+  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `support`,
   `b2b`, `customer-intelligence`, `outreach-acquisition` — إضافةً إلى
   `agent-supervisor` (الوكيل الحتمي الإشرافي الوحيد الذي **يكتب** حالات الاحتواء، فلا يندرج تحت
   بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين، A2 = التجّار،
-  A3 = المبيعات، A4 = المنتجات أُنجزت).
+  A3 = المبيعات، A4 = المنتجات، A5 = التسويق أُنجزت).
 - أدوات `allowedTools` المُعلنة بلا تنفيذ تبقى خاملة في البوابة (`UNBOUND_DECLARED_TOOLS`)؛
   صارت القائمة الآن مكتملة ومتطابقة مع المُعلَن (انظر القسم 12).
 
@@ -1304,6 +1305,102 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - `packages/server/tests/g5-phase2-product-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
 
 ### 27.8 قيود متبقّية
-- بقي **6 منفّذين خارج** البوابة من أصل **20**: خمسة وكلاء بنطاق مالك/مزدوج (`marketing`, `support`,
+- بقي **5 منفّذين خارج** البوابة من أصل **20**: أربعة وكلاء بنطاق مالك/مزدوج (`support`,
+  `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب).
+  أُنجز التالي: `marketing-agent` في A5 (القسم 28).
+  لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
+
+## 28. توحيد بوابة الأدوات — G5 Phase 2 (A5: Marketing Agent)
+
+### 28.1 الهدف
+`execMarketingAgent` كان يقرأ بياناته **مباشرةً**: (1) لقطة الكتالوج **المنشور** — مجاميع
+(`count(*)`، أعلى التصنيفات، أعلى العلامات) عبر كل البائعين للمشرف أو عبر كيانات البائع المملوكة
+للمتّصل لغيره؛ و(2) فيديوهات التسويق التي أنشأها المتّصل عبر `listRecentMarketingVideos`. نقلت هذه
+المرحلة **كل** القراءات إلى البوابة المركزية عبر **ثلاث** أدوات مسجّلة، **دون تغيير أي صلاحية أو
+نطاق أو سلوك تجاري**. النمط نفسه المُثبَت في A1 (القسم 24) وA2 (القسم 25) وA3 (القسم 26) وA4
+(القسم 27).
+
+### 28.2 الأدوات الجديدة (قراءة فقط)
+| الأداة | الوصف | `effect` | `permission` | `platformScoped` |
+| --- | --- | --- | --- | --- |
+| `marketing.read_catalogue_owned` | مجاميع الكتالوج **المنشور** المملوك للمتّصل (أعلى التصنيفات/العلامات) | `read` | `ai:use` | ❌ (نطاق المالك) |
+| `marketing.read_catalogue_platform` | المجاميع ذاتها عبر كل البائعين (منشور فقط) | `read` | `analytics:read:all` | ✅ (منصّة — `ADMIN`/`SUPER_ADMIN` فقط) |
+| `marketing.read_videos_owned` | فيديوهات التسويق **المملوكة للمتّصل** (`media_assets` نوع `MARKETING_VIDEO`) | `read` | `ai:use` | ❌ (نطاق المالك) |
+
+المخططات `.strict()` للأدوات الثلاث: `limit?` (عدد صحيح 1..10، افتراض 5؛ يقبل سلسلة رقمية عبر
+`coerce` حفظًا لسلوك `Number(input.limit ?? 5)` السابق). **لا** تقبل `userId`/`requestedBy`/`scope`/
+`sellerId` — حقن الهوية/النطاق يُرفض بـ`INVALID_INPUT`.
+
+`marketing.read_catalogue_platform` هي الأداة **المنصّية** الوحيدة هنا: البوابة تشترط
+`ADMIN`/`SUPER_ADMIN` عبر `rolesAllowPlatformScope` (نفس مصدر الحقيقة `resolvePlatformScope`)
+وترفض غير المشرف بـ`PLATFORM_SCOPE_DENIED`، وتشترط `analytics:read:all` (لأن لقطة المنصّة تحليلية)
+وترفض من لا يملكها بـ`PERMISSION_DENIED`. الأداتان الأخريان غير منصّيتين ومتاحتان لكل من يملك
+`ai:use` (وهو ما يحمله كل دور؛ حفظًا للسلوك السابق حيث كان الوكيل غير محجوب). ملاحظة: `ai:use` أدقّ
+من `media:read:own` هنا لأن `SUPPORT` لا يحمل `media:read:own` لكنه يستطيع تشغيل الوكيل — فاختيار
+`media:read:own` كان سيمنع سلوكًا سابقًا.
+
+### 28.3 المعالجات (Handlers)
+في `tool-handlers.ts`: `marketingReadCatalogueOwned`, `marketingReadCataloguePlatform`,
+`marketingReadVideosOwned`، تتشارك الأولى والثانية مُساعدًا واحدًا
+`readPublishedCatalogue(db, limit, ownedSellerIds?)` يبني نفس الاستعلامات الثلاثة (عدّ، تصنيفات،
+علامات) بشرط `is_published = true` — مطابقًا حرفيًا للقراءة المباشرة القديمة.
+- **المالك من السياق الموثوق فقط** (`getAgentRunContext()?.requestedBy`) — **لا من الوسائط**.
+  تُبنى شرطية الملكية من `resolveOwnedSellerIds`. إن كان المالك هو `SYSTEM_PRINCIPAL` (أو غائبًا) أو
+  لا يملك أي كيان بائع، تُعاد `{ scope:'own', noScope: true, snapshot:{ published:0, ... } }`
+  **بلا أي استعلام** (مطابقًا لسلوك `sql\`false\`` السابق).
+- `marketingReadVideosOwned`: يعيد استخدام `listRecentMarketingVideos(db, owner, limit)` نفسها
+  (فيكون الناتج مطابقًا حرفيًا)، ولا يستعلم إطلاقًا عند غياب المالك الموثوق أو كونه
+  `SYSTEM_PRINCIPAL`.
+
+### 28.4 ما تغيّر في المنفّذ
+- `execMarketingAgent`: يقرأ **فقط** عبر `invokeTool(...)`. إن كان المستدعي `SYSTEM_PRINCIPAL` لا
+  يحاول أداة المنصّة إطلاقًا (سلوك `canReadPlatformData('system') === false` السابق)؛ وإلا يحاول
+  `marketing.read_catalogue_platform`، فإن رفضتها البوابة بـ`PLATFORM_SCOPE_DENIED`/
+  `PERMISSION_DENIED` **فقط** ينتقل إلى `marketing.read_catalogue_owned`، وأي خطأ آخر **يُعاد رميه**
+  (لا تفشل مفتوحًا، ولا سقوط صامت). ثم `marketing.read_videos_owned`.
+- **حفظ النطاق مطابق للسلوك السابق**: غير المشرف **لا يرى بيانات المنصّة أبدًا** — المالك يقرأ
+  كتالوجه المنشور، ومن لا يملك كيانًا بائعًا يحصل على لقطة فارغة (كما كان `productWhere = sql\`false\``)
+  ولا يبلغ أداة المنصّة.
+- نفس بناء المخرجات حرفيًا (`agentKey`, `action`, `snapshot`, `campaignSuggestion`, `marketingVideos`,
+  `marketingVideosHint`, `readOnly`, `generatedAt`) ثم `reasonAboutAgent` و`withProposal` ورسالة
+  النظام — دون تغيير.
+- **إزالة الاستيرادات الميتة**: حُذفت `listRecentMarketingVideos` و`products`/`categories` من
+  استيرادات `executors.ts` بعد نقل القراءات.
+
+### 28.5 الأمان (لا توسيع)
+- البوابة تفشل مغلقًا: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `PERMISSION_DENIED` /
+  `PLATFORM_SCOPE_DENIED` (لأداة المنصّة فقط) / `INVALID_INPUT` (حقن معطيات).
+- العزل: الهوية من السياق الموثوق فقط؛ شرطية المالك = كيانات البائع المملوكة؛ لا نطاق من الطلب.
+  أداة المنصّة محصورة إداريًا بفحص صلاحية حقيقي.
+- لا كتابة: الأدوات `read`؛ الاختبار يثبّت عدم وجود كتابة في مسار القراءة وأن التدقيق `AI.TOOL_EXECUTED`.
+- المجدول و`SYSTEM_PRINCIPAL` وبقية الوكلاء: لم يُمَسّوا — `marketing-agent` ليس في `DEFAULT_SCHEDULES`
+  ولا في `OUTBOX_ROUTES`؛ ومتى جاء التشغيل من المجدول (`system` بأدوار `SUPER_ADMIN`) لا يبلغ
+  `marketing.read_catalogue_platform` (يرى اللقطة الفارغة/الخاصة فقط).
+
+### 28.6 الاختبارات ونتائجها
+- `tests/g5-phase2-marketing-tool.test.ts` (جديد، **35/35**، **DB-free**): تسجيل/نطاق/صلاحية الأدوات
+  الثلاث، fail-closed (بلا سياق / أداة غير ممنوحة / أداة أخت ممنوحة فقط / حقن معطيات / `limit` خارج
+  النطاق / دور بلا صلاحية / منصّة لغير المشرف قبل المعالج)، عزل المالك (لا تسرّب بين حسابين، الهوية
+  من السياق لا الوسائط، بلا مالك موثوق ⇒ `noScope` بلا استعلام)، بوّابة المنصّة الإدارية (نجاح
+  `ADMIN`/`SUPER_ADMIN`، رفض `SUPPORT` بـ`PLATFORM_SCOPE_DENIED`)، عزل أن القراءات لا تلمس
+  `campaigns`/`ad_events`/`ads`، تدقيق `AI.TOOL_EXECUTED`، حصر `marketing-agent` فقط، حفظ عقد
+  المخرجات، ومسار المنفّذ end-to-end مقابل fake عند حدّ drizzle فقط. **لا يفتح اتصال قاعدة بيانات**
+  (يُشغَّل عبر إعداد مؤقّت بلا `globalSetup`).
+- `tests/phase3d-scope-gate.test.ts` — محدَّث (**32→37** حالة، DB-free): يثبّت أن `execMarketingAgent`
+  يقرأ عبر `invokeTool` بلا `db.select(` وبلا `listRecentMarketingVideos(` وبلا `requirePlatformGate(`،
+  وأن الأدوات ممنوحة **فقط** لـ`marketing-agent`، وأن `CATALOG_TOOLS` المشتركة لم تُمسّ، وأن تصريحات
+  الوكيل لم تتغيّر.
+- **إجمالي A5: 72/72** (35 من ملف التسويق + 37 من بوّابة النطاق)، بالإضافة إلى اختبار انحدار يثبت أن
+  التشغيل المجدول (`system` + أدوار `SUPER_ADMIN`) لا يبلغ `marketing.read_catalogue_platform`.
+
+### 28.7 الملفات التي تغيّرت
+- `packages/server/src/lib/ai/tool-registry.ts` (ثلاث أدوات: `marketing.read_catalogue_owned` / `marketing.read_catalogue_platform` / `marketing.read_videos_owned`)
+- `packages/server/src/lib/ai/tool-handlers.ts` (المعالجات الثلاثة + `readPublishedCatalogue`)
+- `packages/server/src/modules/ai/executors.ts` (توجيه `execMarketingAgent` + تنظيف الاستيرادات)
+- `packages/server/src/modules/ai/catalogue.ts` (`allowedTools` لـ`marketing-agent` فقط)
+- `packages/server/tests/g5-phase2-marketing-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
+
+### 28.8 قيود متبقّية
+- بقي **5 منفّذين خارج** البوابة من أصل **20**: أربعة وكلاء بنطاق مالك/مزدوج (`support`,
   `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب).
   لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.

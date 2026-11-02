@@ -13,6 +13,9 @@ import {
   PRODUCT_READ_PUBLIC,
   PRODUCT_READ_OWNED,
   PRODUCT_READ_PLATFORM,
+  MARKETING_READ_CATALOGUE_OWNED,
+  MARKETING_READ_CATALOGUE_PLATFORM,
+  MARKETING_READ_VIDEOS_OWNED,
   UNBOUND_DECLARED_TOOLS,
   findTool,
   isRegisteredTool,
@@ -461,5 +464,87 @@ describe('G5 Phase 2 (A4) — product agent is routed through the gateway (three
 describe('the scheduler principal cannot be used as an owner', () => {
   it('SYSTEM_PRINCIPAL is refused as an owner scope', () => {
     expect(() => deriveScope({ userId: SYSTEM_PRINCIPAL })).toThrow(NoScopeError);
+  });
+});
+
+describe('G5 Phase 2 (A5) — marketing agent is routed through the gateway', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'src', 'modules', 'ai', 'executors.ts'), 'utf8');
+
+  function bodyOf(name: string): string {
+    const start = SRC.indexOf(`async function ${name}(`);
+    expect(start, `${name} not found`).toBeGreaterThan(-1);
+    const rest = SRC.slice(start + 1);
+    const next = rest.indexOf('\nasync function ');
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it('registers the owner / platform / videos tools as read-only with bound handlers', () => {
+    const owned = findTool(MARKETING_READ_CATALOGUE_OWNED);
+    expect(owned?.effect).toBe('read');
+    expect(owned?.platformScoped).toBe(false);
+    expect(owned?.permission).toBe('ai:use');
+    const platform = findTool(MARKETING_READ_CATALOGUE_PLATFORM);
+    expect(platform?.effect).toBe('read');
+    expect(platform?.platformScoped).toBe(true);
+    expect(platform?.permission).toBe('analytics:read:all');
+    const videos = findTool(MARKETING_READ_VIDEOS_OWNED);
+    expect(videos?.effect).toBe('read');
+    expect(videos?.platformScoped).toBe(false);
+    expect(videos?.permission).toBe('ai:use');
+    for (const id of [MARKETING_READ_CATALOGUE_OWNED, MARKETING_READ_CATALOGUE_PLATFORM, MARKETING_READ_VIDEOS_OWNED]) {
+      expect(isRegisteredTool(id), id).toBe(true);
+      expect(registeredToolIds(), id).toContain(id);
+      expect(getToolHandler(id), id).toBeTruthy();
+      expect(UNBOUND_DECLARED_TOOLS, id).not.toContain(id);
+    }
+  });
+
+  it('grants the marketing tools to marketing-agent ONLY (no widening)', () => {
+    for (const agent of AGENT_CATALOGUE) {
+      const grant = toolGrantForAgent(agent);
+      for (const id of [MARKETING_READ_CATALOGUE_OWNED, MARKETING_READ_CATALOGUE_PLATFORM, MARKETING_READ_VIDEOS_OWNED]) {
+        if (agent.key === 'marketing-agent') expect(grant, `${agent.key}:${id}`).toContain(id);
+        else expect(grant, `${agent.key}:${id}`).not.toContain(id);
+      }
+    }
+  });
+
+  it('does not touch the shared CATALOG_TOOLS group (product/supplier/merchant unchanged)', () => {
+    const marketing = findAgentSpec('marketing-agent')!;
+    expect(marketing.allowedTools).toEqual([
+      'platform.read_catalog',
+      'platform.metrics',
+      'report.generate',
+      MARKETING_READ_CATALOGUE_OWNED,
+      MARKETING_READ_CATALOGUE_PLATFORM,
+      MARKETING_READ_VIDEOS_OWNED,
+    ]);
+    for (const key of ['product-agent', 'supplier-agent', 'merchant-agent']) {
+      const grant = toolGrantForAgent(findAgentSpec(key)!);
+      expect(grant, key).not.toContain(MARKETING_READ_CATALOGUE_OWNED);
+      expect(grant, key).not.toContain(MARKETING_READ_CATALOGUE_PLATFORM);
+      expect(grant, key).not.toContain(MARKETING_READ_VIDEOS_OWNED);
+    }
+  });
+
+  it('execMarketingAgent reads ONLY through invokeTool (no direct query, no inline platform gate)', () => {
+    const body = bodyOf('execMarketingAgent');
+    expect(body.includes('invokeTool(')).toBe(true);
+    expect(body.includes(MARKETING_READ_CATALOGUE_OWNED)).toBe(true);
+    expect(body.includes(MARKETING_READ_CATALOGUE_PLATFORM)).toBe(true);
+    expect(body.includes(MARKETING_READ_VIDEOS_OWNED)).toBe(true);
+    expect(body.includes('db.select(')).toBe(false);
+    expect(body.includes('listRecentMarketingVideos(')).toBe(false);
+    expect(body.includes('canReadPlatformData(')).toBe(false);
+    expect(body.includes('resolveOwnedSellerIds(')).toBe(false);
+    expect(body.includes('requirePlatformGate(')).toBe(false);
+  });
+
+  it('does not change marketing-agent permissions, scope or approval declarations', () => {
+    const marketing = findAgentSpec('marketing-agent')!;
+    expect(marketing.permissionsRequired).toEqual(['ai:use']);
+    expect(marketing.requiresPlatformScope).not.toBe(true);
+    expect(marketing.approvalActions).toEqual([]);
+    expect(marketing.requiresHumanApproval).toBe(false);
   });
 });

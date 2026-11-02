@@ -85,7 +85,19 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
 - ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
-- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **14 داخل** البوابة و**6 خارجها** (بعد G5 Phase 2 — A1/A2/A3/A4). الخارجون: 5 وكلاء بنطاق مالك/مزدوج (`marketing`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **15 داخل** البوابة و**5 خارجها** (بعد G5 Phase 2 — A1/A2/A3/A4/A5). الخارجون: 4 وكلاء بنطاق مالك/مزدوج (`support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A5): توحيد Marketing Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A5)**: نُقلت **كل** قراءات `execMarketingAgent` إلى البوابة المركزية عبر ثلاث أدوات جديدة **قراءة فقط** (الوكيل **مزدوج النطاق**: مالك + منصّة):
+  - `marketing.read_catalogue_owned` (`permission ai:use`, `platformScoped: false`) — `{ limit?: int(1..10)=5 }` → مجاميع الكتالوج **المنشور** المملوك للمتصل `{ scope:'own', noScope, snapshot:{ published, topCategories, topBrands } }`؛ **المالك من السياق الموثوق**، وبلا كيان بائع ⇒ `noScope: true` بلا استعلام.
+  - `marketing.read_catalogue_platform` (`permission analytics:read:all`, `platformScoped: true`) — نفس الوسائط → المجاميع ذاتها عبر كل البائعين (منشور فقط) `{ scope:'platform', snapshot }`؛ **`ADMIN`/`SUPER_ADMIN` فقط** (البوابة ترفض غيره بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`).
+  - `marketing.read_videos_owned` (`permission ai:use`, `platformScoped: false`) — `{ limit?: int(1..10)=5 }` → فيديوهات التسويق **المملوكة للمتصل** (`media_assets` من نوع `MARKETING_VIDEO`) `{ scope:'own', noScope, videos }`؛ يعيد استخدام `listRecentMarketingVideos` نفسها (مخرجات مطابقة) و**المالك من السياق الموثوق**.
+- ✅ **الهوية من السياق الموثوق فقط**: `marketingReadCatalogueOwned`/`marketingReadVideosOwned` يحلّان المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**؛ مخطط `.strict()` يمنع حقن الهوية/النطاق (`INVALID_INPUT`).
+- ✅ **حفظ السلوك**: البوابة تحاول أولًا `marketing.read_catalogue_platform` (للمشرف فقط) ثم `marketing.read_catalogue_owned`؛ غير المشرف **لا يرى بيانات المنصّة أبدًا** (بلا كيان ⇒ لقطة فارغة كما كان `sql\`false\``)، و`SYSTEM_PRINCIPAL` لا يبلغ طبقة المنصّة. **لا تفشل مفتوحًا**: تُبتلع فقط رفضا النطاق/الصلاحية المعروفان، وأي خطأ آخر **يُعاد رميه**. المخرجات (`agentKey`/`action`/`snapshot`/`campaignSuggestion`/`marketingVideos`/`marketingVideosHint`/`readOnly`/`generatedAt`)، `reasonAboutAgent`، `withProposal`، ورسالة النظام — دون تغيير.
+- ✅ **لا توسيع**: `allowedTools` لـ`marketing-agent` فقط صار `[...CATALOG_TOOLS, 'marketing.read_catalogue_owned', 'marketing.read_catalogue_platform', 'marketing.read_videos_owned']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`product`/`supplier`/`merchant`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **الاختبارات**: `tests/g5-phase2-marketing-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**37/37**) — **إجمالي A5: 72/72** — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §28 (+ تحديث §10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
 
 ## الحالة الحالية (2026-11-01) — G5 Phase 2 (A1): توحيد Supplier Agent عبر بوابة الأدوات
 

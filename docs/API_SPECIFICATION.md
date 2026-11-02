@@ -320,6 +320,9 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 | `product.read_public` | عام (بلا نطاق مالك) | `ai:use` | إدراج منشور/نشط واحد (أو عيّنة منشورة) + تصنيف/متغيّرات/صور/مخزون (G5 Phase 2 — A4) |
 | `product.read_owned` | مالك (`platformScoped: false`) | `ai:use` | إدراجات المنتجات **المملوكة للمتصل** (أي حالة) + التفاصيل (G5 Phase 2 — A4) |
 | `product.read_platform` | منصّة (`platformScoped: true`) | `product:read` | أي إدراج لأي مالك وأي حالة — للمشرفين فقط (G5 Phase 2 — A4) |
+| `marketing.read_catalogue_owned` | مالك (`platformScoped: false`) | `ai:use` | مجاميع الكتالوج **المنشور المملوك للمتصل** (أعلى التصنيفات/العلامات) (G5 Phase 2 — A5) |
+| `marketing.read_catalogue_platform` | منصّة (`platformScoped: true`) | `analytics:read:all` | المجاميع ذاتها عبر كل البائعين (منشور فقط) — للمشرفين فقط (G5 Phase 2 — A5) |
+| `marketing.read_videos_owned` | مالك (`platformScoped: false`) | `ai:use` | فيديوهات التسويق **المملوكة للمتصل** (`media_assets` نوع `MARKETING_VIDEO`) (G5 Phase 2 — A5) |
 
 - `supplier.read_owned`: الوسائط `{ supplierId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
   السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `supplierId` يُحترم فقط إن كان
@@ -346,6 +349,17 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `product.read_platform`: الوسائط `{ productId?: string(1..64) }`؛ `platformScoped: true` — تُقبل فقط
   لدور `ADMIN`/`SUPER_ADMIN` عبر فحص صلاحية حقيقي، ويُرفض غير المشرف بـ`PLATFORM_SCOPE_DENIED`/
   `PERMISSION_DENIED`. تعيد `{ scope:'platform', found, product }` لأي مالك وأي حالة.
+- `marketing.read_catalogue_owned`: الوسائط `{ limit?: int(1..10) = 5 }` (يقبل سلسلة رقمية)؛ **المالك
+  يُحلّ من السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ يعيد
+  `{ scope:'own', noScope, snapshot:{ published, topCategories, topBrands } }`، وإن لم يوجد مالك موثوق
+  أو لم يملك المتصل أي كيان بائع يعيد `noScope: true` بلا استعلام. الأداة ممنوحة لـ`marketing-agent` فقط.
+- `marketing.read_catalogue_platform`: الوسائط `{ limit?: int(1..10) = 5 }`؛ `platformScoped: true` —
+  تُقبل فقط لدور `ADMIN`/`SUPER_ADMIN`، ويُرفض غير المشرف بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`.
+  تعيد `{ scope:'platform', snapshot }` (الكتالوج المنشور عبر كل البائعين).
+- `marketing.read_videos_owned`: الوسائط `{ limit?: int(1..10) = 5 }`؛ **المالك يُحلّ من السياق الموثوق**
+  لا من الوسائط؛ يعيد `{ scope:'own', noScope, videos }` (أصول `MARKETING_VIDEO` المملوكة للمتصل مع روابط
+  معاينة/تنزيل موقّعة)، ولا يستعلم عند غياب المالك الموثوق أو كونه `SYSTEM_PRINCIPAL`. الأداة ممنوحة
+  لـ`marketing-agent` فقط.
 - أخطاء البوابة المرتجعة (fail-closed): `TOOL_NOT_REGISTERED`, `NO_RUN_CONTEXT`,
   `ACTION_NOT_AUTHORIZED`, `PERMISSION_DENIED`, `PLATFORM_SCOPE_DENIED`, `INVALID_INPUT`,
   `TOOL_TIMEOUT`, `TOOL_EXECUTION_FAILED` — وكل محاولة (مسموحة أو مرفوضة) تُدقَّق (`AI.TOOL_EXECUTED` /

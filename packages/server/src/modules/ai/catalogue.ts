@@ -114,7 +114,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'growth',
     description: 'Recommends marketing content angles and channel mix for campaigns.',
     capabilities: [{ action: 'recommend_campaign', description: 'Draft a marketing campaign proposal' }],
-    allowedTools: CATALOG_TOOLS,
+    // G5 Phase 2 (A5): the catalogue snapshot and the caller's own videos are
+    // read ONLY through the Tool Gateway. The shared `CATALOG_TOOLS` group is kept
+    // verbatim so marketing/product/supplier/merchant declarations stay in sync;
+    // the three marketing tools are appended for this agent alone.
+    allowedTools: [...CATALOG_TOOLS, 'marketing.read_catalogue_owned', 'marketing.read_catalogue_platform', 'marketing.read_videos_owned'],
     approvalActions: [],
     limits: { maxCostUsdPerRun: 1.5 },
     taskTypes: ['marketing.plan_campaign'],

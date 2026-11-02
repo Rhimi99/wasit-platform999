@@ -32,8 +32,10 @@ import {
   PRODUCT_READ_PUBLIC,
   PRODUCT_READ_OWNED,
   PRODUCT_READ_PLATFORM,
+  MARKETING_READ_CATALOGUE_OWNED,
+  MARKETING_READ_CATALOGUE_PLATFORM,
+  MARKETING_READ_VIDEOS_OWNED,
 } from '../../lib/ai/tool-registry';
-import { products, categories } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { orders, orderItems, transactions, transactionLedger } from '../../db/schema/commerce';
 import { adCreatives } from '../../db/schema/ads';
@@ -43,7 +45,6 @@ import { reviews } from '../../db/schema/trust';
 import { messages, threads, threadParticipants } from '../../db/schema/messaging';
 import { users } from '../../db/schema/auth';
 import { agentTasks } from '../../db/schema/agents';
-import { listRecentMarketingVideos } from '../media/service';
 import { listOwnedSellerEntities, resolveOwnedSellerIds } from '../../lib/seller-ownership';
 import { ledgerFlowTotals } from '../../lib/ledger-flows';
 import { supervise } from './supervisor.js';
@@ -416,44 +417,62 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
   return { content: JSON.stringify(withProposal(data, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
 }
 
+/** Catalogue snapshot shape returned by the marketing catalogue tools. */
+interface MarketingCatalogueSnapshot {
+  published: number;
+  topCategories: { name: string; products: number }[];
+  topBrands: { name: string; products: number }[];
+}
+
+/** The subset of a marketing video view the executor re-shapes into its output. */
+interface MarketingVideoView {
+  id: string;
+  title: string;
+  previewUrl: string | null;
+  downloadUrl: string | null;
+  previewable: boolean;
+  downloadable: boolean;
+  mimeType: string;
+  status: string;
+  provider: string;
+  language: string;
+  durationSeconds: number | null;
+  productId: string | null;
+  createdAt: string;
+}
+
 async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
-  // Platform-wide catalogue/brand detail is admin-only. A non-admin sees the
-  // same shape scoped to the entities they own (empty when they own none), so
-  // the agent keeps working without exposing another seller's catalogue.
-  const isPlatform = await canReadPlatformData(db, userId, agent);
-  const ownedIds = isPlatform ? [] : await resolveOwnedSellerIds(db, userId);
-  const productWhere = isPlatform
-    ? eq(products.isPublished, true)
-    : and(eq(products.isPublished, true), ownedIds.length > 0 ? inArray(products.sellerId, ownedIds) : sql`false`);
-  const limit = Math.min(Number(input.limit ?? 5), 10);
-  const [published, topCategories, brands] = await Promise.all([
-    db.select({ v: sql<number>`count(*)::int` }).from(products).where(productWhere),
-    db
-      .select({ category: categories.name, p: sql<number>`count(*)::int` })
-      .from(products)
-      .leftJoin(categories, eq(products.categoryId, categories.id))
-      .where(productWhere)
-      .groupBy(categories.name)
-      .orderBy(sql`count(*) desc`)
-      .limit(limit),
-    db
-      .select({ brand: products.brand, p: sql<number>`count(*)::int` })
-      .from(products)
-      .where(and(sql`${products.brand} is not null`, productWhere))
-      .groupBy(products.brand)
-      .orderBy(sql`count(*) desc`)
-      .limit(limit),
-  ]);
 
-  // Brand select returns null brand rows; keep only non-null.
-  const brandRows = brands.filter((b) => b.brand !== null);
+  // G5 Phase 2 (A5): every read runs ONLY through the Tool Gateway, never a
+  // direct query. The agent has always surfaced two things:
+  //  1. a catalogue snapshot — `marketing.read_catalogue_platform` (every seller,
+  //     admins only) or, for everyone else, `marketing.read_catalogue_owned`
+  //     (the caller's OWN published listings; the owner is resolved from the
+  //     trusted run context, never the args). The gateway refuses a non-admin on
+  //     the platform tool with PLATFORM_SCOPE_DENIED / PERMISSION_DENIED, and
+  //     ONLY those refusals are swallowed (any other error is re-thrown, never a
+  //     silent fallback). A non-admin NEVER sees platform data: an owner reads
+  //     their own published listings, and an owner with no seller entity gets an
+  //     empty snapshot — exactly as the former direct read did.
+  //  2. the caller's OWN generated marketing videos (`marketing.read_videos_owned`).
+  // The scheduler principal is never treated as an owner, so a scheduled run
+  // reads the empty/own snapshot and an empty video list — exactly as before.
+  const limit = input.limit !== undefined ? { limit: input.limit } : {};
 
-  const facts = {
-    published: toNum(published[0]?.v),
-    topCategories: topCategories.map((c) => ({ name: c.category ?? 'Uncategorised', products: toNum(c.p) })),
-    topBrands: brandRows.map((b) => ({ name: b.brand ?? '', products: toNum(b.p) })),
-  };
+  const platform =
+    userId === SYSTEM_PRINCIPAL
+      ? null
+      : await invokeTool(db, MARKETING_READ_CATALOGUE_PLATFORM, limit).catch((err: unknown) => {
+          if (err instanceof ToolGatewayError && (err.code === 'PLATFORM_SCOPE_DENIED' || err.code === 'PERMISSION_DENIED')) {
+            return null;
+          }
+          throw err;
+        });
+
+  const facts = platform
+    ? (platform.data.snapshot as MarketingCatalogueSnapshot)
+    : ((await invokeTool(db, MARKETING_READ_CATALOGUE_OWNED, limit)).data.snapshot as MarketingCatalogueSnapshot);
 
   const campaignSuggestion = {
     objective: 'PRODUCT_ADS',
@@ -464,12 +483,10 @@ async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<
     })),
   };
 
-  // Real media: surface the seller's actually-generated marketing videos from
-  // `media_assets`. Each entry is READY only when a real binary exists, and
-  // carries signed preview/download URLs. When none exist yet, the agent
-  // returns an empty list plus a hint — it never fabricates a media URL.
-  const requesterId = typeof input.__userId === 'string' ? (input.__userId as string) : null;
-  const generatedVideos = requesterId ? await listRecentMarketingVideos(db, requesterId, 5) : [];
+  // The caller's OWN generated marketing videos, read through the gateway. Each
+  // entry is READY only when a real binary exists and carries signed
+  // preview/download URLs; the agent never fabricates a media URL.
+  const generatedVideos = (await invokeTool(db, MARKETING_READ_VIDEOS_OWNED, {})).data.videos as MarketingVideoView[];
   const marketingVideos = generatedVideos.map((v) => ({
     id: v.id,
     title: v.title,
@@ -507,7 +524,7 @@ async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<
   );
 
   const reasoning = await reasonAboutAgent(db, agent, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    userId,
     system: 'You are the WASIT Marketing Agent.',
     user: text,
     maxTokens: 96,
