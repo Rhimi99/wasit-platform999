@@ -72,6 +72,15 @@ export const MERCHANT_READ_OWN = 'merchant.read_owned';
 export const SALES_READ_ORDERS_OWN = 'sales.read_orders_owned';
 export const SALES_READ_ORDERS_PLATFORM = 'sales.read_orders_platform';
 export const SALES_READ_MARKET_TOTALS = 'sales.read_market_totals';
+// G5 Phase 2 (A4): the product agent's reads moved behind the gateway. The agent
+// applies a three-tier product-visibility policy, so it is served by three tools
+// instead of one: the public catalogue listing, the caller's OWN listings (any
+// status), and the platform-wide catalogue (admins). Each mirrors the exact
+// query `execProductAgent` already ran, so routing them changes no result and
+// grants no new authority — the owner is resolved from the trusted run context.
+export const PRODUCT_READ_PUBLIC = 'product.read_public';
+export const PRODUCT_READ_OWNED = 'product.read_owned';
+export const PRODUCT_READ_PLATFORM = 'product.read_platform';
 
 /** `{ limit?: int }` — a bounded page size, the only knob the read tools take. */
 const limit = (max: number) => z.number().int().min(1).max(max).optional();
@@ -258,6 +267,54 @@ const TOOL_LIST: readonly ToolDefinition[] = [
       inputSchema: z.object({}).strict(),
       permission: 'ai:use',
       platformScoped: false,
+    },
+    {
+      id: PRODUCT_READ_PUBLIC,
+      description:
+        'Public catalogue listing — a single published/ACTIVE product (or a sample when no id is given) with its category, variants, images and total stock. Public visibility only: an unpublished or non-ACTIVE listing is invisible to a non-owner.',
+      effect: 'read',
+      // The public tier the product agent has always exposed to every caller. It
+      // mirrors `pickProduct`'s `is_published AND status='ACTIVE'` predicate, so
+      // it leaks no unpublished listing and preserves the previous behaviour.
+      inputSchema: z
+        .object({
+          // Tolerant of a non-UUID id on purpose: an id the caller cannot see
+          // yields an empty scope ("not found"), never a validation error.
+          productId: z.string().min(1).max(64).optional(),
+        })
+        .strict(),
+      permission: 'ai:use',
+      platformScoped: false,
+    },
+    {
+      id: PRODUCT_READ_OWNED,
+      description:
+        "The caller's own product listings — a single product the caller owns (any status), or a sample of their own catalogue when no id is given, with category, variants, images and total stock. Owner-scoped: the owner is resolved from the trusted run context, never the args.",
+      effect: 'read',
+      // Owner-scoped: the caller reads only listings tied to a seller entity they
+      // own. `platformScoped: false` means the gateway does NOT require an admin;
+      // the owner is taken from the trusted run context, so a caller can never
+      // widen the read to another tenant's listing.
+      inputSchema: z
+        .object({
+          productId: z.string().min(1).max(64).optional(),
+        })
+        .strict(),
+      permission: 'ai:use',
+      platformScoped: false,
+    },
+    {
+      id: PRODUCT_READ_PLATFORM,
+      description:
+        'Platform-wide catalogue — a single product of any owner and status (or a sample when no id is given) with category, variants, images and total stock. Admin-only: the gateway refuses a non-admin requester.',
+      effect: 'read',
+      inputSchema: z
+        .object({
+          productId: z.string().min(1).max(64).optional(),
+        })
+        .strict(),
+      permission: 'product:read',
+      platformScoped: true,
     },
   ];
 

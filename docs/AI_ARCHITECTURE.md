@@ -236,11 +236,12 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 
 ### 10.5 قيود متبقّية
 - البوابة ليست إلزامية لكل الأدوات بعد. عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)،
-  منهم **13 داخل** البوابة و**7 خارجها** (بعد G5 Phase 2، الأقسام 24 و25 و26). الخارجون هم ستة وكلاء
-  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `marketing`, `product`, `support`,
+  منهم **14 داخل** البوابة و**6 خارجها** (بعد G5 Phase 2، الأقسام 24–27). الخارجون هم خمسة وكلاء
+  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `marketing`, `support`,
   `b2b`, `customer-intelligence`, `outreach-acquisition` — إضافةً إلى
   `agent-supervisor` (الوكيل الحتمي الإشرافي الوحيد الذي **يكتب** حالات الاحتواء، فلا يندرج تحت
-  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين، A2 = التجّار، A3 = المبيعات أُنجزت).
+  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها؛ A1 = الموردين، A2 = التجّار،
+  A3 = المبيعات، A4 = المنتجات أُنجزت).
 - أدوات `allowedTools` المُعلنة بلا تنفيذ تبقى خاملة في البوابة (`UNBOUND_DECLARED_TOOLS`)؛
   صارت القائمة الآن مكتملة ومتطابقة مع المُعلَن (انظر القسم 12).
 
@@ -1211,6 +1212,98 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - `packages/server/tests/g5-phase2-sales-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
 
 ### 26.8 قيود متبقّية
-- بقي **7 منفّذين خارج** البوابة من أصل **20**: ستة وكلاء بنطاق مالك/مزدوج (`marketing`, `product`,
+- بقي **6 منفّذين خارج** البوابة من أصل **20**: خمسة وكلاء بنطاق مالك/مزدوج (`marketing`,
   `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي
-  الكاتب). لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
+  الكاتب). أُنجز التالي: `product-agent` في A4 (القسم 27).
+- لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.
+
+## 27. توحيد بوابة الأدوات — G5 Phase 2 (A4: Product Agent)
+
+### 27.1 الهدف
+`execProductAgent` كان يقرأ بياناته **مباشرةً** عبر مُساعد `pickProduct`: صفّ المنتج مع التصنيف
+(`leftJoin`)، ثم أعداد المتغيّرات (`product_variants`) والصور (`product_images`) والمخزون
+(`inventory_items`). كان الوكيل **ثلاثي النطاق** للرؤية: المشرف يرى أي منتج، والمالك يرى منتجه
+بأي حالة، وأي شخص آخر يرى الإدراجات المنشورة/النشطة فقط (`is_published AND status='ACTIVE'`).
+نقلت هذه المرحلة **كل** القراءات إلى البوابة المركزية عبر **ثلاث** أدوات مسجّلة، **دون تغيير أي
+صلاحية أو نطاق أو سلوك تجاري**. النمط نفسه المُثبَت في A1 (القسم 24) وA2 (القسم 25) وA3 (القسم 26).
+
+### 27.2 الأدوات الجديدة (قراءة فقط)
+| الأداة | الوصف | `effect` | `permission` | `platformScoped` |
+| --- | --- | --- | --- | --- |
+| `product.read_public` | إدراج منشور/نشط واحد (أو عيّنة منشورة بلا معرّف) + التصنيف والمتغيّرات والصور والمخزون | `read` | `ai:use` | ❌ (عام) |
+| `product.read_owned` | إدراجات المتّصل المملوكة (أي حالة) + التفاصيل | `read` | `ai:use` | ❌ (نطاق المالك) |
+| `product.read_platform` | أي إدراج لأي مالك وأي حالة | `read` | `product:read` | ✅ (منصّة — `ADMIN`/`SUPER_ADMIN` فقط) |
+
+المخططات `.strict()` للأدوات الثلاث: `productId?` (سلسلة 1..64 حرفًا، اختيارية). **لا** تقبل
+`userId`/`requestedBy`/`scope`/`sellerId` — حقن الهوية/النطاق يُرفض بـ`INVALID_INPUT`. المعرّف
+الحرّ القصير مسموح عمدًا (لا UUID صارم) لأن معرّفًا غير مرئي يجب أن يُحَلّ إلى «غير موجود» لا إلى خطأ
+تحقّق — حفظًا لسلوك `pickProduct` السابق.
+
+`product.read_platform` هي الأداة **المنصّية** الوحيدة هنا: البوابة تشترط `ADMIN`/`SUPER_ADMIN`
+عبر `rolesAllowPlatformScope` (نفس مصدر الحقيقة `resolvePlatformScope`) وترفض غير المشرف
+بـ`PLATFORM_SCOPE_DENIED`، وتشترط `product:read` وترفض من لا يملكها بـ`PERMISSION_DENIED`.
+الأداتان الأخريان غير منصّيتين ومتاحتان لكل من يملك `ai:use`.
+
+### 27.3 المعالجات (Handlers)
+في `tool-handlers.ts`: `productReadPublic`, `productReadOwned`, `productReadPlatform`، تتشارك
+مُساعدًا واحدًا `readProductFacts(db, productId, visibility)` يبني استعلام الصف (مع `leftJoin`
+للتصنيف) ثم استعلامات المتغيّرات/الصور/المخزون — مطابقًا حرفيًا لقراءة `pickProduct` القديمة.
+- **المالك من السياق الموثوق فقط** (`getAgentRunContext()?.requestedBy`) — **لا من الوسائط**.
+  تُبنى شرطية الملكية من كيانات البائع المملوكة للمتّصل (`resolveOwnedSellerIds`). إن كان المالك هو
+  `SYSTEM_PRINCIPAL` (أو غائبًا) أو لا يملك أي كيان بائع، تُعاد `{ scope:'own', noScope: true,
+  product: null }` **بلا أي استعلام**.
+- `productReadPublic`: يقيّد بالمنشور/النشط؛ فلا يرى غير المالك إدراجًا غير منشور حتى بمعرّفه.
+- `productReadPlatform`: بلا شرط نطاق (يرى الكل) — لا تُستدعى إلا بعد فحص البوابة.
+
+### 27.4 ما تغيّر في المنفّذ
+- `execProductAgent`: يقرأ **فقط** عبر `invokeTool(...)`. إن كان المستدعي `SYSTEM_PRINCIPAL` لا
+  يحاول أداة المنصّة إطلاقًا (سلوك `canReadPlatformData('system') === false` السابق)؛ وإلا يحاول
+  `product.read_platform`، فإن رفضتها البوابة بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`
+  **فقط** ينتقل إلى الطبقتين الأخريين، وأي خطأ آخر **يُعاد رميه** (لا تفشل مفتوحًا، ولا سقوط صامت).
+- **دمج الطبقات مطابق للسلوك السابق**: عند معرّف محدّد = المالك ثم العام (owner ∪ public)؛ وبلا
+  معرّف = تفضيل إدراج منشور (مالك منشور ← عام منشور ← أيّهما) — تمامًا كما كان `pickProduct` يفضّل
+  صفًّا منشورًا للعرض العام.
+- نفس بناء المخرجات حرفيًا (`agentKey`, `action`, `product`, `completeness{score,issues,recommendation}`,
+  `readOnly`, `generatedAt`) ثم `reasonAboutAgent` و`withProposal`.
+- **إزالة الاستيرادات الميتة**: حُذف مُساعد `pickProduct` وواجهتا `ProductViewer`/`ProductWithCategory`،
+  وحُذفت `or` و`productVariants` و`productImages` و`inventoryItems`/`inventoryMovements` من
+  استيرادات `executors.ts` بعد نقل القراءات.
+- `allowedTools`: `product-agent` فقط صار `[...CATALOG_TOOLS, 'product.read_public',
+  'product.read_owned', 'product.read_platform']`. **لم تُمسّ** `CATALOG_TOOLS` المشتركة (فيبقى
+  `marketing-agent`/`supplier-agent`/`merchant-agent` بلا الأدوات)، ولا `permissionsRequired`، ولا
+  `requiresPlatformScope`، ولا `approvalActions`.
+
+### 27.5 الأمان (لا توسيع)
+- البوابة تفشل مغلقًا: `NO_RUN_CONTEXT` / `ACTION_NOT_AUTHORIZED` / `PERMISSION_DENIED` /
+  `PLATFORM_SCOPE_DENIED` (لأداة المنصّة فقط) / `INVALID_INPUT` (حقن معطيات).
+- العزل: الهوية من السياق الموثوق فقط؛ شرطية المالك = كيانات البائع المملوكة؛ لا نطاق من الطلب.
+  أداة المنصّة محصورة إداريًا بفحص صلاحية حقيقي.
+- لا كتابة: الأدوات `read`؛ الاختبار يثبّت عدم وجود كتابة في مسار القراءة وأن التدقيق `AI.TOOL_EXECUTED`.
+- المجدول و`SYSTEM_PRINCIPAL` وبقية الوكلاء: لم يُمَسّوا — `product-agent` ليس في `DEFAULT_SCHEDULES`
+  ولا في `OUTBOX_ROUTES`؛ ومتى جاء التشغيل من المجدول (`system`) يرى **العام فقط** كما كان.
+
+### 27.6 الاختبارات ونتائجها
+- `tests/g5-phase2-product-tool.test.ts` (جديد، **35/35**، **DB-free**): تسجيل/نطاق/صلاحية الأدوات
+  الثلاث، fail-closed (بلا سياق / أداة غير ممنوحة / حقن معطيات / `productId` خارج النطاق / دور بلا
+  صلاحية / أداة أخت ممنوحة فقط)، عزل المالك (لا تسرّب بين حسابين، الهوية من السياق لا الوسائط، بلا
+  مالك موثوق ⇒ `noScope` بلا استعلام)، الطبقة العامة (لا إدراج غير منشور بالمعرّف)، بوّابة المنصّة
+  الإدارية (نجاح `ADMIN`/`SUPER_ADMIN`، رفض غير المشرف قبل المعالج)، تدقيق `AI.TOOL_EXECUTED`، حصر
+  `product-agent` فقط، حفظ عقد المخرجات، ومسار المنفّذ end-to-end مقابل fake عند حدّ drizzle فقط.
+  **لا يفتح اتصال قاعدة بيانات** (يُشغَّل عبر إعداد مؤقّت بلا `globalSetup`).
+- `tests/phase3d-scope-gate.test.ts` — محدَّث (**27→32** حالة، DB-free): يثبّت أن `execProductAgent`
+  يقرأ عبر `invokeTool` بلا `.from(` وبلا `pickProduct(` وبلا `requirePlatformGate(`، وأن الأدوات
+  ممنوحة **فقط** لـ`product-agent`، وأن `CATALOG_TOOLS` المشتركة لم تُمسّ، وأن تصريحات الوكيل لم تتغيّر.
+- **إجمالي A4: 67/67** (35 من ملف المنتجات + 32 من بوّابة النطاق)، بالإضافة إلى اختبار انحدار يثبت أن
+  التشغيل المجدول (`system` + أدوار `SUPER_ADMIN`) لا يبلغ `product.read_platform`.
+
+### 27.7 الملفات التي تغيّرت
+- `packages/server/src/lib/ai/tool-registry.ts` (ثلاث أدوات: `product.read_public` / `product.read_owned` / `product.read_platform`)
+- `packages/server/src/lib/ai/tool-handlers.ts` (المعالجات الثلاثة + `readProductFacts`)
+- `packages/server/src/modules/ai/executors.ts` (توجيه `execProductAgent` + حذف `pickProduct` + تنظيف الاستيرادات)
+- `packages/server/src/modules/ai/catalogue.ts` (`allowedTools` لـ`product-agent` فقط)
+- `packages/server/tests/g5-phase2-product-tool.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
+
+### 27.8 قيود متبقّية
+- بقي **6 منفّذين خارج** البوابة من أصل **20**: خمسة وكلاء بنطاق مالك/مزدوج (`marketing`, `support`,
+  `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب).
+  لا أدوات كتابة أو مالية جديدة؛ لا migrations؛ لا تغيير في مخطط قاعدة البيانات.

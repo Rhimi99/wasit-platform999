@@ -157,7 +157,12 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     category: 'operations',
     description: 'Analyzes a product listing, pricing, category fit and completeness.',
     capabilities: [{ action: 'analyze_product', description: 'Analyze a product listing' }],
-    allowedTools: CATALOG_TOOLS,
+    // G5 Phase 2 (A4): the product agent's reads now run through the gateway's
+    // three-tier product tools (public / owner / platform). Declared as an
+    // explicit list (NOT by mutating the shared CATALOG_TOOLS, which
+    // marketing/supplier/merchant also use) so the new tools are granted to this
+    // agent alone.
+    allowedTools: [...CATALOG_TOOLS, 'product.read_public', 'product.read_owned', 'product.read_platform'],
     approvalActions: [],
     limits: { maxCostUsdPerRun: 1 },
     taskTypes: ['product.audit_catalog'],

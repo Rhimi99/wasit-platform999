@@ -1,8 +1,9 @@
 import { and, desc, eq, gte, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DB } from '../../db/client';
-import { products, categories } from '../../db/schema/products';
+import { products, categories, productVariants, productImages } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { orders, orderItems, transactions, transactionLedger } from '../../db/schema/commerce';
+import { inventoryItems } from '../../db/schema/commerce_extras';
 import { agentTasks } from '../../db/schema/agents';
 import { riskProfiles, riskEvents } from '../../db/schema/risk';
 import { disputes, disputeMessages } from '../../db/schema/disputes';
@@ -28,6 +29,9 @@ import {
   PAYMENTS_READ_SETTLEMENTS,
   PLATFORM_METRICS,
   PLATFORM_READ_ORDERS,
+  PRODUCT_READ_OWNED,
+  PRODUCT_READ_PLATFORM,
+  PRODUCT_READ_PUBLIC,
   RISK_READ_OVERVIEW,
   SALES_READ_MARKET_TOTALS,
   SALES_READ_ORDERS_OWN,
@@ -594,6 +598,114 @@ const salesReadMarketTotals: ToolHandler = async (db) => {
 };
 
 /**
+ * Product Agent (G5 Phase 2 / A4) — the shared catalogue read behind all three
+ * product tools. `visibility` is the tier's WHERE predicate (or `undefined` for
+ * the platform tier, which sees every row). Mirrors `execProductAgent`'s former
+ * `pickProduct` read plus its variant/image/inventory side reads exactly, so the
+ * routed facts are identical: a specific id returns that row; without an id a
+ * published row is preferred (a "sample" for an overview), else the first row.
+ */
+async function readProductFacts(
+  db: DB,
+  productId: unknown,
+  visibility: SQL | undefined,
+): Promise<Record<string, unknown> | null> {
+  const hasId = typeof productId === 'string' && productId.length > 0;
+  const where = hasId
+    ? visibility
+      ? and(eq(products.id, productId as string), visibility)
+      : eq(products.id, productId as string)
+    : visibility ?? sql`true`;
+  const rows = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      sku: products.sku,
+      basePrice: products.basePrice,
+      currencyCode: products.currencyCode,
+      categoryName: categories.name,
+      sellerType: products.sellerType,
+      isPublished: products.isPublished,
+      brand: products.brand,
+      moq: products.moq,
+    })
+    .from(products)
+    .leftJoin(categories, eq(products.categoryId, categories.id))
+    .where(where);
+  if (rows.length === 0) return null;
+  const row = hasId ? rows[0] : rows.find((r) => r.isPublished) ?? rows[0];
+
+  const [variants, images, inventorySum] = await Promise.all([
+    db.select({ name: productVariants.name, sku: productVariants.sku, price: productVariants.price, attributes: productVariants.attributes }).from(productVariants).where(eq(productVariants.productId, row.id)),
+    db.select({ url: productImages.url, isPrimary: productImages.isPrimary }).from(productImages).where(eq(productImages.productId, row.id)),
+    db.select({ v: sql<number>`coalesce(sum(quantity),0)::int` }).from(inventoryItems).where(eq(inventoryItems.productId, row.id)),
+  ]);
+
+  return {
+    id: row.id,
+    name: row.name,
+    sku: row.sku,
+    price: row.basePrice === null ? '0' : String(row.basePrice),
+    currency: row.currencyCode,
+    category: row.categoryName,
+    sellerType: row.sellerType,
+    brand: row.brand,
+    moq: row.moq,
+    isPublished: row.isPublished,
+    variants: variants.length,
+    images: images.length,
+    inventoryQty: toNum(inventorySum[0]?.v),
+  };
+}
+
+/**
+ * Product Agent (G5 Phase 2 / A4) — the PUBLIC tier.
+ *
+ * A single published/ACTIVE listing (or a published sample when no id is given).
+ * Public visibility only: an unpublished or non-ACTIVE listing is invisible, so
+ * a non-owner can never fetch another tenant's draft by guessing its id.
+ */
+const productReadPublic: ToolHandler = async (db, args) => {
+  const product = await readProductFacts(
+    db,
+    args.productId,
+    and(eq(products.isPublished, true), eq(products.status, 'ACTIVE')),
+  );
+  return { scope: 'public', found: product !== null, product };
+};
+
+/**
+ * Product Agent (G5 Phase 2 / A4) — the OWNER tier.
+ *
+ * The caller's own listing (any status), or a sample of their own catalogue. The
+ * owner is resolved from the TRUSTED run context (`getAgentRunContext().requestedBy`),
+ * never from the args, so a caller cannot name another tenant. A caller who owns
+ * no seller entity returns an empty scope WITHOUT running a query, so the
+ * executor can fall through to the public tier exactly as before.
+ */
+const productReadOwned: ToolHandler = async (db, args) => {
+  const owner = getAgentRunContext()?.requestedBy ?? null;
+  const ownedSellerIds = owner && owner !== SYSTEM_PRINCIPAL ? await resolveOwnedSellerIds(db, owner) : [];
+  if (ownedSellerIds.length === 0) {
+    return { scope: 'own', found: false, noScope: true, product: null };
+  }
+  const product = await readProductFacts(db, args.productId, inArray(products.sellerId, ownedSellerIds));
+  return { scope: 'own', found: product !== null, noScope: false, product };
+};
+
+/**
+ * Product Agent (G5 Phase 2 / A4) — the PLATFORM tier.
+ *
+ * Any product of any owner and status (or a sample). Admin-only by registration
+ * (`platformScoped: true`); the gateway refuses a non-admin with
+ * `PLATFORM_SCOPE_DENIED` before this handler runs.
+ */
+const productReadPlatform: ToolHandler = async (db, args) => {
+  const product = await readProductFacts(db, args.productId, undefined);
+  return { scope: 'platform', found: product !== null, product };
+};
+
+/**
  * Platform ad book — campaign budget/spend rows plus impression/click/conversion
  * counts. Cross-owner advertising data, so the gateway admits admins only
  * (`platformScoped: true`). The payload mirrors `execAdsAgent`'s former direct
@@ -695,6 +807,9 @@ const HANDLERS: ReadonlyMap<string, ToolHandler> = new Map<string, ToolHandler>(
   [SALES_READ_ORDERS_OWN, salesReadOrdersOwn],
   [SALES_READ_ORDERS_PLATFORM, salesReadOrdersPlatform],
   [SALES_READ_MARKET_TOTALS, salesReadMarketTotals],
+  [PRODUCT_READ_PUBLIC, productReadPublic],
+  [PRODUCT_READ_OWNED, productReadOwned],
+  [PRODUCT_READ_PLATFORM, productReadPlatform],
 ]);
 
 /** Looks up the handler bound to a registered tool. */

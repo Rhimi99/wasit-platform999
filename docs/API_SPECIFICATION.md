@@ -317,6 +317,9 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 | `sales.read_orders_owned` | مالك (`platformScoped: false`) | `order:read:own` | طلبات البيع **المملوكة للمتصل** + مؤشراتها (G5 Phase 2 — A3) |
 | `sales.read_orders_platform` | منصّة (`platformScoped: true`) | `order:read` | دفتر الطلبات على مستوى المنصّة — للمشرفين فقط (G5 Phase 2 — A3) |
 | `sales.read_market_totals` | عام (بلا نطاق مالك) | `ai:use` | مجاميع السوق (أعداد + متوسط الثقة) — بلا سجلات/معرّفات (G5 Phase 2 — A3) |
+| `product.read_public` | عام (بلا نطاق مالك) | `ai:use` | إدراج منشور/نشط واحد (أو عيّنة منشورة) + تصنيف/متغيّرات/صور/مخزون (G5 Phase 2 — A4) |
+| `product.read_owned` | مالك (`platformScoped: false`) | `ai:use` | إدراجات المنتجات **المملوكة للمتصل** (أي حالة) + التفاصيل (G5 Phase 2 — A4) |
+| `product.read_platform` | منصّة (`platformScoped: true`) | `product:read` | أي إدراج لأي مالك وأي حالة — للمشرفين فقط (G5 Phase 2 — A4) |
 
 - `supplier.read_owned`: الوسائط `{ supplierId?: string(1..64), limit?: int(1..100) }`؛ **المالك يُحلّ من
   السياق الموثوق** (`getAgentRunContext().requestedBy`) لا من الوسائط؛ `supplierId` يُحترم فقط إن كان
@@ -333,6 +336,16 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
   بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`. تعيد `{ scope:'platform', kpi, recentOrders }` عبر كل المالكين.
 - `sales.read_market_totals`: بلا وسائط؛ تعيد **مجاميع فقط** `{ activeProducts, suppliers, merchants, companies,
   avgTrust }` — بلا أي سجلات أو معرّفات أو بيانات فردية؛ متاحة لكل متصل يملك `ai:use` (كسلوك المنفّذ السابق).
+- `product.read_public`: الوسائط `{ productId?: string(1..64) }`؛ تعيد `{ scope:'public', found, product }`
+  حيث `product` إدراج **منشور/نشط فقط** (أو عيّنة منشورة بلا معرّف). لا تكشف إدراجًا غير منشور حتى بمعرّفه.
+  الأداة ممنوحة لـ`product-agent` فقط.
+- `product.read_owned`: الوسائط `{ productId?: string(1..64) }`؛ **المالك يُحلّ من السياق الموثوق**
+  (`getAgentRunContext().requestedBy`) لا من الوسائط؛ يعيد `{ scope:'own', found, noScope, product }`،
+  وإن لم يوجد مالك موثوق أو لم يملك المتصل أي كيان بائع يعيد `noScope: true` بلا استعلام. الأداة ممنوحة
+  لـ`product-agent` فقط.
+- `product.read_platform`: الوسائط `{ productId?: string(1..64) }`؛ `platformScoped: true` — تُقبل فقط
+  لدور `ADMIN`/`SUPER_ADMIN` عبر فحص صلاحية حقيقي، ويُرفض غير المشرف بـ`PLATFORM_SCOPE_DENIED`/
+  `PERMISSION_DENIED`. تعيد `{ scope:'platform', found, product }` لأي مالك وأي حالة.
 - أخطاء البوابة المرتجعة (fail-closed): `TOOL_NOT_REGISTERED`, `NO_RUN_CONTEXT`,
   `ACTION_NOT_AUTHORIZED`, `PERMISSION_DENIED`, `PLATFORM_SCOPE_DENIED`, `INVALID_INPUT`,
   `TOOL_TIMEOUT`, `TOOL_EXECUTION_FAILED` — وكل محاولة (مسموحة أو مرفوضة) تُدقَّق (`AI.TOOL_EXECUTED` /

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import { ApiError, type UserRole } from '@wasit/shared';
 import type { AgentDefinition } from '../../lib/ai/types';
@@ -29,11 +29,13 @@ import {
   SALES_READ_ORDERS_OWN,
   SALES_READ_ORDERS_PLATFORM,
   SALES_READ_MARKET_TOTALS,
+  PRODUCT_READ_PUBLIC,
+  PRODUCT_READ_OWNED,
+  PRODUCT_READ_PLATFORM,
 } from '../../lib/ai/tool-registry';
-import { products, categories, productVariants, productImages } from '../../db/schema/products';
+import { products, categories } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { orders, orderItems, transactions, transactionLedger } from '../../db/schema/commerce';
-import { inventoryItems, inventoryMovements } from '../../db/schema/commerce_extras';
 import { adCreatives } from '../../db/schema/ads';
 import { riskProfiles, riskEvents } from '../../db/schema/risk';
 import { disputes, disputeMessages } from '../../db/schema/disputes';
@@ -314,82 +316,6 @@ function withProposal(data: Record<string, unknown>, reasoning: AgentReasoning):
 
 // ---------- helpers for queries ----------
 
-interface ProductWithCategory {
-  id: string;
-  name: string;
-  sku: string;
-  basePrice: string | null;
-  currencyCode: string;
-  categoryName: string | null;
-  sellerType: string;
-  isPublished: boolean;
-  brand: string | null;
-  moq: number;
-}
-
-interface ProductViewer {
-  /** True for ADMIN/SUPER_ADMIN — may read any product, published or not. */
-  isAdmin: boolean;
-  /** Seller entity ids the viewer owns (empty for a non-owner / admin). */
-  ownedSellerIds: string[];
-}
-
-/**
- * Loads one product (or a sample for an overview) subject to the platform's
- * product-visibility policy, extracted from the products module:
- *  - an admin sees every product;
- *  - an owner sees their own products regardless of publication;
- *  - everyone else sees only publicly listed products
- *    (`is_published AND status='ACTIVE'`, as `listProducts` uses).
- *
- * Visibility is applied in the WHERE clause, so a non-owner can never fetch an
- * unpublished product by guessing its id — `productId` is never treated as proof
- * of authorization. An invisible product resolves to `null` (a plain "not found"
- * to the caller), never a widened read.
- */
-async function pickProduct(db: DB, productId: unknown, viewer: ProductViewer): Promise<ProductWithCategory | null> {
-  const hasId = typeof productId === 'string' && productId.length > 0;
-  const ownedCond = viewer.ownedSellerIds.length > 0 ? inArray(products.sellerId, viewer.ownedSellerIds) : undefined;
-  const publicCond = and(eq(products.isPublished, true), eq(products.status, 'ACTIVE'));
-  const visibility = viewer.isAdmin ? undefined : ownedCond ? or(ownedCond, publicCond) : publicCond;
-  const where = hasId
-    ? visibility
-      ? and(eq(products.id, productId as string), visibility)
-      : eq(products.id, productId as string)
-    : visibility ?? sql`true`;
-  const rows = await db
-    .select({
-      id: products.id,
-      name: products.name,
-      sku: products.sku,
-      basePrice: products.basePrice,
-      currencyCode: products.currencyCode,
-      categoryName: categories.name,
-      sellerType: products.sellerType,
-      isPublished: products.isPublished,
-      brand: products.brand,
-      moq: products.moq,
-    })
-    .from(products)
-    .leftJoin(categories, eq(products.categoryId, categories.id))
-    .where(where);
-  if (rows.length === 0) return null;
-  // For a general overview, prefer a published/sample product; for a specific id return that row.
-  const row = hasId ? rows[0] : rows.find((r) => r.isPublished) ?? rows[0];
-  return {
-    id: row.id,
-    name: row.name,
-    sku: row.sku,
-    basePrice: row.basePrice === null ? null : String(row.basePrice),
-    currencyCode: row.currencyCode,
-    categoryName: row.categoryName,
-    sellerType: row.sellerType,
-    isPublished: row.isPublished,
-    brand: row.brand,
-    moq: row.moq,
-  };
-}
-
 async function countOpenSupportMessages(db: DB): Promise<number> {
   const rows = await db
     .select({ v: sql<number>`count(*)::int` })
@@ -635,12 +561,52 @@ async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string
 
 async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const userId = typeof input.__userId === 'string' ? (input.__userId as string) : 'system';
-  // Product visibility is enforced server-side: an admin sees any product, an
-  // owner sees their own, everyone else only published/active listings. The
-  // viewer is resolved from the trusted requester id, never from `input`.
-  const isAdmin = await canReadPlatformData(db, userId, agent);
-  const ownedSellerIds = isAdmin ? [] : await resolveOwnedSellerIds(db, userId);
-  const p = await pickProduct(db, input.productId, { isAdmin, ownedSellerIds });
+
+  // G5 Phase 2 (A4): every read runs ONLY through the Tool Gateway, never a
+  // direct query. Product visibility is three-tier and resolved server-side:
+  //  1. `product.read_platform` — any product of any owner (admins only). The
+  //     gateway refuses a non-admin with PLATFORM_SCOPE_DENIED / PERMISSION_DENIED,
+  //     and ONLY those refusals are swallowed (any other error is re-thrown,
+  //     never a silent fallback).
+  //  2. `product.read_owned` — the caller's OWN listings, the owner resolved from
+  //     the trusted run context (never the args).
+  //  3. `product.read_public` — published/ACTIVE listings only.
+  // The former `pickProduct` chose admin → owned∪public → public; here an admin
+  // uses the platform tier, a real owner uses the owned tier, and anyone else —
+  // or an owner with no match — falls through to the public tier. The scheduler
+  // principal never reaches the platform tier (it was never an admin here), so a
+  // scheduled run sees only public data, exactly as before.
+  const rawId = input.productId;
+  const productId = typeof rawId === 'string' && rawId.length > 0 && rawId.length <= 64 ? rawId : undefined;
+  const args = productId !== undefined ? { productId } : {};
+
+  const platform =
+    userId === SYSTEM_PRINCIPAL
+      ? null
+      : await invokeTool(db, PRODUCT_READ_PLATFORM, args).catch((err: unknown) => {
+          if (err instanceof ToolGatewayError && (err.code === 'PLATFORM_SCOPE_DENIED' || err.code === 'PERMISSION_DENIED')) {
+            return null;
+          }
+          throw err;
+        });
+
+  let p: Record<string, unknown> | null;
+  if (platform) {
+    p = (platform.data.product ?? null) as Record<string, unknown> | null;
+  } else {
+    const owned = (await invokeTool(db, PRODUCT_READ_OWNED, args)).data.product as Record<string, unknown> | null;
+    if (productId !== undefined) {
+      // A specific id: the owner tier, then the public tier (owner ∪ public).
+      p = owned ?? ((await invokeTool(db, PRODUCT_READ_PUBLIC, args)).data.product as Record<string, unknown> | null);
+    } else {
+      // A general overview: prefer a published listing (as `pickProduct` did).
+      const pub = (await invokeTool(db, PRODUCT_READ_PUBLIC, args)).data.product as Record<string, unknown> | null;
+      const ownedPublished = owned?.isPublished === true ? owned : null;
+      const pubPublished = pub?.isPublished === true ? pub : null;
+      p = ownedPublished ?? pubPublished ?? owned ?? pub;
+    }
+  }
+
   if (!p) {
     const reasoning = await reasonAboutAgent(db, agent, {
       userId,
@@ -659,39 +625,29 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
     return { content, tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };
   }
 
-  const [variants, images, inventorySum] = await Promise.all([
-    db.select({ name: productVariants.name, sku: productVariants.sku, price: productVariants.price, attributes: productVariants.attributes }).from(productVariants).where(eq(productVariants.productId, p.id)),
-    db.select({ url: productImages.url, isPrimary: productImages.isPrimary }).from(productImages).where(eq(productImages.productId, p.id)),
-    db.select({ v: sql<number>`coalesce(sum(quantity),0)::int` }).from(inventoryItems).where(eq(inventoryItems.productId, p.id)),
-  ]);
-
-  const inventoryQty = toNum(inventorySum[0]?.v);
-  const priceNum = toNum(p.basePrice);
-  const relevant = p.categoryName !== null && p.brand !== null && p.isPublished;
-
   const facts = {
     id: p.id,
     name: p.name,
     sku: p.sku,
-    price: p.basePrice ?? '0',
-    currency: p.currencyCode,
-    category: p.categoryName,
+    price: p.price ?? '0',
+    currency: p.currency,
+    category: p.category,
     sellerType: p.sellerType,
     brand: p.brand,
     moq: p.moq,
     isPublished: p.isPublished,
-    variants: variants.length,
-    images: images.length,
-    inventoryQty,
+    variants: toNum(p.variants),
+    images: toNum(p.images),
+    inventoryQty: toNum(p.inventoryQty),
   };
 
   const issues: string[] = [];
-  if (!p.isPublished) issues.push('not published');
-  if (p.categoryName === null) issues.push('missing category');
-  if (p.brand === null) issues.push('missing brand');
-  if (variants.length === 0) issues.push('no variants');
-  if (images.length === 0) issues.push('no images');
-  if (inventoryQty <= 0) issues.push('no stock');
+  if (p.isPublished !== true) issues.push('not published');
+  if (p.category === null || p.category === undefined) issues.push('missing category');
+  if (p.brand === null || p.brand === undefined) issues.push('missing brand');
+  if (facts.variants === 0) issues.push('no variants');
+  if (facts.images === 0) issues.push('no images');
+  if (facts.inventoryQty <= 0) issues.push('no stock');
   const recommendation = issues.length > 0 ? `Improve: ${issues.join(', ')}.` : 'Listing looks healthy.';
 
   const data: Record<string, unknown> = {
@@ -709,15 +665,15 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
 
   const text = adviceText(
     'Product "{{name}}" (SKU {{sku}}): price {{price}}, category {{category}}, variants {{variants}}, images {{images}}, stock {{inventoryQty}}. {{recommendation}}',
-    { name: p.name, sku: p.sku, price: facts.price, category: p.categoryName ?? 'none', variants: facts.variants, images: facts.images, inventoryQty: facts.inventoryQty, recommendation },
+    { name: facts.name, sku: facts.sku, price: facts.price, category: facts.category ?? 'none', variants: facts.variants, images: facts.images, inventoryQty: facts.inventoryQty, recommendation },
   );
 
   const reasoning = await reasonAboutAgent(db, agent, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    userId,
     system: 'You are the WASIT Product Agent.',
     user: text,
     maxTokens: 96,
-    metadata: { agentKey: agent.key, productId: p.id },
+    metadata: { agentKey: agent.key, productId: facts.id },
   });
 
   return { content: JSON.stringify(withProposal(data, reasoning)), tokensInput: reasoning.tokensInput, tokensOutput: reasoning.tokensOutput };

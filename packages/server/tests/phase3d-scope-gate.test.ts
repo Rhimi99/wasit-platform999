@@ -10,6 +10,9 @@ import {
   SALES_READ_ORDERS_OWN,
   SALES_READ_ORDERS_PLATFORM,
   SALES_READ_MARKET_TOTALS,
+  PRODUCT_READ_PUBLIC,
+  PRODUCT_READ_OWNED,
+  PRODUCT_READ_PLATFORM,
   UNBOUND_DECLARED_TOOLS,
   findTool,
   isRegisteredTool,
@@ -371,6 +374,87 @@ describe('G5 Phase 2 (A3) — sales agent is routed through the gateway (dual-sc
     expect(sales.requiresPlatformScope).not.toBe(true);
     expect(sales.approvalActions).toEqual(['finance.refund', 'commission.change']);
     expect(sales.requiresHumanApproval).toBe(true);
+  });
+});
+
+describe('G5 Phase 2 (A4) — product agent is routed through the gateway (three-tier)', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'src', 'modules', 'ai', 'executors.ts'), 'utf8');
+
+  function bodyOf(name: string): string {
+    const start = SRC.indexOf(`async function ${name}(`);
+    expect(start, `${name} not found`).toBeGreaterThan(-1);
+    const rest = SRC.slice(start + 1);
+    const next = rest.indexOf('\nasync function ');
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it('registers the public / owner / platform tools as read-only with bound handlers', () => {
+    const pub = findTool(PRODUCT_READ_PUBLIC);
+    expect(pub?.effect).toBe('read');
+    expect(pub?.platformScoped).toBe(false);
+    expect(pub?.permission).toBe('ai:use');
+    const owned = findTool(PRODUCT_READ_OWNED);
+    expect(owned?.effect).toBe('read');
+    expect(owned?.platformScoped).toBe(false);
+    expect(owned?.permission).toBe('ai:use');
+    const platform = findTool(PRODUCT_READ_PLATFORM);
+    expect(platform?.effect).toBe('read');
+    expect(platform?.platformScoped).toBe(true);
+    expect(platform?.permission).toBe('product:read');
+    for (const id of [PRODUCT_READ_PUBLIC, PRODUCT_READ_OWNED, PRODUCT_READ_PLATFORM]) {
+      expect(isRegisteredTool(id), id).toBe(true);
+      expect(registeredToolIds(), id).toContain(id);
+      expect(getToolHandler(id), id).toBeTruthy();
+      expect(UNBOUND_DECLARED_TOOLS, id).not.toContain(id);
+    }
+  });
+
+  it('grants the product tools to product-agent ONLY (no widening)', () => {
+    for (const agent of AGENT_CATALOGUE) {
+      const grant = toolGrantForAgent(agent);
+      for (const id of [PRODUCT_READ_PUBLIC, PRODUCT_READ_OWNED, PRODUCT_READ_PLATFORM]) {
+        if (agent.key === 'product-agent') expect(grant, `${agent.key}:${id}`).toContain(id);
+        else expect(grant, `${agent.key}:${id}`).not.toContain(id);
+      }
+    }
+  });
+
+  it('does not touch the shared CATALOG_TOOLS group (marketing/supplier/merchant unchanged)', () => {
+    const product = findAgentSpec('product-agent')!;
+    expect(product.allowedTools).toEqual([
+      'platform.read_catalog',
+      'platform.metrics',
+      'report.generate',
+      PRODUCT_READ_PUBLIC,
+      PRODUCT_READ_OWNED,
+      PRODUCT_READ_PLATFORM,
+    ]);
+    for (const key of ['marketing-agent', 'supplier-agent', 'merchant-agent']) {
+      const grant = toolGrantForAgent(findAgentSpec(key)!);
+      expect(grant, key).not.toContain(PRODUCT_READ_PUBLIC);
+      expect(grant, key).not.toContain(PRODUCT_READ_OWNED);
+      expect(grant, key).not.toContain(PRODUCT_READ_PLATFORM);
+    }
+  });
+
+  it('execProductAgent reads ONLY through invokeTool (no direct query, no inline platform gate)', () => {
+    const body = bodyOf('execProductAgent');
+    expect(body.includes('invokeTool(')).toBe(true);
+    expect(body.includes(PRODUCT_READ_PUBLIC)).toBe(true);
+    expect(body.includes(PRODUCT_READ_OWNED)).toBe(true);
+    expect(body.includes(PRODUCT_READ_PLATFORM)).toBe(true);
+    expect(body.includes('.from(')).toBe(false);
+    expect(body.includes('pickProduct(')).toBe(false);
+    expect(body.includes('resolveOwnedSellerIds(')).toBe(false);
+    expect(body.includes('requirePlatformGate(')).toBe(false);
+  });
+
+  it('does not change product-agent permissions, scope or approval declarations', () => {
+    const product = findAgentSpec('product-agent')!;
+    expect(product.permissionsRequired).toEqual(['ai:use']);
+    expect(product.requiresPlatformScope).not.toBe(true);
+    expect(product.approvalActions).toEqual([]);
+    expect(product.requiresHumanApproval).toBe(false);
   });
 });
 

@@ -85,7 +85,7 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
 - ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
-- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **13 داخل** البوابة و**7 خارجها** (بعد G5 Phase 2 — A1/A2/A3). الخارجون: 6 وكلاء بنطاق مالك/مزدوج (`marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **14 داخل** البوابة و**6 خارجها** (بعد G5 Phase 2 — A1/A2/A3/A4). الخارجون: 5 وكلاء بنطاق مالك/مزدوج (`marketing`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
 
 ## الحالة الحالية (2026-11-01) — G5 Phase 2 (A1): توحيد Supplier Agent عبر بوابة الأدوات
 
@@ -119,6 +119,18 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **لا توسيع**: `allowedTools` لـ`sales-agent` فقط صار `[...READ_TOOLS, 'sales.read_orders_owned', 'sales.read_orders_platform', 'sales.read_market_totals']`؛ **لم تُمسّ** `READ_TOOLS` المشتركة (بقية الوكلاء بلا الأدوات)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
 - ✅ **الاختبارات**: `tests/g5-phase2-sales-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**27/27**) — **إجمالي A3: 62/62** — انظر قسم الاختبارات أدناه.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §26 (+ تحديث §10.4/§10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
+
+## الحالة الحالية (2026-11-01) — G5 Phase 2 (A4): توحيد Product Agent عبر بوابة الأدوات
+
+- ✅ **G5 Phase 2 (A4)**: نُقلت **كل** قراءات `execProductAgent` إلى البوابة المركزية عبر ثلاث أدوات جديدة **قراءة فقط** (الوكيل **ثلاثي النطاق**: عام + مالك + منصّة):
+  - `product.read_public` (`permission ai:use`, بلا نطاق مالك) — `{ productId?: string(1..64) }` → إدراج **منشور/نشط** واحد (أو عيّنة منشورة) مع تصنيف/متغيّرات/صور/مخزون `{ scope:'public', found, product }`. لا يكشف إدراجًا غير منشور حتى بمعرّفه.
+  - `product.read_owned` (`permission ai:use`, `platformScoped: false`) — نفس الوسائط → إدراجات المتّصل المملوكة (أي حالة) `{ scope:'own', found, noScope, product }`؛ **المالك من السياق الموثوق**، وبلا مالك موثوق/بلا كيان بائع ⇒ `noScope: true` بلا استعلام.
+  - `product.read_platform` (`permission product:read`, `platformScoped: true`) — نفس الوسائط → أي إدراج لأي مالك وأي حالة `{ scope:'platform', found, product }`؛ **`ADMIN`/`SUPER_ADMIN` فقط** (البوابة ترفض غيره بـ`PLATFORM_SCOPE_DENIED`/`PERMISSION_DENIED`).
+- ✅ **الهوية من السياق الموثوق فقط**: `productReadOwned` يحلّ المالك من `getAgentRunContext().requestedBy`، **لا من الوسائط**؛ مخطط `.strict()` يمنع حقن الهوية/النطاق (`INVALID_INPUT`).
+- ✅ **حفظ السلوك**: دمج الطبقات مطابق لـ`pickProduct` السابق (معرّف محدّد = مالك ثم عام؛ بلا معرّف = تفضيل إدراج منشور)؛ `product`/`completeness{score,issues,recommendation}`/`readOnly`/`generatedAt`، `reasonAboutAgent`، `withProposal`، ورسالة النظام — دون تغيير. **لا تفشل مفتوحًا**: تُبتلع فقط رفضا النطاق/الصلاحية المعروفان، وأي خطأ آخر يُعاد رميه. `SYSTEM_PRINCIPAL` لا يبلغ طبقة المنصّة (كما كان `canReadPlatformData('system') === false`).
+- ✅ **لا توسيع**: `allowedTools` لـ`product-agent` فقط صار `[...CATALOG_TOOLS, 'product.read_public', 'product.read_owned', 'product.read_platform']`؛ **لم تُمسّ** `CATALOG_TOOLS` المشتركة (`marketing`/`supplier`/`merchant`)، ولا `permissionsRequired`، ولا `requiresPlatformScope`، ولا `approvalActions`. لا كتابة، لا migrations، لا جدولة/Outbox.
+- ✅ **الاختبارات**: `tests/g5-phase2-product-tool.test.ts` (جديد، **35/35**، DB-free) + `tests/phase3d-scope-gate.test.ts` محدَّث (**32/32**) — **إجمالي A4: 67/67** — انظر قسم الاختبارات أدناه.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §27 (+ تحديث §10.5) + `docs/API_SPECIFICATION.md` (قسم أدوات البوابة الداخلية).
 
 ## الحالة الحالية (2026-11-01) — G7: سطح الذاكرة التشغيلية للقراءة فقط
 
