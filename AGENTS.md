@@ -85,7 +85,18 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **المجدول/`SYSTEM_PRINCIPAL`/بقية الوكلاء**: لم يُمَسّوا (لا `ads-agent` ولا `development-agent` في `DEFAULT_SCHEDULES`/`OUTBOX_ROUTES`).
 - ✅ **الاختبارات**: `tests/g5-phase1-tool-unification.test.ts` (**18/18**) + `tests/phase3d-scope-gate.test.ts` محدَّث — المجموعة الكاملة **106 Test Files · 1394/1397 (3 متخطّاة) · Exit 0**، tsc (server+web) PASS، E2E المتأثرة **52/52**، `git diff --check` نظيف.
 - 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §22 (+ تحديث §10.4/§10.5).
-- ⚠️ **متبقٍّ (لم يبدأ)**: 10 منفّذين بنطاق المالك خارج البوابة + `agent-supervisor` = G5 Phase 2 وما بعدها.
+- ⚠️ **متبقٍّ (لم يبدأ)**: عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)، منهم **10 داخل** البوابة و**10 خارجها**. الخارجون: 9 وكلاء بنطاق مالك/مزدوج (`sales`, `marketing`, `product`, `support`, `b2b`, `customer-intelligence`, `outreach-acquisition`, `supplier`, `merchant`) + `agent-supervisor` (الحتمي الكاتب) = G5 Phase 2 وما بعدها.
+
+## الحالة الحالية (2026-11-01) — G7: سطح الذاكرة التشغيلية للقراءة فقط
+
+- ✅ **G7 — سطح قراءة فقط للذاكرة التشغيلية (مغلق)**: مسار واحد `GET /api/admin/agent-ops/memory` تحت `agentMonitorRoutes`. يعرض ملاحظات الذاكرة التشغيلية (AI-06.0/AI-06.1) لنطاق **المتصل نفسه فقط**، دون أي كتابة.
+- ✅ **الصلاحيات (لا تغيير)**: `requireAuth` + `requirePermission(AI_MANAGE, ADMIN_AI)` — كلاهما لـ`ADMIN`/`SUPER_ADMIN` فقط. غير موثّق ⇒ 401، دور غير مخوّل ⇒ 403.
+- ✅ **عزل النطاق**: `callerScope` يحلّ النطاق خادميًا (`userHasPlatformScope` → `derivePlatformScope`/`deriveScope`)، **لا من الطلب**. الفلاتر (`agentKey`, `taskId`, `limit`, `offset`) تضيّق فقط؛ النطاق المنصّي **لا يمنح** قراءة ذاكرة عبر المالكين؛ `taskId` لمهمة خارج النطاق ⇒ **404**.
+- ✅ **إسقاط محدود**: `toMemoryView` يُرجع الحقول المسموحة فقط (`id`, `agentKey`, `kind`, `taskId`, `source`, `tags`, `outcome`, `latencyMs`, `errorCode`, `createdAt`) — **لا `content` خام ولا `scope_owner`**.
+- ✅ **الواجهة**: `api.adminAgentOpsMemory(...)` + تبويب «الذاكرة التشغيلية» في `AdminAgentOpsPage.tsx`، ومفاتيح `adminAgentOps.memory.*` في اللغات الأربع (ar/en/fr/zh).
+- ✅ **الاختبارات**: `tests/g7-memory-read.test.ts` (إسقاط نقي + RBAC 401/403/200 + عزل النطاق + 404 + سلامة القراءة) + حالتان في `e2e/admin-agent-ops.spec.ts`.
+- 📄 **التوثيق**: `docs/AI_ARCHITECTURE.md` §23 + `docs/API_SPECIFICATION.md` (كتلة `/api/admin/agent-ops`).
+- ⚠️ **حدود**: حقل `refs` في محتوى الذاكرة معطَّل مؤقتًا (`REF_OWNERSHIP_VERIFIABLE = false`)؛ لا مسار كتابة من الواجهة؛ لا migrations.
 
 ## الحالة الحالية (2026-10-29) — G8: دورة الوكلاء عند الطلب (GM On-Demand AI Cycle) — 1337/1340 Tests
 

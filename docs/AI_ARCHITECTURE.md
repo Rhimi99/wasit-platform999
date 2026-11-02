@@ -179,8 +179,8 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 **فقط** عبر `invokeTool` — لم يبقَ استعلام مباشر في مساراتهم. يُثبت ذلك اختبار على مستوى
 المصدر (لا `.from(` داخل المنفّذ) واختبارات سلوكية حقيقية على قاعدة بيانات.
 
-> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي 10 منفّذين
-> آخر يقرأون مباشرةً بنطاق ذاتي (انظر القسمين 10 و22).
+> ملاحظة نطاق: البوابة **ليست** القناة الإلزامية لكل أدوات الوكلاء بعد؛ بقي **10 منفّذين خارجها**
+> من أصل **20** (9 وكلاء بنطاق مالك/مزدوج + `agent-supervisor` الحتمي الكاتب) — انظر القسمين 10 و22.
 
 ## 10. إصلاح ثغرات المراجعة الأمنية (AI-02.1-R1)
 
@@ -235,10 +235,12 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 لا تُعدّ مجرّد عدم المرور عبر البوابة ثغرة بذاتها؛ التصنيف مبنيّ على أثر أمني مُثبَت.
 
 ### 10.5 قيود متبقّية
-- البوابة ليست إلزامية لكل الأدوات بعد. بعد G5 Phase 1 (القسم 22) بقي **10 منفّذين** خارجها
-  بنطاق ذاتي (الملكية): `sales`, `marketing`, `support`, `product`, `b2b`, `customer-intelligence`,
-  `outreach-acquisition`, `supplier`, `merchant`، إضافةً إلى `agent-supervisor` الحتمي. توحيدهم
-  مهمّة مستقلة (G5 Phase 2 وما بعدها).
+- البوابة ليست إلزامية لكل الأدوات بعد. عدد المنفّذين الكلي **20** (عبر `executeAgentTask`)،
+  منهم **10 داخل** البوابة و**10 خارجها** (بعد G5 Phase 1، القسم 22). الخارجون هم تسعة وكلاء
+  متخصّصون بنطاق مالك أو مزدوج (platform/own) — `sales`, `marketing`, `product`, `support`,
+  `b2b`, `customer-intelligence`, `outreach-acquisition`, `supplier`, `merchant` — إضافةً إلى
+  `agent-supervisor` (الوكيل الحتمي الإشرافي الوحيد الذي **يكتب** حالات الاحتواء، فلا يندرج تحت
+  بوّابة `read` الحالية). توحيدهم مهمّة مستقلة (G5 Phase 2 وما بعدها).
 - أدوات `allowedTools` المُعلنة بلا تنفيذ تبقى خاملة في البوابة (`UNBOUND_DECLARED_TOOLS`)؛
   صارت القائمة الآن مكتملة ومتطابقة مع المُعلَن (انظر القسم 12).
 
@@ -661,6 +663,9 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 
 ### 18.7 قيود متبقّية
 - لا تحكّم من هذه الصفحة (إيقاف/تغيير حالة الوكيل يبقى في `/admin/ai`) — بقصد، فهي مراقبة فقط.
+- **تحديث لاحق (G7، القسم 23)**: أُضيف تبويب خامس «الذاكرة التشغيلية» (`memory`) للقراءة فقط، فارتفع
+  عدد تبويبات الصفحة إلى **خمسة** وحالات `e2e/admin-agent-ops.spec.ts` إلى **12**. ما ورد أعلاه
+  (أربعة تبويبات / 10 حالات) يصف حالة AI-06.2 وقت تنفيذها.
 - لا migration ولا تغيير Schema.
 
 ## 19. الصادر المعاملاتي (Transactional Outbox) + حدث `order.placed` — AI-08.0
@@ -914,7 +919,76 @@ AI-07.1 يضيف **واجهة إدارة** لطبقة تنسيق المدير ا
 - `packages/server/tests/g5-phase1-tool-unification.test.ts` (جديد)، `tests/phase3d-scope-gate.test.ts`
 
 ### 22.7 قيود متبقّية
-- بقي 10 منفّذين بنطاق المالك خارج البوابة (`sales`, `marketing`, `support`, `product`, `b2b`,
-  `customer-intelligence`, `outreach-acquisition`, `supplier`, `merchant`) + `agent-supervisor`.
-  توحيدهم = G5 Phase 2 وما بعدها (لم تبدأ).
+- بقي **10 منفّذين خارج** البوابة من أصل **20** (عبر `executeAgentTask`): تسعة وكلاء بنطاق مالك أو
+  مزدوج (`sales`, `marketing`, `support`, `product`, `b2b`, `customer-intelligence`,
+  `outreach-acquisition`, `supplier`, `merchant`) + `agent-supervisor` (الحتمي الكاتب). توحيدهم =
+  G5 Phase 2 وما بعدها (لم تبدأ).
 - لا أدوات كتابة أو مالية جديدة؛ لا migrations.
+
+## 23. سطح الذاكرة التشغيلية للقراءة فقط — G7
+
+### 23.1 الغاية
+طبقة الذاكرة التشغيلية (AI-06.0/AI-06.1) تُنتج **ملاحظة واحدة مدمجة وحتمية** لكل مهمة منتهية
+(`recordTaskMemory`) وتستدعي سياقًا سابقًا عند التشغيل (`recallAgentContext`)، لكن **بلا أي سطح
+قراءة** من الواجهة. G7 يضيف **سطح قراءة فقط** يسمح للمشرف برؤية ملاحظات **نطاقه هو فقط**، دون
+توسيع أي صلاحية ودون أي كتابة.
+
+### 23.2 الواجهة (HTTP)
+- `GET /api/admin/agent-ops/memory` — تحت `agentMonitorRoutes` (مركّبة على `/api/admin/agent-ops`).
+- استعلام مُتحقَّق عبر `memoryQuerySchema` (zod): `agentKey?` (1..64)، `taskId?` (UUID)،
+  `limit?` (1..`MAX_MEMORY_LIMIT`=100)، `offset?` (0..100000).
+- الاستجابة: `{ success: true, data: { items, total, limit, offset } }` حيث كل `item` هو إسقاط
+  محدود عبر `toMemoryView`.
+
+### 23.3 الصلاحيات (لا تغيير)
+- الوسيط على كل مسارات `agentMonitorRoutes`: `requireAuth` + `requirePermission(AI_MANAGE, ADMIN_AI)`.
+- `AI_MANAGE` = `ai:manage`، `ADMIN_AI` = `admin:ai` — كلاهما مملوك من `ADMIN`/`SUPER_ADMIN` فقط
+  (لا يملكهما أي دور آخر). غير الموثّق ⇒ 401؛ دور غير مخوّل ⇒ 403.
+- لم تُضَف أي صلاحية جديدة ولم يتغيّر أي دور.
+
+### 23.4 عزل النطاق (لا توسيع)
+- النطاق يُحلّ **خادميًا** في `callerScope`: يُتحقَّق من النطاق المنصّي عبر `userHasPlatformScope`
+  (من قاعدة البيانات)، ثم `derivePlatformScope`/`deriveScope`. **لا يُقرأ النطاق من الطلب أبدًا.**
+- `scope.owner` هو المالك الوحيد الظاهر. الفلاتر (`agentKey`/`taskId`) **تضيّق** ملاحظات المالك فقط
+  ولا يمكنها توسيعها إلى مالك آخر (كل الاستعلامات تحمل `ownerPredicate = scope_owner = ctx.owner`).
+- **النطاق المنصّي لا يمنح قراءة ذاكرة عبر المالكين**: حتى الإداري يرى ملاحظاته هو فقط (الذاكرة
+  مقيّدة بالمالك في `scope.ts` بخلاف المجاميع).
+- `taskId` يشير إلى مهمة **ليست** للمالك ⇒ `404` عبر `taskBelongsToOwner` (لا صفحة فارغة صامتة
+  تؤكّد عدم وجودها).
+
+### 23.5 الإسقاط المحدود (لا محتوى خام)
+- `toMemoryView` يُرجع الحقول المسموحة فقط: `id`, `agentKey`, `kind`, `taskId`, `source`, `tags`,
+  `outcome`, `latencyMs`, `errorCode`, `createdAt`.
+- **لا يُمرَّر `content` jsonb الخام**، ولا `scope_owner`، ولا أي عمود داخلي. `content` يُعامَل
+  كغير موثوق: كل حقل يُفحَص نوعيًا ويُعامَل كقيمة افتراضية عند غيابه.
+
+### 23.6 القراءة فقط (لا كتابة)
+- كل الوصول عبر `listMemoryPage` (قراءة) + `taskBelongsToOwner` (قراءة). لا `insert`/`update`/
+  `delete` في مسار القراءة. الاختبار يثبّت أن القراءات المتكرّرة لا تُنشئ صفوفًا ولا تغيّر شيئًا.
+
+### 23.7 الواجهة (Web)
+- `api.adminAgentOpsMemory({ agentKey?, taskId?, limit?, offset? })` في `lib/api.ts` (لا يُرسل
+  نطاقًا أبدًا).
+- تبويب «الذاكرة التشغيلية» في `AdminAgentOpsPage.tsx` (`Memory`، `data-testid` =
+  `admin-agent-ops-memory`)، ومفاتيح `adminAgentOps.memory.*` في اللغات الأربع (ar/en/fr/zh)
+  مغطّاة باختبار parity.
+
+### 23.8 الاختبارات ونتائجها
+- `tests/g7-memory-read.test.ts` — **335 سطرًا**: إسقاط نقي (حقول مسموحة فقط، لا محتوى خام/مالك)،
+  RBAC (401/403/200)، عزل النطاق (الإداري يرى ملاحظاته فقط، مالكَان لا يتشاركان ملاحظة، `taskId`
+  خارج النطاق ⇒ 404، لا توسيع عبر معطيات الاستعلام)، سلامة القراءة (422 لـ`limit`/`taskId` غير
+  صالح، قراءات متكرّرة لا تكتب، إسقاط محدود، ترقيم ثابت).
+- `e2e/admin-agent-ops.spec.ts` — حالتان لـG7 (التبويب يعرض نفس صفوف الـAPI؛ التبويب للقراءة فقط
+  ولا يوسّع النطاق).
+
+### 23.9 الملفات التي تغيّرت
+- `packages/server/src/modules/admin/agent-monitor-routes.ts` (المسار + `callerScope`)
+- `packages/server/src/modules/ai/memory-repo.ts` (`listMemoryPage`, `taskBelongsToOwner`)
+- `packages/server/src/modules/ai/memory-service.ts` (`toMemoryView`)
+- `packages/web/src/lib/api.ts`, `lib/types.ts`, `lib/i18n.ts`, `pages/AdminAgentOpsPage.tsx`
+- `packages/server/tests/g7-memory-read.test.ts` (جديد)، `e2e/admin-agent-ops.spec.ts`
+
+### 23.10 قيود متبقّية
+- الحقل `refs` في محتوى الذاكرة **معطَّل مؤقتًا** (`REF_OWNERSHIP_VERIFIABLE = false`) حتى يُوصَل
+  مصدر ملكية موثوق — مذكور في القسم 18/AI-06.0.
+- لا مسار كتابة من الواجهة (السطح قراءة فقط بحكم التصميم)؛ لا migrations.

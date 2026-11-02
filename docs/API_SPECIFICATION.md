@@ -141,6 +141,7 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
   - `GET /performance?overdueSeconds=` — صف لكل وكيل من السجلات الحقيقية؛ النطاق (منصّة/مالك) يُحلّ خادميًا
   - `GET /health?overdueSeconds=` — `TeamHealth`: وكلاء، مهام حيّة، نتائج 24 ساعة، ميزانية، تنبيهات، `needsHumanAttention`، وكتلة `system` (تليمترية المجدول) **للمنصّة فقط ومنفصلة عن نشاط البشر**
   - `GET /activity?limit=` — آخر مهام الوكلاء (حدّ أقصى 100)
+  - `GET /memory?agentKey=&taskId=&limit=&offset=` — **G7**: الذاكرة التشغيلية للقراءة فقط. الاستعلام مُتحقَّق (`agentKey` 1..64، `taskId` UUID، `limit` 1..100، `offset` 0..100000)؛ الاستجابة `{ items, total, limit, offset }` حيث كل `item` إسقاط محدود (`id`, `agentKey`, `kind`, `taskId`, `source`, `tags`, `outcome`, `latencyMs`, `errorCode`, `createdAt`) بلا `content` خام ولا `scope_owner`. النطاق **دائمًا** نطاق المتصل نفسه (يُحلّ من الجلسة، لا من الطلب)، والفلاتر تضيّق فقط؛ و`taskId` لمهمة خارج نطاق المتصل ⇒ **404**. لا كتابة.
 - المشرف (`/api/admin/ai`) — `AI_MANAGE` أو `ADMIN_AI`:
   - `GET /supervisor` — لقطة صحة (عدّادات، وكلاء متوقّفون، تنبيهات مفتوحة)
   - `GET /supervisor/report` — التقرير الكامل + قائمة المهام المحتَواة (قراءة فقط)
