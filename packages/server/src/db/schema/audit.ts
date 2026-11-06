@@ -12,6 +12,12 @@ export const auditLogs = pgTable(
   {
     id: varchar('id', { length: 36 }).primaryKey(),
     actorId: varchar('actor_id', { length: 36 }),
+    /**
+     * `USER` (human request) or `SYSTEM` (automated/scheduled execution).
+     * Existing rows default to `USER`, so a system run is never mistaken for a
+     * human one and vice versa.
+     */
+    actorType: varchar('actor_type', { length: 16 }).notNull().default('USER'),
     action: varchar('action', { length: 120 }).notNull(),
     entityType: varchar('entity_type', { length: 100 }).notNull(),
     entityId: varchar('entity_id', { length: 36 }),

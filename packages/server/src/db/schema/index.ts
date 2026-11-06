@@ -14,6 +14,8 @@ export * from './ads';
 export * from './subscriptions';
 export * from './ai';
 export * from './agents';
+export * from './agent_schedules';
+export * from './agent_runs';
 export * from './media';
 export * from './analytics';
 export * from './revenue';
