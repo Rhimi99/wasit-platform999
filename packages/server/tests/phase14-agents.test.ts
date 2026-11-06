@@ -94,12 +94,19 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
     }
   });
 
-  /** Runs a task and, for gated agents, approves it as a SUPER_ADMIN. */
+  /**
+   * Runs a task and, for gated agents, approves it as a *different* SUPER_ADMIN.
+   *
+   * The requester may not approve their own task (AI-02.P0 separation of duties),
+   * so the approval is performed by a distinct authorised actor. The executor
+   * still runs against the original requester's context.
+   */
   async function runAndComplete(agentKey: string, input: Record<string, unknown>, staffId: string) {
     const created = await createAgentTask(db, ['SUPER_ADMIN'], staffId, { agentKey, requestedBy: staffId, input }, AUDIT);
     if (created.status === 'awaiting_approval') {
-      // Human approval path — SUPER_ADMIN may approve (they hold AI_MANAGE).
-      return decideAgentTask(db, created.id, staffId, 'APPROVE', 'auto test approval', AUDIT);
+      // Human approval path — a *separate* SUPER_ADMIN approves (they hold AI_MANAGE).
+      const approver = await insertStaff('SUPER_ADMIN');
+      return decideAgentTask(db, created.id, approver.id, 'APPROVE', 'auto test approval', AUDIT);
     }
     return created;
   }
