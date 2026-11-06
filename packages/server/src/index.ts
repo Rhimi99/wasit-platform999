@@ -27,6 +27,12 @@ if (env.SCHEDULER_ENABLED) {
     rateLimitPurgeIntervalMinutes: env.RATE_LIMIT_PURGE_INTERVAL_MINUTES,
     alertsEnabled: env.OBS_ALERTS_ENABLED,
     alertIntervalMinutes: env.OBS_ALERT_INTERVAL_MINUTES,
+    agentSchedulerEnabled: env.AI_AGENT_SCHEDULER_ENABLED,
+    agentSchedulerIntervalMinutes: env.AI_AGENT_SCHEDULER_INTERVAL_MINUTES,
+    agentScheduleLeaseSeconds: env.AI_AGENT_SCHEDULE_LEASE_SECONDS,
+    agentRunsRecoveryEnabled: env.AI_AGENT_RUNS_RECOVERY_ENABLED,
+    agentRunsRecoveryIntervalMinutes: env.AI_AGENT_RUNS_RECOVERY_INTERVAL_MINUTES,
+    agentRunStepStuckSeconds: env.AI_AGENT_RUN_STEP_STUCK_SECONDS,
   });
   const shutdown = (): void => {
     handle.stop();

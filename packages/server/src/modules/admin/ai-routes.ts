@@ -11,6 +11,21 @@ import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
 import { agentTasks } from '../../db/schema/agents.js';
 import { adminUsageSummary } from '../ai/service.js';
 import { listRegistryAgents } from '../ai/agents.js';
+import {
+  dispatchStep,
+  approveRunStep,
+  cancelRun,
+  recoverRun,
+  getRunWithSteps,
+} from '../ai/dispatcher.js';
+import {
+  createAgentSchedule,
+  updateAgentSchedule,
+  deleteAgentSchedule,
+  listAgentSchedules,
+  getAgentSchedule,
+  MIN_SCHEDULE_INTERVAL_MINUTES,
+} from '../ai/scheduling.js';
 
 const budgetSchema = z
   .object({
@@ -47,6 +62,23 @@ const taskStatusQuerySchema = z.object({
   agentKey: z.string().max(64).optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
 });
+
+const scheduleCreateSchema = z.object({
+  agentKey: z.string().min(1).max(64),
+  input: z.record(z.unknown()).default({}),
+  intervalMinutes: z.number().int().min(MIN_SCHEDULE_INTERVAL_MINUTES),
+  isActive: z.boolean().default(true),
+});
+
+const scheduleUpdateSchema = z
+  .object({
+    intervalMinutes: z.number().int().min(MIN_SCHEDULE_INTERVAL_MINUTES).optional(),
+    isActive: z.boolean().optional(),
+    input: z.record(z.unknown()).optional(),
+  })
+  .refine((v) => v.intervalMinutes !== undefined || v.isActive !== undefined || v.input !== undefined, {
+    message: 'Provide at least one of intervalMinutes, isActive, input',
+  });
 
 export const adminAiRoutes = new Hono();
 
@@ -209,4 +241,115 @@ adminAiRoutes.get('/tasks', async (c) => {
     .orderBy(desc(agentTasks.createdAt))
     .limit(query.limit ?? 50);
   return c.json({ success: true, data: { items: rows } });
+});
+
+// ----- Agent schedules (AI-01) ---------------------------------------------
+// Creating a schedule is a governance action: it authorises the platform to run
+// an agent automatically. The whole router is already gated by AI_MANAGE or
+// ADMIN_AI (see `.use('*', …)` above), and the service re-checks the agent is
+// schedulable (registered, active, not approval-gated) and that the creator's
+// role covers the agent's permissions.
+adminAiRoutes.get('/agent-schedules', async (c) => {
+  const ctx = getContext(c);
+  const items = await listAgentSchedules(ctx.db);
+  return c.json({ success: true, data: { items, minIntervalMinutes: MIN_SCHEDULE_INTERVAL_MINUTES } });
+});
+
+adminAiRoutes.post('/agent-schedules', validateBody(scheduleCreateSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof scheduleCreateSchema>>(c);
+  const created = await createAgentSchedule(
+    ctx.db,
+    ctx.user!.id,
+    { agentKey: body.agentKey, input: body.input, intervalMinutes: body.intervalMinutes, isActive: body.isActive },
+    { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: created }, 201);
+});
+
+adminAiRoutes.get('/agent-schedules/:id', async (c) => {
+  const ctx = getContext(c);
+  const row = await getAgentSchedule(ctx.db, c.req.param('id')!);
+  if (!row) return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Agent schedule' } }, 404);
+  return c.json({ success: true, data: row });
+});
+
+adminAiRoutes.patch('/agent-schedules/:id', validateBody(scheduleUpdateSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof scheduleUpdateSchema>>(c);
+  const updated = await updateAgentSchedule(
+    ctx.db,
+    c.req.param('id')!,
+    ctx.user!.id,
+    { intervalMinutes: body.intervalMinutes, isActive: body.isActive, input: body.input },
+    { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: updated });
+});
+
+adminAiRoutes.delete('/agent-schedules/:id', async (c) => {
+  const ctx = getContext(c);
+  await deleteAgentSchedule(ctx.db, c.req.param('id')!, ctx.user!.id, {
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: { id: c.req.param('id')!, deleted: true } });
+});
+
+// ----- Agent runs (AI-02.3.1) ----------------------------------------------
+// The operational surface for the run layer: inspect a run, dispatch one ready
+// step, record a human approval, cancel, and reconcile. Every action goes
+// through the same services the tests exercise; no executor or parallel task
+// path is introduced here.
+const runStepParam = (c: { req: { param: (k: string) => string | undefined } }): { runId: string; stepKey: string } => ({
+  runId: c.req.param('runId')!,
+  stepKey: c.req.param('stepKey')!,
+});
+
+adminAiRoutes.get('/agent-runs/:runId', async (c) => {
+  const ctx = getContext(c);
+  const data = await getRunWithSteps(ctx.db, c.req.param('runId')!);
+  return c.json({ success: true, data });
+});
+
+adminAiRoutes.post('/agent-runs/:runId/steps/:stepKey/dispatch', async (c) => {
+  const ctx = getContext(c);
+  const { runId, stepKey } = runStepParam(c);
+  const result = await dispatchStep(ctx.db, runId, stepKey, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: result });
+});
+
+adminAiRoutes.post('/agent-runs/:runId/steps/:stepKey/approve', async (c) => {
+  const ctx = getContext(c);
+  const { runId, stepKey } = runStepParam(c);
+  const result = await approveRunStep(ctx.db, runId, stepKey, ctx.user!.id, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: result });
+});
+
+adminAiRoutes.post('/agent-runs/:runId/cancel', async (c) => {
+  const ctx = getContext(c);
+  const status = await cancelRun(ctx.db, c.req.param('runId')!, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: { runId: c.req.param('runId')!, status } });
+});
+
+adminAiRoutes.post('/agent-runs/:runId/recover', async (c) => {
+  const ctx = getContext(c);
+  const status = await recoverRun(ctx.db, c.req.param('runId')!, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: { runId: c.req.param('runId')!, status } });
 });

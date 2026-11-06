@@ -1,13 +1,27 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { ApiError, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { agentRegistry, agentTasks } from '../../db/schema/agents';
-import { writeAudit } from '../../lib/audit';
+import { agentRunSteps } from '../../db/schema/agent_runs';
+import { writeAudit, type AuditContext } from '../../lib/audit';
 import { newId } from '../../lib/ids';
 import { createNotification } from '../../lib/notifications-service';
 import type { AgentCapability } from '../../lib/ai/types';
 import type { AgentDefinition, AgentTaskStatus, CreateAgentTaskInput, ResolvedAgentTask } from '../../lib/ai/types';
 import { executeAgentTask } from './executors.js';
+
+/**
+ * Fencing context for a task created on behalf of a dispatched run step
+ * (AI-02.3.2). `claimToken` is the step's `attempt_count` captured at the atomic
+ * dispatch claim; it identifies the exact claim that owns the step. The
+ * ownership check and the insert are performed in one transaction, so a stale
+ * dispatch cannot attach a task to a step that Recovery already settled.
+ */
+export interface AgentTaskFencing {
+  runId: string;
+  stepId: string;
+  claimToken: number;
+}
 
 /**
  * WASIT Agent Catalogue — the eleven specialised agents from the spec.
@@ -107,7 +121,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
 ];
 
-async function ensureAgentRegistrySeeded(db: DB): Promise<void> {
+export async function ensureAgentRegistrySeeded(db: DB): Promise<void> {
   const existingKeys = new Set((await db.select().from(agentRegistry)).map((r) => r.key));
   for (const def of AGENT_CATALOGUE) {
     if (existingKeys.has(def.key)) continue;
@@ -166,7 +180,8 @@ export async function createAgentTask(
   role: UserRole[],
   requestedBy: string,
   input: CreateAgentTaskInput,
-  audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  audit: AuditContext,
+  fencing?: AgentTaskFencing,
 ): Promise<ResolvedAgentTask> {
   const agent = await getAgentDef(db, input.agentKey);
   if (!role.includes('ADMIN') && !role.includes('SUPER_ADMIN')) {
@@ -182,15 +197,66 @@ export async function createAgentTask(
   const initialStatus: AgentTaskStatus = requiresApproval ? 'awaiting_approval' : 'queued';
 
   const id = newId();
-  await db.insert(agentTasks).values({
-    id,
-    agentKey: agent.key,
-    requestedBy,
-    input: input.input as never,
-    status: initialStatus,
-    requiresApproval,
-    model: 'local-heuristic',
-  });
+
+  if (fencing) {
+    // Service-level fencing (AI-02.3.2). The task is created only if the step is
+    // still RUNNING and still owned by the exact claim that dispatched it. The
+    // ownership re-check (which also renews the recovery lease) and the insert
+    // share one transaction, so Recovery cannot settle the step in between and a
+    // stale dispatch cannot attach a task to a step it no longer owns.
+    await db.transaction(async (tx) => {
+      // The ownership UPDATE is taken FIRST so it doubles as the step's row lock.
+      // Two concurrent creators for the same step then serialise here: the loser
+      // blocks until the winner commits and only then reads the task table. A
+      // bare SELECT-then-INSERT before this lock is not atomic under READ
+      // COMMITTED — both transactions would see "no task" and both would insert,
+      // producing two active tasks for one step.
+      const owned = await tx
+        .update(agentRunSteps)
+        .set({ updatedAt: new Date() })
+        .where(
+          and(
+            eq(agentRunSteps.id, fencing.stepId),
+            eq(agentRunSteps.runId, fencing.runId),
+            eq(agentRunSteps.status, 'RUNNING'),
+            eq(agentRunSteps.attemptCount, fencing.claimToken),
+          ),
+        )
+        .returning({ id: agentRunSteps.id });
+      if (owned.length === 0) {
+        throw ApiError.conflict('Step is no longer owned by this dispatch; refusing to create an agent task');
+      }
+      // Under the row lock this read sees any task the winning creator committed.
+      const existing = await tx
+        .select({ id: agentTasks.id })
+        .from(agentTasks)
+        .where(sql`${agentTasks.input}->>'__stepId' = ${fencing.stepId}`)
+        .limit(1);
+      if (existing.length > 0) {
+        // Idempotent: a task already exists for this step; do not create a second.
+        throw ApiError.conflict(`Step already has an agent task; refusing to create a duplicate`);
+      }
+      await tx.insert(agentTasks).values({
+        id,
+        agentKey: agent.key,
+        requestedBy,
+        input: input.input as never,
+        status: initialStatus,
+        requiresApproval,
+        model: 'local-heuristic',
+      });
+    });
+  } else {
+    await db.insert(agentTasks).values({
+      id,
+      agentKey: agent.key,
+      requestedBy,
+      input: input.input as never,
+      status: initialStatus,
+      requiresApproval,
+      model: 'local-heuristic',
+    });
+  }
 
   await writeAudit(db, audit, {
     action: 'AI.AGENT_TASK_CREATED',
@@ -333,11 +399,21 @@ export async function decideAgentTask(
   approverId: string,
   decision: 'APPROVE' | 'REJECT',
   reason: string | null,
-  audit: { actorId: string; ipAddress?: string | null; userAgent?: string | null },
+  audit: AuditContext,
 ): Promise<ResolvedAgentTask> {
   const task = await getTask(db, taskId);
   if (task.status !== 'awaiting_approval') {
     throw ApiError.conflict('Task is not awaiting approval');
+  }
+
+  // Separation of duties (AI-02.P0): the person who requested a task may never
+  // approve it, no matter how privileged their role. This is enforced here — the
+  // single service every approval surface calls — rather than in the UI, so an
+  // administrator cannot rubber-stamp their own sensitive request. SUPER_ADMIN is
+  // included deliberately: holding every permission does not make self-approval
+  // acceptable; a different authorised approver must decide.
+  if (decision === 'APPROVE' && task.requestedBy === approverId) {
+    throw ApiError.forbidden('You cannot approve your own agent task; another authorised approver must decide');
   }
 
   if (decision === 'REJECT') {

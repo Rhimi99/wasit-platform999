@@ -2,9 +2,12 @@ import { db } from '../db/client';
 import { rolloverDueSubscriptions } from '../modules/subscriptions/service';
 import { expireLapsedSubscriptions } from '../modules/subscriptions/collection';
 import { advanceDueDeletionRetentions } from '../modules/privacy/service';
+import { runDueAgentSchedules, reclaimExpiredLeases } from '../modules/ai/scheduling';
+import { recoverStuckSteps } from '../modules/ai/dispatcher';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
+import { newId } from './ids';
 
 export interface SchedulerHandle {
   stop: () => void;
@@ -14,22 +17,61 @@ export interface SchedulerHandle {
  * Minimal in-process scheduler for period-based jobs.
  *
  * Jobs today: subscription auto-renew rollover/expiry, privacy data-retention
- * window sweep, rate-limit bucket purge, and alert rule evaluation. It is
- * deliberately not a general cron framework: a further job should be added as a
- * named entry here, or the work should move to the deployment platform's
- * scheduler hitting the authenticated admin route. Rollover and the retention
- * sweep are idempotent, so a duplicate run from another instance is a no-op.
+ * window sweep, rate-limit bucket purge, alert rule evaluation, and (AI-01)
+ * due agent-schedule execution. It is deliberately not a general cron
+ * framework: a further job should be added as a named entry here, or the work
+ * should move to the deployment platform's scheduler hitting the authenticated
+ * admin route. Rollover and the retention sweep are idempotent, so a duplicate
+ * run from another instance is a no-op. Agent scheduling is safe across
+ * instances because a due schedule is claimed with a DB-level lease, not an
+ * in-process flag.
  */
+
+/**
+ * Serialises a scheduled job inside one process: at most one cycle runs at a
+ * time, and the guard is released in `finally` so a thrown cycle never wedges
+ * it. Cross-instance safety is the job's own DB lease, not this guard.
+ * Exported so the in-flight semantics can be unit-tested deterministically.
+ */
+export function createInFlightGuard(): <T>(job: () => Promise<T>) => Promise<T | undefined> {
+  let inFlight = false;
+  return async <T>(job: () => Promise<T>): Promise<T | undefined> => {
+    if (inFlight) return undefined;
+    inFlight = true;
+    try {
+      return await job();
+    } finally {
+      inFlight = false;
+    }
+  };
+}
+
 export function startScheduler(options: {
   rolloverIntervalMinutes: number;
   rateLimitPurgeIntervalMinutes?: number;
   alertsEnabled?: boolean;
   alertIntervalMinutes?: number;
+  agentSchedulerEnabled?: boolean;
+  agentSchedulerIntervalMinutes?: number;
+  agentScheduleLeaseSeconds?: number;
+  agentRunsRecoveryEnabled?: boolean;
+  agentRunsRecoveryIntervalMinutes?: number;
+  agentRunStepStuckSeconds?: number;
 }): SchedulerHandle {
   const intervalMs = options.rolloverIntervalMinutes * 60 * 1000;
   const purgeIntervalMs = (options.rateLimitPurgeIntervalMinutes ?? 15) * 60 * 1000;
   const alertIntervalMs = (options.alertIntervalMinutes ?? 5) * 60 * 1000;
+  const agentIntervalMs = (options.agentSchedulerIntervalMinutes ?? 5) * 60 * 1000;
+  const agentLeaseSeconds = options.agentScheduleLeaseSeconds ?? 300;
+  const recoveryIntervalMs = (options.agentRunsRecoveryIntervalMinutes ?? 5) * 60 * 1000;
+  const recoveryStuckSeconds = options.agentRunStepStuckSeconds ?? 300;
+  // Stable per-process worker id; the DB lease (not this string) is what keeps
+  // two instances from running the same schedule.
+  const workerId = `sched-${newId()}`;
   let lastPurgeAt = Date.now();
+  let agentRunInFlight = false;
+  // In-process guard for the recovery sweep; see runAgentRunRecovery below.
+  const recoveryGuard = createInFlightGuard();
 
   const runRollover = async (): Promise<void> => {
     try {
@@ -91,6 +133,70 @@ export function startScheduler(options: {
     }
   };
 
+  const runAgentSchedules = async (): Promise<void> => {
+    // In-process guard: never overlap two sweeps in this instance. Cross-instance
+    // safety comes from the DB lease inside runDueAgentSchedules, not from this.
+    if (agentRunInFlight) return;
+    agentRunInFlight = true;
+    try {
+      // Reclaim leases left by a crashed worker before claiming new work, so a
+      // schedule stuck behind a dead lease becomes eligible again.
+      await reclaimExpiredLeases(db);
+      const result = await runDueAgentSchedules(db, workerId, { leaseSeconds: agentLeaseSeconds });
+      if (result.claimed > 0) {
+        logger.info('agent schedule sweep', { ...result });
+      }
+    } catch (err) {
+      // A DB outage or unexpected error must not take the scheduler down; the
+      // next tick retries. Individual run failures are already handled inside.
+      logger.error('agent schedule sweep failed', { error: (err as Error).message });
+    } finally {
+      agentRunInFlight = false;
+    }
+  };
+
+  const runAgentRunRecovery = async (): Promise<void> => {
+    // In-process guard: never overlap two recovery sweeps in this instance. The
+    // DB lease inside recoverStuckSteps is what keeps separate instances apart;
+    // this guard only prevents self-overlap when a sweep outruns its interval.
+    // The guard releases in `finally`, so a thrown sweep never wedges it.
+    await recoveryGuard(async () => {
+      const correlationId = newId();
+      const startedAt = Date.now();
+      try {
+        // Reconcile steps stuck RUNNING beyond the configured timeout against their
+        // linked task, then re-derive the affected runs' status. Idempotent and
+        // lease-guarded, so overlapping sweeps (or instances) cannot double-process.
+        const result = await recoverStuckSteps(
+          db,
+          { stuckSeconds: recoveryStuckSeconds, leaseSeconds: Math.max(recoveryStuckSeconds, 60) },
+          { actorId: null, actorType: 'SYSTEM' },
+        );
+        // Log every cycle, including a clean no-op sweep, so operators can see the
+        // job is alive. No sensitive data: only counts and a correlation id.
+        logger.info('agent run recovery sweep', {
+          correlationId,
+          status: result.status,
+          scanned: result.scanned,
+          recovered: result.recovered,
+          skippedLease: result.skippedLease,
+          lostRace: result.lostRace,
+          reconciledRuns: result.reconciledRuns,
+          errors: result.errors,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch (err) {
+        // A DB outage or unexpected error must not take the scheduler down; the
+        // next tick retries. Individual step failures are isolated inside.
+        logger.error('agent run recovery sweep failed', {
+          correlationId,
+          durationMs: Date.now() - startedAt,
+          error: (err as Error).message,
+        });
+      }
+    });
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
@@ -111,10 +217,20 @@ export function startScheduler(options: {
   const alertTimer = options.alertsEnabled ? setInterval(runAlerts, alertIntervalMs) : null;
   alertTimer?.unref();
 
+  // Agent schedule sweep on its own cadence. Off unless explicitly enabled.
+  const agentTimer = options.agentSchedulerEnabled ? setInterval(runAgentSchedules, agentIntervalMs) : null;
+  agentTimer?.unref();
+
+  // Agent-run stuck-step recovery sweep on its own cadence. Off unless enabled.
+  const recoveryTimer = options.agentRunsRecoveryEnabled ? setInterval(runAgentRunRecovery, recoveryIntervalMs) : null;
+  recoveryTimer?.unref();
+
   return {
     stop: () => {
       clearInterval(timer);
       if (alertTimer) clearInterval(alertTimer);
+      if (agentTimer) clearInterval(agentTimer);
+      if (recoveryTimer) clearInterval(recoveryTimer);
     },
   };
 }

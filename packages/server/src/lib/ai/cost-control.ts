@@ -134,6 +134,38 @@ export async function assertWithinBudget(
   }
 }
 
+/**
+ * Reports whether a user has NO headroom left for even one more request in the
+ * period — i.e. the budget is already exhausted. Callers use it as a pre-flight
+ * gate before creating work that would make a paid provider call, so the
+ * provider is never invoked once the budget is spent. The runtime's
+ * `assertWithinBudget` remains the authoritative per-call check.
+ */
+export async function isBudgetExhausted(
+  db: DB,
+  userId: string,
+  roles: UserRole[],
+  period: string,
+  envMonthlyCap: number,
+): Promise<{ exhausted: boolean; reason?: string }> {
+  const { limit } = await resolveLimit(db, userId, roles, period, envMonthlyCap);
+  const usage = await usageSum(db, userId, currentPeriodWindow(period));
+
+  if (limit.maxRequests !== undefined && usage.requests >= limit.maxRequests) {
+    return { exhausted: true, reason: 'requests' };
+  }
+  if (limit.maxTokensInput !== undefined && usage.tokensIn >= limit.maxTokensInput) {
+    return { exhausted: true, reason: 'input_tokens' };
+  }
+  if (limit.maxTokensOutput !== undefined && usage.tokensOut >= limit.maxTokensOutput) {
+    return { exhausted: true, reason: 'output_tokens' };
+  }
+  if (limit.maxCost !== undefined && usage.cost.gte(limit.maxCost)) {
+    return { exhausted: true, reason: 'cost' };
+  }
+  return { exhausted: false };
+}
+
 export interface RecordAiRequestInput {
   userId: string;
   requestType: string;

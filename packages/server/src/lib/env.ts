@@ -162,6 +162,32 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   SUBSCRIPTION_ROLLOVER_INTERVAL_MINUTES: z.coerce.number().int().positive().default(60),
+  // Scheduled AI agent execution (AI-01). Off by default: automatic agent runs
+  // make provider calls and must be an explicit operator choice. `interval` is
+  // the sweep cadence; `min interval` is the shortest cadence a schedule may
+  // have (guards against resource-draining configurations); `lease seconds`
+  // bounds how long a claimed schedule stays reserved before another worker may
+  // reclaim it after a crash.
+  AI_AGENT_SCHEDULER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  AI_AGENT_SCHEDULER_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  AI_AGENT_SCHEDULE_MIN_INTERVAL_MINUTES: z.coerce.number().int().positive().default(15),
+  AI_AGENT_SCHEDULE_LEASE_SECONDS: z.coerce.number().int().positive().default(300),
+  // Agent-run execution reliability (AI-02.3.1). `recovery enabled` runs the
+  // stuck-step reconciliation sweep; off by default so tests and one-off commands
+  // never start background work. `stuck seconds` is how long a step may stay
+  // RUNNING before recovery considers it abandoned; `lease seconds` bounds how
+  // long a recovery claim on a step is held (defaults to `stuck seconds`, floored
+  // at 60s). There is deliberately no auto-dispatch flag: recovery only ever
+  // reconciles; dispatching a step is always an explicit, authorised action.
+  AI_AGENT_RUNS_RECOVERY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  AI_AGENT_RUNS_RECOVERY_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  AI_AGENT_RUN_STEP_STUCK_SECONDS: z.coerce.number().int().positive().default(300),
   // Observability. Structured logs go to stdout (single JSON line per record)
   // and a bounded in-process buffer is exposed to admins. `pretty` is for
   // reading along in a terminal; JSON is what a log pipeline should ingest.
