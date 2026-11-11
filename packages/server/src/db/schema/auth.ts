@@ -38,6 +38,10 @@ export const users = pgTable(
     phoneVerified: boolean('phone_verified').notNull().default(false),
     isActive: boolean('is_active').notNull().default(true),
     isLocked: boolean('is_locked').notNull().default(false),
+    /** Running streak of wrong-password attempts (temporary brute-force lock). */
+    failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
+    /** When a temporary lock lapses (NULL = not locked). Separate from `isLocked`. */
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
     locale: varchar('locale', { length: 10 }).notNull().default('ar'),
     mfaEnabled: boolean('mfa_enabled').notNull().default(false),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),

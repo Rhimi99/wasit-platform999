@@ -17,8 +17,12 @@ export const agentSchedules = pgTable(
   {
     id: varchar('id', { length: 36 }).primaryKey(),
     agentKey: varchar('agent_key', { length: 64 }).notNull(),
+    /** Optional task-type discriminator used by Copilot-authored schedules. */
+    taskType: varchar('task_type', { length: 64 }),
     /** Agent input payload, validated against the agent's schema before a run. */
     input: jsonb('input').notNull(),
+    /** Copilot/AI-layer payload for `taskType` schedules; mirrors `input`. */
+    payload: jsonb('payload').notNull().default({}),
     /** Fixed cadence in minutes. Enforced >= the configured safe minimum. */
     intervalMinutes: integer('interval_minutes').notNull(),
     isActive: boolean('is_active').notNull().default(true),

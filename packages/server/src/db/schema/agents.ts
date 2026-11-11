@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -6,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
 
@@ -19,16 +21,34 @@ export const agentRegistry = pgTable(
     id: varchar('id', { length: 36 }).primaryKey(),
     key: varchar('key', { length: 64 }).notNull(),
     name: varchar('name', { length: 200 }).notNull(),
+    nameAr: varchar('name_ar', { length: 200 }),
+    mission: text('mission'),
+    category: varchar('category', { length: 40 }).notNull().default('general'),
     description: text('description'),
     capabilities: jsonb('capabilities').notNull(),
+    /** Declarative tool allow-list. An executor may only reach data via these. */
+    allowedTools: jsonb('allowed_tools').notNull().default([]),
+    /** Actions from this agent that require an explicit human approval first. */
+    approvalActions: jsonb('approval_actions').notNull().default([]),
+    /** Deterministic per-run limits (cost, fanout, daily quotas, interval). */
+    limits: jsonb('limits').notNull().default({}),
+    /** Task types this agent is designed to handle. */
+    taskTypes: jsonb('task_types').notNull().default([]),
     permissionsRequired: jsonb('permissions_required').notNull(),
     requiresHumanApproval: boolean('requires_human_approval').notNull().default(false),
     inputSchema: jsonb('input_schema'),
+    /** Lifecycle: ACTIVE | PAUSED | DISABLED. A paused/disabled agent cannot run. */
+    status: varchar('status', { length: 20 }).notNull().default('ACTIVE'),
+    /** The Copilot is the coordinator and is not counted among the agents. */
+    isCopilot: boolean('is_copilot').notNull().default(false),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    agentKeyIdx: index('agent_registry_key_idx').on(t.key),
+    // Unique so the catalogue key is a true identity: concurrent seeding and
+    // any future write path cannot register the same agent twice. This is the
+    // conflict target of `ensureAgentRegistrySeeded`'s ON CONFLICT.
+    agentKeyIdx: uniqueIndex('agent_registry_key_idx').on(t.key),
   }),
 );
 
@@ -43,14 +63,27 @@ export const agentTasks = pgTable(
     id: varchar('id', { length: 36 }).primaryKey(),
     agentKey: varchar('agent_key', { length: 64 }).notNull(),
     requestedBy: varchar('requested_by', { length: 36 }).notNull(),
+    /** The action/task-type being run; drives the approval + tool allow-list. */
+    taskType: varchar('task_type', { length: 64 }),
     input: jsonb('input').notNull(),
     status: varchar('status', { length: 30 }).notNull().default('queued'),
     result: jsonb('result'),
     error: jsonb('error'),
     requiresApproval: boolean('requires_approval').notNull().default(false),
+    /** The specific approval action when requiresApproval is true. */
+    approvalAction: varchar('approval_action', { length: 64 }),
     approvedBy: varchar('approved_by', { length: 36 }),
     approvedAt: timestamp('approved_at', { withTimezone: true }),
     rejectionReason: text('rejection_reason'),
+    /** Idempotency key: a second enqueue with the same open key returns the first. */
+    dedupeKey: varchar('dedupe_key', { length: 200 }),
+    /** Correlates a dispatch with the task(s) it spawned. */
+    correlationId: varchar('correlation_id', { length: 36 }),
+    triggeredBy: varchar('triggered_by', { length: 64 }).notNull().default('user'),
+    priority: integer('priority').notNull().default(100),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(3),
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true }),
     tokensInput: integer('tokens_input').notNull().default(0),
     tokensOutput: integer('tokens_output').notNull().default(0),
     cost: varchar('cost', { length: 40 }).notNull().default('0'),
@@ -65,5 +98,79 @@ export const agentTasks = pgTable(
     agentTaskAgentIdx: index('agent_tasks_agent_idx').on(t.agentKey),
     agentTaskUserIdx: index('agent_tasks_user_idx').on(t.requestedBy),
     agentTaskStatusIdx: index('agent_tasks_status_idx').on(t.status),
+    agentTaskDedupeIdx: index('agent_tasks_dedupe_idx').on(t.dedupeKey),
+    // At most one *open* task per (owner, dedupe key). A partial index means a
+    // terminal task (succeeded/failed/rejected/approved) drops out and frees the
+    // key for reuse. Scoping by `requested_by` stops one owner colliding with —
+    // or reading — another owner's open task. NULL keys are never constrained.
+    // The terminal set matches the statuses Master actually settles to
+    // ('succeeded', 'failed', 'rejected', 'approved'); 'approved' is terminal.
+    agentTaskDedupeOpenUidx: uniqueIndex('agent_tasks_dedupe_open_uidx')
+      .on(t.requestedBy, t.dedupeKey)
+      .where(
+        sql`${t.dedupeKey} is not null and ${t.status} not in ('succeeded', 'failed', 'rejected', 'approved')`,
+      ),
+  }),
+);
+
+/**
+ * Agent Metric — an append-only record of how an agent task actually ended.
+ *
+ * A measurement log, not state: a row is written after a task reaches a terminal
+ * outcome and never influences the task itself. It carries `scopeOwner` — the
+ * requester of the originating task — so per-tenant performance can be
+ * aggregated without ever joining one owner's rows to another's. No business
+ * payload is stored here.
+ */
+export const agentMetrics = pgTable(
+  'agent_metrics',
+  {
+    id: varchar('id', { length: 36 }).primaryKey(),
+    agentKey: varchar('agent_key', { length: 64 }).notNull(),
+    /** The task this measurement came from (null for a synthetic sample). */
+    taskId: varchar('task_id', { length: 36 }),
+    taskType: varchar('task_type', { length: 64 }),
+    /** Isolation key: the requester of the originating task. */
+    scopeOwner: varchar('scope_owner', { length: 36 }).notNull(),
+    /** Terminal outcome: succeeded | failed | blocked | refused. */
+    outcome: varchar('outcome', { length: 20 }).notNull(),
+    attempt: integer('attempt').notNull().default(1),
+    latencyMs: integer('latency_ms').notNull().default(0),
+    /** Short machine code when outcome is not `succeeded` (e.g. NO_SCOPE). */
+    errorCode: varchar('error_code', { length: 64 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agentMetricAgentIdx: index('agent_metrics_agent_idx').on(t.agentKey),
+    agentMetricOwnerIdx: index('agent_metrics_owner_idx').on(t.scopeOwner),
+    agentMetricOutcomeIdx: index('agent_metrics_outcome_idx').on(t.outcome),
+    agentMetricCreatedIdx: index('agent_metrics_created_idx').on(t.createdAt),
+  }),
+);
+
+/**
+ * Agent Memory — scoped, per-owner notes/learnings an agent accumulates.
+ *
+ * Strictly tenant-scoped: `scopeOwner` is NOT NULL and every read must filter by
+ * it, so one owner's memory can never be read for another's benefit. It stores
+ * only compact operational notes/learnings — never credentials, personal data or
+ * raw business payloads.
+ */
+export const agentMemory = pgTable(
+  'agent_memory',
+  {
+    id: varchar('id', { length: 36 }).primaryKey(),
+    agentKey: varchar('agent_key', { length: 64 }).notNull(),
+    /** Isolation key — a memory row is only ever visible to its own owner. */
+    scopeOwner: varchar('scope_owner', { length: 36 }).notNull(),
+    /** note | learning | summary. */
+    kind: varchar('kind', { length: 32 }).notNull(),
+    content: jsonb('content').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agentMemoryAgentIdx: index('agent_memory_agent_idx').on(t.agentKey),
+    agentMemoryOwnerIdx: index('agent_memory_owner_idx').on(t.scopeOwner),
+    agentMemoryKindIdx: index('agent_memory_kind_idx').on(t.kind),
   }),
 );

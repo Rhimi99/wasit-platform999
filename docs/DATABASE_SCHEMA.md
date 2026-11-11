@@ -100,6 +100,16 @@ PostgreSQL + Drizzle ORM. 70 جدولاً منظمة في مجموعات Schema.
 - `aiUsage` (aggregate per user/date)
 - `aiBudgets` (budgetMonth, spentAmount, status)
 
+### طبقة الوكلاء (`schema/agents.ts`, `schema/agent_schedules.ts`, `schema/agent_runs.ts`, `schema/outbox.ts`)
+
+- `agent_registry` — كتالوج الوكلاء (key **فريد**, name/name_ar, mission, category, capabilities, allowed_tools, approval_actions, limits, task_types, permissions_required, requires_human_approval, input_schema, status ACTIVE/PAUSED/DISABLED, is_copilot, is_active, created_at) — migration `0004` + توسيع `0030`.
+- `agent_tasks` — تنفيذ وكيل واحد (agent_key, requested_by, task_type, input, status, result/error, requires_approval, approval_action, approved_by/at, rejection_reason, dedupe_key, correlation_id, triggered_by, priority, attempts, max_attempts, scheduled_for, tokens/cost/model/latency, timestamps) — migration `0004` + توسيع `0030` + فهارس dedupe `0032`.
+- `agent_schedules` — جدولة دورية (agent_key, task_type, input, payload, interval_minutes, **is_active** (مصدر الحقيقة الوحيد للتفعيل), next_run_at, last_run_at, lease_owner, lease_expires_at, last_task_id, created_by, timestamps) — migration `0027` (Master) + توسيع `0031`. المطالبة ذرّية عبر `FOR UPDATE SKIP LOCKED` + lease.
+- `agent_runs` / `agent_run_steps` — آلة حالات التشغيل (11 حالة تشغيل + 10 حالات خطوة) — migration `0028`.
+- `agent_metrics` — سجل قياس append-only (agent_key, task_id, task_type, scope_owner, outcome, attempt, latency_ms, error_code) — migration `0033`.
+- `agent_memory` — ملاحظات/تعلّمات مقيّدة بالمالك (agent_key, scope_owner, kind, content) — migration `0033`.
+- `event_outbox` — Outbox معاملاتي للـAI (event_type, aggregate_type/id, payload, dedupe_key **فريد**, status, attempts, max_attempts, available_at, locked_at, processed_at) — migration `0036`.
+
 ## 14. Analytics (`schema/analytics.ts`)
 
 - `analyticsEvents` (event, entityType, entityId, metadata)
