@@ -20,6 +20,30 @@ const envSchema = z.object({
    * authenticated responses.
    */
   CORS_ORIGIN: z.string().default(''),
+  /**
+   * CSRF enforcement for cookie-authenticated state-changing requests. `auto`
+   * (default) enforces it in production/staging and leaves local development
+   * and tests frictionless; `on`/`off` force it. See `middleware/csrf.ts`.
+   */
+  CSRF_PROTECTION: z.enum(['auto', 'on', 'off']).default('auto'),
+  /**
+   * Mandatory MFA enforcement for internal staff roles (LC-06). `auto` (default)
+   * enforces it in **production only** — staging is the public demo and must not
+   * be locked out; `on`/`off` force it. See `middleware/mfa.ts`.
+   */
+  STAFF_MFA_ENFORCEMENT: z.enum(['auto', 'on', 'off']).default('auto'),
+  /** TTL of a pending staff MFA enrollment challenge (minutes). */
+  MFA_ENROLLMENT_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
+  /**
+   * Mandatory acceptance of published legal documents (LC-01). `off` (default)
+   * keeps the gate inert: the platform never blocks sign-in or normal use on an
+   * unapproved draft. It is switched to `on` only *after* qualified counsel
+   * approves texts and they are published with a version and an effective date —
+   * a deliberate two-key action (publish the document *and* enable the flag).
+   * Even when `on`, a request is only gated once a document is actually
+   * published-and-in-force, so enabling the flag against drafts changes nothing.
+   */
+  LEGAL_ACCEPTANCE_ENFORCEMENT: z.enum(['off', 'on']).default('off'),
   AI_PROVIDER: z.string().default('none'),
   // Optional deployment-wide model override. It is only consulted when a caller
   // does not name a model; a capability route or explicit request model always
@@ -154,6 +178,84 @@ const envSchema = z.object({
   RATE_LIMIT_STORE: z.enum(['memory', 'postgres']).default('memory'),
   /** How often expired rate-limit buckets are purged, in minutes. */
   RATE_LIMIT_PURGE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(15),
+  /**
+   * General API rate limit (LC-08/011.4): requests per window per subject
+   * (authenticated user id, else trusted client IP) applied to `/api/*` as a
+   * backstop against resource exhaustion. Deliberately generous so ordinary
+   * bursts are unaffected; the per-route limits below are the tight ones.
+   * `/api/auth` and `/api/health` are exempt (they carry their own limits /
+   * are cheap operational probes).
+   */
+  RATE_LIMIT_API_MAX: z.coerce.number().int().positive().default(300),
+  RATE_LIMIT_API_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  /**
+   * AI endpoints (`/api/ai/*`) are the most expensive per call. A tighter
+   * per-user limit bounds one account, and a per-IP backstop bounds an attacker
+   * rotating accounts from one host. Auth is still required — these limits are
+   * an addition to RBAC, never a replacement.
+   */
+  RATE_LIMIT_AI_MAX: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_AI_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_AI_IP_MAX: z.coerce.number().int().positive().default(300),
+  /**
+   * Search (`/api/search`) is public and relatively costly (multi-entity
+   * queries), so it is limited per trusted client IP.
+   */
+  RATE_LIMIT_SEARCH_MAX: z.coerce.number().int().positive().default(120),
+  RATE_LIMIT_SEARCH_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  /**
+   * Marketing-video generation renders synchronously with ffmpeg, so it gets the
+   * tightest per-user limit. It is a backstop in addition to the concurrency cap
+   * (`MEDIA_VIDEO_MAX_CONCURRENCY`) and the AI budget checks the route already
+   * performs.
+   */
+  RATE_LIMIT_VIDEO_MAX: z.coerce.number().int().positive().default(6),
+  RATE_LIMIT_VIDEO_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  /**
+   * Application-level request body cap (011.4). A request whose body exceeds
+   * this is rejected with HTTP 413 before any handler reads it, so a large
+   * payload cannot be buffered into memory by an expensive route. Sized well
+   * above the largest legitimate JSON body (long AI prompts); media assets are
+   * generated server-side, not uploaded, so no route needs a larger cap.
+   */
+  MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1_048_576),
+  /**
+   * Maximum number of marketing-video renders running at once in a process
+   * (011.4). ffmpeg renders are CPU/memory heavy and synchronous; without a cap
+   * a burst of requests would spawn unbounded concurrent renders. Excess
+   * requests wait briefly for a slot and are shed with 503 if none frees up, so
+   * a legitimate render is never killed mid-flight.
+   */
+  MEDIA_VIDEO_MAX_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  /** How long a video request waits for a render slot before being shed, in ms. */
+  MEDIA_VIDEO_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  /**
+   * Maximum number of non-terminal agent tasks a single user may hold at once
+   * (011.4). Creating agent tasks is unbounded otherwise; this caps per-user
+   * concurrent work without touching the agent RBAC/approval gates.
+   */
+  AI_AGENT_MAX_ACTIVE_TASKS_PER_USER: z.coerce.number().int().positive().default(25),
+  /**
+   * Number of reverse proxies we operate in front of the API (LC-08). `0`
+   * (default) means the API is reached directly, so `X-Forwarded-For`/`X-Real-IP`
+   * are attacker-controlled and ignored: the client is the real TCP peer. Set it
+   * to the exact count of our own proxies (e.g. `1` behind a single nginx) so the
+   * client is read from the forwarded chain instead — but only when the peer
+   * matches `TRUSTED_PROXY_CIDRS`. Setting it higher than the real number of
+   * proxies would trust a client-supplied hop. See `lib/net/client-ip.ts`.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(20).default(0),
+  /**
+   * Explicit allowlist of proxy networks whose `X-Forwarded-For` is trusted
+   * (LC-08), comma/space-separated CIDRs, e.g. `10.20.0.0/24,2001:db8::/32`.
+   * Empty by default: **no** proxy is trusted, and loopback/RFC1918/ULA are
+   * never trusted implicitly. Trust is honoured only for a peer whose socket
+   * address matches an entry here, and only in combination with
+   * `TRUSTED_PROXY_HOPS`. Invalid entries are ignored (with a warning), never
+   * treated as a trust-all. Keep this to your real proxy addresses; it must be
+   * set from the actual network layout, never guessed.
+   */
+  TRUSTED_PROXY_CIDRS: z.string().default(''),
   // In-process scheduler. Off by default so tests and one-off commands never
   // start background jobs; a single production instance (or a cron hitting the
   // admin route) enables it. Rollover itself is idempotent across workers.
@@ -188,6 +290,34 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
   AI_AGENT_RUNS_RECOVERY_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
   AI_AGENT_RUN_STEP_STUCK_SECONDS: z.coerce.number().int().positive().default(300),
+  // AI-02.S1 — Agent Supervisor cycle. Off by default so tests and one-off
+  // commands never start background work; a deployment turns it on. The cycle is
+  // bounded, idempotent and conditional-write guarded across instances.
+  AI_AGENT_RUNS_SUPERVISOR_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /**
+   * Central AI Kill Switch seed (A1). The initial state of the process-global
+   * execution gate: `false` disables ALL AI execution at boot (new tasks,
+   * dispatch, schedules, supervisor, recovery) until an authorised operator
+   * re-enables it. Defaults to `true` so existing behaviour is unchanged; a
+   * deployment under review can boot with it off. Runtime enable/disable is the
+   * admin control and does not persist across restarts.
+   */
+  AI_AGENT_EXECUTION_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  AI_AGENT_RUNS_SUPERVISOR_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  // Dispute auto-escalation sweep. Off by default so tests and one-off commands
+  // never start background work; a deployment (or a cron hitting the admin
+  // trigger route) turns it on. The sweep is idempotent across instances.
+  DISPUTE_ESCALATION_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DISPUTE_ESCALATION_INTERVAL_MINUTES: z.coerce.number().int().positive().default(30),
   // Observability. Structured logs go to stdout (single JSON line per record)
   // and a bounded in-process buffer is exposed to admins. `pretty` is for
   // reading along in a terminal; JSON is what a log pipeline should ingest.
@@ -384,6 +514,37 @@ if ((env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') && env.JWT_SEC
 export const cookieSecure =
   env.NODE_ENV === 'production' ||
   (env.NODE_ENV === 'staging' && env.APP_URL.startsWith('https://'));
+
+/**
+ * Whether mandatory MFA for internal staff is enforced (LC-06).
+ *
+ * `auto` (default) enforces it in **production only**. Staging is deliberately
+ * excluded because WASIT's staging stack is the *public demo* (published staff
+ * credentials, no real data) — enforcing there would lock the demo out. A real
+ * pre-production staging that is not a public demo must set
+ * `STAFF_MFA_ENFORCEMENT=on`. `off` disables enforcement entirely.
+ */
+export function staffMfaEnforced(): boolean {
+  if (env.STAFF_MFA_ENFORCEMENT === 'off') return false;
+  if (env.STAFF_MFA_ENFORCEMENT === 'on') return true;
+  return env.NODE_ENV === 'production';
+}
+
+/**
+ * Whether mandatory acceptance of *published* legal documents is enforced
+ * (LC-01). Default `off`: the platform must never block sign-in or normal use on
+ * an unapproved draft, and it must never record a consent to a text that is not
+ * in force. It is turned `on` only after qualified counsel approves texts and
+ * they are published with a version and an effective date.
+ *
+ * This is intentionally independent of `NODE_ENV`: enabling enforcement is an
+ * explicit, reviewed act, never inferred from the environment. Even when `on`,
+ * the guard only blocks when a document is actually published-and-in-force
+ * (`isAcceptable`), so the flag against drafts is a no-op.
+ */
+export function legalAcceptanceEnforced(): boolean {
+  return env.LEGAL_ACCEPTANCE_ENFORCEMENT === 'on';
+}
 
 /**
  * Resolves the CORS origin option. When `CORS_ORIGIN` is unset the platform
