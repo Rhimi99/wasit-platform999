@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { test, expect, storageFor, placeOrderViaUi, E2E_WEBHOOK_SECRET } from './helpers';
+import { completeRefundViaEvidence, latestRefundForOrder } from './refund-evidence';
 
 const WEBHOOK_SECRET = E2E_WEBHOOK_SECRET;
 
@@ -141,13 +142,33 @@ test.describe('Payment kernel (real API, offline provider)', () => {
       data: { reason: 'e2e refund', idempotencyKey: `e2e-rf-${orderId}` },
     });
     expect(refund.ok()).toBeTruthy();
-    expect((await refund.json()).data.refund.status).toBe('COMPLETED');
+    // The offline provider cannot prove money moved, so the refund is a REQUEST
+    // and the order stays PAID — no ledger entry is written yet.
+    expect((await refund.json()).data.refund.status).toBe('REQUESTED');
 
-    // The ledger now carries a REFUND DEBIT for the transaction.
+    // Scope the ledger read to this order's transaction: earlier specs in the run
+    // legitimately wrote REFUND rows for other orders, so an unscoped "no REFUND
+    // anywhere" check would be false.
+    const paymentRes = await adminPage.request.get(`/api/payments/orders/${orderId}`);
+    const transactionId = ((await paymentRes.json()).data as { payment: { transactionId: string } }).payment.transactionId;
+    const ledgerBefore = (await (await adminPage.request.get('/api/admin/ledger')).json()).data.items as Array<{
+      transactionId: string;
+      entryType: string;
+      direction: string;
+    }>;
+    expect(ledgerBefore.some((e) => e.transactionId === transactionId && e.entryType === 'REFUND')).toBe(false);
+
+    // Complete it on trusted external evidence, exactly as an acquirer's report
+    // would reach the real completion rail.
+    const pending = await latestRefundForOrder(adminPage.request, orderId);
+    expect(pending.status).toBe('REQUESTED');
+    await completeRefundViaEvidence(pending.id, pending);
+
+    // The ledger now carries a REFUND DEBIT for this transaction.
     const ledgerRes = await adminPage.request.get('/api/admin/ledger');
     expect(ledgerRes.ok()).toBeTruthy();
-    const ledger = (await ledgerRes.json()).data.items as Array<{ entryType: string; direction: string }>;
-    expect(ledger.some((e) => e.entryType === 'REFUND' && e.direction === 'DEBIT')).toBe(true);
+    const ledger = (await ledgerRes.json()).data.items as Array<{ transactionId: string; entryType: string; direction: string }>;
+    expect(ledger.some((e) => e.transactionId === transactionId && e.entryType === 'REFUND' && e.direction === 'DEBIT')).toBe(true);
     await adminCtx.close();
   });
 });

@@ -1,5 +1,5 @@
-import { test, expect, storageFor, loginViaUi, DEMO_USERS, DEMO_PASSWORD } from './helpers';
-import type { Page } from '@playwright/test';
+import { test, expect, storageFor, loginViaUi, resetPasswordViaApi, DEMO_USERS, DEMO_PASSWORD, E2E_API_URL } from './helpers';
+import { request, type Page } from '@playwright/test';
 
 /**
  * Authentication E2E: the real login/register/reset forms against the live API.
@@ -43,7 +43,17 @@ test.describe('Password recovery', () => {
       await expect(page).toHaveURL(/\/dashboard/);
       await page.getByRole('button', { name: /تسجيل الخروج|Sign out/i }).click();
     } finally {
-      await restorePassword(page, DEMO_USERS.company);
+      // Restore on every exit path through the real API — including a UI timeout,
+      // which can cancel the test's own request context mid-flight. A dedicated
+      // context with a short timeout is independent of the page, so a failure here
+      // can never leave the shared demo account on the temporary password and
+      // break every later spec that signs in as it.
+      const restore = await request.newContext({ baseURL: E2E_API_URL, timeout: 15_000 });
+      try {
+        await resetPasswordViaApi(restore, DEMO_USERS.company, DEMO_PASSWORD);
+      } finally {
+        await restore.dispose();
+      }
     }
   });
 });
@@ -55,21 +65,6 @@ async function submitAndAwaitReset(page: Page): Promise<void> {
     page.locator('form button[type="submit"]').click(),
   ]);
   expect(res.ok()).toBe(true);
-}
-
-/** Resets an account back to DEMO_PASSWORD using the real token flow. */
-async function restorePassword(page: Page, email: string): Promise<void> {
-  await page.goto('/forgot-password');
-  await page.locator('form input[type="email"]').fill(email);
-  await page.locator('form button[type="submit"]').click();
-  const tokenEl = page.locator('code[dir="ltr"]');
-  // The dev token must be shown; if it is not, the fixture would silently stay on
-  // the temporary password and break every later spec that signs in as this user.
-  await expect(tokenEl).toBeVisible();
-  const token = (await tokenEl.innerText()).trim();
-  await page.goto(`/reset-password?token=${encodeURIComponent(token)}`);
-  await page.locator('form input[type="password"]').fill(DEMO_PASSWORD);
-  await submitAndAwaitReset(page);
 }
 
 test.describe('Internationalization', () => {

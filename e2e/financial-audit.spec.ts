@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { test, expect, storageFor, placeOrderViaUi, E2E_WEBHOOK_SECRET } from './helpers';
+import { completeRefundViaEvidence, latestRefundForOrder } from './refund-evidence';
 
 /**
  * Financial chain audit — Order → Commission → Ledger → Payment → Refund,
@@ -129,12 +130,21 @@ test.describe('Financial chain — order, commission, ledger, payment, refund', 
       const paidOrder = (await (await page.request.get(`/api/orders/${orderId}`)).json()).data as { paymentStatus: string };
       expect(paidOrder.paymentStatus).toBe('PAID');
 
-      // 5) Refund as admin → a REFUND DEBIT is appended for the same transaction.
+      // 5) Refund as admin. The offline provider cannot prove money moved, so the
+      // refund is a REQUEST: no completion, no ledger reversal yet.
       const refund = await adminPage.request.post(`/api/payments/orders/${orderId}/refunds`, {
         data: { reason: 'financial audit e2e', idempotencyKey: `e2e-fin-rf-${orderId}` },
       });
       expect(refund.ok()).toBeTruthy();
-      expect((await refund.json()).data.refund.status).toBe('COMPLETED');
+      expect((await refund.json()).data.refund.status).toBe('REQUESTED');
+      const noReversalYet = ((await (await adminPage.request.get('/api/admin/ledger')).json()).data as { items: LedgerRow[] }).items;
+      expect(noReversalYet.some((e) => e.transactionId === transactionId && e.entryType === 'REFUND')).toBe(false);
+
+      // Only trusted external evidence completes the refund and writes the
+      // reversal; the suite supplies it through the real completion rail.
+      const pending = await latestRefundForOrder(adminPage.request, orderId);
+      expect(pending.status).toBe('REQUESTED');
+      await completeRefundViaEvidence(pending.id, pending);
 
       const afterRows = ((await (await adminPage.request.get('/api/admin/ledger')).json()).data as { items: LedgerRow[] }).items;
       const refundRow = afterRows.find((e) => e.transactionId === transactionId && e.entryType === 'REFUND');

@@ -14,6 +14,41 @@ export const DEMO_PASSWORD = 'Passw0rd!2026';
  */
 export const E2E_WEBHOOK_SECRET = 'e2e-webhook-secret-0123456789';
 
+/** Base URLs the suite targets; mirror `playwright.config.ts` and its overrides. */
+export const E2E_API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
+export const E2E_WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
+
+/**
+ * Stored cookie-consent decision seeded before the app's scripts run, in every
+ * test page and every storageState (see the `page` fixture below and the
+ * matching injection in `global-setup.ts`).
+ *
+ * The first-visit consent banner is `position: fixed` at the bottom of the
+ * viewport (`z-[70]`), so on the suite's 1280x720 viewport it overlaps the
+ * sidebar's bottom controls — including the logout button. Playwright then waits
+ * forever for a click the banner intercepts and the test times out.
+ *
+ * Seeding the decision uses the product's own persistence (`localStorage`),
+ * i.e. a returning visitor who already chose; nothing is forced, hidden, or
+ * weakened, and no consent rule changes. LC-02's own coverage
+ * (`cookie-consent.spec.ts`) imports Playwright's `test` directly and clears this
+ * key itself, so the first-visit banner is still exercised there.
+ */
+export const CONSENT_STORAGE_KEY = 'wasit.consent';
+export function consentRecord(): {
+  version: number;
+  categories: Record<string, boolean>;
+  decidedAt: string;
+  id: string;
+} {
+  return {
+    version: 1,
+    categories: { necessary: true, preferences: true, analytics: true, marketing: true },
+    decidedAt: new Date().toISOString(),
+    id: `e2e-consent-${Date.now()}`,
+  };
+}
+
 export const DEMO_USERS = {
   customer: 'customer1@wasit.tn',
   supplier: 'suppliera@wasit.tn',
@@ -49,7 +84,50 @@ export async function loginViaUi(page: Page, email: string, password = DEMO_PASS
   await page.locator('form button[type="submit"]').click();
 }
 
-export const test = base;
+/**
+ * Resets an account's password through the real forgot→reset API flow.
+ *
+ * The password-recovery spec drives the UI to change a shared demo account's
+ * password, so its teardown must put it back on every exit path — pass, failure,
+ * or timeout. A reset that is not undone leaves the account on a temporary
+ * password and every later spec that signs in as it fails (observed as
+ * `HTTP 401 login failed for companya@wasit.tn`). It uses the real endpoints
+ * rather than editing data by hand, so the recovery path stays under test.
+ */
+export async function resetPasswordViaApi(
+  ctx: { post: (url: string, options?: { data?: unknown }) => Promise<{ ok(): boolean; status(): number; json(): Promise<unknown> }> },
+  email: string,
+  newPassword: string,
+): Promise<void> {
+  const forgot = await ctx.post('/api/auth/forgot-password', { data: { email } });
+  if (!forgot.ok()) throw new Error(`forgot-password failed for ${email}: HTTP ${forgot.status()}`);
+  const token = ((await forgot.json()) as { data?: { devResetToken?: string } }).data?.devResetToken;
+  if (!token) throw new Error(`No dev reset token for ${email}; cannot restore its password`);
+  const reset = await ctx.post('/api/auth/reset-password', { data: { token, newPassword } });
+  if (!reset.ok()) throw new Error(`reset-password failed for ${email}: HTTP ${reset.status()}`);
+}
+
+export const test = base.extend({
+  /**
+   * Seeds a stored cookie-consent decision before any app script runs, so the
+   * first-visit banner never renders (and so never intercepts clicks on the
+   * sidebar's bottom controls). See `consentRecord` for why this is the product's
+   * own persistence rather than a forced hide.
+   */
+  page: async ({ page }, use) => {
+    await page.addInitScript(
+      ([key, value]) => {
+        try {
+          window.localStorage.setItem(key as string, value as string);
+        } catch {
+          /* opaque origin (about:blank) — nothing to seed yet */
+        }
+      },
+      [CONSENT_STORAGE_KEY, JSON.stringify(consentRecord())] as const,
+    );
+    await use(page);
+  },
+});
 export { expect };
 
 /**

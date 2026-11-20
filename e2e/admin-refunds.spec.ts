@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { test, expect, storageFor, placeOrderViaUi, type Page, E2E_WEBHOOK_SECRET } from './helpers';
+import { completeRefundViaEvidence, latestRefundForOrder } from './refund-evidence';
 
 const WEBHOOK_SECRET = E2E_WEBHOOK_SECRET;
 
@@ -38,8 +39,21 @@ test.describe('ADMIN — refund an order from the real orders UI', () => {
     await adminPage.getByTestId('admin-refund-reason').fill('e2e full refund');
     await adminPage.getByTestId('admin-refund-submit').click();
 
-    // The user sees a real confirmation, and the row now reports the refunded state.
+    // The user sees a real confirmation, and the request is registered — but the
+    // offline provider cannot prove money moved, so the refund is a REQUEST. The
+    // order is NOT refunded yet: the row still reports PAID and no refund state.
     await expect(adminPage.getByTestId('admin-refund-notice')).toBeVisible();
+    const pending = await latestRefundForOrder(adminPage.request, orderId);
+    expect(pending.status).toBe('REQUESTED');
+    await expect(adminPage.getByTestId(`admin-order-${orderId}`)).toContainText('PAID');
+    await expect(adminPage.getByTestId(`admin-order-${orderId}`)).not.toContainText('REFUNDED');
+
+    // Only trusted external evidence completes the refund; the suite supplies it
+    // through the real completion rail, exactly as an acquirer's report would.
+    await completeRefundViaEvidence(pending.id, pending);
+    await adminPage.reload();
+
+    // The row now reports the refunded state.
     await expect(adminPage.getByTestId(`admin-order-${orderId}`)).toContainText('REFUNDED');
 
     // Independent verification through the live API (not just the rendered text).
@@ -91,7 +105,15 @@ test.describe('ADMIN — refund an order from the real orders UI', () => {
     await adminPage.getByTestId('admin-refund-amount').fill(partial);
     await adminPage.getByTestId('admin-refund-submit').click();
 
+    // The request is registered but not completed by the offline provider.
     await expect(adminPage.getByTestId('admin-refund-notice')).toBeVisible();
+    const pending = await latestRefundForOrder(adminPage.request, orderId);
+    expect(pending.status).toBe('REQUESTED');
+
+    // Complete it on trusted external evidence, as an acquirer's report would.
+    await completeRefundViaEvidence(pending.id, pending);
+    await adminPage.reload();
+
     // PARTIALLY_REFUNDED orders stay actionable so the rest can be returned.
     await expect(adminPage.getByTestId(`admin-order-${orderId}`)).toContainText('PARTIALLY_REFUNDED');
     await expect(adminPage.getByTestId(`admin-order-refund-${orderId}`)).toBeVisible();

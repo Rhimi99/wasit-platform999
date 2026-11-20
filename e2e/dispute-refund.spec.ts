@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { test, expect, storageFor, placeOrderViaUi, type Page, E2E_WEBHOOK_SECRET } from './helpers';
+import { completeRefundViaEvidence, latestRefundForOrder } from './refund-evidence';
 
 /**
  * P6 — a dispute decided in the buyer's favour must move real money.
@@ -91,6 +92,22 @@ test.describe('P6 — dispute decided for the buyer refunds through the real rai
     const dispute = await (await adminPage.request.get(`/api/admin/disputes/${disputeId}`)).json();
     expect((dispute.data as { decision: string }).decision).toBe('IN_FAVOR_OF_BUYER');
 
+    // The decision opened a refund *request* through the real rail. The offline
+    // provider cannot prove money moved, so the request is still REQUESTED and
+    // the order is not yet refunded — no money has moved.
+    const pending = await latestRefundForOrder(buyerPage.request, orderId);
+    expect(pending.status).toBe('REQUESTED');
+    const beforeComplete = (await (await buyerPage.request.get(`/api/orders/${orderId}`)).json()).data as {
+      refundStatus: string;
+      paymentStatus: string;
+    };
+    expect(beforeComplete.refundStatus).not.toBe('COMPLETED');
+    expect(beforeComplete.paymentStatus).toBe('PAID');
+
+    // Only trusted external evidence completes the refund; the suite supplies it
+    // through the real completion rail, exactly as an acquirer's report would.
+    await completeRefundViaEvidence(pending.id, pending);
+
     // Read the order back as the buyer — a party, so the detail is theirs to see.
     const order = await (await buyerPage.request.get(`/api/orders/${orderId}`)).json();
     const refunded = order.data as { refundStatus: string; paymentStatus: string; buyerId: string };
@@ -129,8 +146,24 @@ test.describe('P6 — dispute decided for the buyer refunds through the real rai
     });
     expect(replay.status(), 'deciding an already-decided dispute must conflict').toBe(409);
 
+    // The refused replay created no second refund: exactly one refund request
+    // exists for the order, still pending on external evidence.
+    const rows = (await (await buyerPage.request.get(`/api/payments/orders/${orderId}/refunds`)).json()).data as Array<{
+      id: string;
+      amount: string;
+      currencyCode: string;
+      status: string;
+    }>;
+    expect(rows.length, 'a replayed decision must not create a second refund').toBe(1);
+    expect(rows[0].status).toBe('REQUESTED');
+
+    // Completing it on trusted evidence refunds the order exactly once; the
+    // replay still cannot produce a second refund.
+    await completeRefundViaEvidence(rows[0].id, rows[0]);
     const order = await (await buyerPage.request.get(`/api/orders/${orderId}`)).json();
     expect((order.data as { refundStatus: string }).refundStatus).toBe('COMPLETED');
+    const rowsAfter = (await (await buyerPage.request.get(`/api/payments/orders/${orderId}/refunds`)).json()).data as unknown[];
+    expect(rowsAfter.length).toBe(1);
 
     await buyer.close();
     await admin.close();

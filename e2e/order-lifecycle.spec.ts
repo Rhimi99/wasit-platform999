@@ -1,4 +1,5 @@
-import { test, expect, storageFor } from './helpers';
+import { test, expect, storageFor, E2E_WEBHOOK_SECRET } from './helpers';
+import { createHmac } from 'node:crypto';
 
 /**
  * Seller/buyer order lifecycle driven entirely from the UI (real backend, no mocks).
@@ -71,6 +72,32 @@ async function placeOrderViaApi(
   return (await res.json()).data.orderId as string;
 }
 
+/**
+ * Pays an order through the trusted path (intent + signed success webhook).
+ * SEC-03 requires a confirmed payment before an order can be confirmed, so the
+ * lifecycle spec must settle the order first — the same way the payment kernel
+ * does — rather than expecting the UI to confirm an unpaid order.
+ */
+async function payOrderViaApi(page: import('@playwright/test').Page, orderId: string): Promise<void> {
+  const intentRes = await page.request.post(`/api/payments/orders/${orderId}/intent`, { data: {} });
+  expect(intentRes.ok(), `intent failed: HTTP ${intentRes.status()} ${await intentRes.text()}`).toBeTruthy();
+  const intent = (await intentRes.json()).data.intent as { externalRef: string; amount: string };
+  const raw = JSON.stringify({
+    eventId: `e2e-lifecycle-${orderId}-${Date.now()}`,
+    type: 'payment.succeeded',
+    externalRef: intent.externalRef,
+    amount: intent.amount,
+    currencyCode: 'TND',
+  });
+  const signature = createHmac('sha256', E2E_WEBHOOK_SECRET).update(raw, 'utf8').digest('hex');
+  const hook = await page.request.post('/api/payment-webhooks', {
+    headers: { 'Content-Type': 'application/json', 'x-wasit-signature': signature },
+    data: raw,
+  });
+  expect(hook.ok(), `webhook failed: HTTP ${hook.status()} ${await hook.text()}`).toBeTruthy();
+  expect((await hook.json()).data.applied).toBe(true);
+}
+
 test.describe('ORDER LIFECYCLE — seller fulfils and buyer cancels from the UI', () => {
   test('seller advances a real order PENDING → COMPLETED through the order page buttons', async ({ browser }) => {
     const merchantCtx = await browser.newContext({ storageState: storageFor('merchant') });
@@ -80,6 +107,8 @@ test.describe('ORDER LIFECYCLE — seller fulfils and buyer cancels from the UI'
     const buyerCtx = await browser.newContext({ storageState: storageFor('customer') });
     const buyerPage = await buyerCtx.newPage();
     const orderId = await placeOrderViaApi(buyerPage, productId, 2);
+    // Pay before fulfilment: SEC-03 forbids confirming an unpaid order.
+    await payOrderViaApi(buyerPage, orderId);
     await buyerCtx.close();
 
     await merchantPage.goto(`/dashboard/orders/${orderId}`);

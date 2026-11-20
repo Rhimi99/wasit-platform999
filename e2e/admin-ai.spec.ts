@@ -1,4 +1,5 @@
-import { test, expect, storageFor } from './helpers';
+import { test, expect, storageFor, type DemoRole } from './helpers';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 /**
  * Admin AI governance desk — functional audit driven from the browser.
@@ -8,6 +9,28 @@ import { test, expect, storageFor } from './helpers';
  * `page.request` shares the browser context's authenticated session, so setup
  * and verification hit the same real backend with the same RBAC as the UI.
  */
+
+/** Runs `fn` against a fresh authenticated API context for `role`, then disposes it. */
+async function asRole<T>(page: Page, role: DemoRole, fn: (ctx: APIRequestContext) => Promise<T>): Promise<T> {
+  const ctx = await page.context().browser()!.newContext({ storageState: storageFor(role) });
+  try {
+    return await fn(ctx.request);
+  } finally {
+    await ctx.close();
+  }
+}
+
+/** Raises a gated agent task as `role` and returns its id (asserts it is gated). */
+async function createTaskAs(page: Page, role: DemoRole, agentKey: string): Promise<string> {
+  return asRole(page, role, async (ctx) => {
+    const created = await ctx.post(`/api/ai/agents/${agentKey}/tasks`, { data: { input: {} } });
+    expect(created.status()).toBe(201);
+    const body = (await created.json()).data as { id: string; status: string };
+    expect(body.status).toBe('awaiting_approval');
+    return body.id;
+  });
+}
+
 
 test.describe('Admin AI governance desk', () => {
   test.use({ storageState: storageFor('admin') });
@@ -35,11 +58,10 @@ test.describe('Admin AI governance desk', () => {
   });
 
   test('a gated agent task appears in the queue and is approved from the UI', async ({ page }) => {
-    const created = await page.request.post('/api/ai/agents/sales-agent/tasks', { data: { input: {} } });
-    expect(created.status()).toBe(201);
-    const body = (await created.json()).data;
-    const taskId = body.id as string;
-    expect(body.status).toBe('awaiting_approval');
+    // Separation of duties (AI-02.P0): the requester may never approve their own
+    // task. Raise the task as an INDEPENDENT authorised user (admin2) so the
+    // signed-in admin is a genuine second party and the approval is legitimate.
+    const taskId = await createTaskAs(page, 'admin2', 'sales-agent');
 
     await page.goto('/admin/ai');
     await page.getByTestId('admin-ai-tab-tasks').click();
@@ -56,10 +78,40 @@ test.describe('Admin AI governance desk', () => {
     await expect(page.getByTestId(`admin-ai-task-${taskId}`)).toContainText('approved');
   });
 
+  test('a requester cannot approve their own task, but an independent approver can', async ({ page }) => {
+    // The signed-in admin raises their OWN gated task…
+    const ownTaskId = await createTaskAs(page, 'admin', 'sales-agent');
+
+    // …and the server refuses the self-approval outright (separation of duties).
+    const selfApprove = await page.request.post(`/api/ai/tasks/${ownTaskId}/approve`, {
+      data: { decision: 'APPROVE' },
+    });
+    expect(selfApprove.status()).toBe(403);
+    // The task is untouched by the refused attempt.
+    expect((await (await page.request.get(`/api/ai/tasks/${ownTaskId}`)).json()).data.status).toBe('awaiting_approval');
+
+    // A DIFFERENT authorised approver (admin2 holds ai:manage) succeeds.
+    const decision = await asRole(page, 'admin2', (ctx) =>
+      ctx.post(`/api/ai/tasks/${ownTaskId}/approve`, { data: { decision: 'APPROVE' } }),
+    );
+    expect(decision.ok()).toBeTruthy();
+    expect((await (await page.request.get(`/api/ai/tasks/${ownTaskId}`)).json()).data.status).toBe('approved');
+  });
+
+  test('a user without ai:manage cannot approve a gated task', async ({ page }) => {
+    // A merchant may raise an ai:use task, but holds no ai:manage permission.
+    const taskId = await createTaskAs(page, 'merchant', 'sales-agent');
+
+    const attempt = await asRole(page, 'merchant', (ctx) =>
+      ctx.post(`/api/ai/tasks/${taskId}/approve`, { data: { decision: 'APPROVE' } }),
+    );
+    expect(attempt.status()).toBe(403);
+    // RBAC held: the task is still awaiting an authorised approver.
+    expect((await (await page.request.get(`/api/ai/tasks/${taskId}`)).json()).data.status).toBe('awaiting_approval');
+  });
+
   test('rejecting a gated task from the UI is persisted server-side', async ({ page }) => {
-    const created = await page.request.post('/api/ai/agents/b2b-agent/tasks', { data: { input: {} } });
-    expect(created.status()).toBe(201);
-    const taskId = (await created.json()).data.id as string;
+    const taskId = await createTaskAs(page, 'admin2', 'b2b-agent');
 
     await page.goto('/admin/ai');
     await page.getByTestId('admin-ai-tab-tasks').click();

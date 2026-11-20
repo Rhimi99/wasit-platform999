@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { test, expect, storageFor, placeOrderViaUi, E2E_WEBHOOK_SECRET } from './helpers';
+import { completeRefundViaEvidence, latestRefundForOrder } from './refund-evidence';
 import type { Page } from '@playwright/test';
 
 const WEBHOOK_SECRET = E2E_WEBHOOK_SECRET;
@@ -147,13 +148,22 @@ test.describe('SETTLEMENT INTEGRITY — RC-1 / RC-3 / RC-4 / RC-5 from the real 
       expect(await ledgerNet(admin, transactionId, 'COMMISSION')).toBeGreaterThan(0);
       expect(await ledgerNet(admin, transactionId, 'PAYMENT_FEE')).toBeGreaterThan(0);
 
-      // Refund from the real orders UI.
+      // Refund from the real orders UI. The offline provider cannot prove money
+      // moved, so the request stays REQUESTED: nothing is reversed yet.
       await admin.goto('/admin/orders');
       await admin.getByTestId(`admin-order-refund-${orderId}`).click();
       await expect(admin.getByTestId('admin-refund-panel')).toBeVisible();
       await admin.getByTestId('admin-refund-reason').fill('e2e settlement reversal');
       await admin.getByTestId('admin-refund-submit').click();
       await expect(admin.getByTestId('admin-refund-notice')).toBeVisible();
+
+      const pending = await latestRefundForOrder(admin.request, orderId);
+      expect(pending.status).toBe('REQUESTED');
+      expect(await ledgerNet(admin, transactionId, 'COMMISSION')).toBeGreaterThan(0);
+
+      // Only trusted external evidence completes the refund and reverses the
+      // commission and fee; the suite supplies it through the real rail.
+      await completeRefundViaEvidence(pending.id, pending);
 
       // Full refund ⇒ WASIT's commission and fee net to zero.
       expect(await ledgerNet(admin, transactionId, 'COMMISSION')).toBeCloseTo(0, 4);

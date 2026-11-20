@@ -2,8 +2,10 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { request } from '@playwright/test';
+import { CONSENT_STORAGE_KEY, consentRecord, E2E_WEB_URL } from './helpers';
 
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
+const WEB_URL = E2E_WEB_URL;
 const PASSWORD = 'Passw0rd!2026';
 
 const ROLES = {
@@ -59,7 +61,20 @@ export default async function globalSetup(): Promise<void> {
     if (!res.ok()) {
       throw new Error(`Login failed for ${role} (${email}): HTTP ${res.status()}`);
     }
-    await ctx.storageState({ path: path.join(authDir, `${role}.json`) });
+    // Seed the stored consent decision into the state itself, so contexts created
+    // straight from this file (e.g. `browser.newContext({ storageState })`) also
+    // start as a returning visitor and never render the fixed consent banner over
+    // the sidebar's bottom controls. The origin key must equal the web URL exactly
+    // or the browser ignores the entry.
+    const state = await ctx.storageState();
+    state.origins = [
+      ...(state.origins ?? []),
+      {
+        origin: WEB_URL,
+        localStorage: [{ name: CONSENT_STORAGE_KEY, value: JSON.stringify(consentRecord()) }],
+      },
+    ];
+    fs.writeFileSync(path.join(authDir, `${role}.json`), JSON.stringify(state, null, 2));
     await ctx.dispose();
   }
 }

@@ -33,6 +33,26 @@ const SERVER_ENV = {
   // across repeated local runs, which would leave a demo account on a
   // temporary password. Raise it for the E2E process only.
   RATE_LIMIT_FORGOT_MAX: '500',
+  // General API backstop (production default 300/60s, keyed per user when
+  // authenticated else per IP). The full suite is one long-lived browser
+  // profile per role: a busy role, and the shared anonymous IP bucket, each
+  // make thousands of calls inside a single 60s window, so the production
+  // default 429s mid-suite and turns unrelated assertions (e.g. an expected
+  // 401) into spurious failures. Raise the backstop for the E2E process only.
+  // The limiter itself is not disabled: `tests/rate-limit.test.ts` and
+  // `tests/sec0114-rate-limit-resource.test.ts` still exercise the real
+  // middleware with the real production defaults.
+  RATE_LIMIT_API_MAX: '100000',
+  // Search is public and IP-keyed (production default 120/60s); the discovery
+  // specs issue far more searches than that from one address.
+  RATE_LIMIT_SEARCH_MAX: '100000',
+  // Video generation is per-user and deliberately tight (production default
+  // 6/60s: each render is a synchronous ffmpeg job). The marketing-video studio
+  // spec drives several real renders from one demo account inside a single
+  // window, so the default 429s the later assertions. Raise it for the E2E
+  // process only; the real middleware still runs with production defaults in
+  // `tests/rate-limit.test.ts`.
+  RATE_LIMIT_VIDEO_MAX: '500',
   // Exercise the real payment kernel offline (no external acquirer calls).
   PAYMENT_PROVIDER: 'manual',
   // The offline provider is a demo harness; the E2E stack runs no real
