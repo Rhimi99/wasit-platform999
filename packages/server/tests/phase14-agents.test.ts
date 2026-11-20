@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createAgentTask, decideAgentTask, listAgents, getTask, AGENT_CATALOGUE } from '../src/modules/ai/agents.js';
 import { db } from '../src/db/client.js';
@@ -6,7 +6,21 @@ import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { products, categories } from '../src/db/schema/products.js';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
+import { cleanupOwnedRows } from './support/ownership-cleanup.js';
+
+/**
+ * Phase 14 — specialised agent executors.
+ *
+ * Every task executed here records an `ai_requests` row and (for gated agents)
+ * an approving user. The spec therefore owns all rows reachable from the staff
+ * users it mints plus the category/product fixtures it inserts; `afterAll`
+ * removes exactly those.
+ */
+const createdUserIds: string[] = [];
+const createdUserEmails: string[] = [];
+const createdCategoryIds: string[] = [];
+const createdProductIds: string[] = [];
 
 const app = createApp();
 
@@ -39,7 +53,9 @@ function makeClient() {
 /** Insert a staff user directly (public register allows only trading roles). */
 async function insertStaff(roleName: 'ADMIN' | 'SUPER_ADMIN' | 'RISK' | 'DISPUTE' = 'ADMIN') {
   const id = randomUUID();
+  createdUserIds.push(id);
   const email = `p14-${roleName.toLowerCase()}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@wasit.tn`;
+  createdUserEmails.push(email);
   const passwordHash = await argon2.hash('Phase14Pass123!');
   await db.insert(users).values({
     id,
@@ -170,6 +186,8 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
     // Insert a real category + product so the executor has live DB data.
     const categoryId = randomUUID();
     const productId = randomUUID();
+    createdCategoryIds.push(categoryId);
+    createdProductIds.push(productId);
     const catSlug = `cat-p14-${Date.now()}`;
     const prodSlug = `prod-p14-${Date.now()}`;
     await db.insert(categories).values({
@@ -257,6 +275,7 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
 describe('Phase 14 — agent API integration (HTTP)', () => {
   it('creates an agent task and lists it via /api/ai endpoints', async () => {
     const email = `p14-api-${Date.now()}@wasit.tn`;
+    createdUserEmails.push(email);
     const client = makeClient();
     const reg = await client.req('/api/auth/register', {
       method: 'POST',
@@ -285,6 +304,7 @@ describe('Phase 14 — agent API integration (HTTP)', () => {
 
   it('gated agent requires AI_MANAGE approval via HTTP (approve/reject flow)', async () => {
     const email = `p14-gate-${Date.now()}@wasit.tn`;
+    createdUserEmails.push(email);
     const client = makeClient();
     await client.req('/api/auth/register', {
       method: 'POST',
@@ -314,9 +334,11 @@ describe('Phase 14 — agent API integration (HTTP)', () => {
 
     // Admin (AI_MANAGE) can approve and then the task runs to 'approved'.
     const admin = await makeClient();
+    const adminEmail = `p14-admin-${Date.now()}@wasit.tn`;
+    createdUserEmails.push(adminEmail);
     await admin.req('/api/auth/register', {
       method: 'POST',
-      body: { email: `p14-admin-${Date.now()}@wasit.tn`, password: 'StrongPass123!', firstName: 'Adm', role: 'SUPPORT' },
+      body: { email: adminEmail, password: 'StrongPass123!', firstName: 'Adm', role: 'SUPPORT' },
     });
     // SUPPORT role doesn't have AI_MANAGE — create an admin via staff insertion.
     const inserted = await insertStaff('ADMIN');
@@ -333,5 +355,25 @@ describe('Phase 14 — agent API integration (HTTP)', () => {
     });
     expect(approved.status).toBe(200);
     expect(approved.data.data.status).toBe('approved');
+  });
+});
+
+afterAll(async () => {
+  // Resolve the ids of users this spec registered over HTTP (CUSTOMER/SUPPORT)
+  // so they are removed alongside the directly-inserted staff users.
+  if (createdUserEmails.length) {
+    const byEmail = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(inArray(users.email, createdUserEmails));
+    for (const row of byEmail) createdUserIds.push(row.id);
+  }
+  // Removes the tasks, ai_requests, ai_usage, schedules and user_roles owned by
+  // this spec's users, plus its product/category fixtures. Scoped by id —
+  // other specs' rows are never affected.
+  await cleanupOwnedRows(db, {
+    userIds: createdUserIds,
+    productIds: createdProductIds,
+    categoryIds: createdCategoryIds,
   });
 });

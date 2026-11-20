@@ -16,9 +16,26 @@ import {
 } from '../src/db/schema/index.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { computeWebhookSignature } from '../src/lib/payments/providers.js';
+import { completeRefundWithEvidence } from '../src/modules/payments/service.js';
 
 const app = createApp();
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET!;
+
+/**
+ * Completes a refund with *trusted external evidence*, standing in for the
+ * acquirer's verified webhook/API reply. Under the offline `manual` provider a
+ * refund request never completes on its own — that is the integrity rule this
+ * suite now pins — so a test that wants a completed refund must supply the same
+ * proof production would receive from a real acquirer.
+ */
+async function completeRefund(refundId: string, amount: string, currencyCode = 'TND') {
+  return completeRefundWithEvidence(
+    db,
+    refundId,
+    { source: 'PROVIDER_WEBHOOK', providerId: 'open-checkout', externalRef: `ext-${refundId}`, amount, currencyCode },
+    { actorId: null },
+  );
+}
 
 function makeClient() {
   let cookie = '';
@@ -265,10 +282,20 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
       body: { reason: 'customer request', idempotencyKey: key },
     });
     expect(refund.status).toBe(201);
-    expect(refund.data.data.refund.status).toBe('COMPLETED');
+    // The offline `manual` provider cannot prove money moved, so the refund is a
+    // REQUEST: no completion, no ledger entry, no REFUNDED order yet.
+    expect(refund.data.data.refund.status).toBe('REQUESTED');
     expect(refund.data.data.refund.amount).toBe(s.grandTotal);
+    const refundId = refund.data.data.refund.id as string;
 
-    const orderRow = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    let orderRow = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    expect(orderRow[0].paymentStatus).toBe('PAID');
+    expect(orderRow[0].status).not.toBe('REFUNDED');
+
+    // Only trusted external evidence completes the refund.
+    await completeRefund(refundId, s.grandTotal);
+
+    orderRow = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
     expect(orderRow[0].paymentStatus).toBe('REFUNDED');
     expect(orderRow[0].status).toBe('REFUNDED');
 
@@ -277,6 +304,11 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
     expect(refundEntries.length).toBe(1);
     expect(refundEntries[0].direction).toBe('DEBIT');
     expect(refundEntries[0].amount).toBe(s.grandTotal);
+
+    // Completing again with the same evidence is a no-op — no second ledger entry.
+    await completeRefund(refundId, s.grandTotal);
+    const ledgerAfterComplete = await db.select().from(transactionLedger).where(eq(transactionLedger.transactionId, s.transactionId));
+    expect(ledgerAfterComplete.filter((l) => l.entryType === 'REFUND').length).toBe(1);
 
     // Idempotent retry returns the same refund, does not create a second ledger entry.
     const retry = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, {
@@ -298,7 +330,9 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
       body: { amount: '100.0000', reason: 'partial' },
     });
     expect(partial.status).toBe(201);
-    expect(partial.data.data.refund.status).toBe('COMPLETED');
+    // Pending until proven; complete it with trusted evidence.
+    expect(partial.data.data.refund.status).toBe('REQUESTED');
+    await completeRefund(partial.data.data.refund.id as string, '100.0000');
 
     const orderRow = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
     expect(orderRow[0].paymentStatus).toBe('PARTIALLY_REFUNDED');
@@ -313,6 +347,7 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
     const rest = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: {} });
     expect(rest.status).toBe(201);
     expect(rest.data.data.refund.amount).toBe('216.2000');
+    await completeRefund(rest.data.data.refund.id as string, '216.2000');
 
     const finalOrder = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
     expect(finalOrder[0].paymentStatus).toBe('REFUNDED');
@@ -341,7 +376,9 @@ describe('PHASE A — Payment provider / intent / webhooks / refunds', () => {
     expect(beforeRow.refundStatus).toBe('NONE');
     expect(beforeRow.currencyCode).toBe('TND');
 
-    await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'ui projection' } });
+    const created = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'ui projection' } });
+    // Complete it with trusted evidence so the projection reflects a finished refund.
+    await completeRefund(created.data.data.refund.id as string, s.grandTotal);
 
     const after = await s.admin.req('/api/admin/orders');
     const afterRow = (after.data.data.items as Array<Record<string, unknown>>).find((o) => o.id === s.orderId)!;
@@ -468,7 +505,8 @@ describe('RC-5 — refunds reverse COMMISSION and PAYMENT_FEE proportionally', (
 
     const refund = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'full reversal' } });
     expect(refund.status).toBe(201);
-    expect(refund.data.data.refund.status).toBe('COMPLETED');
+    // Commission is only reversed when the refund completes on trusted evidence.
+    await completeRefund(refund.data.data.refund.id as string, (await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1))[0].grandTotal);
 
     // Full refund: WASIT's commission and fee net to exactly zero.
     expect(await netByType(s.transactionId, 'COMMISSION')).toBeCloseTo(0, 4);
@@ -487,6 +525,7 @@ describe('RC-5 — refunds reverse COMMISSION and PAYMENT_FEE proportionally', (
     const half = (paid / 2).toFixed(4);
     const r1 = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { amount: half, reason: 'half' } });
     expect(r1.status).toBe(201);
+    await completeRefund(r1.data.data.refund.id as string, half);
 
     const afterHalf = await netByType(s.transactionId, 'COMMISSION');
     // Roughly half the commission is reversed (4 dp rounding is the only drift).
@@ -495,6 +534,7 @@ describe('RC-5 — refunds reverse COMMISSION and PAYMENT_FEE proportionally', (
     // Second half completes the reversal; the total must not exceed the original.
     const r2 = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'rest' } });
     expect(r2.status).toBe(201);
+    await completeRefund(r2.data.data.refund.id as string, r2.data.data.refund.amount as string);
     expect(await netByType(s.transactionId, 'COMMISSION')).toBeCloseTo(0, 4);
 
     // Idempotent retry of the last refund writes no further reversal.

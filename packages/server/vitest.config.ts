@@ -1,9 +1,15 @@
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
+import { resolveTestDatabaseUrl } from './tests/test-db-guard';
 
-const TEST_DB_URL =
-  process.env.TEST_DATABASE_URL ??
-  'postgresql://wasit:wasit_dev_password@localhost:5432/wasit_test';
+/**
+ * The DB-backed suite may only target the authorized isolated environment.
+ * `resolveTestDatabaseUrl` refuses to load the config at all unless
+ * `TEST_DATABASE_URL` is supplied explicitly and points at PostgreSQL on
+ * 127.0.0.1:5434, database `wasit_test` — no fallback to `DATABASE_URL`,
+ * `localhost`, or the default port. See `tests/test-db-guard.ts`.
+ */
+const TEST_DB_URL = resolveTestDatabaseUrl().url;
 
 /**
  * Demo/demo-stack flags the specs assert are *absent* by default.

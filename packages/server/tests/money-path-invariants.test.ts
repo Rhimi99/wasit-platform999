@@ -8,7 +8,7 @@ import { roles, userRoles, users } from '../src/db/schema/auth.js';
 import { orders, transactionLedger, transactions } from '../src/db/schema/commerce.js';
 import { paymentIntents } from '../src/db/schema/payments_extras.js';
 import { auditLogs } from '../src/db/schema/audit.js';
-import { handlePaymentWebhook } from '../src/modules/payments/service.js';
+import { handlePaymentWebhook, completeRefundWithEvidence } from '../src/modules/payments/service.js';
 import { computeWebhookSignature, OpenCheckoutPaymentProvider, ManualPaymentProvider } from '../src/lib/payments/providers.js';
 
 /**
@@ -171,6 +171,23 @@ async function confirmSettlement(externalRef: string, amount: string, settlement
   return handlePaymentWebhook(db, { rawBody, signature: computeWebhookSignature(rawBody, WEBHOOK_SECRET) }, SETTLEMENT_PROVIDER);
 }
 
+/**
+ * Completes a pending refund with trusted external evidence.
+ *
+ * The offline `manual` provider cannot prove money moved, so `createRefund`
+ * deliberately leaves the refund as a REQUEST (no completion, no ledger entry).
+ * Completion is the exclusive job of `completeRefundWithEvidence`, reached here
+ * exactly as a real acquirer's report would reach it.
+ */
+async function completeRefund(refundId: string, amount: string, currencyCode = 'TND') {
+  return completeRefundWithEvidence(
+    db,
+    refundId,
+    { source: 'PROVIDER_WEBHOOK', providerId: 'open-checkout', externalRef: `ext-${refundId}`, amount, currencyCode },
+    { actorId: null },
+  );
+}
+
 afterAll(async () => {
   await closeDb();
 });
@@ -298,8 +315,14 @@ describe('Money path — Commission Earned ≠ Received, refunds stay book entri
 
     const refund = await s.admin.req(`/api/payments/orders/${s.orderId}/refunds`, { method: 'POST', body: { reason: 'invariant' } });
     expect(refund.status).toBe(201);
-    // The refund itself completed (a business fact) …
-    expect(refund.data.data.refund.status).toBe('COMPLETED');
+    // The offline provider cannot prove money moved, so the refund is a REQUEST:
+    // no completion, no ledger entry, no REFUNDED order yet.
+    expect(refund.data.data.refund.status).toBe('REQUESTED');
+
+    // Only trusted external evidence completes the refund.
+    await completeRefund(refund.data.data.refund.id as string, s.grandTotal);
+    const completed = await db.select().from(orders).where(eq(orders.id, s.orderId)).limit(1);
+    expect(completed[0].paymentStatus).toBe('REFUNDED');
 
     // … but the reversal is a book entry, not received money.
     const ledger = await ledgerRows(s.transactionId);
@@ -307,6 +330,33 @@ describe('Money path — Commission Earned ≠ Received, refunds stay book entri
     expect(refundEntries.length).toBeGreaterThan(0);
     expect(refundEntries.every((l) => l.status === 'PENDING')).toBe(true);
     expect(ledger.some((l) => l.status === 'SETTLED')).toBe(false);
+  });
+});
+
+describe('Money path — a commission ledger entry carries its own share rate', () => {
+  it('records the buyer share at 2%, not the 4% basket total', async () => {
+    const s = await setupOrder();
+    const ledger = await ledgerRows(s.transactionId);
+    const shares = ledger.filter((l) => l.entryType === 'COMMISSION');
+    const shareOf = (l: (typeof shares)[number]) => (l.metadata as { share?: string } | null)?.share;
+    const rateOf = (l: (typeof shares)[number]) => Number((l.metadata as { rate?: string } | null)?.rate);
+    const seller = shares.find((l) => shareOf(l) === 'SELLER');
+    const buyer = shares.find((l) => shareOf(l) === 'BUYER');
+    expect(seller, 'seller commission entry').toBeTruthy();
+    expect(buyer, 'buyer commission entry').toBeTruthy();
+
+    // Frozen BASE policy: 4% total = 2% seller + 2% buyer, split between the two
+    // parties — not 4% charged to each. Each entry describes ONE share, so its
+    // `rate` must be that share's rate.
+    expect(rateOf(seller!)).toBeCloseTo(0.02, 6);
+    expect(rateOf(buyer!)).toBeCloseTo(0.02, 6);
+    // The regression: the buyer entry used to carry the 4% basket total, so the
+    // row's stated rate contradicted its own amount (which is 2% of the items).
+    expect(rateOf(buyer!)).not.toBeCloseTo(0.04, 6);
+
+    // The stated rate must agree with the entry's own amount.
+    const itemsTotal = Number(s.grandTotal) / 1.02;
+    expect(Number(buyer!.amount)).toBeCloseTo(itemsTotal * rateOf(buyer!), 2);
   });
 });
 

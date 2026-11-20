@@ -5,11 +5,11 @@ import { eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
 import { roles, userRoles, users } from '../src/db/schema/auth.js';
-import { orders, transactionLedger, transactions } from '../src/db/schema/commerce.js';
+import { orders, sellerOrders, transactionLedger, transactions } from '../src/db/schema/commerce.js';
 import { suppliers } from '../src/db/schema/trade.js';
 import { computeWebhookSignature, ManualPaymentProvider } from '../src/lib/payments/providers.js';
 import { handlePaymentWebhook } from '../src/modules/payments/service.js';
-import { confirmSettlement } from '../src/modules/settlements/service.js';
+import { confirmSettlement, settleSellerSuborder } from '../src/modules/settlements/service.js';
 
 /**
  * P3 — HTTP surface for settlement / payout / reconciliation.
@@ -160,6 +160,16 @@ async function paidAndSettledOrder() {
   });
   expect(settled.applied).toBe(true);
 
+  const suborder = (
+    await db.select().from(sellerOrders).where(eq(sellerOrders.parentOrderId, orderData.orderId)).limit(1)
+  )[0];
+
+  // M2.3 — a payout now requires the seller suborder itself to be SETTLED, and a
+  // suborder is only settleable once DELIVERED. Drive the real fulfilment
+  // transition (which auto-settles), so this fixture mirrors production.
+  await db.update(sellerOrders).set({ status: 'DELIVERED' }).where(eq(sellerOrders.id, suborder.id));
+  await settleSellerSuborder(db, suborder.id);
+
   return {
     supplier,
     buyer,
@@ -167,6 +177,7 @@ async function paidAndSettledOrder() {
     buyerUserId,
     orderId: orderData.orderId,
     transactionId: orderData.transactionId,
+    sellerOrderId: suborder.id,
     grandTotal: orderData.grandTotal,
     externalRef: intent.externalRef,
     settlementRef: `settle-${stamp}`,
@@ -237,11 +248,11 @@ describe('P3 finance routes — authentication and permission', () => {
 
 describe('P3 finance routes — payout cannot be forced to COMPLETED', () => {
   it('an ADMIN creates a payout via HTTP; it starts as CREATED', async () => {
-    const { transactionId } = await paidAndSettledOrder();
+    const { transactionId, sellerOrderId } = await paidAndSettledOrder();
     const admin = await staffClient('ADMIN');
     const r = await admin.req('/api/admin/finance/payouts', {
       method: 'POST',
-      body: { transactionId, providerId: 'sandbox' },
+      body: { transactionId, sellerOrderId, providerId: 'sandbox' },
     });
     expect(r.status).toBe(200);
     expect(r.data.data.status).toBe('CREATED');
@@ -251,11 +262,11 @@ describe('P3 finance routes — payout cannot be forced to COMPLETED', () => {
   });
 
   it('dispatching over HTTP reaches PROCESSING, never COMPLETED', async () => {
-    const { transactionId } = await paidAndSettledOrder();
+    const { transactionId, sellerOrderId } = await paidAndSettledOrder();
     const admin = await staffClient('ADMIN');
     const created = await admin.req('/api/admin/finance/payouts', {
       method: 'POST',
-      body: { transactionId, providerId: 'sandbox' },
+      body: { transactionId, sellerOrderId, providerId: 'sandbox' },
     });
     const payoutId = created.data.data.id as string;
 
@@ -269,11 +280,11 @@ describe('P3 finance routes — payout cannot be forced to COMPLETED', () => {
   });
 
   it('reading a payout over HTTP returns its persisted state', async () => {
-    const { transactionId } = await paidAndSettledOrder();
+    const { transactionId, sellerOrderId } = await paidAndSettledOrder();
     const admin = await staffClient('ADMIN');
     const created = await admin.req('/api/admin/finance/payouts', {
       method: 'POST',
-      body: { transactionId, providerId: 'sandbox' },
+      body: { transactionId, sellerOrderId, providerId: 'sandbox' },
     });
     const payoutId = created.data.data.id as string;
 

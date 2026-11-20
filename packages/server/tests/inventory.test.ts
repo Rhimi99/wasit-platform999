@@ -3,21 +3,58 @@ import { createApp } from '../src/app.js';
 import { db } from '../src/db/client.js';
 import { inventoryItems, inventoryMovements } from '../src/db/schema/commerce_extras.js';
 import { notifications } from '../src/db/schema/messaging.js';
+import { computeWebhookSignature } from '../src/lib/payments/providers.js';
 import { eq, sql, and } from 'drizzle-orm';
 
 const app = createApp();
+const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET!;
+
+/**
+ * Drives the trusted payment path (intent + signed success webhook) so an order
+ * can be confirmed. SEC-03 requires a confirmed payment before CONFIRMED, so the
+ * inventory lifecycle spec must pay an order before advancing it.
+ */
+async function payOrder(
+  buyer: ReturnType<typeof makeClient>,
+  orderId: string,
+): Promise<void> {
+  const intent = await buyer.req(`/api/payments/orders/${orderId}/intent`, { method: 'POST', body: {} });
+  expect(intent.status).toBe(201);
+  const body = JSON.stringify({
+    eventId: `inv-${orderId}-${Date.now()}`,
+    type: 'payment.succeeded',
+    externalRef: intent.data.data.intent.externalRef,
+    amount: intent.data.data.intent.amount,
+    currencyCode: 'TND',
+  });
+  const hook = await buyer.req('/api/payment-webhooks', {
+    method: 'POST',
+    rawBody: body,
+    headers: { 'Content-Type': 'application/json', 'x-wasit-signature': computeWebhookSignature(body, WEBHOOK_SECRET) },
+  });
+  expect(hook.status).toBe(200);
+  expect(hook.data.data.applied).toBe(true);
+}
 
 function makeClient() {
   let cookie = '';
   return {
-    async req(path: string, options: { method?: string; body?: unknown } = {}) {
-      const headers: Record<string, string> = {};
+    async req(
+      path: string,
+      options: { method?: string; body?: unknown; rawBody?: string; headers?: Record<string, string> } = {},
+    ) {
+      const headers: Record<string, string> = { ...(options.headers ?? {}) };
       if (options.body !== undefined) headers['Content-Type'] = 'application/json';
       if (cookie) headers.Cookie = cookie;
       const res = await app.request(path, {
         method: options.method ?? 'GET',
         headers,
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        body:
+          options.rawBody !== undefined
+            ? options.rawBody
+            : options.body !== undefined
+              ? JSON.stringify(options.body)
+              : undefined,
       });
       const setCookie = res.headers.get('set-cookie');
       if (setCookie) cookie = setCookie;
@@ -230,6 +267,9 @@ describe('Inventory Engine', () => {
       body: { buyerId: buyerUserId, buyerType: 'CUSTOMER', items: [{ productId, quantity: 10 }] },
     });
     const order2Id = (order2.data.data as { orderId: string }).orderId;
+
+    // SEC-03: an order must be paid before it can be confirmed.
+    await payOrder(buyer, order2Id);
 
     // Confirm -> decrement to 90
     const confirm = await supplier.req(`/api/orders/${order2Id}/status`, {

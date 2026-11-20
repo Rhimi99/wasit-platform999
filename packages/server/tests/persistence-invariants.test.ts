@@ -5,7 +5,7 @@ import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
-import { orders, transactionLedger } from '../src/db/schema/commerce.js';
+import { orders, sellerOrders, transactionLedger } from '../src/db/schema/commerce.js';
 import { payouts } from '../src/db/schema/payouts.js';
 import { wasitReceipts } from '../src/db/schema/receipts.js';
 import {
@@ -14,7 +14,7 @@ import {
 } from '../src/db/schema/reconciliation.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { handlePaymentWebhook } from '../src/modules/payments/service.js';
-import { confirmSettlement } from '../src/modules/settlements/service.js';
+import { confirmSettlement, settleSellerSuborder } from '../src/modules/settlements/service.js';
 import {
   applyPayoutEventToDb,
   createPayout,
@@ -131,7 +131,19 @@ async function setupOrder() {
 
   // The order's own figures, so the tests use the real policy output.
   const orderRow = (await db.select().from(orders).where(eq(orders.id, orderData.orderId)).limit(1))[0];
-  return { buyer, orderId: orderData.orderId, grandTotal: orderData.grandTotal, transactionId: orderData.transactionId, orderRow };
+  // M2.2 — every order created through the API now carries a seller suborder,
+  // so a payout must name it.
+  const suborderRow = (
+    await db.select().from(sellerOrders).where(eq(sellerOrders.parentOrderId, orderData.orderId)).limit(1)
+  )[0];
+  return {
+    buyer,
+    orderId: orderData.orderId,
+    grandTotal: orderData.grandTotal,
+    transactionId: orderData.transactionId,
+    orderRow,
+    sellerOrderId: suborderRow.id,
+  };
 }
 
 async function payAndSettle(s: Awaited<ReturnType<typeof setupOrder>>) {
@@ -160,6 +172,12 @@ async function payAndSettle(s: Awaited<ReturnType<typeof setupOrder>>) {
     settlementRef,
     providerRef: `acq-${Date.now()}`,
   });
+  // M2.3 — a payout now requires the seller suborder itself to be settled, and a
+  // suborder is only settleable once fulfilled. Drive it to DELIVERED, then
+  // settle it, so this fixture reflects an order that was actually delivered and
+  // whose seller is payable.
+  await db.update(sellerOrders).set({ status: 'DELIVERED' }).where(eq(sellerOrders.id, s.sellerOrderId));
+  await settleSellerSuborder(db, s.sellerOrderId);
   return { externalRef: intent.externalRef, settlementRef };
 }
 
@@ -191,7 +209,7 @@ describe('Persistence invariants — evidence per transition', () => {
 
     // No settlement ⇒ no payout.
     await expect(
-      createPayout(db, { transactionId: s.transactionId, providerId: ACQUIRER }),
+      createPayout(db, { transactionId: s.transactionId, sellerOrderId: s.sellerOrderId, providerId: ACQUIRER }),
     ).rejects.toThrow(/not settled/);
   });
 
@@ -204,7 +222,7 @@ describe('Persistence invariants — evidence per transition', () => {
     expect(receipts.length).toBe(0);
 
     // A payout is created but is NOT completed by settlement alone.
-    const payout = await createPayout(db, { transactionId: s.transactionId, providerId: ACQUIRER });
+    const payout = await createPayout(db, { transactionId: s.transactionId, sellerOrderId: s.sellerOrderId, providerId: ACQUIRER });
     expect(payout.status).toBe('CREATED');
     expect(payout.payoutRef).toBeNull();
 
@@ -227,7 +245,7 @@ describe('Persistence invariants — evidence per transition', () => {
   it('rejects COMPLETED without a payout_ref at the engine AND the database', async () => {
     const s = await setupOrder();
     await payAndSettle(s);
-    const payout = await createPayout(db, { transactionId: s.transactionId, providerId: ACQUIRER });
+    const payout = await createPayout(db, { transactionId: s.transactionId, sellerOrderId: s.sellerOrderId, providerId: ACQUIRER });
 
     // Move to PROCESSING legitimately; completion is still gated on a reference.
     await applyPayoutEventToDb(db, { payoutId: payout.id, event: { type: 'payout.processing', providerRef: `acq-core-${Math.random().toString(36).slice(2, 8)}` } });
@@ -256,7 +274,7 @@ describe('Persistence invariants — evidence per transition', () => {
   it('completes a payout only with a real transfer reference and matching amount', async () => {
     const s = await setupOrder();
     await payAndSettle(s);
-    const payout = await createPayout(db, { transactionId: s.transactionId, providerId: ACQUIRER });
+    const payout = await createPayout(db, { transactionId: s.transactionId, sellerOrderId: s.sellerOrderId, providerId: ACQUIRER });
     await applyPayoutEventToDb(db, { payoutId: payout.id, event: { type: 'payout.processing', providerRef: `acq-core-${Math.random().toString(36).slice(2, 8)}` } });
 
     const wrongAmount = (Number(payout.amount) + 1).toFixed(4);

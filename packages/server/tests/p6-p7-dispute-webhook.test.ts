@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import argon2 from 'argon2';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
+import { auditLogs } from '../src/db/schema/audit.js';
 import { roles, userRoles, users } from '../src/db/schema/auth.js';
 import {
   orders,
@@ -14,7 +15,7 @@ import {
   transactionLedger,
 } from '../src/db/schema/index.js';
 import { computeWebhookSignature } from '../src/lib/payments/providers.js';
-import { MAX_WEBHOOK_ATTEMPTS } from '../src/modules/payments/service.js';
+import { MAX_WEBHOOK_ATTEMPTS, completeRefundWithEvidence } from '../src/modules/payments/service.js';
 
 /**
  * P6/P7 — dispute financial effect, and webhook ordering / retry / DLQ.
@@ -38,11 +39,18 @@ function makeClient() {
       const headers: Record<string, string> = { ...(options.headers ?? {}) };
       if (options.body !== undefined) headers['Content-Type'] = 'application/json';
       if (cookie) headers.Cookie = cookie;
-      const res = await app.request(path, {
-        method: options.method ?? 'GET',
-        headers,
-        body: options.rawBody !== undefined ? options.rawBody : options.body !== undefined ? JSON.stringify(options.body) : undefined,
-      });
+      // Inject the real TCP peer: with the trusted-IP fix the client address
+      // comes from the socket, not from a forwarded header, so a test must set
+      // the socket to observe an address in audit records.
+      const res = await app.request(
+        path,
+        {
+          method: options.method ?? 'GET',
+          headers,
+          body: options.rawBody !== undefined ? options.rawBody : options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        },
+        { incoming: { socket: { remoteAddress: '203.0.113.7', remotePort: 0, remoteFamily: 'IPv4' } } },
+      );
       const setCookie = res.headers.get('set-cookie');
       if (setCookie) cookie = setCookie;
       let data: unknown = null;
@@ -155,7 +163,7 @@ afterAll(() => {
 });
 
 describe('P6 — dispute decisions have a real, policy-driven financial effect', () => {
-  it('IN_FAVOR_OF_BUYER refunds the buyer through the real refund rail', async () => {
+  it('IN_FAVOR_OF_BUYER requests a refund but the decision alone does NOT complete it', async () => {
     const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e5)}`;
     const { orderId, disputeId } = await paidOrderWithDispute(stamp);
     const judge = await createStaffUser('ADMIN');
@@ -167,12 +175,27 @@ describe('P6 — dispute decisions have a real, policy-driven financial effect',
     expect(decided.status).toBe(200);
     expect(decided.data.data.financialEffect.kind).toBe('REFUND_BUYER');
 
-    // A real refund row exists and the order is refunded.
+    // A refund row is raised, but the offline provider proves nothing, so the
+    // decision alone leaves it REQUESTED — no money has moved.
     const refundRows = await db.select().from(refunds).where(eq(refunds.orderId, orderId));
     expect(refundRows.length).toBe(1);
-    expect(refundRows[0].status).toBe('COMPLETED');
+    expect(refundRows[0].status).toBe('REQUESTED');
 
-    const orderRow = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    let orderRow = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    expect(orderRow[0].paymentStatus).toBe('PAID');
+    expect(orderRow[0].refundStatus).not.toBe('COMPLETED');
+
+    // Only trusted external evidence completes the reversal.
+    await completeRefundWithEvidence(
+      db,
+      refundRows[0].id,
+      { source: 'PROVIDER_WEBHOOK', providerId: 'open-checkout', externalRef: `ext-${refundRows[0].id}`, amount: refundRows[0].amount, currencyCode: 'TND' },
+      { actorId: null },
+    );
+
+    const completedRefund = await db.select().from(refunds).where(eq(refunds.id, refundRows[0].id)).limit(1);
+    expect(completedRefund[0].status).toBe('COMPLETED');
+    orderRow = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     expect(orderRow[0].paymentStatus).toBe('REFUNDED');
     expect(orderRow[0].refundStatus).toBe('COMPLETED');
   });
@@ -232,12 +255,16 @@ describe('P6 — dispute decisions have a real, policy-driven financial effect',
 
     const refundRows = await db.select().from(refunds).where(eq(refunds.orderId, orderId));
     expect(refundRows.length).toBe(1);
-    // Exactly one REFUND ledger entry — no double reversal.
+    // Still only a request: no decision, and no refund, has moved money.
+    expect(refundRows[0].status).toBe('REQUESTED');
     const ledgerRefunds = await db
       .select()
       .from(transactionLedger)
-      .where(and(eq(transactionLedger.currencyCode, 'TND'), eq(transactionLedger.entryType, 'REFUND')));
-    expect(ledgerRefunds.filter((l) => l.payerId === 'wasit').length).toBeGreaterThanOrEqual(1);
+      .where(and(eq(transactionLedger.entryType, 'REFUND'), eq(transactionLedger.payerId, 'wasit')));
+    // Scoped to this order's transaction, not the whole (shared) test database.
+    const orderPayment = await db.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
+    const thisTxRefunds = ledgerRefunds.filter((l) => l.transactionId === orderPayment[0].transactionId);
+    expect(thisTxRefunds.length).toBe(0);
   });
 });
 
@@ -424,5 +451,161 @@ describe('P7 — webhook ordering, retry and dead-letter queue', () => {
     await registerAndLogin(buyer, `t6-nonpriv-${Date.now()}@wasit.tn`, 'CUSTOMER');
     const r = await buyer.req('/api/payments/webhook-failures');
     expect(r.status).toBe(403);
+  });
+
+  // ---- OBS-01: webhook failure desk — audit identity, pagination, guardrails ----
+
+  /** Drives an event to DEAD_LETTERED by failing the apply path MAX times. */
+  async function deadLetterEvent(prefix: string): Promise<{ eventId: string; externalRef: string }> {
+    const eventId = `evt-${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const externalRef = `ref-ghost-${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    for (let i = 0; i < MAX_WEBHOOK_ATTEMPTS; i += 1) {
+      await postWebhook({ eventId, type: 'payment.succeeded', externalRef });
+    }
+    return { eventId, externalRef };
+  }
+
+  async function findFailure(admin: ReturnType<typeof createStaffUser> extends Promise<infer R> ? R : never, eventId: string) {
+    const listed = await admin.client.req('/api/payments/webhook-failures');
+    return (listed.data.data.items as Array<{ id: string; eventId: string; status: string }>).find((i) => i.eventId === eventId);
+  }
+
+  it('records the acting operator identity (not NULL) in the replay audit entry', async () => {
+    const { eventId } = await deadLetterEvent('audit');
+    const admin = await createStaffUser('ADMIN');
+    const item = await findFailure(admin, eventId);
+    expect(item).toBeTruthy();
+
+    const replay = await admin.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.7', 'user-agent': 'wasit-obs01-test' },
+    });
+    expect(replay.status).toBe(200);
+
+    const audits = await db.select().from(auditLogs).where(eq(auditLogs.entityId, item!.id));
+    const entry = audits.find((a) => a.action === 'PAYMENT.WEBHOOK_REPLAY');
+    expect(entry).toBeTruthy();
+    // The whole point of OBS-01: the audit names the operator, not NULL.
+    expect(entry!.actorId).toBe(admin.id);
+    expect(entry!.actorId).not.toBeNull();
+    expect(entry!.ipAddress).toBe('203.0.113.7');
+    expect(entry!.userAgent).toBe('wasit-obs01-test');
+  });
+
+  it('rejects replay of an event that is not DEAD_LETTERED with 404', async () => {
+    // A FAILED (below-cap) event exists but must not be replayable.
+    const eventId = `evt-failed-${Date.now()}`;
+    const externalRef = `ref-ghost-failed-${Date.now()}`;
+    await postWebhook({ eventId, type: 'payment.succeeded', externalRef });
+    const [row] = await db
+      .select()
+      .from(paymentWebhookEvents)
+      .where(and(eq(paymentWebhookEvents.provider, 'manual'), eq(paymentWebhookEvents.eventId, eventId)))
+      .limit(1);
+    expect(row.status).toBe('FAILED');
+
+    const admin = await createStaffUser('ADMIN');
+    const replay = await admin.client.req(`/api/payments/webhook-failures/${row.id}/replay`, { method: 'POST' });
+    expect(replay.status).toBe(404);
+  });
+
+  it('rejects replay of a non-existent event with 404', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const replay = await admin.client.req(`/api/payments/webhook-failures/${randomUUID()}/replay`, { method: 'POST' });
+    expect(replay.status).toBe(404);
+  });
+
+  it('runs concurrent replays of the same event exactly once (single transition)', async () => {
+    const { eventId } = await deadLetterEvent('concurrent');
+    const admin = await createStaffUser('ADMIN');
+    const item = await findFailure(admin, eventId);
+    expect(item).toBeTruthy();
+
+    const [a, b] = await Promise.all([
+      admin.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' }),
+      admin.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' }),
+    ]);
+    const statuses = [a.status, b.status].sort();
+    // Exactly one transition: one 200, one 404 (the loser sees the row already RECEIVED).
+    expect(statuses).toEqual([200, 404]);
+
+    const [row] = await db
+      .select()
+      .from(paymentWebhookEvents)
+      .where(eq(paymentWebhookEvents.id, item!.id))
+      .limit(1);
+    expect(row.status).toBe('RECEIVED');
+    expect(row.attempts).toBe(0);
+  });
+
+  it('replaying a dead-lettered event creates no financial effect and moves no ledger to SETTLED', async () => {
+    // A dead-lettered event for a ghost intent: replay only resets the counter.
+    const { eventId } = await deadLetterEvent('nofin');
+    const admin = await createStaffUser('ADMIN');
+    const item = await findFailure(admin, eventId);
+    expect(item).toBeTruthy();
+
+    const before = await db.select().from(transactionLedger);
+    const beforePaid = before.filter((l) => l.status === 'SETTLED').length;
+
+    const replay = await admin.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' });
+    expect(replay.status).toBe(200);
+
+    const after = await db.select().from(transactionLedger);
+    expect(after.length).toBe(before.length);
+    expect(after.filter((l) => l.status === 'SETTLED').length).toBe(beforePaid);
+    // The replay response is honest: it reports the reset, not a completed process.
+    expect(replay.data.data.replayed).toBe(true);
+    expect(replay.data.data.applied).toBeUndefined();
+  });
+
+  it('pages the failure list with an offset and reports the true total', async () => {
+    const admin = await createStaffUser('ADMIN');
+    const first = await admin.client.req('/api/payments/webhook-failures?limit=1&offset=0');
+    expect(first.status).toBe(200);
+    expect((first.data.data.items as unknown[]).length).toBeLessThanOrEqual(1);
+    expect(typeof first.data.data.meta.total).toBe('number');
+    expect(first.data.data.meta.offset).toBe(0);
+
+    // A malformed offset must not reach SQL as NaN — it falls back to 0.
+    const bad = await admin.client.req('/api/payments/webhook-failures?offset=abc');
+    expect(bad.status).toBe(200);
+    expect(bad.data.data.meta.offset).toBe(0);
+  });
+
+  it('never leaks the raw payload or signature fields in the failure list', async () => {
+    const { eventId } = await deadLetterEvent('noleak');
+    const admin = await createStaffUser('ADMIN');
+    const listed = await admin.client.req('/api/payments/webhook-failures');
+    const item = (listed.data.data.items as Array<Record<string, unknown>>).find((i) => i.eventId === eventId);
+    expect(item).toBeTruthy();
+    expect(item).not.toHaveProperty('payload');
+    expect(item).not.toHaveProperty('signatureValid');
+  });
+
+  it('allows a SUPER_ADMIN to list and replay, and forbids SUPPORT/RISK/DISPUTE/MERCHANT/CUSTOMER', async () => {
+    const { eventId } = await deadLetterEvent('rbac');
+    const superAdmin = await createStaffUser('SUPER_ADMIN');
+    const item = await findFailure(superAdmin, eventId);
+    expect(item).toBeTruthy();
+    const replay = await superAdmin.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' });
+    expect(replay.status).toBe(200);
+
+    for (const role of ['SUPPORT', 'RISK', 'DISPUTE']) {
+      const staff = await createStaffUser(role);
+      expect((await staff.client.req('/api/payments/webhook-failures')).status).toBe(403);
+      expect((await staff.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' })).status).toBe(403);
+    }
+
+    const merchant = makeClient();
+    await registerAndLogin(merchant, `t6-merchant-${Date.now()}@wasit.tn`, 'MERCHANT');
+    expect((await merchant.req('/api/payments/webhook-failures')).status).toBe(403);
+    expect((await merchant.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' })).status).toBe(403);
+  });
+
+  it('rejects an anonymous caller with 401', async () => {
+    const guest = makeClient();
+    expect((await guest.req('/api/payments/webhook-failures')).status).toBe(401);
+    expect((await guest.req(`/api/payments/webhook-failures/${randomUUID()}/replay`, { method: 'POST' })).status).toBe(401);
   });
 });

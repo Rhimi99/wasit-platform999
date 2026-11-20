@@ -107,18 +107,24 @@ describe('PostgresRateLimitStore (distributed)', () => {
 });
 
 describe('rate-limit middleware with the Postgres store', () => {
-  it('enforces the same limit end-to-end through the app', async () => {
+  it('enforces the same limit end-to-end through the app, ignoring a spoofed XFF', async () => {
     // The forgot-password route allows 5 requests / 300s per subject; it needs
-    // no session, so the subject is the client IP.
+    // no session, so the subject is the trusted client IP.
     setRateLimitStore(new PostgresRateLimitStore(db));
-    const ip = `198.51.100.${Math.floor(Math.random() * 200) + 1}`;
+    const realIp = `198.51.100.${Math.floor(Math.random() * 200) + 1}`;
     const statuses: number[] = [];
     for (let i = 0; i < 7; i++) {
-      const res = await app.request('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'x-forwarded-for': ip, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: `rl-${i}@wasit.tn` }),
-      });
+      const res = await app.request(
+        '/api/auth/forgot-password',
+        {
+          method: 'POST',
+          // A different spoofed XFF every time: with the fix it cannot move the
+          // bucket key, so the limit still engages.
+          headers: { 'x-forwarded-for': `203.0.113.${i}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: `rl-${i}@wasit.tn` }),
+        },
+        { incoming: { socket: { remoteAddress: realIp, remotePort: 0, remoteFamily: 'IPv4' } } },
+      );
       statuses.push(res.status);
     }
     // Requests 6 and 7 exceed the window of 5.
@@ -126,12 +132,16 @@ describe('rate-limit middleware with the Postgres store', () => {
     expect(statuses[5]).toBe(429);
     expect(statuses[6]).toBe(429);
 
-    // The counter really lives in Postgres, keyed by IP.
+    // The counter is keyed by the real socket address, not the spoofed header.
     const rows = await db.execute(
-      sql`SELECT count FROM rate_limit_counters WHERE bucket_key = ${`auth-forgot:ip:${ip}`}`,
+      sql`SELECT count FROM rate_limit_counters WHERE bucket_key = ${`auth-forgot:ip:${realIp}`}`,
     );
     expect(rows.rows.length).toBe(1);
     expect(Number((rows.rows[0] as { count: number | string }).count)).toBeGreaterThan(5);
+    const spoofed = await db.execute(
+      sql`SELECT count FROM rate_limit_counters WHERE bucket_key LIKE ${'auth-forgot:ip:203.0.113.%'}`,
+    );
+    expect(spoofed.rows.length).toBe(0);
 
     setRateLimitStore(null);
   });

@@ -206,3 +206,151 @@ describe('Editing a product (PATCH /api/products/:id)', () => {
     expect(rows[0].status).toBe('SUSPENDED');
   });
 });
+
+/**
+ * SEC-01 / SEC-02 — Product authorization is derived from RBAC, not from a
+ * hardcoded role list.
+ *
+ * `product:manage` is held by ADMIN and SUPER_ADMIN only. SUPPORT is a
+ * read-only catalogue desk: it must not suspend, edit or publish on another
+ * seller's behalf, and it must never lift an administrative suspension. These
+ * specs pin the fixed behaviour and fail on the previous role-array check.
+ */
+describe('Product authorization is RBAC-derived (SEC-01 / SEC-02)', () => {
+  async function makeStaffClient(roleName: 'SUPPORT' | 'ADMIN' | 'SUPER_ADMIN') {
+    const id = randomUUID();
+    const email = `rbac-${roleName.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@wasit.tn`;
+    await db.insert(users).values({
+      id,
+      email,
+      passwordHash: await argon2.hash('StaffPass123!'),
+      firstName: 'RBAC Staff',
+      emailVerified: true,
+      isActive: true,
+    });
+    const role = await db.select().from(roles).where(eq(roles.name, roleName)).limit(1);
+    await db.insert(userRoles).values({ id: randomUUID(), userId: id, roleId: role[0].id });
+    const c = makeClient();
+    const login = await c.req('/api/auth/login', {
+      method: 'POST',
+      body: { email, password: 'StaffPass123!', allowUnverifiedEmail: true },
+    });
+    if (login.status !== 200) throw new Error(`staff login (${roleName}) failed: ${login.status}`);
+    return c;
+  }
+
+  /** Registers a real seller (SUPPLIER) that owns one ACTIVE product. */
+  async function seedSellerAndProduct(tag: string) {
+    const seller = makeClient();
+    const email = `rbac-seller-${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@wasit.tn`;
+    const reg = await seller.req('/api/auth/register', {
+      method: 'POST',
+      body: { email, password: 'StrongPass123!', firstName: 'Seller', role: 'SUPPLIER' },
+    });
+    expect(reg.status).toBe(201);
+    expect((await seller.req('/api/auth/login', {
+      method: 'POST',
+      body: { email, password: 'StrongPass123!', allowUnverifiedEmail: true },
+    })).status).toBe(200);
+    const profile = await seller.req('/api/suppliers', { method: 'POST', body: { companyName: `RBAC Supplier ${tag}` } });
+    expect(profile.status).toBe(201);
+    const sellerId = profile.data.data.id as string;
+    const cats = await seller.req('/api/categories');
+    const categoryId = (cats.data.data as Array<{ id: string }>)[0].id;
+    const created = await seller.req('/api/products', {
+      method: 'POST',
+      body: {
+        sellerId, sellerType: 'SUPPLIER', sku: `RBAC-${tag}-${Date.now()}`, categoryId,
+        name: `RBAC Product ${tag}`, basePrice: '11.0000', currencyCode: 'TND', moq: 1,
+      },
+    });
+    expect(created.status).toBe(201);
+    return { seller, sellerId, categoryId, productId: created.data.data.id as string };
+  }
+
+  function newProductBody(sellerId: string, categoryId: string, tag: string) {
+    return {
+      sellerId, sellerType: 'SUPPLIER', sku: `RBAC-NEW-${tag}-${Date.now()}`, categoryId,
+      name: `RBAC Injected ${tag}`, basePrice: '55.0000', currencyCode: 'TND', moq: 1,
+    };
+  }
+
+  it('SUPPORT cannot suspend, edit, publish for another seller, nor lift an admin suspension', async () => {
+    const { sellerId, categoryId, productId } = await seedSellerAndProduct('support');
+    const support = await makeStaffClient('SUPPORT');
+
+    const before = (await db.select().from(products).where(eq(products.id, productId)).limit(1))[0];
+
+    // Suspend another seller's product.
+    expect((await support.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'SUSPENDED' } })).status).toBe(403);
+    // Edit another seller's product.
+    expect((await support.req(`/api/products/${productId}`, { method: 'PATCH', body: { name: 'Renamed by SUPPORT' } })).status).toBe(403);
+    // Publish a product under another seller's entity.
+    expect((await support.req('/api/products', { method: 'POST', body: newProductBody(sellerId, categoryId, 'support') })).status).toBe(403);
+
+    // A true administrator suspends the product.
+    const admin = await makeStaffClient('ADMIN');
+    expect((await admin.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'SUSPENDED' } })).status).toBe(200);
+    // SUPPORT must not be able to lift it.
+    expect((await support.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'ACTIVE' } })).status).toBe(403);
+
+    const after = (await db.select().from(products).where(eq(products.id, productId)).limit(1))[0];
+    expect(after.status).toBe('SUSPENDED');
+    expect(after.name).toBe(before.name);
+    // No SUPPORT-injected product was persisted.
+    const injected = await db.select({ id: products.id }).from(products).where(eq(products.name, 'RBAC Injected support'));
+    expect(injected.length).toBe(0);
+  });
+
+  it('a seller cannot act on another seller product (ownership)', async () => {
+    const victim = await seedSellerAndProduct('victim');
+    const attacker = await seedSellerAndProduct('attacker');
+
+    expect((await attacker.seller.req(`/api/products/${victim.productId}/status`, { method: 'PATCH', body: { status: 'SUSPENDED' } })).status).toBe(403);
+    expect((await attacker.seller.req(`/api/products/${victim.productId}`, { method: 'PATCH', body: { name: 'Stolen' } })).status).toBe(403);
+    expect((await attacker.seller.req('/api/products', { method: 'POST', body: newProductBody(victim.sellerId, victim.categoryId, 'attacker') })).status).toBe(403);
+
+    const row = (await db.select().from(products).where(eq(products.id, victim.productId)).limit(1))[0];
+    expect(row.status).toBe('ACTIVE');
+    expect(row.name).not.toBe('Stolen');
+  });
+
+  it('ADMIN and SUPER_ADMIN retain the designed administrative operations', async () => {
+    for (const role of ['ADMIN', 'SUPER_ADMIN'] as const) {
+      const { sellerId, categoryId, productId } = await seedSellerAndProduct(`adm-${role}`);
+      const staff = await makeStaffClient(role);
+
+      // Suspend another seller's product, then restore it.
+      expect((await staff.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'SUSPENDED' } })).status).toBe(200);
+      expect((await db.select({ s: products.status }).from(products).where(eq(products.id, productId)).limit(1))[0].s).toBe('SUSPENDED');
+      expect((await staff.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'ACTIVE' } })).status).toBe(200);
+      expect((await db.select({ s: products.status }).from(products).where(eq(products.id, productId)).limit(1))[0].s).toBe('ACTIVE');
+
+      // Edit another seller's product.
+      expect((await staff.req(`/api/products/${productId}`, { method: 'PATCH', body: { name: `Admin Edited ${role}` } })).status).toBe(200);
+
+      // Publish under another seller's entity (administrative authority).
+      expect((await staff.req('/api/products', { method: 'POST', body: newProductBody(sellerId, categoryId, `adm-${role}`) })).status).toBe(201);
+
+      // The dedicated admin suspend endpoint still works.
+      expect((await staff.req(`/api/products/${productId}/suspend`, { method: 'PATCH' })).status).toBe(200);
+      expect((await db.select({ s: products.status }).from(products).where(eq(products.id, productId)).limit(1))[0].s).toBe('SUSPENDED');
+    }
+  });
+
+  it('an unauthorized caller gets 403 with no database mutation', async () => {
+    const { categoryId, productId, sellerId } = await seedSellerAndProduct('customer');
+    const customer = makeClient();
+    const email = `rbac-customer-${Date.now()}@wasit.tn`;
+    await customer.req('/api/auth/register', { method: 'POST', body: { email, password: 'StrongPass123!', firstName: 'Cust', role: 'CUSTOMER' } });
+    expect((await customer.req('/api/auth/login', { method: 'POST', body: { email, password: 'StrongPass123!', allowUnverifiedEmail: true } })).status).toBe(200);
+
+    const before = (await db.select().from(products).where(eq(products.id, productId)).limit(1))[0];
+    expect((await customer.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'SUSPENDED' } })).status).toBe(403);
+    expect((await customer.req(`/api/products/${productId}`, { method: 'PATCH', body: { name: 'Customer Edit' } })).status).toBe(403);
+    expect((await customer.req('/api/products', { method: 'POST', body: newProductBody(sellerId, categoryId, 'customer') })).status).toBe(403);
+    const after = (await db.select().from(products).where(eq(products.id, productId)).limit(1))[0];
+    expect(after.status).toBe(before.status);
+    expect(after.name).toBe(before.name);
+  });
+});
