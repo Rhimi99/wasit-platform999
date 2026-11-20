@@ -30,6 +30,23 @@
 npm run test:e2e     # من الجذر — يشغّل server + web تلقائياً ضد wasit_dev
 ```
 
+**نتيجة التشغيل الفعلي (2026-11-20): 243 ناجح، 8 متخطى، 0 فشل (8.1 دقيقة).** التخطيات الثمانية كلها في `demo-auto-login.spec.ts` و`demo-owner.spec.ts` وهي مشروعة: `DEMO_AUTO_LOGIN=false` هو الافتراضي الآمن، فتتخطى نفسها عبر `test.skip(!autoLoginEnabled(...))`.
+
+**تفصيل تجهيز البيئة من الصفر** (لا يوجد اختصار — كل خطوة لازمة):
+```bash
+sudo apt-get install -y postgresql postgresql-contrib age
+sudo -u postgres initdb -D /var/lib/postgresql/e2edata -A scram-sha-256
+sudo -u postgres pg_ctl -D /var/lib/postgresql/e2edata -o "-p 5432" -l /tmp/pg.log start
+# ثم: أنشئ دور wasit + قاعدة wasit_dev، ثم
+cd packages/server && DATABASE_URL=...wasit_dev npx drizzle-kit migrate   # 41 ترحيلاً → 104 جدولاً
+DATABASE_URL=...wasit_dev npx tsx src/scripts/seed.ts
+npx playwright install --with-deps chromium
+```
+
+**فخّان بيئيان كلّفا وقتاً، وليسا عيباً في الكود** — افحصهما أولاً عند أي فشل غريب:
+1. **`initdb -A trust` يجعل كل الاختبارات التي تعتمد على رفض كلمة مرور خاطئة تنجح كذباً.** استخدم `scram-sha-256`؛ وإلا فشل `backup-restore.test.sh` في «failed backup left no folder» لأن النسخة «الفاشلة» تنجح فعلياً.
+2. **لا تصدّر `PG_BIN` عند تشغيل `backup-restore.test.sh`.** السكربت يحقنه في مقدمة `PATH` (`restore-db.sh:46`) فيتجاوز الـstubs الخاصة بالاختبار ويصل لخادم حقيقي — تسقط اختبارات G8 وحدها. صدّر `PATH` بدلاً منه.
+
 - `e2e/{auth,marketplace,rbac,ads}.spec.ts` — 28 اختباراً، لا Mocks ولا route interception.
 - `e2e/global-setup.ts` يشغّل `db:seed:demo` (idempotent، لا drop/drop schema) ثم يبني `storageState` لكل دور عبر `POST /api/auth/login` الحقيقي (يتفادى login rate-limit). الجلسات في `e2e/.auth/` وهي git-ignored.
 - **Self-healing**: إذا رجع login دور 401 (مثلاً بعد اختبار استعادة كلمة المرور)، يصلح كلمة المرور تلقائياً عبر مسار forgot/reset الحقيقي.
