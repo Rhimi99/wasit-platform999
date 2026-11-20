@@ -2,6 +2,32 @@
 
 ذاكرة الوكيل لحالة المشروع وإرشادات البناء.
 
+## ⛔ إلزامي قبل أي عمل — سياسة حفظ العمل (2026-11-20)
+
+**GitHub هو النسخة الدائمة. الحاوية والمساحة المحلية مؤقتتان. أي عمل ليس في
+commit مدفوع على `origin` معرّض للضياع.**
+
+```bash
+./scripts/session/session start                       # قبل أي تعديل — يجب أن يكون SAFE
+./scripts/session/session checkpoint -m "…"           # بعد كل جزء مكتمل ومُختبَر
+./scripts/session/session close                       # قبل إنهاء الجلسة — يجب أن ينجح
+./scripts/session/session backup                      # bundle مستقل + SHA-256
+./scripts/session/session recovery --target <جديد>    # بعد فقدان الحاوية
+```
+
+1. افحص حالة الحفظ قبل العمل (`session start`).
+2. لا تبدأ مهمة فوق أعمال غير محفوظة.
+3. احفظ التقدم المرحلي في Git (`session checkpoint`).
+4. ادفع نقاط الحفظ إلى GitHub عند سلامة الحالة.
+5. لا تعتبر commit محليًا نسخة احتياطية دائمة.
+6. لا تُنهِ مهمة مكتملة قبل التحقق من الدفع (`origin/<branch> == HEAD`).
+7. لا تُنهِ جلسة قبل فحص الملفات والـcommits غير المدفوعة (`session close`).
+8. لا تستخدم أوامر Git التدميرية: لا `push --force`، لا `reset --hard`، لا `clean`، لا حذف فروع/نسخ.
+9. لا تتجاوز قيود الموافقات، ولا ترفع أسرارًا أو bundles إلى المستودع العام.
+10. عند أي تعارض أو غموض: احمِ العمل (bundle + checkpoint) وتوقّف — لا تستبدل.
+
+الأدلة الكاملة: [`docs/session/`](docs/session/README.md) — ابدأ منها لا من ذاكرة المحادثة.
+
 ## المشروع
 
 منصة وساطة تجارية B2B/B2C عالمية: Marketplace + Commerce + Trust + AI + Advertising + Analytics.
@@ -898,3 +924,16 @@ npx playwright install --with-deps chromium
 - **Migration `0041_flimsy_winter_soldier`** إضافية (أعمدة + جدول + فهرسين) — لا DROP.
 - **بيئة الاختبار المحلية**: PostgreSQL 17 على `127.0.0.1:5434`، والدخول عبر `TEST_DATABASE_URL=postgresql://wasit:wasit_test_password@127.0.0.1:5434/wasit_test` (حرّاس `tests/test-db-guard.ts` تمنع أي هدف آخر).
 - **إخفاقان بيئيان معروفان في الحزمة الكاملة المتوازية**: `a1-kill-switch` يحسب `ai_requests` عالميًا (يمرّ منفردًا)، و`marketing-video` يحتاج ثنائية `ffmpeg-static` (`node node_modules/ffmpeg-static/install.js`).
+
+## نظام استمرارية العمل — تفاصيل تشغيلية (2026-11-20)
+
+- **الأدوات**: `scripts/session/session-{start,checkpoint,close,status,recovery,backup}.sh` + `lib/session-common.sh`، وواجهة موحّدة `scripts/session/session <subcommand>`، ومقابلات npm: `npm run session:start|checkpoint|close|status|backup|recovery|selftest`.
+- **رموز الخروج**: `0` سليم · `1` مرفوض/غير آمن (الأسباب تُطبع) · `3` خطأ استخدام أو لسنا في مستودع.
+- **`session-start`** يرفض الحالة إذا: شجرة غير نظيفة، commits غير مدفوعة، متأخر عن البعيد، detached HEAD، stashes، أو تعذّر التحقق من GitHub. `--report-only` للعرض فقط — **لا تستخدمه لتجاوز المنع**.
+- **`session-checkpoint`** يرفض افتراضيًا العمل على `master` (استخدم فرع مهمة، أو `--allow-master` للمسار المعتمد fast-forward). يفحص السطور المضافة في الـstaged diff بأنماط أسرار عالية الثقة؛ عند الرفض لا commit ولا push. `--push-only` لإكمال دفع انقطع.
+- **`session-close`** يفشل عند: تعارضات، شجرة غير نظيفة، stashes (إلا `--ack-stash`)، commits غير مدفوعة، تعذّر التحقق من البعيد (لا `--no-fetch` للنجاح)، أو ملفات مهمة متجاهَلة (إلا `--ack-ignored`).
+- **`session-backup`** يكتب `wasit-<UTC>-<label>.bundle` في `backups/git` (مستثنى من Git) مع `manifest.tsv` (sha256/size/head/branch/refs). `--prune` وحده يحذف، ولا يحذف ما عمره < 7 أيام.
+- **`session-recovery`** يرفض هدفًا موجودًا غير فارغ، ويطلب `--sha256` للـbundle قبل `git bundle verify`. لا يحذف ولا يستبدل شيئًا.
+- **ملفات لا يحميها Git أبدًا**: `.env*`، `backups/*.dump`، `packages/server/.wasit-media/`، `e2e/.auth/`، `node_modules/`. تُبلَّغ دائمًا؛ انسخها خارجيًا قبل نهاية الجلسة.
+- **الاختبار العملي**: `./scripts/session/session-selftest.sh` (22 فحصًا على فرع اختبار، لا master) — النتائج في `docs/session/08-test-results.md`.
+- **الأدلة**: `docs/session/README.md` + 8 أدلة (بداية، checkpoint، إغلاق، استعادة، backup، تعارضات، احتفاظ، نتائج).
