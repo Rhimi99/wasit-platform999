@@ -14,6 +14,8 @@ import { writeAudit, type AuditContext } from '../../lib/audit';
 import { anonymizeUser, type AnonymizationResult } from '../../lib/anonymize';
 import { resolveMergedPolicy } from '../../lib/policy-engine';
 import { recordCountryPolicyGap, resolveCountryPolicyGap } from '../../lib/country-policy-gaps';
+import { normalizePhone } from '../auth/service';
+import { LEGAL_DOCUMENTS, findLegalDocument, isAcceptable, needsReacceptance, appliesToRoles, type LegalDocumentEntry } from '../../lib/legal/catalogue';
 import { newId } from '../../lib/ids';
 
 type DeletionStage = (typeof deletionStageEnum.enumValues)[number];
@@ -21,6 +23,7 @@ type DeletionStage = (typeof deletionStageEnum.enumValues)[number];
 export const CONSENT_TYPES = [
   'TERMS',
   'PRIVACY_POLICY',
+  'COOKIE_POLICY',
   'COMMUNICATIONS',
   'MARKETING',
   'DATA_PROCESSING',
@@ -201,6 +204,246 @@ export async function getConsentState(
   }));
 
   return { consents: normalized, defaults, settings: settings[0] ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Rectification (data-subject right to correct) — LC-01
+// ---------------------------------------------------------------------------
+
+export interface RectificationInput {
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  locale?: string | null;
+  displayName?: string | null;
+}
+
+/**
+ * Applies a self-service correction to the caller's own profile. Only a
+ * whitelisted set of fields is writable — never email (an identity/contact
+ * change that must go through verification, not a free edit) and never any
+ * verification flag. The email and verification status are therefore
+ * structurally out of reach here, not merely omitted from a schema.
+ */
+export async function rectifyOwnProfile(
+  db: DB,
+  ctx: ConsentAuditContext,
+  input: RectificationInput,
+): Promise<{ changed: string[] }> {
+  const userId = ctx.userId;
+  const now = new Date();
+
+  const [before] = await db
+    .select({
+      firstName: users.firstName,
+      lastName: users.lastName,
+      phone: users.phone,
+      locale: users.locale,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!before) throw ApiError.notFound('User');
+
+  const patch: { firstName?: string | null; lastName?: string | null; phone?: string | null; locale?: string } = {};
+  if (input.firstName !== undefined) patch.firstName = input.firstName?.trim().slice(0, 100) || null;
+  if (input.lastName !== undefined) patch.lastName = input.lastName?.trim().slice(0, 100) || null;
+  if (input.phone !== undefined) patch.phone = normalizePhone(input.phone);
+  if (input.locale !== undefined && input.locale) patch.locale = input.locale;
+
+  const changed: string[] = (Object.keys(patch) as Array<keyof typeof patch>).filter(
+    (k) => (patch[k] ?? null) !== ((before[k] ?? null) as string | null),
+  );
+
+  if (changed.length > 0) {
+    await db
+      .update(users)
+      .set({ ...patch, updatedAt: now })
+      .where(eq(users.id, userId));
+  }
+
+  if (input.displayName !== undefined) {
+    const [existingProfile] = await db
+      .select({ userId: profiles.userId, displayName: profiles.displayName })
+      .from(profiles)
+      .where(eq(profiles.userId, userId))
+      .limit(1);
+    const nextDisplayName = input.displayName?.trim().slice(0, 150) || null;
+    if (existingProfile) {
+      if ((existingProfile.displayName ?? null) !== nextDisplayName) {
+        await db.update(profiles).set({ displayName: nextDisplayName, updatedAt: now }).where(eq(profiles.userId, userId));
+        changed.push('displayName');
+      }
+    } else if (nextDisplayName) {
+      await db.insert(profiles).values({ userId, displayName: nextDisplayName });
+      changed.push('displayName');
+    }
+  }
+
+  await writeAudit(
+    db,
+    { actorId: ctx.actorId ?? userId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    {
+      action: 'PRIVACY.RECTIFICATION',
+      entityType: 'USER',
+      entityId: userId,
+      // Record which fields changed, never the values themselves.
+      after: { fields: changed },
+      metadata: { source: 'USER' },
+    },
+  );
+
+  return { changed };
+}
+
+// ---------------------------------------------------------------------------
+// Legal-document acceptance (LC-01)
+// ---------------------------------------------------------------------------
+
+/**
+ * Records a user's acceptance of a specific *version* of a legal document. This
+ * is distinct from `setConsent`: a consent is a grant/revoke of a processing
+ * purpose, whereas acceptance pins the exact text version the user agreed to,
+ * with the instant and the client context. Storing the version is what makes
+ * "re-accept when the terms change" answerable later — a bare boolean cannot.
+ *
+ * The catalogue is the source of truth for which version is in force; the route
+ * refuses any document that is not published-and-acceptable, so this function is
+ * only ever reached for a real, approved text.
+ */
+export async function recordLegalAcceptance(
+  db: DB,
+  ctx: ConsentAuditContext,
+  input: { documentCode: string; version: string; locale?: string },
+  catalogue: readonly LegalDocumentEntry[] = LEGAL_DOCUMENTS,
+): Promise<{ documentCode: string; version: string; acceptedAt: string }> {
+  const now = new Date();
+  const acceptedAt = now.toISOString();
+  const metadata = {
+    version: input.version,
+    locale: input.locale ?? null,
+    acceptedAt,
+    userAgent: ctx.userAgent ?? null,
+    ip: ctx.ipAddress ?? null,
+  };
+
+  // Mirror into the generic consent table so the disclosure/acceptance appears
+  // in the user's consent list alongside the other consents. `setConsent` also
+  // appends the consent_events history row and the audit entry.
+  const entry = findLegalDocument(input.documentCode, catalogue);
+  if (entry?.consentType) {
+    await setConsent(db, ctx, entry.consentType, true, 'USER');
+  }
+
+  await db.insert(consentEvents).values({
+    id: newId(),
+    userId: ctx.userId,
+    consentType: 'LEGAL_DOCUMENT',
+    action: 'ACCEPT',
+    granted: true,
+    actorId: ctx.actorId ?? null,
+    source: 'USER',
+    metadata: { documentCode: input.documentCode, ...metadata },
+  });
+
+  await writeAudit(
+    db,
+    { actorId: ctx.actorId ?? ctx.userId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    {
+      action: 'LEGAL.DOCUMENT_ACCEPTED',
+      entityType: 'USER',
+      entityId: ctx.userId,
+      after: { documentCode: input.documentCode, version: input.version },
+      metadata,
+    },
+  );
+
+  return { documentCode: input.documentCode, version: input.version, acceptedAt };
+}
+
+/** Latest accepted version per document code for a user, from the append-only log. */
+export async function getAcceptedVersions(db: DB, userId: string): Promise<Record<string, string>> {
+  const rows = await db
+    .select({ metadata: consentEvents.metadata })
+    .from(consentEvents)
+    .where(and(eq(consentEvents.userId, userId), eq(consentEvents.consentType, 'LEGAL_DOCUMENT'), eq(consentEvents.action, 'ACCEPT')))
+    .orderBy(desc(consentEvents.createdAt));
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const m = (r.metadata ?? {}) as Record<string, unknown>;
+    const code = typeof m.documentCode === 'string' ? m.documentCode : null;
+    const version = typeof m.version === 'string' ? m.version : null;
+    if (code && version && !(code in out)) out[code] = version;
+  }
+  return out;
+}
+
+/**
+ * The legal documents a user must (re-)accept, from the code catalogue versus
+ * their recorded acceptances, scoped to the audiences their roles cover. A
+ * missing acceptance and a stale version are both "needs acceptance"; a document
+ * that is not yet published is never demanded, so the platform does not block
+ * users on an unapproved draft; and a document whose audience does not match any
+ * of the user's roles is never demanded either, so a buyer is never asked to
+ * accept seller terms (LC-01.1, H1).
+ *
+ * `roles` is the caller's trusted role set (from the session) and is optional
+ * for the audience-neutral call sites that pass no user; when it is absent or
+ * empty, only `ALL` documents apply.
+ */
+export async function getPendingLegalAcceptances(
+  db: DB,
+  userId: string,
+  catalogue: readonly LegalDocumentEntry[] = LEGAL_DOCUMENTS,
+  roles: readonly string[] = [],
+): Promise<Array<{ code: string; title: { ar: string; en: string }; version: string }>> {
+  const accepted = await getAcceptedVersions(db, userId);
+  return catalogue.filter(
+    (d) =>
+      d.acceptanceRequired &&
+      isAcceptable(d) &&
+      appliesToRoles(d, roles) &&
+      needsReacceptance(d, accepted[d.code] ?? null),
+  ).map((d) => ({ code: d.code, title: d.title, version: d.version }));
+}
+
+/**
+ * The caller's own legal-acceptance history: one entry per acceptance act, from
+ * the append-only log, newest first. Scoped to the given user id and never
+ * exposing any other user's rows — the only caller passes the session user.
+ * Only the fields needed to show "what you agreed to, when" are returned; the
+ * captured client context (ip/user-agent) is deliberately omitted.
+ */
+export async function listLegalAcceptances(
+  db: DB,
+  userId: string,
+): Promise<Array<{ documentCode: string; version: string; acceptedAt: string | null; locale: string | null }>> {
+  const rows = await db
+    .select({ metadata: consentEvents.metadata, createdAt: consentEvents.createdAt })
+    .from(consentEvents)
+    .where(
+      and(
+        eq(consentEvents.userId, userId),
+        eq(consentEvents.consentType, 'LEGAL_DOCUMENT'),
+        eq(consentEvents.action, 'ACCEPT'),
+      ),
+    )
+    .orderBy(desc(consentEvents.createdAt));
+
+  return rows.flatMap((r) => {
+    const m = (r.metadata ?? {}) as Record<string, unknown>;
+    const documentCode = typeof m.documentCode === 'string' ? m.documentCode : null;
+    const version = typeof m.version === 'string' ? m.version : null;
+    if (!documentCode || !version) return [];
+    return [
+      {
+        documentCode,
+        version,
+        acceptedAt: typeof m.acceptedAt === 'string' ? m.acceptedAt : r.createdAt.toISOString(),
+        locale: typeof m.locale === 'string' ? m.locale : null,
+      },
+    ];
+  });
 }
 
 export async function setConsent(
