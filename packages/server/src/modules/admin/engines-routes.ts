@@ -10,6 +10,7 @@ import { getRiskProfile, listRiskProfiles, reassessUserRisk } from '../risk/serv
 import {
   assignDispute,
   decideDispute,
+  escalateOverdueDisputes,
   getDisputeDetail,
   listAllDisputes,
   listDisputeAppeals,
@@ -53,13 +54,25 @@ const reviewAppealSchema = z.object({
 });
 
 export const adminEnginesRoutes = new Hono();
-adminEnginesRoutes.use('*', requireAuth, requirePermission(
-  PERMISSIONS.ADMIN_VERIFICATION,
-  PERMISSIONS.ADMIN_TRUST,
-  PERMISSIONS.ADMIN_RISK,
-  PERMISSIONS.ADMIN_DISPUTES,
-  PERMISSIONS.ADMIN_REPORTS,
-));
+
+// The general admin guard in `adminRoutes` deliberately steps aside for the
+// specialised desk prefixes so staff roles can reach them. That makes these
+// per-desk guards the real authorization boundary, so each desk is gated by the
+// permission a role must actually hold for it — not by role name.
+//
+// Verification: the desk exposes every request's documents, so it needs
+// VERIFICATION_REVIEW (staff reviewer) — VERIFICATION_READ alone is held by
+// every trading role and would leak PII. The decision endpoint narrows further
+// to VERIFICATION_APPROVE/REJECT.
+const verificationDesk = requirePermission(PERMISSIONS.VERIFICATION_REVIEW);
+const trustDesk = requirePermission(PERMISSIONS.TRUST_READ);
+const riskDesk = requirePermission(PERMISSIONS.RISK_READ);
+const disputeDesk = requirePermission(PERMISSIONS.DISPUTE_REVIEW, PERMISSIONS.DISPUTE_MANAGE);
+
+adminEnginesRoutes.use('/verification/*', requireAuth, verificationDesk);
+adminEnginesRoutes.use('/trust/*', requireAuth, trustDesk);
+adminEnginesRoutes.use('/risk/*', requireAuth, riskDesk);
+adminEnginesRoutes.use('/disputes/*', requireAuth, disputeDesk);
 
 // ----- Verification -----
 adminEnginesRoutes.get('/verification/requests', async (c) => {
@@ -187,6 +200,19 @@ adminEnginesRoutes.post('/disputes/:id/appeals/:appealId/review', validateBody(r
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof reviewAppealSchema>>(c);
   const result = await reviewDisputeAppeal(ctx.db, ctx.user!.id, c.req.param('id')!, c.req.param('appealId')!, body);
+  return c.json({ success: true, data: result });
+});
+
+// Dispute auto-escalation maintenance. The scheduler escalates on an interval;
+// this lets an operator (or an external cron) trigger the same idempotent sweep.
+adminEnginesRoutes.post('/disputes/escalate-overdue', requireAuth, requirePermission(PERMISSIONS.DISPUTE_MANAGE), async (c) => {
+  const ctx = getContext(c);
+  const result = await escalateOverdueDisputes(ctx.db);
+  await writeAudit(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'DISPUTE.ESCALATION_SWEEP_RUN',
+    entityType: 'DISPUTE',
+    after: { scanned: result.scanned, escalated: result.escalated },
+  });
   return c.json({ success: true, data: result });
 });
 

@@ -3,7 +3,7 @@ import type { DB } from '../../db/client';
 import { auditLogs } from '../../db/schema/audit';
 import { users, sessions } from '../../db/schema/auth';
 import { analyticsEvents, dailyKpis, dashboardReports } from '../../db/schema/analytics';
-import { orders, transactions, transactionLedger } from '../../db/schema/commerce';
+import { orders, sellerOrders, transactions, transactionLedger } from '../../db/schema/commerce';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { products } from '../../db/schema/products';
 import { inventoryItems } from '../../db/schema/commerce_extras';
@@ -409,7 +409,15 @@ export async function getMyAnalyticsOverview(
   const idsSet = new Set(sellerIds);
   const ids = Array.from(idsSet);
 
-  const sellerCond = sql`${orders.sellerId} in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`;
+  // A seller's orders are the ones attributed to them directly (single-seller
+  // parent, pre- and post-M2) OR any parent order they hold a suborder on. The
+  // second term is what makes a multi-seller basket count for every seller in
+  // it, not just whichever seller the parent happens to name.
+  const idsSql = sql.join(ids.map((i) => sql`${i}`), sql`, `);
+  const sellerCond = sql`(
+    ${orders.sellerId} in (${idsSql})
+    or ${orders.id} in (select parent_order_id from seller_orders where seller_id in (${idsSql}))
+  )`;
   // Money figures are scoped to one currency so a seller trading in several
   // currencies never sees their GMV/commission silently summed across them.
   const sellerMoneyCond = sql`${sellerCond} and ${orders.currencyCode} = ${currencyCode}`;
@@ -422,8 +430,13 @@ export async function getMyAnalyticsOverview(
       db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems).where(sql`(merchant_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})) and quantity <= low_stock_threshold and quantity > 0`),
       db.select({ v: sql<number>`count(*)::int` }).from(inventoryItems).where(sql`(merchant_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})) and quantity <= 0`),
       db.select({ v: sql<number>`count(*)::int` }).from(orders).where(sellerCond),
-      db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(orders).where(sellerMoneyCond),
-      db.select({ v: sql<string>`coalesce(sum(commission - buyer_commission),0)::text` }).from(orders).where(sellerMoneyCond),
+      // GMV/commission are summed from each seller's SUBORDER, not the parent:
+      // a multi-seller parent's totals span every seller in it, so summing the
+      // parent would credit each seller with the whole basket (double counting).
+      // A single-seller order's suborder carries that seller's full amount, so
+      // this stays exact for the common case too.
+      db.select({ v: sql<string>`coalesce(sum(items_total),0)::text` }).from(sellerOrders).where(sql`${sellerOrders.sellerId} in (${idsSql}) and ${sellerOrders.currencyCode} = ${currencyCode}`),
+      db.select({ v: sql<string>`coalesce(sum(commission - buyer_commission),0)::text` }).from(sellerOrders).where(sql`${sellerOrders.sellerId} in (${idsSql}) and ${sellerOrders.currencyCode} = ${currencyCode}`),
       db.select({ v: sql<number>`count(distinct buyer_id)::int` }).from(orders).where(sellerCond),
       db.select({ v: sql<number>`count(*)::int` }).from(auditLogs).where(and(eq(auditLogs.entityType, 'ORDER'), sql`${auditLogs.entityId} in (select id from orders where ${sellerCond})`)),
       db.select({ v: sql<number>`count(*)::int` }).from(campaigns).where(sql`advertiser_id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`),

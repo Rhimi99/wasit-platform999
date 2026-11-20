@@ -14,10 +14,35 @@ import { writeAudit } from '../../lib/audit.js';
 import { reportingCurrency } from '../../lib/env.js';
 import { resolveCurrencyScope } from '../../lib/currency-scope.js';
 
+/**
+ * The specialised staff desks (verification, trust, risk, disputes) are owned by
+ * `adminEnginesRoutes`, which sits on the same `/api/admin` prefix but enforces
+ * its own per-desk permissions. Those prefixes are the only paths the general
+ * admin guard steps aside for, so the specialised staff roles (SUPPORT/RISK/
+ * DISPUTE) can reach exactly the desks their RBAC permissions allow.
+ *
+ * Everything else under `/api/admin` stays ADMIN/SUPER_ADMIN only — including
+ * the sibling sub-apps (ai, analytics, policies, countries, observability, tax,
+ * finance) that rely on this blanket guard for defence in depth.
+ */
+const SPECIALIZED_DESK_PREFIXES = ['/verification', '/trust', '/risk', '/disputes'] as const;
+
+function isSpecializedDeskPath(path: string): boolean {
+  const relative = path.startsWith('/api/admin') ? path.slice('/api/admin'.length) : path;
+  return SPECIALIZED_DESK_PREFIXES.some(
+    (prefix) => relative === prefix || relative.startsWith(`${prefix}/`),
+  );
+}
+
+const generalAdminOnly = requireRole('ADMIN', 'SUPER_ADMIN');
+
 /** Admin-only sub-app. Every route requires ADMIN or SUPER_ADMIN role. */
 export const adminRoutes = new Hono();
 
-adminRoutes.use('*', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
+adminRoutes.use('*', requireAuth, async (c, next) => {
+  if (isSpecializedDeskPath(c.req.path)) return next();
+  return generalAdminOnly(c, next);
+});
 
 const statsQuerySchema = z.object({
   currency: z.string().length(3).optional(),
@@ -222,6 +247,9 @@ adminRoutes.get('/orders', async (c) => {
       // refunded (only PAID / PARTIALLY_REFUNDED) and to show what already went back.
       paymentStatus: orders.paymentStatus,
       refundStatus: orders.refundStatus,
+      // `sellerId` is null for a multi-seller parent order; `metadata.sellerCount`
+      // tells the desk how many seller suborders the basket was split into.
+      metadata: orders.metadata,
       createdAt: orders.createdAt,
     })
     .from(orders)

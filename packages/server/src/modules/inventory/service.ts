@@ -37,12 +37,14 @@ export async function resolveOwnedSellerId(db: DB, userId: string): Promise<stri
 
 export async function listMyInventory(
   db: DB,
-  sellerId: string,
+  sellerId: string | null,
   query: InventoryListQuery = {},
 ): Promise<{ items: Array<Record<string, unknown>>; total: number; page: number; pageSize: number }> {
   const { page, pageSize } = normalizePage(query.page);
 
-  const conditions: ReturnType<typeof sql>[] = [eq(inventoryItems.merchantId, sellerId)];
+  // A null seller id means the caller reads across every seller (admin scope);
+  // otherwise the list is pinned to the caller's own entity.
+  const conditions: ReturnType<typeof sql>[] = sellerId ? [eq(inventoryItems.merchantId, sellerId)] : [];
 
   if (query.q) {
     conditions.push(sql`(
@@ -107,11 +109,12 @@ export async function listMyInventory(
   return { items, total: Number(total), page, pageSize };
 }
 
-export async function getMyInventoryItem(db: DB, sellerId: string, itemId: string) {
-  const item = await db.select().from(inventoryItems).where(and(
-    eq(inventoryItems.id, itemId),
-    eq(inventoryItems.merchantId, sellerId),
-  )).limit(1);
+export async function getMyInventoryItem(db: DB, sellerId: string | null, itemId: string) {
+  const item = await db.select().from(inventoryItems).where(
+    sellerId
+      ? and(eq(inventoryItems.id, itemId), eq(inventoryItems.merchantId, sellerId))
+      : eq(inventoryItems.id, itemId),
+  ).limit(1);
   if (item.length === 0) throw ApiError.notFound('Inventory item not found');
 
   const product = await db.select().from(products).where(eq(products.id, item[0].productId)).limit(1);
@@ -253,7 +256,7 @@ export async function setMyStock(
 
 export async function listMyMovements(
   db: DB,
-  sellerId: string,
+  sellerId: string | null,
   itemId: string,
   query: { page?: number } = {},
 ) {

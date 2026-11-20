@@ -186,13 +186,13 @@ adminAnalyticsRoutes.post('/events', requirePermission(PERMISSIONS.ADMIN_ANALYTI
   return c.json({ success: true, data: result }, 201);
 });
 
-adminAnalyticsRoutes.get('/reports', async (c) => {
+adminAnalyticsRoutes.get('/reports', requirePermission(PERMISSIONS.ADMIN_REPORTS), async (c) => {
   const ctx = getContext(c);
   const data = await listDashboardReports(ctx.db);
   return c.json({ success: true, data: { items: data } });
 });
 
-adminAnalyticsRoutes.post('/reports', validateBody(reportSchema), async (c) => {
+adminAnalyticsRoutes.post('/reports', requirePermission(PERMISSIONS.ADMIN_REPORTS), validateBody(reportSchema), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<{ reportCode: string; title: string; reportData?: Record<string, unknown> }>(c);
   const result = await createDashboardReport(ctx.db, ctx.user!.id, {

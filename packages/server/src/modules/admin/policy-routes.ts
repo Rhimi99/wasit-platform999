@@ -35,6 +35,7 @@ const decisionEffectsSchema = z.record(
 /** Numeric rule fields the admin may edit; each is a positive whole number of days/count. */
 const disputeRulesSchema = z.object({
   openWindowDays: z.number().int().positive().max(3650).optional(),
+  responseWindowDays: z.number().int().positive().max(3650).optional(),
   evidenceDeadlineDays: z.number().int().positive().max(3650).optional(),
   decisionDeadlineDays: z.number().int().positive().max(3650).optional(),
   appealWindowDays: z.number().int().positive().max(3650).optional(),
