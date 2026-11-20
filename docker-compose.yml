@@ -136,6 +136,10 @@ services:
       BACKUP_ROOT: /backups
       BACKUP_RETENTION_COUNT: ${BACKUP_RETENTION_COUNT:-7}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      # Off by default, so this image needs no extra tool. Setting it to `age`
+      # requires the `age` binary in the image (add it to a derived image) plus
+      # BACKUP_AGE_RECIPIENTS; see docs/commercial-release/08-OPERATIONS-RUNBOOK.md.
+      BACKUP_ENCRYPTION: ${BACKUP_ENCRYPTION:-off}
     volumes:
       - backup-data:/backups
       - ./scripts:/scripts:ro
