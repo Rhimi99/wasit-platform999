@@ -7,6 +7,8 @@ export interface AuthUser {
   email: string;
   emailVerified: boolean;
   isActive: boolean;
+  /** Whether the account has an enabled second factor (TOTP). */
+  mfaEnabled: boolean;
   roles: UserRole[];
 }
 
@@ -43,6 +45,17 @@ export function getDb(c: Context): DB {
 
 export function setContext(c: Context, ctx: AppContext): void {
   c.set(AppContextKey as never, ctx);
+}
+
+/**
+ * Replaces the authenticated user on the request context, preserving the rest of
+ * the context. Used by the auth middleware to attach a user without rebuilding
+ * the whole context object (which would drop the db/trace fields).
+ */
+export function setAuthUser(c: Context, user: AuthUser): void {
+  const ctx = c.get(AppContextKey as never) as AppContext | undefined;
+  if (!ctx) return;
+  c.set(AppContextKey as never, { ...ctx, user });
 }
 
 export function getContext(c: Context): AppContext {
