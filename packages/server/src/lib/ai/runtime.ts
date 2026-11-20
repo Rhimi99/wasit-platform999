@@ -4,9 +4,19 @@ import type { DB } from '../../db/client';
 import { aiModels } from '../../db/schema/ai';
 import { eq } from 'drizzle-orm';
 import { env } from '../env';
+import { assertAiExecutionEnabled } from './kill-switch';
+import { ApiError } from '@wasit/shared';
 import type { AIFeatureResult, AIProvider } from './types';
 import { resolveProvider, estimateTokens } from './provider';
 import { logger } from '../observability/logger';
+import {
+  getAgentRunBudget,
+  getAgentRunContext,
+  mergeAgentTaskMetadata,
+  AgentRunBudgetExceededError,
+  AgentCostRecordingError,
+  AGENT_TASK_LEDGER_KEY,
+} from './agent-run-context';
 import {
   assertWithinBudget,
   recordAiRequest,
@@ -22,6 +32,28 @@ export interface ModelPrice {
   currencyCode: string;
   inputPer1k: Decimal;
   outputPer1k: Decimal;
+}
+
+/**
+ * Parses a configured per-1k price into an exact, non-negative Decimal.
+ *
+ * Fail-closed: a negative, non-numeric, NaN or infinite catalogue value is a
+ * misconfiguration that could otherwise yield a NEGATIVE cost estimate and so
+ * widen (or invert) the budget instead of bounding it. Such a value is refused
+ * (503) rather than silently coerced to zero. A zero price is valid (free/local
+ * models) and returned as-is. No non-numeric or infinite Decimal ever escapes.
+ */
+function parsePricePer1k(raw: unknown): Decimal {
+  let value: Decimal;
+  try {
+    value = new Decimal((raw ?? '0') as Decimal.Value);
+  } catch {
+    throw ApiError.serviceUnavailable('AI model pricing is misconfigured (non-numeric price)');
+  }
+  if (!value.isFinite() || value.lt(0)) {
+    throw ApiError.serviceUnavailable('AI model pricing is misconfigured (invalid price)');
+  }
+  return value;
 }
 
 /**
@@ -50,8 +82,8 @@ export async function resolveModelPrice(db: DB, modelKey: string): Promise<Model
     provider: m.provider,
     displayName: m.displayName,
     currencyCode: m.currencyCode,
-    inputPer1k: new Decimal(m.inputPer1k || '0'),
-    outputPer1k: new Decimal(m.outputPer1k || '0'),
+    inputPer1k: parsePricePer1k(m.inputPer1k),
+    outputPer1k: parsePricePer1k(m.outputPer1k),
   };
 }
 
@@ -110,6 +142,22 @@ export interface RunFeatureOutput {
 }
 
 /**
+ * Strips the server-owned reconciliation key from caller-supplied metadata.
+ *
+ * Used on the no-run-context path so a direct caller (`/api/ai/run`) can never
+ * plant `metadata[AGENT_TASK_LEDGER_KEY]` and have `reconcileTaskCostFromLedger`
+ * treat it as trusted evidence for a task it does not own (AI-INTEG-P3-G2). Every
+ * other key is preserved untouched, so master paths keep their exact behaviour.
+ */
+function stripReservedAgentMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const merged = { ...(metadata ?? {}) };
+  delete merged[AGENT_TASK_LEDGER_KEY];
+  return merged;
+}
+
+/**
  * Executes an AI feature end-to-end:
  * resolve provider → pre-budget check → provider call → cost calc → record → usage.
  *
@@ -120,6 +168,11 @@ export async function runAIFeature(
   db: DB,
   input: RunFeatureInput,
 ): Promise<RunFeatureOutput> {
+  // Central AI Kill Switch (A1): the innermost safety net. Every provider call
+  // in the platform flows through here, so a global disable stops ALL AI work —
+  // agent executors, smart features and one-off `/api/ai/run` alike — before any
+  // budget reservation or provider call. Fail-closed and LLM-independent.
+  assertAiExecutionEnabled();
   // Precedence: explicit caller model → deployment AI_MODEL → AI_DEFAULT_MODEL.
   const requestedModelKey = input.modelKey?.trim() || env.AI_MODEL?.trim() || env.AI_DEFAULT_MODEL;
   // The router may have chosen a provider; otherwise resolve from configuration.
@@ -142,6 +195,30 @@ export async function runAIFeature(
   };
   await assertWithinBudget(db, input.userId, input.roles, period, snapshot, env.AI_BUDGET_MONTHLY_USD);
 
+  // Per-run ceiling (agent tasks only, AI-INTEG-P3-T1). An ADDITIONAL guard on
+  // top of the monthly budget above — it does NOT replace it. When a run budget
+  // is bound to this async execution, the call's conservative estimate is
+  // reserved atomically BEFORE the provider call, so two concurrent calls in one
+  // run cannot both slip under the same remaining headroom: the second is refused
+  // up front. Outside an agent run there is no budget, so every guard below is
+  // skipped and behaviour is byte-for-byte unchanged.
+  const runBudget = getAgentRunBudget();
+  if (runBudget && !runBudget.reserve(estimated.cost)) {
+    throw new AgentRunBudgetExceededError(runBudget.maxCostUsd!.toFixed(10), runBudget.spentUsd.toFixed(10));
+  }
+
+  // Attribute this request to the running agent task, if any. With a trusted run
+  // context, `taskId`/`agentKey` come from it (never `input`), so a forged value
+  // cannot attribute a request to another task/agent. With no context the
+  // caller's metadata is kept as-is — EXCEPT the server-owned reconciliation key,
+  // which is always stripped so a direct caller (e.g. `/api/ai/run`) can never
+  // plant trusted-looking evidence for `reconcileTaskCostFromLedger`
+  // (AI-INTEG-P3-G2). Every other key is preserved, so master behaviour is intact.
+  const runCtx = getAgentRunContext();
+  const requestMetadata = runCtx
+    ? mergeAgentTaskMetadata(input.metadata, runCtx)
+    : stripReservedAgentMetadata(input.metadata);
+
   const started = Date.now();
   let result;
   try {
@@ -154,6 +231,9 @@ export async function runAIFeature(
       model: vendorModel,
     });
   } catch (err) {
+    // The call never produced a billable result, so release the reservation: the
+    // run must not be charged for a call that did not complete.
+    runBudget?.release(estimated.cost);
     const latencyMs = Date.now() - started;
     // Persist the failed attempt (no tokens billed) so the ledger and the audit
     // trail reflect that a provider call was made and did not succeed.
@@ -168,7 +248,7 @@ export async function runAIFeature(
       status: (err as { statusCode?: number }).statusCode === 503 ? 'UNAVAILABLE' : 'FAILED',
       latencyMs,
       metadata: {
-        ...(input.metadata ?? {}),
+        ...requestMetadata,
         provider: provider.id,
         errorName: (err as Error).name,
         providerStatus: (err as { statusCode?: number }).statusCode ?? null,
@@ -184,18 +264,38 @@ export async function runAIFeature(
   // Exact cost from the measured tokens.
   const actualCost = price.inputPer1k.mul(result.tokensInput / 1000).plus(price.outputPer1k.mul(result.tokensOutput / 1000));
 
-  const requestId = await recordAiRequest(db, {
-    userId: input.userId,
-    requestType: input.requestType,
-    model: result.model,
-    tokensInput: result.tokensInput,
-    tokensOutput: result.tokensOutput,
-    cost: actualCost.toFixed(10),
-    currencyCode: price.currencyCode,
-    status: 'SUCCESS',
-    latencyMs,
-    metadata: { ...(input.metadata ?? {}), provider: provider.id },
-  });
+  // Settle the reservation to the measured cost (exactly once — the estimate is
+  // REPLACED, never added on top). The provider call already happened, so the
+  // money is spent whether or not the run stays within its ceiling: the cost is
+  // always recorded, and the accumulator always moves to the true spend so a
+  // later call can never be allowed on the strength of an unrecorded overshoot.
+  const overBudget = runBudget ? !runBudget.settle(estimated.cost, actualCost) : false;
+
+  // Record the measured cost. A failure here must NOT be swallowed: the provider
+  // was already paid, so reporting success would leave the run accounted as
+  // complete while its cost is missing from the ledger. The original database
+  // error is preserved as the `cause` (never hidden behind a secondary error) and
+  // surfaced as `AgentCostRecordingError`, which is retryable so a later attempt
+  // re-enters this path with the correct spend.
+  let requestId: string;
+  try {
+    requestId = await recordAiRequest(db, {
+      userId: input.userId,
+      requestType: input.requestType,
+      model: result.model,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      cost: actualCost.toFixed(10),
+      currencyCode: price.currencyCode,
+      status: overBudget ? 'OVER_BUDGET' : 'SUCCESS',
+      latencyMs,
+      metadata: overBudget
+        ? { ...requestMetadata, provider: provider.id, runBudgetExceeded: true }
+        : { ...requestMetadata, provider: provider.id },
+    });
+  } catch (err) {
+    throw new AgentCostRecordingError(actualCost.toFixed(10), err instanceof Error ? err.message : String(err));
+  }
 
   const window = currentPeriodWindow(period);
   await upsertAiUsage(db, input.userId, period, window, {
@@ -205,6 +305,19 @@ export async function runAIFeature(
     cost: actualCost.toFixed(10),
     currencyCode: price.currencyCode,
   });
+
+  if (overBudget) {
+    // Refuse the run only AFTER the full cost is on the ledger. The accumulator
+    // was settled to the true (over-cap) spend, so any subsequent call is refused
+    // up front too — the ceiling cannot be evaded by a retry. The measured call
+    // cost rides on the error so the task's termination path can persist it to
+    // `agent_tasks.cost` without re-deriving (or double-counting) the spend.
+    throw new AgentRunBudgetExceededError(
+      runBudget!.maxCostUsd!.toFixed(10),
+      runBudget!.spentUsd.toFixed(10),
+      actualCost.toFixed(10),
+    );
+  }
 
   return {
     content: result.content,

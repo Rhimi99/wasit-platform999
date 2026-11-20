@@ -2,6 +2,8 @@ import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import type { AgentDefinition } from '../../lib/ai/types';
 import { runAIFeature } from '../../lib/ai/runtime';
+import { requireAction } from '../../lib/ai/agent-run-context';
+import { withAgentDataScope } from './agent-scope';
 import { products, categories, productVariants, productImages } from '../../db/schema/products';
 import { suppliers, merchants, companies } from '../../db/schema/trade';
 import { orders, orderItems, transactions } from '../../db/schema/commerce';
@@ -29,6 +31,13 @@ export interface AgentExecutorResult {
   content: string;
   tokensInput: number;
   tokensOutput: number;
+  /**
+   * The exact USD cost of this task's provider call(s), when the executor knows
+   * it (i.e. when it routes through `runAIFeature`). Omitted by the deterministic
+   * executors that make no provider call, in which case the cost is unknown and
+   * must NOT be assumed to be zero (AI-INTEG-P3-T1.1 / F1).
+   */
+  cost?: string;
 }
 
 /** Safely parses a numeric DB field (numeric/text/number) to a plain number. */
@@ -104,6 +113,32 @@ async function countOpenSupportMessages(db: DB): Promise<number> {
     .where(and(eq(messages.isDeleted, false), eq(messages.status, 'SENT'), sql`${messages.readAt} is null`));
   return Number(rows[0]?.v ?? 0);
 }
+
+/**
+ * The exact capability action each executor performs, keyed by the trusted agent
+ * key (AI-INTEG-P3-T2). This is the executor's own declaration of the operation
+ * it is about to run; it is a code literal and never taken from task `input`.
+ *
+ * The value must match the action declared in the agent's catalogue
+ * `capabilities[].action`, which `buildRunContext` copies into the trusted run
+ * context's `authorizedActions` grant list. `executeAgentTask` calls
+ * `requireAction(EXECUTOR_ACTION[key])` at the execution boundary, so a run that
+ * has no trusted context, no grant, or a grant for a different agent's action is
+ * refused before the executor performs any read or provider call.
+ */
+const EXECUTOR_ACTION: Record<string, string> = {
+  'sales-agent': 'identify_leads',
+  'marketing-agent': 'recommend_campaign',
+  'ads-agent': 'recommend_ads',
+  'product-agent': 'analyze_product',
+  'support-agent': 'draft_reply',
+  'analytics-agent': 'generate_report',
+  'market-research-agent': 'market_overview',
+  'b2b-agent': 'match_b2b',
+  'risk-agent': 'assess_risk',
+  'dispute-assistant': 'summarize_dispute',
+  'development-agent': 'dev_plan',
+};
 
 // ---------- executors: one specialised query/output per agent ----------
 
@@ -189,7 +224,7 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -283,7 +318,7 @@ async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -360,7 +395,7 @@ async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -382,7 +417,7 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
       maxTokens: 48,
       metadata: { agentKey: agent.key },
     });
-    return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+    return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
   }
 
   const [variants, images, inventorySum] = await Promise.all([
@@ -448,7 +483,7 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
     metadata: { agentKey: agent.key, productId: p.id },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -500,7 +535,7 @@ async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<st
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execAnalyticsAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -566,7 +601,7 @@ async function execAnalyticsAgent(db: DB, agent: AgentDefinition, input: Record<
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execMarketResearchAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -617,7 +652,7 @@ async function execMarketResearchAgent(db: DB, agent: AgentDefinition, input: Re
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execB2BAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -673,7 +708,7 @@ async function execB2BAgent(db: DB, agent: AgentDefinition, input: Record<string
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execRiskAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -733,7 +768,7 @@ async function execRiskAgent(db: DB, agent: AgentDefinition, input: Record<strin
     metadata: { agentKey: agent.key, action: input.action, scope: userId ?? 'all' },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execDisputeAssistant(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -800,7 +835,7 @@ async function execDisputeAssistant(db: DB, agent: AgentDefinition, input: Recor
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -851,34 +886,49 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
     metadata: { agentKey: agent.key, action: input.action },
   });
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput };
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
 /** Routes an agent task to its specialised executor. Never uses mock data. */
 export async function executeAgentTask(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  // Trusted action gate (AI-INTEG-P3-T2). This is the single execution boundary
+  // every executor is reached through, so enforcing here — BEFORE any dispatch,
+  // read, or provider call — means no agent can perform an action without a
+  // trusted run context and an explicit grant for exactly that action. The
+  // action id is the executor's own code literal (never task `input`), and the
+  // grant list is read from the trusted context (never an argument), so a caller
+  // cannot widen its own authority. Fails closed: a missing context, a missing
+  // grant, or a grant for a different agent's action throws here.
+  requireAction(EXECUTOR_ACTION[agent.key] ?? agent.key);
+  // A2 data-scope enforcement: executors receive a scoped `db` handle, so every
+  // table access is checked against the run's agent scope at the ACTUAL access
+  // boundary. An executor cannot read outside its scope, write business data,
+  // run raw SQL or open a transaction — regardless of which executor, task,
+  // agent key or parameter is used. Fail-closed on a missing scope.
+  const scoped = withAgentDataScope(db);
   switch (agent.key) {
     case 'sales-agent':
-      return execSalesAgent(db, agent, input);
+      return execSalesAgent(scoped, agent, input);
     case 'marketing-agent':
-      return execMarketingAgent(db, agent, input);
+      return execMarketingAgent(scoped, agent, input);
     case 'ads-agent':
-      return execAdsAgent(db, agent, input);
+      return execAdsAgent(scoped, agent, input);
     case 'product-agent':
-      return execProductAgent(db, agent, input);
+      return execProductAgent(scoped, agent, input);
     case 'support-agent':
-      return execSupportAgent(db, agent, input);
+      return execSupportAgent(scoped, agent, input);
     case 'analytics-agent':
-      return execAnalyticsAgent(db, agent, input);
+      return execAnalyticsAgent(scoped, agent, input);
     case 'market-research-agent':
-      return execMarketResearchAgent(db, agent, input);
+      return execMarketResearchAgent(scoped, agent, input);
     case 'b2b-agent':
-      return execB2BAgent(db, agent, input);
+      return execB2BAgent(scoped, agent, input);
     case 'risk-agent':
-      return execRiskAgent(db, agent, input);
+      return execRiskAgent(scoped, agent, input);
     case 'dispute-assistant':
-      return execDisputeAssistant(db, agent, input);
+      return execDisputeAssistant(scoped, agent, input);
     case 'development-agent':
-      return execDevelopmentAgent(db, agent, input);
+      return execDevelopmentAgent(scoped, agent, input);
     default:
       throw new Error(`Unknown agent key: ${agent.key}`);
   }
