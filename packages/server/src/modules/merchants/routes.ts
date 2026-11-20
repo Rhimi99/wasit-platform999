@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
-import { requireAuth, requireRole } from '../../middleware/auth.js';
+import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '@wasit/shared';
 import { createMerchant, listMerchants, getMerchant, updateMerchant } from './service.js';
 
 const createMerchantSchema = z.object({
@@ -17,29 +18,49 @@ const updateMerchantSchema = createMerchantSchema.partial();
 
 export const merchantRoutes = new Hono();
 
-merchantRoutes.get('/', async (c) => {
+// Public directory of active merchants — public projection only.
+merchantRoutes.get('/', optionalAuth, async (c) => {
   const qs = c.req.query();
   const ctx = getContext(c);
   const result = await listMerchants(ctx.db, { q: qs.q, countryId: qs.countryId });
   return c.json({ success: true, data: result });
 });
 
-merchantRoutes.get('/:id', async (c) => {
+// A merchant profile: public projection for everyone, 404 when inactive unless
+// the caller is the owner or internal staff.
+merchantRoutes.get('/:id', optionalAuth, async (c) => {
   const ctx = getContext(c);
-  const merchant = await getMerchant(ctx.db, c.req.param('id')!);
+  const merchant = await getMerchant(ctx.db, c.req.param('id')!, {
+    userId: ctx.user?.id,
+    roles: ctx.user?.roles,
+  });
   return c.json({ success: true, data: merchant });
 });
 
-merchantRoutes.post('/', requireAuth, requireRole('MERCHANT'), validateBody(createMerchantSchema), async (c) => {
-  const body = getValidatedBody<z.infer<typeof createMerchantSchema>>(c);
-  const ctx = getContext(c);
-  const result = await createMerchant(ctx.db, { ...body, userId: ctx.user!.id }, { actorId: ctx.user!.id });
-  return c.json({ success: true, data: result }, 201 as never);
-});
+merchantRoutes.post(
+  '/',
+  requireAuth,
+  requireRoleOrPermission('MERCHANT', PERMISSIONS.MERCHANT_CREATE),
+  validateBody(createMerchantSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof createMerchantSchema>>(c);
+    const ctx = getContext(c);
+    const result = await createMerchant(ctx.db, { ...body, userId: ctx.user!.id }, { actorId: ctx.user!.id });
+    return c.json({ success: true, data: result }, 201 as never);
+  },
+);
 
-merchantRoutes.patch('/:id', requireAuth, validateBody(updateMerchantSchema), async (c) => {
-  const body = getValidatedBody<z.infer<typeof updateMerchantSchema>>(c);
-  const ctx = getContext(c);
-  const merchant = await updateMerchant(ctx.db, c.req.param('id')!, body, ctx.user!.id);
-  return c.json({ success: true, data: merchant });
-});
+// Ownership is enforced in the service (`row.userId !== actorId` → 403): holding
+// merchant:update is not enough to edit another merchant's profile.
+merchantRoutes.patch(
+  '/:id',
+  requireAuth,
+  requirePermission(PERMISSIONS.MERCHANT_UPDATE),
+  validateBody(updateMerchantSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof updateMerchantSchema>>(c);
+    const ctx = getContext(c);
+    const merchant = await updateMerchant(ctx.db, c.req.param('id')!, body, ctx.user!.id);
+    return c.json({ success: true, data: merchant });
+  },
+);

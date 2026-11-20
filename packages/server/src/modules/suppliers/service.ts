@@ -4,6 +4,38 @@ import type { DB } from '../../db/client.js';
 import { supplierContacts, suppliers } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
+import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+
+/**
+ * The supplier columns a public profile may expose. `userId`, `isActive` and the
+ * timestamps are deliberately absent: they are operational and must never reach a
+ * response, public or authenticated.
+ */
+export const SUPPLIER_PUBLIC_FIELDS = {
+  id: suppliers.id,
+  companyName: suppliers.companyName,
+  slug: suppliers.slug,
+  countryId: suppliers.countryId,
+  cityId: suppliers.cityId,
+  description: suppliers.description,
+  logoUrl: suppliers.logoUrl,
+  verified: suppliers.verified,
+} as const;
+
+/** Public fields plus the columns needed to authorize the caller (never returned). */
+const SUPPLIER_ROW_FIELDS = {
+  ...SUPPLIER_PUBLIC_FIELDS,
+  userId: suppliers.userId,
+  isActive: suppliers.isActive,
+} as const;
+
+/** Strips the authorization-only columns, yielding exactly the public projection. */
+function toPublicSupplier(row: Record<string, unknown>): Record<string, unknown> {
+  const { userId: _userId, isActive: _isActive, ...publicFields } = row;
+  void _userId;
+  void _isActive;
+  return publicFields;
+}
 
 export interface CreateSupplierInput {
   userId: string;
@@ -66,7 +98,7 @@ export async function listSuppliers(
     .where(and(...conditions));
 
   const rows = await db
-    .select()
+    .select(SUPPLIER_PUBLIC_FIELDS)
     .from(suppliers)
     .where(and(...conditions))
     .orderBy(asc(suppliers.companyName))
@@ -76,11 +108,33 @@ export async function listSuppliers(
   return { items: rows, pagination: { page, pageSize, total } };
 }
 
-export async function getSupplier(db: DB, id: string) {
-  const row = await db.select().from(suppliers).where(eq(suppliers.id, id)).limit(1);
+/** The supplier's private fields — the contact list. */
+async function loadSupplierContacts(db: DB, id: string) {
+  return db.select().from(supplierContacts).where(eq(supplierContacts.supplierId, id));
+}
+
+/**
+ * A single supplier profile.
+ *
+ * Everyone (including an anonymous visitor) receives the public projection only.
+ * The owner (`userId === viewer.userId`) and internal staff (`isEntityStaff`) also
+ * receive the private contact list. An inactive profile is a 404 to the public and
+ * to anyone who is not the owner/staff, so a suspended supplier's existence is
+ * never disclosed.
+ */
+export async function getSupplier(db: DB, id: string, viewer: EntityViewer = {}) {
+  const row = await db.select(SUPPLIER_ROW_FIELDS).from(suppliers).where(eq(suppliers.id, id)).limit(1);
   if (row.length === 0) throw ApiError.notFound('Supplier not found');
-  const contacts = await db.select().from(supplierContacts).where(eq(supplierContacts.supplierId, id));
-  return { ...row[0], contacts };
+
+  const isOwner = !!viewer.userId && viewer.userId === row[0].userId;
+  const isStaff = isEntityStaff(viewer);
+  if (!row[0].isActive && !isOwner && !isStaff) throw ApiError.notFound('Supplier not found');
+
+  const publicFields = toPublicSupplier(row[0] as unknown as Record<string, unknown>);
+  if (isOwner || isStaff) {
+    return { ...publicFields, contacts: await loadSupplierContacts(db, id) };
+  }
+  return publicFields;
 }
 
 export async function addSupplierContact(db: DB, input: CreateSupplierContactInput, ctx: { actorId: string }) {

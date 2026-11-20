@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getContext } from '../../lib/request-context.js';
 import { validateQuery, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
+import { isEntityStaff } from '../../lib/entity-access.js';
 import { ApiError, PERMISSIONS } from '@wasit/shared';
 import {
   listBuyers,
@@ -69,11 +70,19 @@ directoryRoutes.get('/my/:kind', requirePermission(PERMISSIONS.ORDER_READ_OWN), 
   return c.json({ success: true, data: result });
 });
 
-/** Platform-wide supplier directory (active suppliers). */
+/**
+ * Platform-wide supplier directory (active suppliers).
+ *
+ * Contact e-mail/phone is PII and is only included for a caller holding the staff
+ * permission for entity-private data (`user:read` — SUPPORT/RISK/DISPUTE/ADMIN/
+ * SUPER_ADMIN); a seller-role caller gets the directory without it.
+ */
 directoryRoutes.get('/suppliers', requirePermission(PERMISSIONS.SUPPLIER_LIST), validateQuery(listQuerySchema), async (c) => {
   const ctx = getContext(c);
   const query = getValidatedQuery<z.infer<typeof listQuerySchema>>(c);
-  const result = await listSupplierDirectory(ctx.db, query);
+  const result = await listSupplierDirectory(ctx.db, query, {
+    includeContacts: isEntityStaff({ roles: ctx.user!.roles }),
+  });
   return c.json({ success: true, data: result });
 });
 

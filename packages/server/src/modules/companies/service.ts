@@ -4,6 +4,43 @@ import type { DB } from '../../db/client.js';
 import { companies } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
+import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+
+/**
+ * The company columns a public profile may expose. The legal identifiers
+ * (`registrationNumber`, `taxId`) are private, as are `userId`, `isActive` and the
+ * timestamps — none of them reach a public response.
+ */
+export const COMPANY_PUBLIC_FIELDS = {
+  id: companies.id,
+  legalName: companies.legalName,
+  slug: companies.slug,
+  countryId: companies.countryId,
+  cityId: companies.cityId,
+  industry: companies.industry,
+  description: companies.description,
+  logoUrl: companies.logoUrl,
+  verified: companies.verified,
+} as const;
+
+/** Public fields plus the columns needed to authorize the caller (never returned). */
+const COMPANY_ROW_FIELDS = {
+  ...COMPANY_PUBLIC_FIELDS,
+  userId: companies.userId,
+  isActive: companies.isActive,
+  registrationNumber: companies.registrationNumber,
+  taxId: companies.taxId,
+} as const;
+
+/** Strips the authorization-only and private columns, yielding the public projection. */
+function toPublicCompany(row: Record<string, unknown>): Record<string, unknown> {
+  const { userId: _userId, isActive: _isActive, registrationNumber: _rn, taxId: _taxId, ...publicFields } = row;
+  void _userId;
+  void _isActive;
+  void _rn;
+  void _taxId;
+  return publicFields;
+}
 
 export interface CreateCompanyInput {
   userId: string;
@@ -60,7 +97,7 @@ export async function listCompanies(
     .from(companies)
     .where(and(...conditions));
   const rows = await db
-    .select()
+    .select(COMPANY_PUBLIC_FIELDS)
     .from(companies)
     .where(and(...conditions))
     .limit(pageSize)
@@ -68,10 +105,31 @@ export async function listCompanies(
   return { items: rows, pagination: { page, pageSize, total } };
 }
 
-export async function getCompany(db: DB, id: string) {
-  const rows = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
+/**
+ * A single company profile.
+ *
+ * Everyone receives the public projection (no legal/tax identifiers). The owner
+ * and internal staff additionally receive `registrationNumber`/`taxId`. An
+ * inactive profile is a 404 to the public and to anyone who is not the
+ * owner/staff.
+ */
+export async function getCompany(db: DB, id: string, viewer: EntityViewer = {}) {
+  const rows = await db.select(COMPANY_ROW_FIELDS).from(companies).where(eq(companies.id, id)).limit(1);
   if (rows.length === 0) throw ApiError.notFound('Company not found');
-  return rows[0];
+
+  const isOwner = !!viewer.userId && viewer.userId === rows[0].userId;
+  const isStaff = isEntityStaff(viewer);
+  if (!rows[0].isActive && !isOwner && !isStaff) throw ApiError.notFound('Company not found');
+
+  const publicFields = toPublicCompany(rows[0] as unknown as Record<string, unknown>);
+  if (isOwner || isStaff) {
+    return {
+      ...publicFields,
+      registrationNumber: rows[0].registrationNumber,
+      taxId: rows[0].taxId,
+    };
+  }
+  return publicFields;
 }
 
 export async function updateCompany(
@@ -94,5 +152,6 @@ export async function updateCompany(
       updatedAt: new Date(),
     })
     .where(eq(companies.id, id));
-  return getCompany(db, id);
+  // The owner just wrote the row, so the private/owner view is the right response.
+  return getCompany(db, id, { userId: actorId });
 }

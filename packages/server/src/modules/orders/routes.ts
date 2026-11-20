@@ -20,6 +20,9 @@ const createOrderSchema = z.object({
 
 const updateStatusSchema = z.object({
   status: z.string().min(1),
+  // Which seller suborder the transition targets. Required to disambiguate a
+  // multi-seller parent order; omitted for a single-seller order.
+  sellerOrderId: z.string().min(1).optional(),
 });
 
 export const ordersRoutes = new Hono();
@@ -52,6 +55,6 @@ ordersRoutes.patch('/:id/status', validateBody(updateStatusSchema), async (c) =>
   const body = getValidatedBody<z.infer<typeof updateStatusSchema>>(c);
   const ctx = getContext(c);
   const id = c.req.param('id')!;
-  await updateOrderStatus(ctx.db, id, body.status, ctx.user!.id);
+  await updateOrderStatus(ctx.db, id, body.status, ctx.user!.id, { sellerOrderId: body.sellerOrderId });
   return c.json({ success: true });
 });

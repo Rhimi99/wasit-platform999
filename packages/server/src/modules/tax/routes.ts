@@ -17,10 +17,11 @@ import {
 /**
  * Tax routes (P1).
  *
- * Read + resolve are gated by `admin:reports`; configuring a jurisdiction is a
- * policy act gated by `admin:policies`. No customer/merchant/supplier role holds
- * either permission, so a trading party can never write a tax rule. Nothing here
- * computes a rate the platform was not explicitly given.
+ * Reading a jurisdiction and configuring one are both policy-desk acts, gated by
+ * `admin:policies` (configuring additionally narrows to the same permission on
+ * the write routes). No customer/merchant/supplier role holds it, so a trading
+ * party can never read or write a tax rule. Nothing here computes a rate the
+ * platform was not explicitly given.
  */
 
 const configureSchema = z
@@ -59,7 +60,7 @@ const resolveSchema = z
 
 export const taxRoutes = new Hono();
 
-taxRoutes.use('*', requireAuth, requirePermission(PERMISSIONS.ADMIN_REPORTS));
+taxRoutes.use('*', requireAuth, requirePermission(PERMISSIONS.ADMIN_POLICIES));
 
 /** Lists configured/undecided tax jurisdictions, optionally for one country. */
 taxRoutes.get('/jurisdictions', async (c) => {

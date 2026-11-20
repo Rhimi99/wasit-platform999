@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
-import { requireAuth, requireRole, requirePermission } from '../../middleware/auth.js';
+import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '@wasit/shared';
 import { createSupplier, listSuppliers, getSupplier, addSupplierContact } from './service.js';
 
@@ -33,7 +33,10 @@ const listQuerySchema = z.object({
 
 export const suppliersRoutes = new Hono();
 
-suppliersRoutes.get('/', async (c) => {
+// Public directory of active suppliers. The response carries the public
+// projection only (no owner id, no operational columns) and filters to active
+// rows, so an anonymous visitor sees exactly what the marketplace shows.
+suppliersRoutes.get('/', optionalAuth, async (c) => {
   const qs = c.req.query();
   const parsed = listQuerySchema.safeParse(qs);
   const query = parsed.success ? parsed.data : {};
@@ -42,22 +45,42 @@ suppliersRoutes.get('/', async (c) => {
   return c.json({ success: true, data: result });
 });
 
-suppliersRoutes.get('/:id', async (c) => {
+// A supplier profile. The public projection is always returned; the owner and
+// internal staff additionally receive the contact list. An inactive supplier is
+// a 404 to everyone else.
+suppliersRoutes.get('/:id', optionalAuth, async (c) => {
   const ctx = getContext(c);
-  const supplier = await getSupplier(ctx.db, c.req.param('id'));
+  const supplier = await getSupplier(ctx.db, c.req.param('id')!, {
+    userId: ctx.user?.id,
+    roles: ctx.user?.roles,
+  });
   return c.json({ success: true, data: supplier });
 });
 
-suppliersRoutes.post('/', requireAuth, requireRole('SUPPLIER'), validateBody(createSupplierSchema), async (c) => {
-  const body = getValidatedBody<z.infer<typeof createSupplierSchema>>(c);
-  const ctx = getContext(c);
-  const result = await createSupplier(ctx.db, { ...body, userId: ctx.user!.id }, { actorId: ctx.user!.id });
-  return c.json({ success: true, data: result }, 201 as never);
-});
+suppliersRoutes.post(
+  '/',
+  requireAuth,
+  requireRoleOrPermission('SUPPLIER', PERMISSIONS.SUPPLIER_CREATE),
+  validateBody(createSupplierSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof createSupplierSchema>>(c);
+    const ctx = getContext(c);
+    const result = await createSupplier(ctx.db, { ...body, userId: ctx.user!.id }, { actorId: ctx.user!.id });
+    return c.json({ success: true, data: result }, 201 as never);
+  },
+);
 
-suppliersRoutes.post('/contacts', requireAuth, validateBody(contactSchema), async (c) => {
-  const body = getValidatedBody<z.infer<typeof contactSchema>>(c);
-  const ctx = getContext(c);
-  const result = await addSupplierContact(ctx.db, body, { actorId: ctx.user!.id });
-  return c.json({ success: true, data: result }, 201 as never);
-});
+// Adding a contact modifies an existing supplier profile, so it needs the
+// supplier update permission; ownership is enforced in the service.
+suppliersRoutes.post(
+  '/contacts',
+  requireAuth,
+  requirePermission(PERMISSIONS.SUPPLIER_UPDATE),
+  validateBody(contactSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof contactSchema>>(c);
+    const ctx = getContext(c);
+    const result = await addSupplierContact(ctx.db, body, { actorId: ctx.user!.id });
+    return c.json({ success: true, data: result }, 201 as never);
+  },
+);

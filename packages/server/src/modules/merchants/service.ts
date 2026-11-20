@@ -4,6 +4,37 @@ import type { DB } from '../../db/client.js';
 import { merchants } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
+import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+
+/**
+ * The merchant columns a public profile may expose. `userId`, `isActive` and the
+ * timestamps are operational and stay out of every response.
+ */
+export const MERCHANT_PUBLIC_FIELDS = {
+  id: merchants.id,
+  storeName: merchants.storeName,
+  slug: merchants.slug,
+  countryId: merchants.countryId,
+  cityId: merchants.cityId,
+  description: merchants.description,
+  logoUrl: merchants.logoUrl,
+  verified: merchants.verified,
+} as const;
+
+/** Public fields plus the columns needed to authorize the caller (never returned). */
+const MERCHANT_ROW_FIELDS = {
+  ...MERCHANT_PUBLIC_FIELDS,
+  userId: merchants.userId,
+  isActive: merchants.isActive,
+} as const;
+
+/** Strips the authorization-only columns, yielding exactly the public projection. */
+function toPublicMerchant(row: Record<string, unknown>): Record<string, unknown> {
+  const { userId: _userId, isActive: _isActive, ...publicFields } = row;
+  void _userId;
+  void _isActive;
+  return publicFields;
+}
 
 export interface CreateMerchantInput {
   userId: string;
@@ -54,7 +85,7 @@ export async function listMerchants(
     .from(merchants)
     .where(and(...conditions));
   const rows = await db
-    .select()
+    .select(MERCHANT_PUBLIC_FIELDS)
     .from(merchants)
     .where(and(...conditions))
     .limit(pageSize)
@@ -62,10 +93,22 @@ export async function listMerchants(
   return { items: rows, pagination: { page, pageSize, total } };
 }
 
-export async function getMerchant(db: DB, id: string) {
-  const rows = await db.select().from(merchants).where(eq(merchants.id, id)).limit(1);
+/**
+ * A single merchant profile.
+ *
+ * Everyone receives the public projection. An inactive profile is a 404 to the
+ * public and to anyone who is not the owner or internal staff, so a suspended
+ * merchant's existence is never disclosed.
+ */
+export async function getMerchant(db: DB, id: string, viewer: EntityViewer = {}) {
+  const rows = await db.select(MERCHANT_ROW_FIELDS).from(merchants).where(eq(merchants.id, id)).limit(1);
   if (rows.length === 0) throw ApiError.notFound('Merchant not found');
-  return rows[0];
+
+  const isOwner = !!viewer.userId && viewer.userId === rows[0].userId;
+  const isStaff = isEntityStaff(viewer);
+  if (!rows[0].isActive && !isOwner && !isStaff) throw ApiError.notFound('Merchant not found');
+
+  return toPublicMerchant(rows[0] as unknown as Record<string, unknown>);
 }
 
 export async function updateMerchant(
@@ -87,5 +130,6 @@ export async function updateMerchant(
       updatedAt: new Date(),
     })
     .where(eq(merchants.id, id));
-  return getMerchant(db, id);
+  // The owner just wrote the row, so the private/owner view is the right response.
+  return getMerchant(db, id, { userId: actorId });
 }

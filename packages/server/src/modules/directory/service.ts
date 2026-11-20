@@ -65,8 +65,9 @@ export interface SupplierDirectoryRow {
   cityId: string | null;
   logoUrl: string | null;
   description: string | null;
-  contactEmail: string | null;
-  contactPhone: string | null;
+  /** Present only for callers holding the staff permission for entity-private data. */
+  contactEmail?: string | null;
+  contactPhone?: string | null;
 }
 
 export interface MerchantDirectoryRow {
@@ -218,12 +219,16 @@ export async function listSellerPartners(
 export async function listSupplierDirectory(
   db: DB,
   query: DirectoryQuery,
+  options: { includeContacts?: boolean } = {},
 ): Promise<{ items: SupplierDirectoryRow[]; pagination: Pagination }> {
   const { q, page, pageSize } = normalise(query);
   const conditions = [eq(suppliers.isActive, true)];
   if (q) conditions.push(ilike(suppliers.companyName, `%${q}%`));
   const where = and(...conditions);
 
+  // Contact e-mail/phone is PII. It is selected so the projection stays a single
+  // static query, then stripped for any caller who does not hold the staff
+  // permission for entity-private data — so it is never serialized for them.
   const [countRows, rows] = await Promise.all([
     db.select({ total: sql<number>`count(*)::int` }).from(suppliers).where(where),
     db
@@ -255,7 +260,15 @@ export async function listSupplierDirectory(
       .offset((page - 1) * pageSize),
   ]);
 
-  return { items: rows, pagination: { page, pageSize, total: countRows[0]?.total ?? 0 } };
+  const items = options.includeContacts
+    ? rows
+    : rows.map(({ contactEmail: _e, contactPhone: _p, ...rest }) => {
+        void _e;
+        void _p;
+        return rest;
+      });
+
+  return { items: items as unknown as SupplierDirectoryRow[], pagination: { page, pageSize, total: countRows[0]?.total ?? 0 } };
 }
 
 /** Active merchants in the platform directory (existing merchants module). */

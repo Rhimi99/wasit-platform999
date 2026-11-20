@@ -10,6 +10,7 @@ import { assertSellerOwnership, resolveSellerUserId } from '../../lib/seller-own
 import { newId } from '../../lib/ids.js';
 import { assertWithinBudget, recordAiRequest, resolveLimit, upsertAiUsage } from '../../lib/ai/cost-control.js';
 import { env } from '../../lib/env.js';
+import { Semaphore } from '../../lib/concurrency/semaphore.js';
 import { resolveMediaStorage, resolveVideoProvider } from '../../lib/media/resolve.js';
 import { measureMp4DurationSeconds } from '../../lib/media/mp4.js';
 import { downloadTtlSeconds, signDownloadToken, verifyDownloadToken } from '../../lib/media/tokens.js';
@@ -31,6 +32,21 @@ import type { RenderSpec } from '../../lib/media/video-types.js';
 export const VIDEO_REQUEST_TYPE = 'MARKETING_VIDEO';
 /** Estimated USD cost booked for a local structural render (no vendor call). */
 const RENDER_ESTIMATED_COST_USD = '0.000000';
+
+/**
+ * Bounds concurrent ffmpeg renders in this process (011.4). Lazily constructed
+ * from the configured capacity so the env can be overridden before first use.
+ * Excess requests wait briefly for a slot, then are shed with a 503 rather than
+ * spawning an unbounded number of renderer processes.
+ */
+let renderSemaphore: { capacity: number; semaphore: Semaphore } | null = null;
+function videoRenderSemaphore(): Semaphore {
+  const capacity = env.MEDIA_VIDEO_MAX_CONCURRENCY;
+  if (!renderSemaphore || renderSemaphore.capacity !== capacity) {
+    renderSemaphore = { capacity, semaphore: new Semaphore(capacity) };
+  }
+  return renderSemaphore.semaphore;
+}
 
 export const VIDEO_LANGUAGES = ['ar', 'fr', 'en', 'zh'] as const;
 export const VIDEO_AUDIENCES = ['B2B', 'B2C'] as const;
@@ -245,7 +261,12 @@ export async function generateMarketingVideo(
   const startedAt = Date.now();
   let requestId: string;
   try {
-    const rendered = await provider.render(spec);
+    // Bound concurrent renders: acquire a slot before spawning ffmpeg, release
+    // it once the render settles. A request that cannot get a slot within the
+    // queue timeout is shed with a 503 (an ApiError, re-thrown untouched below).
+    const rendered = await videoRenderSemaphore().run(env.MEDIA_VIDEO_QUEUE_TIMEOUT_MS, () =>
+      provider.render(spec),
+    );
     if (rendered.bytes.length > env.MEDIA_MAX_VIDEO_BYTES) {
       throw new Error(`Rendered video exceeds the ${env.MEDIA_MAX_VIDEO_BYTES} byte limit`);
     }
@@ -333,6 +354,9 @@ export async function generateMarketingVideo(
       entityId: assetId,
       metadata: { productId: product.id, error: message },
     });
+    // A structured API error (e.g. the 503 shed when the render queue is full)
+    // carries its own status and must not be rewritten into a generic 502.
+    if (err instanceof ApiError) throw err;
     throw new ApiError(502, 'SERVICE_UNAVAILABLE', `Video generation failed: ${message}`);
   }
 }
