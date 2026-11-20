@@ -170,7 +170,7 @@ following supplied by the operator. None of these ship in the archive.
 | --- | --- | --- |
 | 1 | Production VM / server | Linux host with Node 20+ and PostgreSQL 15+, sized for expected load |
 | 2 | DNS | An A/AAAA record for the public hostname pointing at the server |
-| 3 | TLS / HTTPS | Certificate for the public hostname (e.g. Let's Encrypt); `deploy/nginx.conf` terminates TLS |
+| 3 | TLS / HTTPS | Certificate for the public hostname (e.g. Let's Encrypt). **`deploy/nginx.conf` does not terminate TLS** — it listens on plain HTTP (`listen 80;`, no `ssl_*` directives). TLS must be terminated by an operator-provided terminator (a load balancer, an edge/CDN, or an added `listen 443 ssl` server block with the certificate mounted); set `APP_URL`/`API_URL`/`CORS_ORIGIN` to the HTTPS origin so HSTS and secure cookies apply. |
 | 4 | PostgreSQL (production) | A managed or self-hosted instance; the app never provisions one |
 | 5 | Payment provider / account | Live merchant account and its credentials for the chosen provider |
 | 6 | AI provider / API keys | Key for the configured AI provider (external mode) |

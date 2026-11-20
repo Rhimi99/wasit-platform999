@@ -7,6 +7,8 @@
 > `docs/DEVELOPMENT_ROADMAP.md`, `docs/DEPLOYMENT.md`) + تحقق حيّ من قاعدة `wasit_demo` و`/api/*`.
 > **قاعدة صارمة**: لا يُعتبر النقص مغلقًا إلا بدليل من الكود أو اختبار/تكامل حقيقي. E2E أخضر ≠ اكتمال تجاري.
 
+> **تحديث DOC-PS03-ALIGN (2026-11-06):** توثيقي بحت — لا تغيير في أي تقييم أو حالة فجوة. **مثبِّت للمعنى الأصلي لهذا الملف:** `PS-03` = قدرة **Split** لدى المزوّد (Critical)، و`PS-06` = استرداد **ClicToPay** (High). صحّح هذا التحديث **إحالة سطر قديمة** في صف PS-06 (`clictopay.ts:121-122` → `127-128`). سبب التوحيد: كان السجل المركزي `docs/GAP_REGISTER.md` يخلط `PS-03` مع استرداد ClicToPay (انظر §10.5 هناك)؛ هذا الملف كان **صحيحاً أصلاً**. التفاصيل في `docs/GAP_REGISTER.md` §10.5.
+
 ---
 
 ## 1. ملاحظات دقّة على وثائق الأساس (قبل الجدول)
@@ -51,7 +53,7 @@ AI/Automation · Documentation · Test/Harness
 | PS-03 | قدرة Split لدى المزوّد (iPay/ClicToPay/Flouci) **غير مؤكَّدة وغير موثَّقة** | Payment/Settlement | الكود يمرّر `metadata` للتسوية فقط؛ النموذج 1020→980+40 يحتاج split أو WASIT كحامل أموال | `docs/PAYMENT_PROVIDER_IPAY_COMPATIBILITY_AUDIT.md` §D: لا endpoint منشور للـsplit/sub-merchant/settlement/settlement_status | Critical | Yes | Yes |
 | PS-04 | لا Reconciliation مع حساب المزوّد/البنك (لا Treasury) | Payment/Settlement | «التسوية» الحالية = حالة قيد محاسبي فقط (`transaction_ledger.status=SETTLED`) | `payments/service.ts:142` تعليق صريح: «provider record … NOT a user wallet» | Critical | Yes | Yes |
 | PS-05 | لا مسار إتمام دفع `manual`/offline من الواجهة | Payment/Settlement | `manual` يُنشئ intent `PENDING` بـ`checkoutUrl=null`، ولا «settlement desk» في الويب | `lib/payments/providers.ts:50-79` · `grep web "settle\|markPaid"` = ∅ · CheckoutPage يبقى «بانتظار الدفع» | Critical | Yes | Yes |
-| PS-06 | Refunds غير مدعومة في ClicToPay | Payment/Settlement | `refund()` يرمي 503 | `lib/payments/clictopay.ts:121-122` («not exposed via the documented REST API») | High | Yes | No |
+| PS-06 | Refunds غير مدعومة في ClicToPay | Payment/Settlement | `refund()` يرمي 503 | `lib/payments/clictopay.ts:127-128` («not exposed via the documented REST API») | High | Yes | No |
 | PS-07 | لا Credentials إنتاجية لمزوّد الدفع | Production/Infra | الكل يمرّ عبر `PaymentProviderPort`؛ لا مفاتيح حيّة | `.env.demo`: `PAYMENT_PROVIDER=manual`؛ `docs/PROJECT_BASELINE.md` §6 بند 3 | Critical | Yes | Yes |
 | LC-01 | لا ToS / Privacy Policy / Cookie Policy (محتوى أو صفحات) | Security/Compliance | لا Route ولا نصّ قانوني في المستودع | `grep web "terms\|privacy policy\|cookie"` = ∅ · لا ملفات قانونية في `docs/` | Critical | Yes | Yes |
 | LC-02 | لا التقاط موافقة الكوكيز/GDPR من الواجهة (API موجود) | Security/Compliance | `PUT /api/privacy/consents` موجود، لكن لا banner/UI | `modules/privacy/routes.ts:70` مقابل `grep web "cookie"` = ∅ | High | Yes | Yes |

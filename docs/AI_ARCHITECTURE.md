@@ -47,7 +47,8 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 ## 6. أخلاقيات/أمان
 
 - النظام لا ينفذ أي تغيير مالي/تسويقي دون إذن المستخدم صاحب الصلاحية.
-- Audit لكافة طلبات AI (من/ماذا/تكلفة).
+- **فصل المهام (AI-02.P0):** منشئ مهمة وكيل لا يعتمد طلبه بنفسه — الحارس في `decideAgentTask` (Backend) ويرجع `403`، ويشمل `SUPER_ADMIN`. أي إجراء حساس يحتاج معتمِدًا مخوّلًا **مختلفًا**؛ سحب الطالب لطلبه (رفض) مسموح لأنه يزيل عملًا لا يؤذن به.
+- Audit لكافة طلبات AI (من/ماذا/تكلفة). هوية المنفّذ الآلي `SYSTEM` (`audit_logs.actor_type`) مع إبقاء المهمة منسوبة لمنشئها.
 - أنماط الإساءة (طلب كثير) → AI Budgets + Rate Limit.
 
 ## 6.5 WASIT AI COPILOT (مواصفة — غير منفَّذة)
@@ -100,3 +101,109 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
   المنتج يجب أن يكون ACTIVE. Marketing Agent **قراءة/توصية فقط** ولا ينشئ وسائط بنفسه —
   يعرض فقط الفيديوهات التي ولّدها صاحب الحساب (بروابط موقّعة).
 - **خصوصية**: الأصول تُخزَّن خاصة وتُقدَّم فقط عبر روابط موقّعة قصيرة العمر — لا كشف ثابت.
+
+## جدولة تنفيذ الوكلاء (AI-01)
+
+- **الوكلاء لم يعودوا طلب-استجابة فقط**: جدول `agent_schedules` يحمل الصفوف الدائمة، و`runAgentSchedules`
+  في `lib/scheduler.ts` يمسحها دورياً (مُطفأ افتراضياً عبر `AI_AGENT_SCHEDULER_ENABLED=false`).
+- **تنفيذ واحد فقط عبر النسخ**: المطالبة استعلام واحد `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED)`
+  مع عقد (`lease_owner`/`lease_expires_at`). القفل داخل العملية (`agentRunInFlight`) ليس ضمانة عبر النسخ.
+- **لا مسار تنفيذ موازٍ**: التنفيذ ينادي `createAgentTask` نفسه (RBAC + ميزانية + تدقيق) — لا كاتب ثانٍ.
+- **fail-closed للموافقة والميزانية**: وكيل بـ`requiresHumanApproval` لا يُجدول (409)، ويُتخطّى وقت التشغيل
+  لو صار مقيّداً؛ نفاد الميزانية يُوقف الإنشاء (429) قبل أي استدعاء مزوّد.
+- **هوية SYSTEM**: `audit_logs.actor_type` يميّز التنفيذ الآلي (`SYSTEM`) عن فعل المستخدم (`USER`)،
+  مع إبقاء المهمة منسوبة لمنشئ الجدولة للمساءلة.
+- التفاصيل الكاملة: `docs/AI-01_AGENT_SCHEDULING.md`.
+
+## Agent Runs & آلة الحالات (AI-02.1)
+
+- **الأساس التأسيسي لـSupervisor**: جدولا `agent_runs` (تشغيل واحد بهدف) و`agent_run_steps` (خطواته)
+  يمثّلان التشغيل المركّب قبل بناء منطق التخطيط/التنسيق. ترحيل `0028_keen_gunslinger.sql`.
+- **العلاقات والقيود**: `agent_run_steps.run_id` → `agent_runs.id` بمفتاح أجنبي `ON DELETE CASCADE`
+  (أول FK صريح في المستودع)، فهرس فريد `(run_id, step_key)`، و3 CHECKs (`priority>=0`، سلامة المحاولات،
+  `depends_on` مصفوفة). سلامة التبعيات الدائرية تُفرض في دالة على مستوى التشغيل لأنها لا تُعبَّر بـCHECK.
+- **آلة الحالات مركزية**: `modules/ai/run-state-machine.ts` يعرّف 11 حالة تشغيل و10 حالات خطوة، وجدولا
+  انتقالات قانونية، ودوال `assertRunTransition`/`assertStepTransition` ترمي `409` على أي انتقال غير قانوني.
+- **الحالات النهائية محمية**: لا إحياء لحالة نهائية دون سياسة صريحة (`allowReopen`). الإكمال لا يتحقق إلا
+  إذا انتهت كل الخطوات ونجحت واحدة على الأقل، و`COMPLETED` تتطلب نجاح كل الخطوات وإلا `PARTIALLY_COMPLETED`.
+- **فصل الهوية**: التشغيل منسوب دائمًا لمن طلبه (`requested_by`)؛ لا تُستبدل هوية `SYSTEM` بهوية المستخدم.
+- **حدود المرحلة**: لا `planRun`/`dispatchStep`/Tool Gateway/إعادة محاولة/Kill Switch/واجهة Supervisor بعد.
+- التفاصيل الكاملة: `docs/AI-02.1_AGENT_RUNS_STATE_MACHINE.md`.
+
+## طبقة التخطيط وحلّ التبعيات (AI-02.2)
+
+- **الوظيفة**: خدمة `modules/ai/planner.ts` تحوّل هدفاً من المدير العام + خطوات مقترحة إلى خطة محفوظة
+  في `agent_runs` (حالة `PLANNING`) و`agent_run_steps`. **لا تفهم الأهداف عبر LLM** — المتصل يزوّد الخطوات.
+- **التحقق**: كل خطوة تُربط بوكيل مسجّل ونشط في `agent_registry`؛ تُرفض المفاتيح المكرّرة، المدخلات غير
+  الصالحة، وتجاوز الحدود (25 خطوة، 16KB للخطوة). الطالب يجب أن يملك كل صلاحية يطلبها الوكلاء.
+- **الترتيب**: طوبولوجي حتمي — الأولوية ثم المفتاح عند التساوي؛ الأولوية لا تتجاوز التبعية. يُعاد
+  استخدام `assertValidDependencies` من AI-02.1، ويُعاد فحص الرسم في كل خطة وفي كل قراءة (`loadPlan`).
+- **الحفظ**: `executionOrder` مشتق عند القراءة لا مخزَّن في عمود جديد (لا تغيير على مخطط AI-02.1).
+- **حدود صارمة**: لا تنفيذ، لا Executor، لا `dispatchStep`، ولا انتقال إلى `DISPATCHING`/`RUNNING`.
+  إنشاء الخطة **ليس** موافقة: الخطوة الحساسة تُسجَّل `requiresApproval=true` وتبقى `PENDING`.
+- التفاصيل الكاملة: `docs/AI-02.2_PLANNING_DEPENDENCY_RESOLUTION.md`.
+
+## طبقة الإرسال والتنفيذ المنضبط (AI-02.3)
+
+- **الوظيفة**: خدمة `modules/ai/dispatcher.ts` تُرسل خطوة صالحة من خطة محفوظة إلى **نظام المهام الحالي**
+  (`createAgentTask`/`decideAgentTask`) وتُسجّل النتيجة. **لا Executor مباشر، ولا نظام مهام موازٍ.**
+- **الربط (بلا Migration)**: `__runId`/`__stepId` داخل `agent_tasks.input` (jsonb)، متسق مع اصطلاح `__userId`.
+- **منع التكرار/التزامن**: مطالبة ذرّية `UPDATE agent_run_steps ... WHERE status IN ('PENDING','READY') RETURNING`
+  (فائز واحد عند التزامن) + فحص مهمة قائمة بنفس `__stepId` + رفض الحالات النهائية/`RUNNING`. انقطاع
+  الاستجابة لا يُفسَّر كعدم إنشاء؛ يُعاد قراءة الحالة الفعلية ولا تُنشأ مهمة بديلة.
+- **التبعيات/الفشل**: لا إرسال قبل نجاح كل التبعيات؛ عند فشل خطوة تُعلَّم التابعة `SKIPPED` بشكل متعدٍّ.
+  `SKIPPED` ليست نجاحاً. **لا Retry في هذه المرحلة** (الفشل → `FAILED` مسجّلة).
+- **الموافقات**: `approveRunStep` يشترط موافقاً مخوّلاً ≠ طالب التشغيل (حماية AI-02.P0)؛ الخطوة الحساسة
+  تُجسر عبر Approval Engine القائم، لا مسار متجاوز.
+- **الإكمال**: `reconcileRun` يغلق الخطة `COMPLETED`/`PARTIALLY_COMPLETED`/`FAILED` عبر آلة حالات AI-02.1؛
+  لا توسيع صلاحيات أي وكيل، ولا مالية/خارجية حقيقية.
+- التفاصيل الكاملة: `docs/AI-02.3_CONTROLLED_EXECUTION.md`.
+
+## موثوقية التنفيذ والاستعادة (AI-02.3.1)
+
+- **الوظيفة**: نفس `modules/ai/dispatcher.ts` صار يحوي طبقة مزامنة/استعادة: `syncStepFromTask`،
+  `recoverStuckSteps`، `recoverRun`، و`findTaskForStep`. لا Executor جديد ولا نظام موازٍ.
+- **المزامنة (idempotent)**: خطوة `RUNNING` تُقارن بمهمتها (`input.__stepId`): نجاح بوجود نتيجة → `SUCCEEDED`؛
+  `failed`/`rejected` → `FAILED`؛ `queued`/`running`/`awaiting_approval`/مجهول → **لا إجراء**. لا كِتابة/تدقيق
+  إلا عند تغيّر فعلي (لا تكرار Audit).
+- **الاستعادة**: `recoverStuckSteps` تجد الخطوات العالقة `RUNNING` بعد مهلة، تطالب بها **ذرّياً** بالإيجار
+  (`updated_at`) فلا تتصادم عمليتا Recovery؛ خطوة بلا مهمة → `FAILED` (لا إنشاء بديل)؛ ثم `reconcileRun`.
+- **دقّة الإغلاق**: إغلاق الخطوة مشروط بفحص الصفوف المتأثرة (`settleRunningStep` = `UPDATE … RETURNING id`).
+  صفر صفوف ⇒ `lost_race` (لا `recovered`، لا Audit نجاح) ويُسجَّل `AI.AGENT_RUN_STEP_RECOVERY_LOST_RACE`
+  ويُزاد `lostRace` في الدورة؛ لا يُستدعى `reconcileRun` لخطوة خسرت السباق. بلا تغيير Fencing/`attempt_count`.
+- **نقطة التشغيل**: المُجدول الداخلي `lib/scheduler.ts` (`runAgentRunRecovery`) عبر `index.ts` — مُطفأة
+  افتراضياً (`AI_AGENT_RUNS_RECOVERY_ENABLED=false`). لا Worker/طابور جديد.
+- **المهل**: `AI_AGENT_RUN_STEP_STUCK_SECONDS` (افتراضي 300) و`AI_AGENT_RUNS_RECOVERY_INTERVAL_MINUTES`
+  (افتراضي 5) — لا قيمة سحرية.
+- **الذرّية (بلا Migration)**: المطالبة الذرّية `UPDATE ... WHERE status IN ('PENDING','READY') RETURNING`
+  تبقى الكاتب الوحيد؛ نافذة الانقطاع بين المطالبة وإنشاء المهمة تُعالَج بالاستعادة لا بمعاملة زائفة
+  (لأن `createAgentTask` ينفّذ متزامناً).
+- **الحدود**: لا Retry (`maxAttempts=1` مفروض في `dispatchStep`)؛ لا مساس بـAI-02.P0 ولا بتوسيع صلاحيات
+  الوكلاء؛ Recovery لا يوافق ولا ينتحل هوية موافق.
+- التفاصيل الكاملة: `docs/AI-02.3.1_EXECUTION_RELIABILITY_RECOVERY.md`.
+
+## الـFencing وأمان التزامن (AI-02.3.2)
+
+- **المشكلة:** بين مطالبة Dispatch (RUNNING) وإنشاء المهمة/كتابة النتيجة نافذة؛ قد تُغلق Recovery الخطوة `FAILED` ثم يكتب Dispatch القديم فوق القرار، أو ينشئ مهمة بعد فقدان الملكية.
+- **الـFencing token:** `attempt_count` يُزاد ذرّياً عند المطالبة ويُعاد للفائز كـ**token**؛ كل كتابة تحمل `WHERE id=? AND status='RUNNING' AND attempt_count=<token>` → كتابة قديمة = no-op.
+- **حماية الخدمة:** `createAgentTask(..., fencing)` يتحقق من الملكية ويُدرج المهمة **في معاملة واحدة**؛ لا مهمة بعد فقدان الملكية؛ لا يوسّع صلاحيات. **الترتيب مقصود:** `UPDATE` الملكية (قفل صف الخطوة) **قبل** فحص التكرار، فيتسلسل المُنشِئون المتزامنون ولا تنشأ **مهمتان نشطتان** للخطوة نفسها (تحت `READ COMMITTED`).
+- **تعدد عمليات Server:** الضمان على مستوى قاعدة البيانات (أقفال الصفوف + شرط الملكية)، لا Mutex في الذاكرة؛ مُثبت باختبار تزامن حقيقي بحوضَي اتصال مستقلين.
+- **Recovery:** الإيجار يمنع معالجة خطوة ما زالت تملك مطالبة صالحة؛ لا تصنيف مبكر `FAILED`؛ خطوة بلا مهمة فقط بعد انتهاء الإيجار.
+- **حارس العملية:** `createInFlightGuard()` يمنع تداخل الدورات ويُحرَّر في `finally`.
+- **السجلات:** كل دورة Recovery (حتى الفارغة) تُسجَّل بـ`correlationId` وعدّادات وحالة؛ أخطاء الخطوات معزولة.
+- **AUTO_DISPATCH:** أُزيل (إعداد ميّت).
+- التفاصيل الكاملة: `docs/AI-02.3.2_FENCING_CONCURRENCY_RECOVERY_SAFETY.md`.
+
+## المشرف الآلي وسياسة إعادة المحاولة (AI-02.S1)
+
+- **الفكرة:** طبقة تنسيق تقرأ التشغيلات الحيّة وتتّخذ تدخّلات محدودة — **لا Executor جديد، لا طابور موازٍ**.
+- **الخدمة:** `modules/ai/supervisor.ts` — `runSupervisorCycle` (دورة محدودة) · `containRun` (حجب) · `retryStep` (إعادة محاولة) · `buildSupervisorOverview` (قراءة).
+- **السياسة:** `modules/ai/supervisor-policy.ts` (قائمة) تُغذّى بصفوف حقيقية؛ `modules/ai/retry-policy.ts` (جديدة، صرفة) تقرّر إعادة المحاولة fail-closed.
+- **ما يراقبه:** التشغيلات النشطة/المتعثّرة (stuck/stale)/الحلقات/تجاوز الميزانية، وعدد الخطوات الفاشلة/المنتظرة لإعادة المحاولة.
+- **متى يحجب:** عند تعثّر خطوة `RUNNING` بعد `stuckRuntimeSeconds`، أو قِدَم خطوة في الطابور بعد `staleQueueSeconds`، أو بلوغ سقف المحاولات، أو تجاوز `maxRunCostUsd`. الحجب يُغلق التشغيل `FAILED` عبر آلة الحالات ويُلغي خطواته غير المنتهية — **لا يُغلق `COMPLETED` أبداً**.
+- **متى يعيد المحاولة:** خطوة `FAILED` فقط، ضمن سقف `maxAttempts=3`، مع تبعيات `SUCCEEDED` وميزانية متاحة وتشغيل مفتوح. الانتقال `FAILED → RETRYING → RUNNING` (آلة AI-02.1) عبر `dispatchStep`.
+- **الصلاحيات:** كل إرسال يمرّ بفحص صلاحيات `run.requestedBy` داخل `dispatchStep`؛ Supervisor لا يرفع صلاحية ولا يوافق على خطوة (الموافقة فعل بشري من معتمِد مختلف).
+- **التدقيق:** `AI.AGENT_RUN_CONTAINED` · `AI.AGENT_RUN_STEP_RETRY_SCHEDULED` · `AI.AGENT_RUN_STEP_RETRY_FAILED` · `AI.AGENT_RUN_SUPERVISOR_FAILED` — بهوية `SYSTEM`.
+- **التزامن:** الحكم قاعدة البيانات (قفل صف التشغيل + كتابات شرطية + مطالبة `dispatchStep` الذرّية)؛ `createSupervisorCycleGuard()` يمنع التداخل داخل العملية فقط.
+- **الحدود:** لا LLM Planner · لا Tool Gateway · لا Kill Switch · لا واجهة ويب · لا Migration.
+- التفاصيل الكاملة: `docs/AI-02.S1_SUPERVISOR_RETRY.md`.

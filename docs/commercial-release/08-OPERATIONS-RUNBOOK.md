@@ -91,14 +91,117 @@ route, or be guarded by a database lock.
 A backup folder contains the custom-format dump, the globals, and a
 `manifest.json` with sizes and SHA-256 so a restore can verify before it starts.
 Retention defaults to the 7 most recent folders (`BACKUP_RETENTION_COUNT`).
+The backup tree is created `0700` explicitly (not via umask), so database
+contents and role password hashes are not world-readable.
+
+**The restore refuses to start unless `checksums.sha256` is present, non-empty,
+and every listed file matches its digest — and every entry must resolve inside
+the backup directory (no `../` or symlink escape).** There is no "warn and
+continue" path.
 
 **The restore target defaults to a scratch database named `<db>_restore`, never
 the live one.** Restoring over live requires an explicit `--allow-live`. A
 restore that exits 0 without verification is not evidence, so verification is on
-by default and reports the comparison explicitly.
+by default and reports the comparison explicitly. The target name must be a
+valid identifier (a-z, 0-9, `_`) — a name with spaces or SQL is refused, not
+escaped. **DEMO (`wasit_demo`), Staging (`wasit_staging`), Production
+(`wasit_prod`) and the system databases (`postgres`, `template0`, `template1`)
+can never be a restore target, and neither `--force` nor `--allow-live` bypasses
+that.** Add extra protected names with `WASIT_PROTECTED_DB_NAMES` (comma or
+space separated).
 
 `backup_stale` fires from the heartbeat file (`BACKUP_HEARTBEAT_FILE`) the backup
 script writes on success.
+
+### Encrypting backups at rest (optional, `age`)
+
+`BACKUP_ENCRYPTION=off` is the default and changes nothing. Set
+`BACKUP_ENCRYPTION=age` to encrypt every payload file (`*.dump`,
+`pg_globals.sql`, `table-counts.tsv`) to one or more recipients:
+
+```bash
+# One-time, off the server: create the keypair; keep the identity offline.
+age-keygen -o /secure/offline/wasit-backup-identity.txt   # prints the public key
+# On the backup host, only the public recipient is needed:
+BACKUP_ENCRYPTION=age \
+BACKUP_AGE_RECIPIENTS=age1... \
+  ./scripts/backup-db.sh
+```
+
+The manifest and `checksums.sha256` switch to the encrypted layout and record a
+`plaintextSha256` per file. The plaintext originals are kept by default
+(`BACKUP_PLAINTEXT_RETENTION=keep`); set it to `drop` only after an encrypted
+restore drill has passed. Multiple recipients are supported (one `-r` each), so
+a new key can be added before an old one is retired.
+
+When `drop` is used, the plaintext is removed only after the whole run has
+succeeded in order: every file is encrypted, the manifest is written with the
+plaintext digests, `checksums.sha256` is written **and re-verified** against the
+files on disk, and only then is each plaintext file removed. Every removal is
+guarded: a symlink is refused rather than followed, and the canonical path must
+resolve inside the current backup folder, so a drop can never reach a previous
+backup folder or anything outside it. If any step fails, the run stops with the
+plaintext still present and the incomplete folder is removed.
+
+To restore an encrypted backup, supply the private identity by **path**:
+
+```bash
+BACKUP_AGE_IDENTITY_FILE=/secure/offline/wasit-backup-identity.txt \
+  ./scripts/restore-db.sh ./backups/<UTC-stamp>
+```
+
+A missing or wrong identity, or a corrupted ciphertext, fails **before** any
+database is touched. The identity is never passed as a command argument (it
+would be visible in `ps`) and never written to the logs; the decrypted payload
+goes to a `0700` scratch directory that is removed on exit, success or failure.
+A key stored inside the backup directory is refused — key and data stay
+separate.
+
+**Integrity, confidentiality — and what neither proves.** These are three
+different properties, and the backup format provides only the first two:
+
+- `checksums.sha256` and the per-file `plaintextSha256` are **integrity** checks:
+  they detect corruption or an altered payload by comparing it against a recorded
+  reference value.
+- `age` recipient encryption is **confidentiality**: it keeps the payload secret
+  and makes it decryptable only by the holders of the listed recipients' private
+  identities. It also lets a restore confirm the ciphertext decrypted to the
+  intended plaintext.
+
+Neither one proves **who created the backup**. A checksum is recomputable by
+anyone who can rewrite the folder, and anyone can encrypt to a public recipient —
+so a valid checksum or a readable ciphertext says nothing about the source's
+identity or authenticity. Proving the origin requires a **trusted digital
+signature** made with a **separate signing key** held only by the producer; that
+mechanism is **out of scope for 013.1** and is not implemented here. Until it
+exists, treat the provenance of a backup as coming from how it was transported
+and stored, not from the backup files themselves.
+
+### Key rotation and retention
+
+Recipients can be rotated without breaking history:
+
+```bash
+# Add a new recipient while keeping the old one, then re-verify with both.
+BACKUP_AGE_RECIPIENTS="$NEW_RECIPIENT $OLD_RECIPIENT" ./scripts/backup-db.sh
+```
+
+- A new backup is written only to the recipients configured at that time. Old
+  backups keep the recipients they were written with, so they stay readable with
+  their original identities — rotation never invalidates existing archives.
+- **Keep every private identity for as long as any backup encrypted to it still
+  exists** (including archives held offsite or in cold storage). Retiring a key
+  means losing the ability to restore every backup that used it.
+- **A lost private identity makes its backups permanently unrecoverable.** There
+  is no recovery path: age has no backdoor. Store identities offline, separate
+  from the backup host, with a tested, documented recovery copy.
+- Rotate when a key may have been exposed, and on a schedule; re-run a restore
+  drill with the new key before retiring the old one.
+
+**Out of scope (unchanged by this feature):** offsite/replicated storage,
+WAL/PITR continuous archiving, and making encryption the default
+(`BACKUP_ENCRYPTION` stays `off` unless set). These remain operator decisions
+and are not provided here.
 
 ---
 

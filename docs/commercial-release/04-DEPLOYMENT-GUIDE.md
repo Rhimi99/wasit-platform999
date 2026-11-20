@@ -79,6 +79,44 @@ default — shortening this will cut off long renders.
 Security headers (`X-Content-Type-Options`, `X-Frame-Options`,
 `Referrer-Policy`) are set on the served SPA.
 
+### Trusted client IP (reverse proxy)
+
+The API attributes anonymous rate limits (and audit records) to the **real TCP
+peer** by default. Forwarded headers are attacker-controlled, so they are
+ignored until you explicitly allowlist the proxy networks you operate. Trust is
+**per network and never inferred**: loopback, RFC1918 and IPv6 ULA are not
+trusted automatically, because on a shared host or a flat private network they
+would let a co-tenant forge client addresses.
+
+Behind this nginx:
+
+1. Set `TRUSTED_PROXY_CIDRS` to the network(s) nginx connects from, e.g.
+   `10.20.0.0/24` (or `127.0.0.1/32` when nginx and the API share a host and you
+   accept that trust). Keep it to the **real** proxy addresses — never guess.
+2. Set `TRUSTED_PROXY_HOPS=1` (one proxy). With `TRUSTED_PROXY_HOPS=0` the chain
+   is never read, so every request looks like it came from nginx and the per-IP
+   limit is meaningless; with an empty `TRUSTED_PROXY_CIDRS` nothing is trusted
+   even if hops are set, and the socket peer is used.
+3. Make nginx **append** the peer to `X-Forwarded-For` (the shipped
+   `deploy/nginx.conf` does: `proxy_set_header X-Forwarded-For
+   $proxy_add_x_forwarded_for;`). Do **not** replace the header with a
+   client-supplied value.
+4. **Do not expose the API port directly.** The allowlist is matched against the
+   socket peer, so if the API is reachable from the internet a direct client
+   could present a source address inside an allowlisted range. Bind the API to a
+   private interface (or a firewall/security group) so only the proxy can reach
+   it.
+
+If you add another proxy (CDN, load balancer) in front of nginx, raise
+`TRUSTED_PROXY_HOPS` to the **exact** new count and add that layer's network to
+`TRUSTED_PROXY_CIDRS`. Raising the hop count above the real number lets a
+client-supplied hop be trusted, which reopens the spoofing hole.
+
+**Production readiness:** these values depend on the deployed network topology
+and are therefore **not** pre-filled. The production setting is pending the
+actual proxy addresses; until then the defaults (no trusted proxy) apply and the
+API ignores all forwarded headers.
+
 ### Volumes
 
 | Path | Purpose |
@@ -92,7 +130,36 @@ If you run **more than one API replica**, set `RATE_LIMIT_STORE=postgres`.
 With the default `memory` store, each replica counts separately and the effective
 limit multiplies by the replica count.
 
+### API resource protection (011.4)
+
+The API applies, in order, a request-body cap, a general `/api/*` rate limit, and
+tighter limits on the expensive surfaces. All are configurable by env (see
+`03-ENVIRONMENT-REFERENCE.md` §3); the values read here are per request, so a
+change takes effect without a rebuild.
+
+| Layer | Default | Behaviour |
+| --- | --- | --- |
+| `MAX_REQUEST_BODY_BYTES` | `1 MiB` | A larger body is refused with **413** before any handler runs. nginx's `client_max_body_size` (20m in `deploy/nginx.conf`) is the outer guard; keep the app cap below it, or a body that nginx accepts is still refused by the app. |
+| General `/api/*` | `300`/60s | Keyed on the authenticated user, else the trusted client IP. `/api/auth` and `/api/health` are exempt. |
+| `/api/ai/*` | `60`/60s per user + `300`/60s per IP | Two limits: a per-user cap and a per-IP backstop for account-rotating floods. |
+| `/api/search/*` | `120`/60s per IP | Public and relatively costly. |
+| `/api/media/marketing-videos` | `6`/60s per user | The tightest limit; on top of the render-concurrency cap. |
+| Video render concurrency | `2` per process | `MEDIA_VIDEO_MAX_CONCURRENCY` bounds simultaneous ffmpeg renders; a request that cannot get a slot within `MEDIA_VIDEO_QUEUE_TIMEOUT_MS` is shed with **503**. |
+
+Notes:
+
+- The client IP used for keying is the trusted client IP only (see *Trusted
+  client IP* above). A forged `X-Forwarded-For` never moves the bucket.
+- When the rate-limit store is unreachable the API **fails closed** (503) rather
+  than letting requests through unguarded — a shared-store outage does not
+  silently disable the limits. Alert on 503s from the API.
+- The render-concurrency cap is **per process**. It bounds load within one
+  replica; it is not a global cap across replicas.
+- **No file uploads:** media assets are generated server-side, and no route
+  accepts a multipart upload, so the 1 MiB body cap never truncates an upload.
+
 ---
+
 
 ## Option B — Bare metal + nginx
 
@@ -129,8 +196,10 @@ WantedBy=multi-user.target
 ```
 
 5. Serve the SPA with nginx using `deploy/nginx.conf` as the template: point
-   `root` at `packages/web/dist`, set `proxy_pass` at the API's real address,
-   and terminate TLS.
+   `root` at `packages/web/dist` and set `proxy_pass` at the API's real address.
+   The shipped template is **HTTP-only** (`listen 80;`, no `ssl_*` directives) —
+   add a `listen 443 ssl` server block (or terminate TLS at a load balancer/CDN)
+   and mount the certificate there before going live.
 
 ```bash
 sudo systemctl daemon-reload

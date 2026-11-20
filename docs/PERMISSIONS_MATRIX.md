@@ -34,6 +34,10 @@ CUSTOMER, MERCHANT, SUPPLIER, COMPANY, MARKETER, SUPPORT, RISK, DISPUTE, ADMIN, 
 | /api/admin/* | ADMIN, SUPER_ADMIN | ADMIN→200/ CUSTOMER→403 |
 | GET /api/library/favorites | FAVORITE_MANAGE | CUSTOMER→200 / زائر→401 |
 | DELETE /api/library/favorites/:type/:id (ملك مستخدم آخر) | FAVORITE_MANAGE | غير المالك→404 (عزل بمعرّف الجلسة) |
+| POST /api/products/:id/compliance-review | CATALOG_COMPLIANCE_REVIEW | ADMIN→200 / بائع→403 |
+| GET /api/products/compliance/queue | CATALOG_COMPLIANCE_REVIEW | ADMIN→200 / بائع→403 |
+
+> **LC-03 — صلاحية مراجعة الامتثال (`catalog:compliance:review`):** أُضيفت لـ**ADMIN/SUPER_ADMIN (بشر)** فقط، و**لا يمنحها أي دور آلي ولا يحملها أي تعريف وكيل AI** — فهي بوّابة المراجعة البشرية الوحيدة لنشر منتج **مقيّد**. تُفرض في المسارين أعلاه عبر `requirePermission`. تفاصيل: `docs/LC-03_PROHIBITED_GOODS.md`.
 
 ## الحفاظ على المصفوفة
 

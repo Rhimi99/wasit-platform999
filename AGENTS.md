@@ -161,7 +161,7 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - ✅ **RBAC**: capabilities تُفرض في `createAgentTask` (غير المخوّل 403 "Agent capability not allowed for your role")؛ gated agents تبقى `awaiting_approval` حتى يوافق `AI_MANAGE` (ADMIN). كل executor يدفع عبر `runAIFeature` لأغراض **usage/cost/audit** (لا runtime موازٍ).
 - ✅ **Web**: `api.ts` أضيفت `aiMyTasks`؛ `DashboardAIPage` ترسل inputs حقيقية لكل وكيل، تعرض structured results (parsing لـ advice JSON)، وmarketingVideos قابلة للمعاينة/التنزيل في الواجهة.
 - ✅ **i18n**: مفاتيح `ai.videos.*` (title/download/generating) في ar/en/fr/zh.
-- ✅ **اختبارات** (`tests/phase14-agents.test.ts` — **20/20**): الكتالوج 11، كل وكيل ينتج حقله المتخصص، marketingVideos عقد (previewable/downloadable/mimeType/mediaUrl)، product-agent بمنتج حقيقي + error لغير موجود، RBAC (CUSTOMER لا يقدر ads)، gated awaiting_approval + autorisation ADMIN (HTTP 403→approve), list/get, reject unknown, non-gated succeeded.
+- ✅ **اختبارات** (`tests/phase14-agents.test.ts` — **20/20**): الكتالوج 11، كل وكيل ينتج حقله المتخصص، marketingVideos عقد (previewable/downloadable/mimeType/mediaUrl)، product-agent بمنتج حقيقي + error لغير موجود، RBAC (CUSTOMER لا يقدر ads)، gated awaiting_approval + autorisation ADMIN (HTTP 403→approve), list/get, reject unknown, non-gated succeeded. (المساعد `runAndComplete` يعتمد عبر `SUPER_ADMIN` **مختلف** عن الطالب التزامًا بفصل المهام — AI-02.P0.)
 - ✅ **الفحص الشامل**: **89/89 Tests (9 files)**، Server Typecheck PASS، Web Typecheck PASS، **Web Build PASS**، E2E curl live: register/login→11 agents→marketing (marketingVideos ببيانات حقيقية بعد إدراج منتجات)→product (completeness)→ads 403→sales gated approve→approved.
 
 ## Phase 15 — Advertising + AI Ads (مكتملة التنفيذ — غير ملتزمة حتى MASTER CHECKPOINT 2026-09-14)
@@ -332,6 +332,10 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - **Revert/إصلاح**: لا تُعِد كتابة `SETTLED` داخل مسار تأكيد الدفع، ولا تسمح بحدث `settlement.confirmed` من مزوّد ديمو — حرسان مُثبتان في `tests/money-path-invariants.test.ts`.
 - **تدقيق قراءة فقط**: `npx tsx src/scripts/verify-money-path.ts` يكشف صفوف `SETTLED` بلا دليل تسوية (`SETTLEMENT.CONFIRMED` في `audit_logs`) ويُخرج exit code غير صفري عند وجود مخالفة. لا يكتب شيئاً.
 - **E2E محلي**: Playwright يحتاج `wasit_dev`؛ إن لم توجد فأنشئها فقط (`CREATE DATABASE wasit_dev`) ثم `npx drizzle-kit migrate` + `npx tsx src/scripts/seed.ts`. **ممنوع** `db reset/drop/push`.
+- **`Refund = request ≠ money returned`** (LC-04، WASIT-EXECUTION-009.1): `createRefund` يكتب **طلب** فقط (`REQUESTED` بلا مسار موثوق، `PROCESSING` عند مزوّد موثوق سيُستدعى). **الكاتب الوحيد** للحالة `COMPLETED` + قيد `REFUND` (DEBIT/PENDING) + عكس العمولة/الرسم + `REFUNDED` هو `completeRefundWithEvidence`، ولا يُقبل إلا بـ**إثبات خارجي موثوق** مطابِق للمبلغ/العملة. `canProveRefund` (في `lib/payments/refund-integrity.ts`) يرفض كل مزوّد `demo`/غير متاح. **webhook `REFUND_SUCCEEDED` من مزوّد عرض يُرفض (422)**. لا Migration (نوع `refund_status` يكفي، والإثبات في `audit_logs`). تشغيل معزول: `npx vitest run --config vitest.lc04.config.ts`.
+- **قيد عمولة المشتري يحمل نصيبه لا الإجمالي** (2026-11-17): قيد `transaction_ledger` للعمولة يحمل `metadata.share` (`SELLER`/`BUYER`) و`metadata.rate` = **سعر تلك الحصة وحدها** (`commission.buyerRate` للمشتري، `commission.sellerRate` للبائع). السياسة المُجمَّدة BASE: 4% إجمالاً = 2% بائع + 2% مشترٍ. **فخ مُصلَح**: كان قيد المشتري يسجّل `commissionTotalRate` (4%) مع أنّ مبلغه 2% من البضاعة ⇒ تناقض بين السعر المُعلَن والمبلغ. كود الإنتاج **لا يقرأ** `metadata.rate` (فقط `meta.share==='SELLER'`)، فهو وصفي — لكن `financial-audit.spec.ts` يتحقّق منه (`0.02`). حرس: اختبار في `tests/money-path-invariants.test.ts`.
+- **فخ Git — لا تُرجِع ملفاً بتعديل غير محفوظ** (2026-11-17، حادثة): `git checkout -- <file>` يمحو تعديلات العمل غير المحفوظة نهائياً. أثناء «الفحص» جرى إرجاع 3 ملفات فمُحي تعديل مسبق على `money-path-invariants.test.ts` (مواءمة LC-04). **القاعدة**: قبل أي `checkout/reset/restore/stash` افحص `git diff -- <file>` أولاً؛ لا تلمس ملفاً بتعديل غير متوقّع. التفاصيل: `docs/WASIT_EXECUTION_REGISTER.md` §9.
+
 ## Functional UI audit — running the suites correctly (2026-09-28)
 
 - **Always run UI suites against the public HTTPS link**, not `http://127.0.0.1:12000`. The session cookie `wasit_session` is issued with `Secure`, so Playwright's `page.request.*` silently drops it on plain HTTP and returns spurious `401`s. The app itself is fine in that case — an in-page `fetch('/api/...', { credentials: 'include' })` still returns `200`. Suites affected if run over HTTP: `ui-messages-check`, `ui-subscription-check`, `ui-inventory-search-check`.
@@ -345,3 +349,524 @@ npm run test:e2e     # من الجذر — يشغّل server + web تلقائي�
 - Hero artwork is pure SVG in `components/brand/CorporateHero.tsx`, split by `part="map"` (dotted world map + trade network) and `part="skyline"` (illuminated city + water reflection). No external images, no network requests.
 - `PublicHeader`/`PublicLayout` take a `dark`/`darkHeader` prop. The header is `sticky top-[var(--demo-banner-h,0px)]`, and `DemoBanner` publishes its measured height as `--demo-banner-h` so the two sticky bars never overlap.
 - Design tokens live in `tailwind.config.js` (`ink-950`, `brand-*`) and `index.css` (`.lp-dark-section`, `.lp-dark-card`, `.lp-btn-ghost-dark`). Hero copy keys are `lp.hero.headline/subtitle/ctaPrimary/ctaSecondary` in all four locales.
+
+## SEC-04B — حماية قراءة الكيانات (2026-11-05)
+
+- **القاعدة:** مسارات `GET /api/{suppliers,merchants,companies}` و`/:id` **عامة** (`optionalAuth`) لكنها تُرجع **الإسقاط العام فقط** (`*_PUBLIC_FIELDS` في `modules/*/service.ts`) — لا `userId`/`isActive`/`createdAt`/`updatedAt` أبداً. لا تستخدم `db.select()` عارياً في مسار قراءة كيان.
+- **البيانات الخاصة:** `contacts` (بريد/هاتف) و`taxId`/`registrationNumber` تُعاد فقط للمالك (`row.userId === viewer.userId`) أو الموظف. بوابة الموظف = `isEntityStaff()` في `src/lib/entity-access.ts` وتستند إلى الصلاحية **الموجودة** `user:read` (تملكها SUPPORT/RISK/DISPUTE/ADMIN/SUPER_ADMIN، ولا يملكها أي دور بائع — البائعون لديهم `user:read:own`). **لا تُنشئ صلاحية جديدة** لهذا.
+- **غير النشط:** `/:id` تُعيد `404` للزوار وغير المالك (لا تكشف الوجود)؛ `200` للمالك/الموظف.
+- **الدليل:** `listSupplierDirectory(db, query, { includeContacts })` — تُحجب `contactEmail/contactPhone` عن غير الموظف (تُختار ثم تُجرَّد قبل الإرسال).
+- **اختبار:** `tests/sec04b-entity-read-access.test.ts` (9 حالات تكامل). تشغيلها يحتاج PostgreSQL — غير متوفّر في بيئة العمل الحالية (لا psql، لا daemon Docker).
+- **التوثيق الكامل:** `docs/SEC-04B_ENTITY_READ_ACCESS.md`.
+
+## PS-02 — Manual Payment Completion Desk (DEMO only, 2026-11-06)
+
+- **السطح:** تبويب `manual` (testid `admin-fin-tab-manual`) داخل `/admin/finance` — **ليس** صفحة منفصلة. الكتابة تمرّ عبر `applyPaymentSucceeded` نفسه (`completeManualPayment` في `modules/payments/service.ts`)، لا كاتب جديد. المسارات: `POST/GET /api/admin/finance/manual-completions` + `GET /manual-payment-availability`، محروسة ADMIN/SUPER_ADMIN. `Paid ≠ Settled`: الدفتر يبقى `PENDING`، وAudit باسم `PAYMENT.MANUAL_COMPLETED`.
+- **فخ اختبار E2E (مُعالَج):** إنشاء الـintent ينقل `orders.paymentStatus` من `UNPAID` إلى **`PENDING`** — لا تتوقّع `UNPAID` في الـspec بعد إنشاء intent. وزر الإتمام `admin-fin-manual-submit` **معطّل** حتى ينجح البحث (`!manualView?.eligible`)، فانقر `admin-fin-manual-lookup` **قبل** `admin-fin-manual-submit` وإلا علّق الاختبار (timeout) — بما فيه اختبار «المرجع الفارغ» (يرفضه الخادم 422).
+- **التشغيل الحيّ:** PostgreSQL 16 معزول (`wasit_test` فقط) + `DEMO_PAYMENT_MODE=true` + مزوّد `manual`. حزمة الـDB تحتاج migrate+seed أولاً (`DATABASE_URL=.../wasit_test npx drizzle-kit migrate && npx tsx src/scripts/seed.ts`) ثم E2E بنفس `DATABASE_URL`. النتيجة المعتمدة: Backend 10/10 + بوّابات 4/4 + E2E 5/5 + تراجع PS-01 (16/16 و10/10) = 45/45.
+
+## OBS-01 — Webhook Failures & Replay (2026-11-06)
+
+- **السطح:** تبويب `webhooks` (testid `admin-obs-tab-webhooks`) داخل `/admin/observability` — صفحة محروسة أصلاً بـ`AdminOnly` (ADMIN/SUPER_ADMIN) وهو نفس نطاق `REFUND_MANAGE` الخلفي. الجدول يعرض `FAILED`/`DEAD_LETTERED` فقط، وزر إعادة التشغيل `admin-obs-webhook-replay-<id>` **مفعّل فقط لـ`DEAD_LETTERED`**.
+- **إعادة التشغيل ≠ تحرّك مال:** `POST /api/payments/webhook-failures/:id/replay` يعيد الحدث إلى `RECEIVED` ويصفّر `attempts` فقط — لا `SETTLED`، لا `Payout`، ولا تطبيق فوري (ينتظر تسليم المزوّد التالي). الرسالة في الواجهة تقول ذلك صراحةً.
+- **تدقيق بالهوية:** `AppContext` **بلا** حقل `actorId` — لا تمرّر `ctx` مباشرةً إلى `writeAudit` (يكتب `actorId=NULL`). مرّر `{ actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }`. (عيب متبقٍّ محتمل في مسارات أخرى مثل `admin/analytics-routes.ts` — لم يُمسّ.)
+- **ترقيم آمن:** `offset` عبر `parseNonNegativeIntParam` (`lib/query.ts`) — `NaN`/`Infinity` يعودان إلى الافتراضي قبل SQL. القائمة تعيد `{ items, meta:{total,limit,offset} }` ولا تحمل `payload`/توقيع.
+- **التشغيل الحيّ:** نفس وصفة PS-02 (PostgreSQL 16 معزول `wasit_test` + `DEMO_PAYMENT_MODE=true` + migrate/seed). النتيجة المعتمدة: Backend `p6-p7-dispute-webhook.test.ts` 19/19 + الحزمة الكاملة 887/887، E2E `admin-webhook-failures.spec.ts` 4/4 + الحزمة الكاملة 226 ناجحة / 8 متخطّاة (الإخفاقات الثمانية شرطية `DEMO_AUTO_LOGIN`).
+- **التوثيق الكامل:** `docs/OBS-01_WEBHOOK_FAILURES_REPLAY.md` + `docs/GAP_REGISTER.md` §10.6.
+
+## AI-01 — جدولة تنفيذ الوكلاء (2026-11-06)
+
+- **ليست `setInterval` ينادي الوكلاء:** الجدولة صفوف دائمة في جدول `agent_schedules` (ترحيل `0027_melodic_lifeguard.sql`)، والتنفيذ يمرّ عبر `createAgentTask` نفسه — لا مسار تنفيذ موازٍ. الخدمة في `modules/ai/scheduling.ts`، والمؤقّت `runAgentSchedules` في `lib/scheduler.ts`.
+- **تنفيذ واحد فقط عبر النسخ:** المطالبة استعلام `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED)` مع `lease_owner`/`lease_expires_at`. **لا تعتمد على قفل داخل العملية** (`agentRunInFlight` يمنع التداخل داخل النسخة فقط) — الأمان عبر النسخ من القاعدة. عند المطالبة يُقدَّم `next_run_at` فوراً (سياسة تفويت لا تراكم).
+- **fail-closed للموافقة:** جدولة وكيل بـ`requiresHumanApproval` مرفوضة `409` (الجدولة ليست موافقة مسبقة)، ولو صار الوكيل مقيّداً لاحقاً يُتخطّى وقت التشغيل ويُدقّق `AI.AGENT_TASK_SKIPPED_APPROVAL_REQUIRED`. **لا تُنشئ صلاحية جديدة** — البوّابة `AI_MANAGE|ADMIN_AI` نفسها.
+- **الميزانية قبل الإنشاء:** `isBudgetExhausted` (جديدة في `lib/ai/cost-control.ts`) تُرجع `429` قبل إنشاء المهمة وتُدقّق `AI.AGENT_TASK_BUDGET_EXCEEDED`.
+- **هوية SYSTEM:** `audit_logs.actor_type` جديد (`USER` افتراضياً، `SYSTEM` للتنفيذ الآلي بلا `actorId` مزيف)؛ المهمة تبقى منسوبة لمنشئ الجدولة (`createdBy`/`requestedBy`) للمساءلة. `AuditContext` صار يقبل `actorType`.
+- **env:** `AI_AGENT_SCHEDULER_ENABLED=false` (مُطفأ افتراضياً) + `AI_AGENT_SCHEDULER_INTERVAL_MINUTES=5` + `AI_AGENT_SCHEDULE_MIN_INTERVAL_MINUTES=15` + `AI_AGENT_SCHEDULE_LEASE_SECONDS=300`. الوكلاء الجدوليّون: غير مقيّدين فقط (مثل `marketing-agent`, `product-agent`, `support-agent`, `analytics-agent`, `market-research-agent`).
+- **الاختبار:** `tests/ai01-agent-scheduling.test.ts` **12/12** + الحزمة الكاملة **899/899**. التشغيل يحتاج PostgreSQL (استُخدم PostgreSQL 16 معزول) — الحزمة الكاملة تُسقط/تُنشئ `wasit_test` عبر `tests/setup.ts`.
+- **التوثيق الكامل:** `docs/AI-01_AGENT_SCHEDULING.md` + `docs/GAP_REGISTER.md` §3/§6.
+
+## AI-02.P0 — حاسمو ما قبل Supervisor (2026-11-06)
+
+- **حسم `actorType`:** لا تضارب — سجل `AI.AGENT_TASK_SCHEDULED` يُكتب بـ`actorType='SYSTEM'` و`actorId=null`، مع `metadata.createdBy` (منشئ الجدولة) و`metadata.scheduleId`. الفصل الثلاثي (منشئ/منفّذ/هوية النظام) محفوظ. **لا تغيير كود.**
+- **منع الموافقة الذاتية (Backend):** حارس في `decideAgentTask` (`modules/ai/agents.ts`): الطالب لا يعتمد طلبه (`403 FORBIDDEN`)، ويشمل ذلك `SUPER_ADMIN`. الحارس في الخدمة (لا الواجهة) فيرثه أي سطح موافقة. سحب الطالب لطلبه (`REJECT`) يبقى مسموحًا.
+- **جرد الوكلاء:** 11 وكيلًا في `AGENT_CATALOGUE` → `agent_registry` (مصدر تسجيل وحيد)، ولكل وكيل منفّذ حقيقي في `executors.ts` (11 حالة `switch`). لا وكيل «تعريف بلا تنفيذ». لم يُغيَّر الترتيب ولم يُنشأ وكيل جديد.
+- **الاختبار:** `tests/ai02p0-approval-guard.test.ts` **5/5** (سلبي: اعتماد ذاتي 403 لـADMIN وSUPER_ADMIN، ومهمة مرفوضة لا تُنفَّذ؛ إيجابي: مُعتمِد آخر، وسحب الطالب). إصلاح مساعد `runAndComplete` في `phase14-agents.test.ts` ليستخدم معتمِدًا مختلفًا. الحزمة الكاملة **904/904** (78 ملفاً)؛ Typecheck نظيف.
+- **التوثيق الكامل:** `docs/AI-02P0_PRE_SUPERVISOR_BLOCKERS.md`.
+
+## AI-02.1 — Agent Runs & State Machine (2026-11-06)
+
+- **نموذج البيانات:** `db/schema/agent_runs.ts` يعرّف `agent_runs` (تشغيل واحد بهدف: `run_key` فريد للـidempotency، `title`/`description`، `status`، `requested_by`، `summary`/`error`/`metadata`، طوابع زمنية) و`agent_run_steps` (خطوة: `step_key`، `agent_key`، `status`، `input`/`result`/`error`، `priority`، `attempt_count`/`max_attempts`، `depends_on`، `requires_approval`/`approved_by`).
+- **العلاقات والقيود:** FK `run_id` → `agent_runs.id` مع `ON DELETE CASCADE` (أول FK صريح في المستودع)؛ فهرس فريد `(run_id, step_key)`؛ CHECKs: `priority>=0`، `attempt_count>=0 AND max_attempts>=1 AND attempt_count<=max_attempts`، `jsonb_typeof(depends_on)='array'`. الترحيل: `0028_keen_gunslinger.sql` (مولّد بـ`drizzle-kit generate`).
+- **آلة الحالات:** `modules/ai/run-state-machine.ts` (منطق صرف): 11 حالة تشغيل و10 حالات خطوة، جدولا انتقالات، و`assertRunTransition`/`assertStepTransition` (ترمي `409` على انتقال غير قانوني/`from===to`/إحياء حالة نهائية)، و`assertStepSuccess` (لا `SUCCEEDED` بلا `result`)، و`assertRunCompletion` (لا إكمال وخطوات غير منتهية، و`COMPLETED` تتطلب نجاح كل الخطوات وإلا `PARTIALLY_COMPLETED`)، و`assertValidDependencies` (تبعية غير معروفة/ذاتية/دائرية عبر خوارزمية Kahn). الإحياء يحتاج `allowReopen` صريحًا.
+- **حدود المرحلة:** لا `planRun`/`dispatchStep`/Tool Gateway/إعادة محاولة/Kill Switch/واجهة Supervisor/تغيير ترتيب الوكلاء — كلها مراحل لاحقة.
+- **الاختبار:** `tests/ai021-agent-runs.test.ts` **31/31** (persistence + انتقالات قانونية/غير قانونية + إحياء نهائي + إكمال + تبعيات + عدم التأثير على `agent_tasks`/`agent_schedules`)؛ الحزمة الكاملة **935/935** (79 ملفاً)؛ Typecheck نظيف.
+- **التوثيق الكامل:** `docs/AI-02.1_AGENT_RUNS_STATE_MACHINE.md`.
+
+## AI-02.2 — Planning & Dependency Resolution (2026-11-06)
+
+- **الخدمة:** `modules/ai/planner.ts` — `planAgentRun(db, requesterId, input, audit)` تحوّل هدفاً + خطوات مقترحة إلى خطة محفوظة: صف `agent_runs` بحالة `PLANNING` + صفوف `agent_run_steps` بحالة `PENDING`. لا تفهم الأهداف عبر LLM؛ المتصل يزوّد الخطوات.
+- **التحقق (`validatePlan`):** وكيل مسجّل ونشط في `agent_registry`، `stepKey` فريد غير فارغ، `input` كائن، `priority` صحيح، تبعيات صحيحة (عبر `assertValidDependencies` من AI-02.1)، حدود (25 خطوة، 16KB)، وصلاحيات الطالب (RBAC؛ `ADMIN`/`SUPER_ADMIN` يمرّان كما في `createAgentTask`).
+- **الترتيب (`topologicalOrder`):** حتمي — الأعلى أولوية أولاً، والتساوي يُفصل بـ`stepKey`؛ الأولوية لا تتجاوز التبعية؛ الدورة تُرفض (`CYCLE`). `executionOrder` يُشتق عند القراءة لا يُخزَّن (لا عمود جديد).
+- **الحفظ:** ذرّي داخل `db.transaction`؛ `runKey` فريد (idempotency → `409`). الميزانية تُفحص مسبقاً (`isBudgetExhausted` → `429`).
+- **حدود صارمة:** لا تنفيذ، لا Executor، لا `createAgentTask`، لا `dispatchStep`، لا `DISPATCHING`/`RUNNING`. الإنشاء ليس موافقة؛ الخطوة الحساسة `requiresApproval=true` وتبقى `PENDING`. حماية AI-02.P0 (منع الموافقة الذاتية) لم تُلمس.
+- **الاختبار:** `tests/ai022-planning.test.ts` **28/28** (الخطة الصحيحة، الربط بالوكلاء، الترتيب، رفض وكيل/مكرّر/تبعية غير موجودة/ذاتية/دائرية/مدخلات/حدود، الصلاحيات والموافقة، عدم تشغيل Executor، عدم الانتقال لـ`DISPATCHING`/`RUNNING`، إعادة قراءة الخطة، سلامة AI-02.P0)؛ الحزمة الكاملة **963/963** (80 ملفاً)؛ Typecheck نظيف.
+- **التوثيق الكامل:** `docs/AI-02.2_PLANNING_DEPENDENCY_RESOLUTION.md`.
+
+## AI-02.3 — Dispatch & Controlled Execution (2026-11-06)
+
+- **الخدمة:** `modules/ai/dispatcher.ts` — `dispatchStep(db, runId, stepKey, audit)` تُرسل خطوة صالحة إلى نظام المهام الحالي عبر `createAgentTask`/`decideAgentTask`، وتسجّل النتيجة على الخطوة والخطة. **لا Executor مباشر، ولا نظام مهام موازٍ.**
+- **الربط (بلا Migration):** `__runId`/`__stepId` داخل `agent_tasks.input` (jsonb) — متسق مع اصطلاح `__userId`؛ `taskId` يُخزَّن أيضاً في `agent_run_steps.result`/`error`. لا عمود/جدول جديد.
+- **التحقق قبل الإرسال:** الخطة في حالة قابلة للإرسال، الخطوة غير نهائية/غير `RUNNING`، كل التبعيات `SUCCEEDED`، الوكيل مسجّل ونشط، صلاحيات الطالب تغطي `permissionsRequired`، الخطوة الحساسة معتمدة من موافق مخوّل، والميزانية غير مستنفدة.
+- **منع التكرار والتزامن:** مطالبة ذرّية `UPDATE ... WHERE status IN ('PENDING','READY') RETURNING` (فائز واحد) + فحص مهمة قائمة بنفس `__stepId` + رفض الحالات النهائية/`RUNNING`. انقطاع الاستجابة لا يُفسَّر كعدم إنشاء؛ يُعاد قراءة الحالة الفعلية ولا تُنشأ مهمة بديلة.
+- **التبعيات/الفشل:** لا إرسال قبل نجاح كل التبعيات؛ عند فشل خطوة تُعلَّم التابعة `SKIPPED` بشكل متعدٍّ؛ `SKIPPED` ليست نجاحاً. **لا Retry** (الفشل → `FAILED` مسجّلة).
+- **الموافقات:** `approveRunStep` (موافق ≠ طالب التشغيل، AI-02.P0 + صلاحية `ai:manage`/ADMIN) ثم جسر عبر Approval Engine؛ لا مسار متجاوز.
+- **الإكمال:** `reconcileRun` يغلق الخطة `COMPLETED`/`PARTIALLY_COMPLETED`/`FAILED` عبر `assertRunTransition`/`assertRunCompletion`؛ `cancelRun` يمنع أي إرسال جديد. لا توسيع صلاحيات، ولا مالية/خارجية حقيقية.
+- **الاختبار:** `tests/ai023-dispatch.test.ts` **21/21**؛ مجموعة AI **125/125**؛ الحزمة الكاملة **984/984** (81 ملفاً)؛ Typecheck نظيف.
+- **التوثيق الكامل:** `docs/AI-02.3_CONTROLLED_EXECUTION.md`.
+
+## AI-02.3.1 — Execution Reliability & Recovery (2026-11-06)
+
+- **المزامنة:** `syncStepFromTask(db, stepId, audit)` تقارن خطوة `RUNNING` بمهمتها المرتبطة (`input.__stepId`): `succeeded`/`approved` بشرط وجود نتيجة → `SUCCEEDED`؛ `failed`/`rejected` → `FAILED`؛ `queued`/`running`/`awaiting_approval`/مجهول → **لا إجراء** (لا إعادة إرسال، لا نتيجة مخترعة). idempotent: لا كتابة/تدقيق إلا عند تغيّر فعلي.
+- **الاستعادة:** `recoverStuckSteps(db, {stuckSeconds, leaseSeconds}, audit)` تجد الخطوات العالقة `RUNNING` (بعد المهلة)، تطالب بها **ذرّياً** (`UPDATE ... WHERE status='RUNNING' AND updated_at < now()-lease RETURNING` — فائز واحد)، تُزامنها، ثم `reconcileRun`. خطوة بلا مهمة → `FAILED` (**لا إنشاء مهمة بديلة**). `recoverRun(db, runId, audit)` تُزامن كل خطوات `RUNNING` في خطة ثم تُغلقها.
+- **نقطة التشغيل:** إعادة استخدام المُجدول الداخلي `lib/scheduler.ts` — وظيفة `runAgentRunRecovery` تُوصَل في `index.ts`؛ **مُطفأة افتراضياً** (`AI_AGENT_RUNS_RECOVERY_ENABLED=false`). لا Worker/طابور جديد.
+- **المهل والإعداد:** `AI_AGENT_RUN_STEP_STUCK_SECONDS` (افتراضي 300) · `AI_AGENT_RUNS_RECOVERY_INTERVAL_MINUTES` (افتراضي 5) — لا قيمة سحرية. **ملاحظة (AI-02.3.2):** أُزيل `AI_AGENT_RUNS_AUTO_DISPATCH_ENABLED` لأنه إعداد ميّت (لم يُقرأ في أي مسار)؛ لا Auto Dispatch معتمداً ضمن النطاق — الإرسال دائماً إجراء صريح مخوّل.
+- **الذرّية (بلا Migration):** المطالبة الذرّية `UPDATE ... WHERE status IN ('PENDING','READY') RETURNING` تبقى الكاتب الوحيد؛ نافذة الانقطاع بين المطالبة وإنشاء المهمة تُعالَج بالاستعادة الـidempotent (لأن `createAgentTask` ينفّذ متزامناً ولا يُدمج في معاملة المطالبة). **لا عمود/جدول/ترحيل جديد.**
+- **السياسة:** لا Retry في هذه المرحلة؛ `maxAttempts` مفروض في `dispatchStep` (المحاولات المستنفدة تُرفض)؛ `FAILED` تُسجَّل ولا تتحوّل نجاحاً؛ `SKIPPED` ليست نجاحاً؛ `reconcileRun` يمرّ عبر الحالات القانونية (حتى عند إغلاق خطة ما زالت `PLANNING`).
+- **الصلاحيات:** لا مساس بـAI-02.P0؛ Recovery/Dispatcher لا يوافقان ولا ينتحلان هوية موافق؛ لا توسيع صلاحيات أي وكيل.
+- **المسارات الإدارية:** `GET/POST /api/admin/ai/agent-runs/...` (inspect/dispatch/approve/cancel/recover) خلف `AI_MANAGE`/`ADMIN_AI`.
+- **الاختبار:** `tests/ai0231-reliability.test.ts` **23/23**؛ الحزمة الكاملة **1007/1007** (82 ملفاً)؛ Typecheck نظيف (server+web).
+- **التوثيق الكامل:** `docs/AI-02.3.1_EXECUTION_RELIABILITY_RECOVERY.md`.
+
+## AI-02.3.2 — Fencing, Concurrency & Recovery Safety (2026-11-06) — **CLOSED**
+
+- **الـFencing token:** كل مطالبة Dispatch تزيد `attempt_count` ذرّياً وتستلم القيمة الجديدة كـ**token**؛ كل كتابة لاحقة تحمل `WHERE id=? AND status='RUNNING' AND attempt_count=<token>`. فتكتب قديمة بعد قرار Recovery أحدث = **no-op** (يُسجَّل `AI.AGENT_RUN_STEP_WRITE_REJECTED`). لا عمود/ترحيل جديد.
+- **حماية خدمة `createAgentTask`:** معامل اختياري `fencing {runId, stepId, claimToken}` — فحص الملكية (تجديد الإيجار) **وإدراج المهمة في معاملة واحدة**؛ 0 صفوف → رفض (لا مهمة). **ترتيب القفل مقصود**: يُنفَّذ `UPDATE` الملكية **قبل** فحص التكرار ليعمل كقفل صف؛ هذا يمنع مهمتين نشطتين للخطوة نفسها تحت `READ COMMITTED` (فحص-then-إدراج غير ذرّي كان يسمح بهما — أُثبت باختبار تزامن حقيقي). **لا يوسّع صلاحيات** (الوكيل الحساس يبقى `awaiting_approval`).
+- **`fencedStepWrite`:** الكتابة الذرّية المُصدَّرة التي تحمل شرط الملكية — كل نتائج `dispatchStep` تمرّ عبرها.
+- **حارس داخل العملية:** `createInFlightGuard()` في `lib/scheduler.ts` — يمنع تداخل دورتَي Recovery، ويُحرَّر في `finally` (لا يعلق بعد استثناء). ليس بديلاً عن الإيجار في قاعدة البيانات.
+- **سجل كل دورة Recovery:** `correlationId` + `status` (SUCCESS/PARTIAL/FAILED) + `scanned/recovered/skippedLease/lostRace/reconciledRuns/errors/durationMs` — تُسجَّل حتى الدورة الفارغة. لا بيانات حساسة. فشل خطوة واحدة يُعزل (`AI.AGENT_RUN_STEP_RECOVERY_FAILED`) ولا يُسقط الدورة.
+- **دقّة إغلاق Recovery (تصحيح التدقيق النهائي):** إغلاق الخطوة مشروط بفحص الصفوف المتأثرة (`settleRunningStep` = `UPDATE … WHERE id=? AND status='RUNNING' RETURNING id`). صفر صفوف = `lost_race` ⇒ **لا** يُزاد `recovered`، **لا** يُسجَّل Audit نجاح (`AI.AGENT_RUN_STEP_SYNCED`/`AI.AGENT_RUN_STEP_RECOVERED`)، ويُسجَّل بدلاً منه `AI.AGENT_RUN_STEP_RECOVERY_LOST_RACE` مع `observedStatus`، ويُزاد `lostRace` في الدورة؛ ولا يُستدعى `reconcileRun` لخطوة خسرت السباق. **بلا تغيير Fencing/`attempt_count`/Retry/الصلاحيات.**
+- **AUTO_DISPATCH:** أُزيل (إعداد ميّت)؛ لا Auto Dispatch ضمن النطاق.
+- **الاختبار:** `tests/ai0232-fencing.test.ts` **30/30** (منها تزامن حقيقي عبر seam `dispatchStep(..., {onClaimed})`) + `tests/ai0232-concurrency.test.ts` **14/14** (تزامن حقيقي **متعدد الاتصالات**: حوضَا `pg.Pool` منفصلان = اتصالان/جلستان مستقلان بقاعدة PostgreSQL، دون مشاركة الاتصال أو المعاملة، `Promise.all` على أقفال الصفوف؛ + 4 اختبارات دقّة تدقيق الاستعادة عبر seam `SyncHooks.beforeSettle` غير مُمرَّر في الإنتاج)؛ الحزمة الكاملة **1051/1051** (84 ملفاً)؛ Typecheck نظيف (server+web).
+- **التوثيق الكامل:** `docs/AI-02.3.2_FENCING_CONCURRENCY_RECOVERY_SAFETY.md`.
+- **قيد صريح محفوظ:** تم اختبار التزامن عبر **اتصالين/جلستين مستقلتين بقاعدة PostgreSQL**، ولم يُختبر بعد تشغيل **عمليتَي Node Server مستقلتين فعلياً**.
+- **الحالة:** AI-02.3.2 **CLOSED**؛ AI-02 كاملة تبقى `IN_PROGRESS` (Supervisor/LLM planner/Tool Gateway/Retry مؤجّلة).
+
+## AI-02.S1 — Agent Supervisor + Retry Policy (2026-11-16) — **COMPLETED (شريحة فرعية)**
+
+- **المهمة:** الشريحة الأولى المحدودة من AI-02: طبقة Supervisor تقرأ التشغيلات وتتّخذ تدخّلات محدودة + سياسة إعادة محاولة مركزية. **بلا مزوّد خارجي · بلا Migration · بلا Seed · بلا تغيير مخطط أو آلة حالات.**
+- **الخدمة:** `packages/server/src/modules/ai/supervisor.ts` (جديد) — `runSupervisorCycle` (دورة محدودة) · `containRun` (حجب) · `retryStep` (إعادة محاولة) · `buildSupervisorOverview` (قراءة) · `createSupervisorCycleGuard`.
+- **السياسة:** `modules/ai/retry-policy.ts` (جديد، صرف) — `decideRetry` fail-closed. تُغذّي `supervisor-policy.ts` القائمة بصفوف حقيقية (أول مستهلك إنتاجي لها).
+- **ما يراقبه:** تشغيلات نشطة/متعثّرة (stuck/stale)/حلقات/تجاوز الميزانية + خطوات فاشلة/منتظرة لإعادة المحاولة.
+- **الحجب:** يُغلق التشغيل `FAILED` عبر آلة الحالات ويُلغي خطواته غير المنتهية (قفل صف التشغيل ⇒ idempotent عبر العمليات) — **لا يُغلق `COMPLETED` أبداً**؛ الإغلاق الناجح حصراً عبر `reconcileRun`.
+- **إعادة المحاولة:** خطوة `FAILED` فقط (`FAILED → RETRYING → RUNNING` عبر `dispatchStep`)، ضمن سقف `DEFAULT_SUPERVISOR_LIMITS.maxAttempts=3`، مع تبعيات `SUCCEEDED` وميزانية متاحة وتشغيل مفتوح. تُرفع `max_attempts` في الصف (بلا Migration) وفكّ ربط المهمة الفاشلة (`__stepId`) لإتاحة مهمة جديدة. لا حلقة لانهائية.
+- **السطح الإداري:** `GET /api/admin/ai/supervisor/overview` + `POST /api/admin/ai/supervisor/runs/:runId/contain`، محروسان بـ`AI_MANAGE|ADMIN_AI` (لا صلاحية جديدة)؛ CUSTOMER/MERCHANT/SUPPLIER مرفوضون (403).
+- **التزامن:** الحكم قاعدة البيانات (قفل صف التشغيل + كتابات شرطية + مطالبة `dispatchStep` الذرّية)؛ `createSupervisorCycleGuard()` يمنع التداخل داخل العملية فقط. **دورة دورية اختيارية** في `lib/scheduler.ts` **مُطفأة افتراضياً** (`AI_AGENT_RUNS_SUPERVISOR_ENABLED=false`).
+- **التدقيق:** `AI.AGENT_RUN_CONTAINED` · `AI.AGENT_RUN_STEP_RETRY_SCHEDULED` · `AI.AGENT_RUN_STEP_RETRY_FAILED` · `AI.AGENT_RUN_SUPERVISOR_FAILED` (هوية `SYSTEM`).
+- **الاختبار:** `tests/unit/retry-policy.test.ts` **10/10** + `tests/ai024-supervisor.test.ts` **17/17** + `tests/ai024-supervisor-routes.test.ts` **7/7** + تراجع AI-02 **158/158** + الحزمة الكاملة **1670/1671** (الفشل الوحيد `sec04b` سابق/متقطّع، يمرّ معزولاً)؛ Typecheck (server+web) نظيف.
+- **مؤجّل صراحةً:** LLM Planner · Tool Gateway · Kill Switch · Circuit Breaker/Backoff المتقدّم · واجهة ويب Supervisor · AI-03/AI-04/AI-05.
+- **التوثيق الكامل:** `docs/AI-02.S1_SUPERVISOR_RETRY.md` (+ `docs/AI_ARCHITECTURE.md` §AI-02.S1، `docs/GAP_REGISTER.md` §23).
+- **الحالة:** AI-02.S1 **COMPLETED**؛ **AI-02 تبقى `IN_PROGRESS`** (المكوّنات المؤجّلة أعلاه).
+
+## WASIT-EXECUTION-AI02S1-CLOSE — إغلاق AI-02.S1 + تدقيق `sec04b` المتقطّع (2026-11-16)
+
+- **النوع:** إغلاق إداري لشريحة + تحقيق READ-ONLY في اختبار متقطّع. **بلا تعديل اختبار أو منطق تطبيق، بلا Migration، بلا Seed، بلا كتابة على DEMO/إنتاج، بلا Git مُغيِّر.**
+- **إغلاق AI-02.S1:** `AI-02.S1 = COMPLETED` بعد التحقق من تحقّق كل شروط القبول — اختبارات جديدة **34/34** (`unit/retry-policy` 10 + `ai024-supervisor` 17 + `ai024-supervisor-routes` 7) + تراجع AI-02 **158/158** + `tsc` (server+web) نظيف + توثيق كامل. **AI-02 تبقى `IN_PROGRESS`** (LLM Planner · Tool Gateway · Kill Switch · واجهة Supervisor الكاملة). **لا ادّعاء جاهزية إنتاجية.**
+- **`sec04b` المتقطّع — السبب الجذري مُثبت:** **مشاركة بيانات/قاعدة الاختبار + ترتيب الاختبارات**. اختبار `SEC-04B E` يطلب `GET /api/directory/suppliers?pageSize=100` (دليل **عالمي** مرتَّب بـ`companyName`، سقف 100) ويتوقّع صفّه في الصفحة الأولى؛ لكن **26 ملف اختبار** يُنشئ موردين بلا تنظيف على قاعدة `wasit_test` **مشتركة** ⇒ **397 مورداً نشطاً**، منها **352** تُسبق `S4` أبجدياً، فصفوفه تسقط في المواضع **#354–#359** (خارج الصفحة) ⇒ `find` = `undefined`. **ينجح منفرداً** لغياب التراكم.
+- **مستقلّ عن AI-02.S1:** يُعاد إنتاجه مع **استبعاد ملفات AI-02.S1 الثلاثة** (`1 failed | 127 passed`)؛ ومسار `directory`/`suppliers` لا يستورد أي وحدة من AI-02.S1. **ليس سباقاً زمنياً ولا تنظيفاً ناقصاً.**
+- **أصغر إصلاح مقترح (لم يُطبَّق):** في الاختبار فقط، استخدام `?q=<companyName>` بدل الاعتماد على الصفحة الأولى (يقلّ العائد إلى 6 صفوف) — **لا يمسّ كود الإنتاج** (الدليل العام المرتَّب سلوك مقصود).
+- **التوثيق الكامل:** `docs/GAP_REGISTER.md` §24 + §23 + `docs/WASIT_EXECUTION_REGISTER.md` §8 (1.2).
+
+## WASIT-EXECUTION-SEC04B-FIX — إصلاح `sec04b` + تحقق شامل (2026-11-17)
+
+- **النوع:** إصلاح اختبار فقط (test-only) بأصغر تعديل. **بلا تعديل كود إنتاج، بلا Migration، بلا Seed، بلا تغيير مخطط، بلا Git مُغيِّر.**
+- **التغيير الدقيق** (`packages/server/tests/sec04b-entity-read-access.test.ts` — كتلة `SEC-04B E` فقط): قراءة `companyName` للمورّد بالمعرّف من DB، ثم `GET /api/directory/suppliers?q=<companyName>&pageSize=100` بدل الاعتماد على الصفحة الأولى؛ **نفس** `find` بالمعرّف و**نفس** تأكيدات الصلاحيات/حجب PII.
+- **لماذا صحيح:** المرشّح `q` يُطبَّق على العدّ والقائمة معاً (`ilike(companyName,'%q%')`) والاسم فريد ⇒ العائد 6 صفوف ⇒ الصف داخل الصفحة. **لا يمسّ API ولا كود الإنتاج.**
+- **النتائج (PostgreSQL 16 معزولة `wasit_test`@5434):** `sec04b` منفرداً **12/12** · ×3 **12/12** · مجموعة الأمان (`sec04b`+`security-privacy`) **31/31** · **الحزمة الكاملة 131 ملفاً / 1671 اختباراً = كلها ناجحة** · `tsc` (server+web) **0 أخطاء**.
+- **إزالة السبب فعلياً:** أثناء النجاح كان شرط الفشل قائماً (**397** مورداً نشطاً، **352** تُسبق `S4`) ⇒ لولا الإصلاح لكان الفشل حتمياً. **لا فشل متبقٍ.**
+- **التوثيق:** `docs/GAP_REGISTER.md` §24.7 + `docs/WASIT_EXECUTION_REGISTER.md` §8 (1.3).
+
+## LC-01 — إطار قانوني ومسوّدات (WASIT-EXECUTION-010، 2026-11-07)
+
+- **الحالة:** الجاهزية التقنية **COMPLETE_VERIFIED**؛ الفجوة **تبقى مفتوحة** (`BLOCKED` على الاعتماد الخارجي). لا تُنشر أي وثيقة ولا يُقبل أي إقرار حتى تُنقل صراحةً إلى `PUBLISHED`.
+- **الكتالوج:** `packages/server/src/lib/legal/catalogue.ts` — 9 وثائق (ToS, Privacy, Cookie, Refund/Dispute, Buyer, Seller/Merchant, Supplier, DPA, Prohibited Goods)، كلها `LEGAL_REVIEW_REQUIRED` بـ`effectiveDate=null`. النشر فعل كود مُراجَع، لا مفتاح وقت تشغيل.
+- **الأسطح:** عام `GET /api/public/legal/documents[/:code]` (المنشور فقط؛ غير المنشور ⇒ 404) · مُصادَق `GET /api/legal/acceptances/me` و`POST /api/legal/acceptances` (قبول **إصدار محدّد**؛ غير المنشور/غير الساري ⇒ 409) · **حق التصحيح** `PATCH /api/privacy/me` (قائمة بيضاء: firstName/lastName/phone/locale/displayName؛ البريد/التحقّق غير قابلين للتعديل؛ التدقيق يسجّل أسماء الحقول فقط).
+- **الموافقة:** `recordLegalAcceptance`/`getPendingLegalAcceptances` تقبل `catalogue?` اختيارياً (الافتراضي الإنتاجي بلا تغيير). رفع إصدار وثيقة ⇒ إعادة قبول (`needsReacceptance`). تُخزَّن في `consents`/`consent_events` (نوع `LEGAL_DOCUMENT`) + `audit_logs`. **بلا Migration.**
+- **الويب:** `packages/web/src/pages/LegalPage.tsx` + مسار `/legal` في `App.tsx` + رابط التذييل + مفاتيح i18n (ar/en/fr/zh). السطح فارغ عمداً حتى النشر.
+- **المسوّدات:** `docs/legal/00..10` (مسوّدات غير سارية للمراجعة). السياق التونسي: `docs/legal/10-tunisia-legal-context.md`. الوثيقة الكاملة: `docs/LC-01_LEGAL_FRAMEWORK.md`.
+- **الاختبار:** `packages/server/tests/lc01-legal-framework.test.ts` **18/18** · الحزمة الكاملة **1267/1267** (107 ملف) · الويب **35/35** · Typecheck (server+web) نظيف.
+- **العدّ:** بلا تغيير في ذلك الوقت (المفتوحة 18 / المغلقة 30) — جوهر الفجوة (النصّ المعتمد) اعتماد خارجي لا يُخترع. **(صُحّح العدّاد الموحّد لاحقاً إلى المفتوحة 21 / المغلقة 32 — WASIT-EXECUTION-012.1.)**
+
+## LC-01.1 — بنية الموافقة القانونية + بوابة إلزامية (WASIT-EXECUTION-010.1، 2026-11-07)
+
+- **الحالة:** بنية الموافقة **COMPLETE_VERIFIED**؛ الفجوة (LC-01) **تبقى مفتوحة** (`BLOCKED` على النصّ المعتمد). البوّابة **مطفأة افتراضياً** ولا تُفرض أي موافقة على مسودّة غير معتمدة.
+- **بوابة إلزامية مطفأة:** `packages/server/src/modules/legal/enforcement.ts` → `requireLegalAcceptance()` مثبّتة على كل `/api` في `app.ts` (بعد CSRF). تُحجب فقط عند تحقّق **ثلاثة** شروط معاً: `LEGAL_ACCEPTANCE_ENFORCEMENT=on` + وجود وثيقة **منشورة وسارية** (`isAcceptable`) + عدم قبول المستخدم الإصدار الساري ⇒ `403 LEGAL_ACCEPTANCE_REQUIRED`. **معفاة:** `/api/auth`, `/api/health`, `/api/legal/*`, `/api/public/legal/*`.
+- **العلم:** `LEGAL_ACCEPTANCE_ENFORCEMENT` (`off` افتراضياً / `on`) في `lib/env.ts` + `legalAcceptanceEnforced()`. **مستقل عن `NODE_ENV`**: التفعيل فعل مُراجَع صريح (مفتاحان: نشر الوثيقة + تفعيل العلم). `on` مقابل المسودات = no-op.
+- **السجل والأمان:** `GET /api/legal/acceptances/history` (سجل المتصل فقط، الأحدث أولاً؛ لا ip/ua في الاستجابة) + `listLegalAcceptances`. مخطط القبول `.strict()` يرفض أي حقل هوية مُنتحَل (422) — لا قبول نيابةً عن الغير. الهوية من الجلسة حصراً.
+- **الويب:** `packages/web/src/pages/LegalAcceptancePage.tsx` + مسار `/dashboard/legal` + رابط الشريط الجانبي + مفاتيح i18n (ar/en/fr/zh) + طرق API في `lib/api.ts` والأنواع في `lib/types.ts`.
+- **التوثيق:** `docs/LC-01.1_LEGAL_CONSENT_INFRASTRUCTURE.md` (البنية والتفعيل) · `docs/LC-01_LEGAL_INFO_REQUIRED.md` (قائمة معلومات الكيان/المحامي، لا قيم مخترعة).
+- **الاختبار:** `tests/lc011-legal-consent-gate.test.ts` **14/14** (منطق القرار النقي + ترتيب التثبيت الحقيقي + الحجب 403) + `tests/lc01-legal-framework.test.ts` **27/27** (تكامل HTTP+DB: السجل/الإصدار/العزلة/رفض التزوير/عدم الحجب/الفصل عن Cookies) · الحزمة الكاملة **1290/1290** (108 ملف) · الويب **35/35** · Typecheck (server+web) نظيف · بناء الويب ✅. **بلا Migration.**
+- **العدّ:** بلا تغيير في ذلك الوقت (المفتوحة 18 / المغلقة 30) — جوهر الفجوة اعتماد خارجي. **(صُحّح العدّاد الموحّد لاحقاً إلى المفتوحة 21 / المغلقة 32 — WASIT-EXECUTION-012.1.)**
+
+## WASIT-EXECUTION-012.1 — تصحيح اتساق توثيقي (2026-11-08) — **DOC-ONLY**
+
+- **النطاق:** توثيق فقط (`docs/**` + `AGENTS.md`). لا كود/اختبارات/Schema، لا Migration/Seed/DEMO/إنتاج، لا stage/commit/push.
+- **العدّ الصحيح الموحّد:** **المفتوحة = 21** · **المغلقة = 32** (كان 18/30). سبب الفارق: `SEC-011.4` أُغلق في §12 دون تحديث العدّاد؛ `SEC-XFF-01` كان يُحتسب خطأً «مفتوحاً»؛ `SEC-03` كان غائباً من §6؛ و§6 يحوي 31 معرّفاً مميّزاً (14 منها غير موجودة في §2–§5).
+- **فصل `LC-08` عن `SEC-XFF-01`:** `LC-08` = فجوة **وثائق امتثال DPA/PCI** (من `MASTER_GAP_AUDIT.md`)، **تبقى مفتوحة/غير مُغلقة** (لا دليل خاص بها). الوسم الخاطئ `(LC-08)` أُزيل من `SEC-XFF-01` (وفي `03-ENVIRONMENT-REFERENCE.md` و§12). إغلاق `SEC-XFF-01` لا يُنسب إلى `LC-08`.
+- **TLS:** `deploy/nginx.conf` **لا ينهي TLS** (`listen 80;` فقط)؛ صُحّح الادّعاء في `COMMERCIAL-RELEASE-MANIFEST.md` §6 و`04-DEPLOYMENT-GUIDE.md` §0/§5.
+- **الوثائق القانونية:** `docs/legal/` = **11 ملفاً** = **9 مستندات سياسات** (`01`…`09`) + `00-README.md` (فهرس) + `10-tunisia-legal-context.md` (سياق، ليس سياسة). المصدر الموثوق `lib/legal/catalogue.ts` (9).
+- **ملفات مُعدَّلة:** `docs/GAP_REGISTER.md` · `docs/MASTER_GAP_AUDIT.md` · `docs/LC-01_LEGAL_FRAMEWORK.md` · `docs/legal/00-README.md` · `docs/commercial-release/{COMMERCIAL-RELEASE-MANIFEST,03-ENVIRONMENT-REFERENCE,04-DEPLOYMENT-GUIDE}.md` · `AGENTS.md`.
+- **بوابة السلامة:** HEAD `a5391a5…` · branch `master` · M0 `e731e…` — **بلا تغيير**. modified 97 → 98 (ملف توثيقي واحد كان نظيفاً)، untracked 122 ثابت.
+
+## WASIT-EXECUTION-013.0 — تصليب أمان النسخ الاحتياطي/الاستعادة (2026-11-09)
+
+- **النطاق:** `scripts/{lib/common.sh,backup-db.sh,restore-db.sh,backup-restore.test.sh}` + توثيق (`docs/DEPLOYMENT.md`, `docs/commercial-release/08-OPERATIONS-RUNBOOK.md`). لا stage/commit/push.
+- **العيوب المُصلَحة:**
+  - **تحقق سلامة اختياري → إلزامي:** `restore-db.sh` كان يتخطّى التحقق عند غياب `checksums.sha256` (تحذير فقط). الآن **غيابه/فراغه/عدم تطابق أي مدخل = رفض تام**. أُضيف منع خروج المدخلات عن مجلد النسخة (`../`, مسار مطلق) ومنع **الروابط الرمزية** (symlink escape).
+  - **حقن اسم قاعدة الهدف:** `EXISTS` كان يبني SQL نصياً بـ`'$TARGET_DB'`، و`DROP/CREATE DATABASE` بـ`\"$TARGET_DB\"`. الآن: تحقق صارم للاسم (`^[a-z][a-z0-9_]*$`, ≤63) ⇒ **الرفض لا الهروب**، و`EXISTS` عبر متغيّر psql `:'target'` **عبر stdin** (ملاحظة: `psql -c` لا يوسّع `:'var'` — عبر stdin فقط)، و`DROP/CREATE` عبر `wasit_sql_ident` (مضاعفة `"`).
+  - **حماية DEMO/إنتاج/نظام:** قائمة محميّة (`wasit_prod`, `wasit_staging`, `wasit_demo`, `postgres`, `template0`, `template1`) + بادئة `_restore`/`_drill`، **غير قابلة للتجاوز بـ`--force` أو`--allow-live`**. قابلة للتوسيع بـ`WASIT_PROTECTED_DB_NAMES`.
+  - **صلاحيات مجلد النسخ:** كان يعتمد umask؛ الآن `0700` صراحةً (`wasit_secure_dir`، مع `BACKUP_DIR_MODE`).
+- **مساعدات جديدة في `scripts/lib/common.sh`:** `wasit_validate_db_name`, `wasit_sql_ident`, `wasit_protected_db_names`, `wasit_extra_protected_names`, `wasit_is_protected_db_name`, `wasit_secure_dir`.
+- **الاختبارات:** أُضيفت أقسام **G1–G8** (حماية استعادة بلا خادم، بـ`psql` مُموّه) + **الأقسام 1–6** تُتخطّى بصوت عالٍ (`SKIP`) عند غياب الخادم. النتيجة على **PostgreSQL 17 حقيقي**: **39/39 ناجح** (كانت 15). فحوص: checksums مفقود/فارغ/غير مطابق/تجاوز مسار/رابط رمزي؛ اسم محقون؛ DEMO/إنتاج/نظام (مع `--force`/`--allow-live`)؛ صلاحيات 0700 رغم umask 000؛ واستعادة ناجحة لهدف scratch.
+- **دليل حقيقي (منفّذ):** نسخة فعلية بمجلد `0700` + manifest؛ رفض `wasit_prod --force --allow-live`؛ رفض اسم محقون؛ رفض الهدف الحيّ؛ استعادة scratch مع تحقق أعداد صفوف ثم `--drop-after`. **`wasit_prod` لم يُنشأ/يُمَس**.
+- **بيئة:** PostgreSQL 17 لم يكن مثبتاً (أُضيف للتو في هذه الجلسة بموافقة صريحة؛ خادم عابر للتجربة). ملاحظة: `/workspace/pgdata` **غير موجود** و`data_directory` ما زال الافتراضي `/var/lib/postgresql/17/main` — يخالف ما يوثّقه AGENTS.md أعلاه (لا تغيير في الإعداد دون موافقة).
+- **بوابة السلامة (بعد):** HEAD `a5391a5…` · branch `master` · M0 `e731e…` — **بلا تغيير**. modified 98 → **104** (+6 ملفات هذا العمل)، untracked 122، deleted 0، staged 0، reflog@0 ثابت. **تنبيه منهجية:** العدّ يجب أن يكون بـ`git status --porcelain -uall` (المجلدات غير المتعقّبة تُطوى افتراضياً فيظهر 98 بدل 122).
+
+## WASIT-EXECUTION-013.1-A/B — تصميم وتنفيذ تشفير النسخ (age) (2026-11-09)
+
+- **013.1-A (تصميم، READ-ONLY):** قارن `age` مقابل GPG مقابل KMS/Secret Manager على 8 معايير (تشغيل آلي، فصل المفتاح، استعادة عند فقدان الخادم، تدوير، نسخ المفتاح، الاعتماد على مزوّد، التكلفة). **القرار: `age` (X25519)** أساساً، وGPG خطة بديلة (متاح بلا تثبيت). تصميم كامل: معمارية Mermaid، تسلسل نسخ/استعادة، دورة حياة المفاتيح، أسماء ملفات/`manifest` مشفّرة، خطة انتقال 5 مراحل، خطة اختبار، متغيّرات بيئية، مخاطر، ومقارنة تخزين خارجي (S3/B2/R2/Azure/GCS/restic). **بلا اختيار مزوّد نهائي.**
+- **013.1-B (تنفيذ محلي):** `BACKUP_ENCRYPTION=off|age` (الافتراضي `off` = سلوك سابق بلا تغيير، مُثبَت بمقارنة مُخرَج off القديم/الجديد = متطابق بنيوياً). في وضع `age`: تشفير **كل** ملفات الحمولة (`*.dump`, `pg_globals.sql`, `table-counts.tsv`) إلى مُستقبِلين (`BACKUP_AGE_RECIPIENTS`/`_FILE`)، الـ`manifest`/`checksums.sha256` بالصيغة المشفّرة مع `plaintextSha256` و`algo`, `encryption`, `recipients`. **`BACKUP_PLAINTEXT_RETENTION=keep` افتراضياً** (لا حذف أثناء الانتقال)، و`drop` يزيل النصّي **بعد** نجاح التشفير وكتابة الـmanifest.
+- **الاستعادة:** `BACKUP_AGE_IDENTITY_FILE` **مسار فقط** (لا يمرّر المحتوى ⇒ لا ظهور في `ps`/السجلات)؛ رفض غياب المفتاح/خطئه/تلف ciphertext/المفتاح داخل مجلد النسخة **قبل أي عملية DB**؛ فكّ إلى مجلد `0700` مؤقت يُنظَّف دائمًا (trap EXIT)؛ تحقق `plaintextSha256` بعد الفكّ.
+- **مساعدات جديدة في `scripts/lib/common.sh`:** `wasit_age_bin`, `wasit_age_recipients`, `wasit_require_age`, `wasit_age_recipient_args`, `wasit_age_identity_path`.
+- **الاختبارات:** `scripts/backup-restore.test.sh` أُضيفت **E1** (off-parity، رفض غياب/خطأ/داخل-المجلد المفتاح، رفض غياب الأداة، «الرفض قبل أي DB»)، **E2** (رفض بدء التشفير بلا أداة/مُستقبِل + بلا مجلد متبقٍّ)، **E3** (round-trip حقيقي: تشفير كامل، حفظ النصّي، استعادة بالمفتاح الصحيح، رفض المفتاح الخاطئ، رفض تلف ciphertext، عدم تسرّب الأسرار للسجلات، تنظيف المؤقت، `drop` + استعادة ciphertext-only). **النتيجة: 61/61 مع `age` حقيقي (v1.2.1)، و48/48 بدون `age` (E3 يُتخطّى بصوت عالٍ).**
+- **التوثيق/البيئة:** `docs/DEPLOYMENT.md` · `docs/commercial-release/08-OPERATIONS-RUNBOOK.md` (قسم تشفير + استعادة) · `docs/commercial-release/03-ENVIRONMENT-REFERENCE.md` (متغيّرات) · `.github/workflows/ci.yml` (تثبيت `age` في `backup-drill` لتفعيل E3) · `docker-compose.yml` (`BACKUP_ENCRYPTION` افتراضي `off`).
+- **تحقق:** `npm run typecheck` (server+web) = **0** · `secret-scan.test.ts` **3/3** · لا مفاتيح/أسرار في Git (لا `AGE-SECRET-KEY` ولا recipient حقيقي ولا ملفات `*.key`/`*.age`).
+- **بيئة:** `age` **غير مثبّت** في البيئة ولا في صورة `postgres:16`؛ لتنفيذ E3 استُخدم ثنائي `age` ثابت **مؤقت** في `/tmp/agebin` (لا تثبيت دائم، لا تعديل صورة). قرار إضافة `age` للصورة الدائمة = مطلوب قبل الإنتاج.
+- **حدود:** لا ربط مزوّد خارجي، لا رفع، لا WAL/PITR، لا تغيير PostgreSQL/PGDATA، لا Git stage/commit/push.
+- **بوابة السلامة (بعد 013.1-B):** HEAD `a5391a5…` · branch `master` · M0 `e731e…` — **بلا تغيير**. modified 104 → **106** (ملفان جديدان دخلا حالة `M`: `.github/workflows/ci.yml` و`docker-compose.yml`؛ أما الثمانية الأخرى فكانت معدّلة سابقاً)، untracked 122، deleted 0، staged 0، reflog@0 ثابت. ملفات هذه المهمة العشرة: 4 سكربتات + `docs/DEPLOYMENT.md` + `08-OPERATIONS-RUNBOOK.md` + `03-ENVIRONMENT-REFERENCE.md` + `ci.yml` + `docker-compose.yml` + `AGENTS.md`.
+
+## WASIT-EXECUTION-013.1-B.1 — إصلاح ترتيب drop + تثبيت age في CI (2026-11-09)
+
+- **إصلاح الترتيب في `scripts/backup-db.sh`:** صار الترتيب — تشفير كل الحمولة والتحقق البنيوي ⇒ كتابة `manifest.json` (مع `plaintextSha256`) ⇒ كتابة `checksums.sha256` ⇒ **التحقق الفعلي منها** (`verify_checksums_file` عبر `sha256sum -c`، سطر ~254–263) ⇒ **ثم** حذف plaintext. أُزيل الحذف الذي كان يسبق كتابة checksums.
+- **حراسة الحذف:** لكل ملف هدف: رفض `-L` (symlink) صراحةً، ثم `cd dirname && pwd -P` والتحقق أن المسار القانوني داخل `OUT_DIR_REAL` وإلا رفض؛ `rm -f --` على المسار القانوني. لا glob يمسّ مجلدات سابقة. (سطور ~265–290)
+- **تحقق مبكر من `BACKUP_PLAINTEXT_RETENTION`:** نُقل إلى ما قبل أي عمل DB (سطور 66–78)؛ `keep` افتراضي، و`drop` اختياري، وأي قيمة أخرى ⇒ `exit 1` بلا لمس قاعدة بيانات. أُزيل التكرار في موقع التشفير.
+- **اختبارات معزولة جديدة (F1–F6)** في `scripts/backup-restore.test.sh` بـ`pg_dump/pg_dumpall/psql/age` مُموّهة وبيئة `env -i` معزولة (بلا DB): F1 ترتيب drop + checksums تتحقق وتغطي ciphertext فقط؛ F2 keep افتراضي؛ F3 symlink لا يُتبع ولا يُحذف الهدف الخارجي؛ F4 لا يُمَس مجلد نسخة سابقة؛ F5 فشل checksum (حقن فشل في `sha256sum -c`) يمنع الحذف؛ F6 قيمة غير صالحة تُرفض. **النتيجة: 77/77 مع age حقيقي، و64/64 بدونه (E3 يُتخطّى).**
+- **تثبيت age في CI:** `.github/workflows/ci.yml` — `sudo add-apt-repository -y universe` ثم `sudo apt-get install -y age=1.1.1-1ubuntu0.24.04.3` (الإصدار الحقيقي في مستودع Ubuntu 24.04 noble universe، مُتحقَّق منه عبر `packages.ubuntu.com`؛ لا رقم مُختلق ولا مصدر خارجي). لا تنزيل مباشر ⇒ لا حاجة لتحقق SHA256. محصور في job `backup-drill`. **لم يُعدّل `docker-compose.yml`/صورة الإنتاج لإضافة age.**
+- **تحقق:** typecheck=0 · secret-scan 3/3 · off-parity (manifest/checksums القديم vs الجديد) متطابق.
+- **حدود:** لم يُشغَّل CI فعلياً، ولم يُختبر الإنتاج. لا DB إنتاج/DEMO، لا migrations/seeds، لا تثبيت أدوات، لا حذف نسخ سابقة، لا Git مُغيِّر.
+- **بوابة السلامة (بعد 013.1-B.1):** HEAD `a5391a5…` · branch `master` · M0 `e731e…` — بلا تغيير. modified **106** (لا ملف جديد)، untracked 122، deleted 0، staged 0.
+
+## WASIT-EXECUTION-013.1-C — اختبارات تشفير واستعادة متقدمة (2026-11-09)
+
+- **قسم اختبارات جديد `H`** في `scripts/backup-restore.test.sh` (بعد F، قبل E3)، بـ`age` **حقيقي** وخادم **مُموّه** يسجّل كل استدعاءات `psql` (لإثبات أن الرفض يسبق أي عملية DB). يعمل داخل `env -i` معزول ويُتخطّى برسالة SKIP صريحة إن غاب `age`. يغطي: H1 استعادة بمفتاح من مجموعة مستلمين متعددة، H2 تدوير المفاتيح (نسخة جديدة بمستلمين جدد + بقاء القديمة قابلة للاستعادة بمفتاحها القديم + رفض المفتاح المُتقاعد)، H3 رفض هوية فارغة/مبتورة/غير صالحة قبل أي DB، H4 رفض recipient غير صالح قبل `pg_dump`، H5 نقص ciphertext، H6 manifest/checksums مفقود أو معدّل، H7 عدم تطابق `plaintextSha256` بعد الفكّ، H8 تلف ملف واحد من عدة، H9 نسخة قديمة غير مشفّرة تعمل بلا تغيير، H10 تنظيف المؤقت بعد فشل، H11 عدم تسرّب المفتاح/المحتوى إلى السجلات.
+- **إصلاحان حقيقيان اكتشفهما H:**
+  1. `wasit_age_recipients` (في `scripts/lib/common.sh`) كان يقسّم على السطر الجديد فقط بينما الوثائق تعد بفصل بالمسافات ⇒ أُضيف `tr '[:blank:]' '\n'` للصيغة المضمّنة. (كان `BACKUP_AGE_RECIPIENTS="r1 r2"` يفشل.)
+  2. `wasit_require_age` كان يرفض فقط إن لم يوجد أي مُستقبِل صالح؛ صار يرفض إن كان **أي** مُدخل غير صالح (`^age1[0-9a-z]+$`)، **قبل** أي `pg_dump`.
+- **نتائج:** **105/105 مع age** (يشمل E3 وH)، **64/64 بدونه** (H وE3 SKIP بصوت عالٍ). typecheck=0 · secret-scan 3/3. تحقق إضافي: صيغة `BACKUP_AGE_RECIPIENTS_FILE` (سطر لكل مستلم) تُحلّ لمستلمين.
+- **توثيق:** `08-OPERATIONS-RUNBOOK.md` (سياسة التدوير، الاحتفاظ بالهويات، فقدان المفتاح، «السلامة ليست أصالة»، خارج النطاق) · `DEPLOYMENT.md` · `03-ENVIRONMENT-REFERENCE.md`.
+- **حدود:** لا DB إنتاج/DEMO، لا migrations/seeds، لا رفع خارجي، لا تفعيل تشفير افتراضي، لا تعديل صورة الإنتاج، لا تثبيت أدوات، لا Git مُغيِّر.
+- **بوابة السلامة (بعد 013.1-C):** HEAD `a5391a5…` · branch `master` · M0 `e731e…` — بلا تغيير. modified **106**، untracked 122، deleted 0، staged 0.
+
+## WASIT-EXECUTION-013.1-C.1 — تحقق مستلم موثوق + توثيق الأصالة (2026-11-09)
+
+- **تحقق موثوق من المستلم (لا regex):** `wasit_require_age` في `scripts/lib/common.sh` صار يمرّر **كل** مستلم إلى **محلِّل `age` نفسه** عبر `printf '' | age --encrypt -r "$r" -o /dev/null` (تحقق نوع المفتاح + **Bech32 checksum**). يُرفض أي مستلم غير صالح — حتى لو طابق `^age1[0-9a-z]+$` (checksum تالف/مبتور/مزيج صحيح+خاطئ) — **قبل** أي `pg_dump`/DB. لا تثبيت أدوات، لا اعتماد خارجي (نستخدم `age` الموجود أصلاً). السبب: لا يوجد أمر تحقق مخصّص في age، والفحص بـ regex وحده كان يمرّر مفتاحاً تالف الـchecksum.
+- **اختبارات H4 موسّعة:** مستلم صحيح يُقبل ويصل `pg_dump`؛ bad-checksum / truncated / junk / مزيج صحيح+خاطئ تُرفض كلها، ويُثبت بسجل `pg_dump` المُموّه أنه **لم يُستدعَ إطلاقاً** في حالات الرفض. (113/113 مع age، 64/64 بدونه.)
+- **تصحيح توثيق الأصالة:** أُزيلت الصياغة التي كانت توحي أن تشفير `age` يثبت هوية المنشئ. الآن موثّق بدقة: `checksums.sha256`/`plaintextSha256` = **سلامة محتوى**، و`age` = **سرية الحمولة**، ولا يثبت أيٌّ منهما **أصالة المصدر/هوية المنشئ**؛ وإثبات المصدر يحتاج **توقيعاً رقمياً بمفتاح توقيع منفصل** = **خارج نطاق 013.1** (لم يُنفَّذ). (`08-OPERATIONS-RUNBOOK.md`، `DEPLOYMENT.md`، `03-ENVIRONMENT-REFERENCE.md`.)
+- **نتائج:** typecheck=0 · secret-scan 3/3 · `bash -n` OK.
+- **حدود:** لا DB إنتاج/DEMO، لا migrations/seeds، لا offsite، لا تعديل صورة الإنتاج، لا تفعيل تشفير افتراضي، لا تثبيت نظامي، لا Git مُغيِّر، لا بدء 013.1-D/E.
+- **بوابة السلامة (بعد 013.1-C.1):** HEAD `a5391a5…` · branch `master` · M0 `e731e…` — بلا تغيير. modified **106**، untracked 122، deleted 0، staged 0.
+
+## WASIT-EXECUTION-M2 — معمارية الطلب متعدد البائعين (Parent Order + Seller Suborders) (2026-11-03)
+
+- **السياق:** كان القيد M0 يرفض أي طلب يجمع أكثر من بائع (409) لأن `orders.sellerId` مفرد وكل صفوف `transactions`/`transactionLedger` تُكتب على البائع الأول ⇒ خطر إسناد أموال بائع آخر. أُزيل القيد وطُبِّقت المعمارية النهائية.
+- **المخطّط (`src/db/schema/commerce.ts`):**
+  - جدول جديد `seller_orders` (طلب فرعي لكل بائع): `parent_order_id`, `seller_id`, `seller_type`, `items_total`, `commission`, `buyer_commission`, `seller_commission`, `seller_payable`, `status`, `settlement_status`, `order_number`, `seller_order_number` (`<orderNumber>-S<n>`). فهرس فريد `(parent_order_id, seller_id)` (يمنع تكرار الطلب الفرعي) + فهرس فريد `(id, parent_order_id, seller_id)` كهدف للقيد المركّب.
+  - `orders.sellerId`/`sellerType` صارا **اختياريين**: طلب البائع الواحد يحتفظ بهما (شكل ما قبل M2)، وطلب متعدد البائعين يتركهما `null`. `orders.metadata.sellerCount` يوضّح العدد.
+  - `order_items`: عمودان جديدان `seller_order_id` و`seller_id` (اختياريان للصفوف القديمة)، مع **قيد مركّب** `order_items_suborder_fk (seller_order_id, order_id, seller_id) → seller_orders(id, parent_order_id, seller_id)` ⇒ يستحيل على بند أن يُنسب لطلب فرعي أو بائع آخر (MATCH SIMPLE يتجاهله عند null).
+- **الهجرة:** `src/db/migrations/0037_tiny_rhodey.sql` — إضافية بالكامل (`CREATE TABLE IF NOT EXISTS` + `ADD COLUMN` + `DROP NOT NULL`)، لا حذف/إعادة تسمية، لا لمس بيانات قائمة.
+- **الخدمات:**
+  - `orders/service.ts::createOrder` — يُجمّع البنود حسب البائع (ودمج الأسطر المكرّرة لنفس المنتج)، ويُنشئ **طلباً أماً واحداً + طلباً فرعياً لكل بائع** داخل **معاملة واحدة** (حجز المخزون + الأم + الفرعية + البنود + الحركة + الدفتر + التدقيق + الإشعارات كلها ذرّية). كل بائع يُحتسب على مجموعه الفرعي: `resolveCommission` لكل بائع، ودفتر: ائتمان `TRANSACTION_VALUE` **لكل بائع** + خصم عمولة بائع لكل بائع + خصم واحد لعمولة المشتري + خصم واحد للرسوم. أُضيف حارس عملة واحدة (كل منتجات الطلب بعملة واحدة). الاستجابة تُبقي الأوتار (`commission`/`commissionSeller`/... بصيغة `toFixed(4)`) كما كانت + `sellerOrderIds`, `sellerCount`.
+  - `orders/service.ts::updateOrderStatus` — يقبل `opts.sellerOrderId`. بائع يؤكّد **طلبه الفرعي فقط** (لا يمسّ مخزون غيره)؛ حالة الطلب الأم تُشتق من الفرعية عبر `aggregateParentStatus`. المشتري يستطيع إلغاء السلة كاملة (كل الفرعية CANCELLED). طلب قديم بلا فرعية يُحدَّث مباشرة كما قبل. الدعوى على الصف (guarded UPDATE) تمنع التطبيق المزدوج.
+  - `orders/service.ts::getOrder` — يُرجع `sellerOrders[]` (كل فرعية ببنودها وبائعها) و`isMultiSeller` و`viewerRole`؛ الوصول للبائع عبر أي فرعية يملكها.
+  - `orders/service.ts::listMyOrders` — تُظهر الطلب متعدد البائعين لكل بائع مشارك (`id in (select parent_order_id from seller_orders where seller_id in (...))`).
+  - `orders/routes.ts` — `sellerOrderId` اختياري في `PATCH /:id/status`.
+  - `payments/service.ts::assertOrderAccess` — يعترف بالبائع الشريك عبر `seller_orders` (الأم بلا `sellerId`).
+  - `disputes/service.ts::canAccessDispute` — نفس المنطق للبائع الشريك.
+  - `payouts/service.ts::createPayout` — **يفشل مغلقاً** على الطلب متعدد البائعين (409) لأن جدول `payouts` مفتاحه `transaction_id` واحد؛ الدفع لكل بائع فرعي = تصميم لاحق غير مُختلق (مسجّل في GAP_REGISTER).
+  - `analytics/service.ts` — `sellerCond` يشمل الطلبات التي للبائع فيها فرعية؛ GMV/العمولة تُجمَع من `seller_orders` (لا من الأم) لتجنّب العدّ المزدوج.
+  - `admin/routes.ts` — يُدرج `metadata` (فيه `sellerCount`) في قائمة الطلبات.
+- **الاختبارات:**
+  - `tests/unit/order-mixed-seller-guard.test.ts` (DB-free): كان يتحقق من الرفض؛ صار يتحقق من **التقسيم** (أم واحد + فرعية لكل بائع، مال كل بائع، ائتمان دفتر لكل بائع، حجز لكل بائع) + عدم تغيّر سلوك البائع الواحد. (5/5)
+  - `tests/m2-multi-seller-order.test.ts` (PostgreSQL حقيقي): تقسيم بائعَين (بنود/مال/دفتر)، تأكيد كل بائع فرعيه فقط وتجميع حالة الأم، رفض تأكيد فرعية لا يملكها (403)، تفاصيل الطلب لكل طرف، إلغاء المشتري للسلة كاملة وتحرير كل الحجوزات، وثبات شكل البائع الواحد. (6/6)
+- **التحقق:** `npm run typecheck` (server+web) = **0** · الوحدة (t1) **127/127** · **المجموعة الكاملة 118 ملفاً / 1507 اختبار = كلها ناجحة** على قاعدة الاختبار المعزولة (`127.0.0.1:5434`, `wasit_test`). ملاحظة: ظهر فشل عابر واحد في اختبار تزامن (`two concurrent confirmations…`) تحت التوازي، ونجح عند الإفراد وعند إعادة التوازي (تزاحم على القاعدة، ليس انحداراً).
+- **حدود:** لا DEMO/إنتاج، لا migrations على غير قاعدة الاختبار المعزولة، لا Git مُغيِّر (بلا stage/commit/push)، لا حذف/استبدال أي عمل سابق.
+- **بوابة السلامة (بعد M2):** المسار `/workspace/project` · الفرع `master` · HEAD `98c3a958…b4aa` (بلا تغيير) · staged 0 · modified **106** · untracked **129** · deleted 0 · stash 0 · M0 `repo.bundle` = `e731e6845b3d1fe5647fd4168e592067099f591a336de0fa8117d53050fa8694` (بلا تغيير). ملفات M2: 8 معدّلة + 5 جديدة (هجرة 0037 + snapshot + 3 اختبارات).
+
+---
+
+## WASIT-EXECUTION-M2.1 — إلغاء الطلبات الفرعية وتصحيح المخزون (2026-11-03)
+
+- **الخلل المُصلَح (انحدار M2، كُشف بالتدقيق المستقل):** في `orders/service.ts::updateOrderStatus` كان قرار المخزون عند الإلغاء (`restoreStockForCancelledOrder` مقابل `releaseReservation`) يُتَّخذ من حالة **الطلب الأم** (`order[0].status`) بدل حالة **الطلب الفرعي المستهدف**. ففي سلة متعدّدة البائعين (الأم `PENDING` لأن فرعية أخرى لم تُؤكَّد)، إلغاء فرعية **مؤكَّدة** كان يستدعي `releaseReservation` ⇒ **لا يُعاد مخزونها**. وإلغاء الأم لسلة بحالات مختلفة كان يطبّق قاعدة واحدة على كل الفرعيات.
+- **الإصلاح (`orders/service.ts`):**
+  - `applyInventory(items, priorStatus)` يستقبل **حالة السجل المستهدف** صراحةً: حالة الفرعية عند استهدافها، وحالة الأم للطلب القديم (بلا فرعية). لم يبقَ أي قرار مخزون مبني على حالة الأم لفرعية بعينها.
+  - استهداف فرعية: دعوى ذرّية على الفرعية بحالتها (`WHERE id = ? AND status = ?`)، ثم معالجة بنودها وحدها، ثم إعادة حساب حالة الأم.
+  - إلغاء الأم لسلة متعدّدة: **كل فرعية تُدَّعى وتُعالَج على حدة وفق حالتها** — المؤكَّدة يُعاد مخزونها، والمعلّقة يُحرَّر حجزها فقط، والملغاة مسبقاً تُتخطّى (لا إعادة مزدوجة).
+  - طلب قديم بلا فرعية: يبقى كما قبل (حالة الأم تقود القرار) — لا تغيير سلوكي.
+  - `aggregateParentStatus`: تُستبعد الفرعيات `CANCELLED` من التلخيص، فالسلة الملغاة جزئياً لا تعود `PENDING` وهي تحوي جزءاً حيّاً مؤكَّداً (بلا اختراع حالات جديدة).
+  - سجل التدقيق يسجّل حالة **السجل المستهدف** فعلاً (لا حالة الأم) عند استهداف فرعية.
+- **قاعدة المخزون المُثبَّتة بالكود:** الخصم الفعلي يقع حصراً عند الانتقال إلى `CONFIRMED` (`commitReservationToSale`). لذلك: الانتقال من `PENDING`/`PROCESSING` ⇒ حجز فقط (`releaseReservation`)؛ ومن `CONFIRMED` أو ما بعده ⇒ مخزون مخصوم (`restoreStockForCancelledOrder`).
+- **الاختبارات:** `tests/m21-cancel-inventory.test.ts` (**9/9** على PostgreSQL 17 معزول `wasit_test`@5434): فرعية مؤكَّدة تُلغى فيُعاد مخزونها وحدها · فرعية معلّقة تُلغى فيُحرَّر حجزها بلا إعادة مخزون · إلغاء سلة مختلطة يعالج كل فرعية بحالتها · إعادة الإلغاء لا تعيد المخزون مرتين · إلغاءان متزامنان لا يضاعفان الإعادة · لا يتغيّر مخزون بائع آخر · الطلب القديم بلا فرعية يعمل كما كان · لا سجلات مالية غير صحيحة (لا إدخال/حذف في الدفتر، حالة المعاملة ثابتة) · حالة الأم بعد إلغاء جزئي = `CONFIRMED` لا `PENDING`.
+  - **إثبات أن الاختبار يكشف الخلل:** أُعيد الخلل مؤقتاً (استخدام `fromStatus` بدل حالة الفرعية) ⇒ **4 اختبارات فشلت** (`expected 47 to be 50`)، ثم أُعيد الملف المُصلَح بنفس البصمة `7bf89e79…812004` ونجحت **9/9**.
+- **التوثيق:** أُضيف القسم §13 في `docs/GAP_REGISTER.md` بستة صفوف: `M2.1-CANCEL-INV` و`M2.1-PARENT-STATUS` (**COMPLETE_VERIFIED**) + `M2.2-PAYOUT-SUBORDER` و`M2.3-SUBORDER-SETTLEMENT` و`M2.4-REFUND-SUBORDER` و`M2.5-TX-SELLER-ATTRIBUTION` (**OPEN** موثَّقة). لم يبقَ اعتماد على ذكر الفجوة في AGENTS.md فقط.
+- **`transactions.sellerId` والثقة:** في الطلب متعدّد البائعين يُسند لبائع واحد (`soleSeller ?? firstProduct.sellerId`) ⇒ تلوّث مجاميع Trust Engine (فجوة `M2.5` موثَّقة). **التصميم الصحيح المقترح:** اشتقاق تقييم كل بائع من فرعيته (`seller_orders`) كما في `analytics`. **لم تُغيَّر حسابات الثقة ولا البنية المالية في هذه المهمة.**
+- **حدود:** إصلاح الإلغاء/المخزون + تجميع حالة الأم + التوثيق فقط. **لا Payout، ولا تغييرات مزوّد دفع، ولا Migration جديدة.** لا DEMO/إنتاج، لا Git مُغيِّر (بلا stage/commit/push).
+
+## WASIT-EXECUTION-M2.3 — تسوية كل Seller Suborder (2026-11-14)
+
+- **الفجوة المُصلَحة:** `seller_orders.settlement_status` لم يكن يكتبه أي كود — يبقى `PENDING` دائماً، والتسوية تُحدِّث حالة الطلب الأب والدفتر على مستوى الأم فقط، فلا يُعرف أي بائع سُوِّي فعلاً في سلة مختلطة.
+- **البنية (Migration 0039، منفَّذة على قاعدة الاختبار فقط):** جدول `seller_settlements` + ست قيود `CHECK` + ثلاث مفاتيح أجنبية مركّبة (منها `seller_settlements_parent_entry_fk`) + الفهارس. صُحّح خلل ترتيب (`42830`): فهرسان فريدان (`transaction_ledger_identity_idx`، `transactions_identity_idx`) كانا يُعرَّفان **بعد** المفاتيح التي تشير إليهما ⇒ نُقلا قبلهما. أُعيد التشغيل: `migrations applied successfully` (40 ترحيلاً).
+- **الكاتب الوحيد (`settlements/service.ts::settleSellerSuborder`):** هو الكاتب الوحيد لـ`seller_orders.settlement_status = 'SETTLED'`. الترتيب: قفل الفرعية (`FOR UPDATE`) ← فحص التكرار ← تقييم الأهلية ← قفل المعاملة الأب ← إدراج `seller_settlements` بقيم مأخوذة من **الصف المقفول** لا من المستدعي ← تحديث الحالة بشرط `<> 'SETTLED'` ← تدقيق `SELLER_SETTLEMENT.CONFIRMED`. كل رفض يُسجَّل `SELLER_SETTLEMENT.REJECTED` ويُعاد مع السبب.
+- **شروط الأهلية (`evaluateSuborderRow`):** فرعية `DELIVERED`/`COMPLETED` · طلب `PAID` · بلا استرداد (كامل/جزئي/قيد المعالجة) · بلا نزاع مفتوح (`≠ CLOSED/ARCHIVED`) · قيد `SETTLEMENT / SETTLED` على المعاملة الأب. الأسباب: `SUBORDER_NOT_DELIVERED`، `PARENT_ORDER_NOT_PAID`، `REFUND_PRESENT`، `DISPUTE_OPEN`، `PARENT_TRANSACTION_NOT_SETTLED`، `ALREADY_SETTLED`، `SUBORDER_NOT_FOUND`.
+- **الربط التلقائي (`orders/service.ts::updateOrderStatus`):** بعد **commit** الانتقال إلى `DELIVERED`، تُسوَّى الفرعيات التي انتقلت فعلاً — **best-effort ومتكرّر-آمن**: فشل التسوية لا يُلغي انتقالاً نجح، والفرعية غير المؤهّلة تبقى `PENDING`.
+- **بوابة الدفع (`payouts/service.ts::createPayout`):** داخل معاملة واحدة؛ قفل الفرعية ثم المعاملة **قبل** أي بوابة (نفس ترتيب `settleSellerSuborder` ⇒ لا deadlock)؛ فحص قيد التسوية الأب أولاً ثم تسوية الفرعية ⇒ `Cannot create a payout before this seller suborder is settled`.
+- **مسار الإدارة:** `POST /api/admin/finance/settlements/suborders/reconcile` (صلاحية `COMMISSION_MANAGE`/`PAYMENT_READ`) — idempotent، يعيد حكماً لكل فرعية، ولا يكتب أي قيد دفتر.
+- **الواجهة:** لوحة «تسويات البائعين الفرعية» في تبويب التسوية بـ`AdminFinancePages.tsx` + مفاتيح i18n لـ4 لغات + اختبار تكافؤ `packages/web/tests/m23-i18n.test.ts`.
+- **الاختبارات:** `tests/m23-t2-suborder-settlement.test.ts` **20/20** · الحزمة الكاملة للخادم **1573/1573** (123 ملف) · حزمة الويب **51/51** · Typecheck (server+web) نظيف · `drizzle-kit check` نظيف. كما حُدِّثت تركيبات `m22-t2-suborder-payout` و`persistence-invariants` و`finance-routes` لتُسوّي الفرعية قبل الدفع (بوابة جديدة).
+- **التوثيق:** §15 في `docs/GAP_REGISTER.md` (انتقلت `M2.3-SUBORDER-SETTLEMENT` من `OPEN` إلى `COMPLETE_VERIFIED`) + `docs/M2.3-T2_SUBORDER_SETTLEMENT.md`.
+- **حدود:** لا Refund على مستوى الفرعية (M2.4)، لا تغيير في إسناد `transactions.sellerId` (M2.5)، لا Wallet، لا مزوّد خارجي فعّال، لا reverse-settlement. لا DEMO/إنتاج، لا Git مُغيِّر (بلا stage/commit/push).
+
+## WASIT-EXECUTION-M2.4-T2.1 — أساس بيانات تخصيص الاستردادات (Refund Allocation) (2026-11-03)
+
+- **الفجوة المُعالَجة (جزئياً):** `M2.4-REFUND-SUBORDER` — الاسترداد لا يُنسَب لبائع في نموذج البيانات، فيعكس عمولة كل البائعين ولا يُحدِّث حالة الفرعيات. **T2.1 = أساس البيانات فقط**؛ طبقة الخدمة في T2.2+.
+- **Migration 0040 (جديدة، غير مُطبَّقة على أي قاعدة):** جدول `refund_allocations` + قيدا `CHECK` + ثلاثة مفاتيح أجنبية مركّبة + ثلاثة فهارس هوية `UNIQUE` جديدة. **additive فقط** — لا حذف ولا إعادة تسمية ولا تغيير هدّام، ولا Wallet ولا أرصدة ولا حالات مالية جديدة.
+- **الجدول `refund_allocations`:** `id`، `refund_id`، `parent_order_id`، `seller_order_id`، `order_item_id` (اختياري)، `amount`، `currency_code`، `created_at`. يسمح لاسترداد واحد بتغطية **عدة فرعيات**. **ليس حركة مالية ولا قيد دفتر ولا محفظة ولا رصيد** — الاسترداد يبقى مصدر الحقيقة.
+- **المفاتيح المركّبة:** `refund_fk → refunds(id, order_id)` · `suborder_fk → seller_orders(id, parent_order_id, currency_code)` · `item_fk → order_items(id, order_id, seller_order_id)`. تثبت أن الاسترداد والفرعية والبند ينتمون لنفس الطلب الأب، وأن البند يتبع الفرعية نفسها لا مجرد وجوده.
+- **منع التكرار:** فهرس فريد `refund_allocations_refund_suborder_idx (refund_id, seller_order_id)`.
+- **قرار تصميمي:** عمود `seller_id` مُستبعَد عمداً من مفتاح الفرعية — المفتاح المركّب يتطلّب فهرساً فريداً بنفس أعمدة المرجع بالضبط، و`refund_fk` على `(refund_id, parent_order_id)` يضمن أصلاً تطابق الطلب الأب.
+- **ترتيب الإنشاء (خطأ 42830):** فهارس الهوية تُنشأ **قبل** المفاتيح التي تشير إليها — نفس تصحيح 0039؛ ملف `drizzle-kit generate` الخام يضع المفاتيح أولاً (خطأ) فصُحّح يدوياً.
+- **حارس الانحراف:** كتلة `DO $$` ترفض التنفيذ إذا وُجد كائن بالاسم نفسه بتعريف مختلف — نفس نمط 0039.
+- **الاختبارات:** `tests/m24-t21-refund-allocation-schema.test.ts` (بنية + ثوابت الإسناد: فرعية من طلب آخر مرفوضة، بند من فرعية أخرى مرفوض، استرداد واحد لفرعيتين مقبول، منع التكرار). **لم تُشغَّل هنا** (PostgreSQL غير متاح).
+- **ما أُثبت:** `drizzle-kit check` نظيف · `tsc` (server) نظيف · `drizzle-kit generate` = «No schema changes» (snapshot مطابق للمخطط حرفياً) · سلسلة `0039.id == 0040.prevId` ✅ · بصمات 0039 دون تغيير.
+- **التوثيق:** §16 في `docs/GAP_REGISTER.md` (`M2.4-REFUND-SUBORDER` → **PARTIAL — T2.1 مكتمل**) + `docs/M2.4-T2.1_REFUND_ALLOCATION.md`.
+- **حدود:** لا منطق خدمة، لا تعديل على `seller_payable`، لا حذف قيود، لا Wallet/clawback، **Migration 0040 لم تُطبَّق على أي قاعدة بيانات**، لا DEMO/إنتاج، لا Git مُغيِّر (بلا stage/commit/push).
+
+## WASIT-EXECUTION-M2.4-T2.2 — إنشاء الاسترداد مع التخصيص لكل بائع (Refund Creation & Allocation) (2026-11-03)
+
+- **الفجوة المُعالَجة (جزئياً):** `M2.4-REFUND-SUBORDER` — الاسترداد لا يُنسَب لبائع. **T2.1 = أساس البيانات** (Migration 0040). **T2.2 = إنشاء الاسترداد بالتخصيص** (طبقة الخدمة). يبقى تحديث حالة الفرعية وعكس العمولة لكل بائع في T2.3+.
+- **الشكل الجديد (`payments/service.ts::createRefund`):** حقل اختياري `allocations?: { sellerOrderId, orderItemId?, amount }[]`. **بلا تخصيص = استرداد كامل** يُوزَّع على الفرعيات بحسب **المتبقّي القابل للاسترداد الفعلي** لكل فرعية (توزيع الباقي الأكبر، مجموعه = المبلغ بالضبط). **مع تخصيص:** المجموع = المبلغ بالضبط، وكل فرعية/بند يخص هذا الطلب.
+- **قاعدة السقف:** سقف الفرعية = `items_total + buyer_commission` (ما دفعه المشتري فعلاً) — **ليس `seller_payable`** (صافي البائع، رقم مختلف). مطابقة لتقرير M2.4-T1.
+- **قواعد الرفض (كلها `422 VALIDATION_FAILED`):** مبلغ غير موجب · فرعية من طلب آخر · عملة مختلفة · بند لا يخص الفرعية المسمّاة · تكرار فرعية · تكرار بند · مجموع ≠ المبلغ · تجاوز سقف الفرعية/البند · **استرداد جزئي لطلب متعدد البائعين بلا تخصيص** (لا تخمين). **البائع الواحد:** الاسترداد الجزئي بلا تخصيص يُقبل ويُنسب للفرعية الوحيدة (يحفظ سلوك ما قبل M2). **الطلب القديم بلا فرعيات:** `[]`.
+- **التزامن:** كل التحقق + الحجز + كتابة التخصيصات في **`db.transaction` واحدة**: قفل صف الطلب `FOR UPDATE` (قفل أول ثابت لا تأخذه مسارات التسوية/الدفع ⇒ لا deadlock) ← قراءة المتبقّي ← قفل الفرعيات ثم البنود بترتيب ثابت (`ORDER BY id`، نفس ترتيب «فرعية ← معاملة») ← قراءة التخصيصات المحجوزة (ضمّ `refunds`، استبعاد غير المحجوز) ← إدراج `refunds` (الحجز) ثم `refund_allocations`. **طلب متزامنان لا يصرفان نفس المتبقّي مرتين.**
+- **Idempotency:** فحص مسبق (إعادة الاسترداد الأصلي) + **حارس عند الالتزام** عبر `refunds_idem_idx`: طلبان متزامنان بنفس المفتاح ⇒ يفوز أحدهما ويرفض الفهرس الآخر فيُعاد الأصلي `reused: true` بدل `500`.
+- **الكاتب الوحيد للاكتمال يبقى `completeRefundWithEvidence`:** T2.2 **لا** يكتب قيد `REFUND` ولا يغيّر `orders.paymentStatus`/`refundStatus`/`status` ولا حالة الفرعية. الإنشاء ≠ الاكتمال.
+- **المسار:** `POST /api/payments/orders/:orderId/refunds` — `refundAllocationSchema` اختياري (`max 200`) ⇒ الطلبات القديمة صالحة. مسار النزاعات يستدعي بلا تخصيص (استرداد كامل) وطلباته بلا `seller_orders` ⇒ بلا تغيير سلوكي.
+- **الاختبارات:** `tests/m24-t22-refund-allocation.test.ts` (14 حالة: مسارات سعيدة، رفض، تزامن، idempotency، توافق قديم، «الإنشاء لا يُكمل»). **لم تُشغَّل** (PostgreSQL غير متاح). الاختبارات القائمة (`payments`، `money-path-invariants`، `p6-p7-dispute-webhook`) محفوظة السلوك.
+- **ما أُثبت:** `tsc` (server+web) نظيف · `drizzle-kit check` نظيف · لا Migration جديدة · لا تعديل على أي ملف سابق (فقط `service.ts` و`routes.ts` مُعدَّلان + ملف اختبار جديد).
+- **التوثيق:** §17 في `docs/GAP_REGISTER.md` (`M2.4-REFUND-SUBORDER` → **PARTIAL — T2.1 + T2.2 مكتملان**) + `docs/M2.4-T2.2_REFUND_CREATION.md`.
+- **حدود:** لا تحديث حالة الفرعية، لا عكس عمولة لكل بائع عند الاكتمال (T2.3+)، لا توزيع تلقائي على بنود داخل فرعية واحدة، لا Wallet/clawback، لا مزوّد خارجي فعّال، لا DEMO/إنتاج، لا Git مُغيِّر (بلا stage/commit/push).
+
+## WASIT-EXECUTION-M2.4-T2.3 — حالة الفرعية لكل بائع + عكس العمولة لكل بائع عند اكتمال الاسترداد (2026-11-16)
+
+- **الفجوة المُعالَجة (جزئياً):** `M2.4-REFUND-SUBORDER`. **T2.1 = أساس البيانات** (Migration 0040) · **T2.2 = إنشاء الاسترداد بالتخصيص** · **T2.3 = الأثر لكل بائع عند الاكتمال** (حالة الفرعية + عكس عمولتها). تبقى الواجهة (T2.4+).
+- **النطاق:** التغيير كله داخل `completeRefundWithEvidence` في `packages/server/src/modules/payments/service.ts`. **بلا تغيير في `createRefund`/`routes.ts`/المخطط، وبلا Migration جديدة.**
+- **`attributedRefundsBySuborder(db, orderId)`:** مجموع تخصيصات **الاستردادات `COMPLETED` فقط** لكل فرعية (`refund_allocations ⋈ refunds`). طلب/معالجة لا يُحتسب (المال لم يرجع بعد). فرعية بلا تخصيص = صفر.
+- **عكس العمولة/الرسوم لكل بائع (`reverseCommissionAndFee`):** حصة البائع (`COMMISSION`/`SELLER` مع `sellerOrderId`) تُعكَس بنسبة **فرعيته** = `attributed ÷ (items_total + buyer_commission)` مقصوصة عند `1`. حصة المشتري (`share=BUYER`) ورسم الدفع يبقيان على نسبة الطلب = `cumulativeRefunded ÷ grandTotal` (بلا تغيير). بيانات قديمة بلا `sellerOrderId`/فرعية مجهولة ⇒ سقوط لسياسة الطلب. **Idempotency محفوظة:** الهدف دالة في المجاميع، ويُكتب الفرق الناقص فقط.
+- **حالة الفرعية (`markRefundedSuborders`):** كل فرعية مستردة **بالكامل** (`attributed >= cap`) ⇒ `status = 'REFUNDED'` (بشرط `<> 'REFUNDED'` ⇒ idempotent). **الجزئية تحافظ على حالتها التفيذية.** لا تُكتب `settlement_status` (المُعدَّد لا يحوي «مسترد»).
+- **منع التسوية:** `evaluateSuborderRow` يشترط `DELIVERED/COMPLETED` ⇒ الفرعية `REFUNDED` **غير مؤهَّلة**، فلا يُدفع مستحقات بائع رُدّ ثمنه.
+- **حالة الطلب الأب:** تبقى من المجموع الكلي (`fullyRefunded`) — **بلا تغيير**.
+- **التدقيق:** `refundedSuborders` مُضاف إلى حمولة `REFUND.COMPLETED`.
+- **قرار التصميم:** في طلب مختلط باسترداد كامل لبائع واحد، السياسة القديمة كانت تخفض عمولة البائع الآخر (نسبة على مستوى الأب). القاعدة الجديدة تربط عمولة كل بائع بمصير ماله (نصيب فرعيته) — «لا خصم بلا استرداد فعلي».
+- **الاختبارات (مُشغَّلة فعلاً):** `tests/m24-t23-refund-suborder-status.test.ts` (جديد) **7/7** على PostgreSQL 16 معزول (`wasit_test` @127.0.0.1:5434، حاوية `wasit-m243-test-pg`). **أول مهمة في سلسلة M2.4 تُشغَّل اختباراتها فعلياً.**
+- **إصلاح عيبين كامنين (اختباران لم يُشغَّلا قبل الآن، بلا تغيير سلوك إنتاجي):** `m24-t22` (كلمة مرور المدير في مساعد الدخول ⇒ 14/14) · `m24-t21` (`product_id` يتجاوز 36 + نص قيد `CHECK` بعد تطبيع Postgres ⇒ 13/13).
+- **الحزمة الكاملة للخادم:** 1608 حالة، 1596 نجحت؛ الفاشل (12) في ملفين **قبل** هذا العمل (`m24-t21` أُصلح؛ `sec04b-entity-read-access` حسّاس للتوازي، ينجح 12/12 منفردة). `tsc` (server) نظيف.
+- **التوثيق:** §18 في `docs/GAP_REGISTER.md` (`M2.4-REFUND-SUBORDER` → **PARTIAL — T2.1 + T2.2 + T2.3**) + `docs/M2.4-T2.3_REFUND_SUBORDER_STATUS.md`.
+- **حدود:** لا Wallet/clawback، لا توزيع تلقائي على بنود داخل فرعية واحدة، لا مزوّد خارجي فعّال، لا DEMO/إنتاج، لا Git مُغيِّر (بلا stage/commit/push).
+
+## WASIT-EXECUTION-M2.4-T2.4 — واجهة عرض تخصيص الاستردادات لكل بائع (Per-seller Refund Allocation View) (2026-11-16)
+
+- **الفجوة المُعالَجة (جزئياً):** `M2.4-REFUND-SUBORDER`. **T2.4 = طبقة قراءة + واجهة إدارية للقراءة فقط.** بهذا تكتمل سلسلة T2.1→T2.4 (أساس البيانات → إنشاء الاسترداد بالتخصيص → الأثر لكل بائع → العرض). **قراءة فقط: لا كتابة، لا زر ينقل مالاً.**
+- **الخادم — `getOrderRefundAttribution(db, orderId, actorId, { isOperator })`** في `packages/server/src/modules/payments/service.ts`: لطلب واحد تُرجِع حالة الطلب ومجاميعه، الاستردادات (مع الفرعيات المنسوب إليها)، وقائمة البائعين — لكل بائع: `refundableCap` (= `items_total + buyer_commission`)، `refundedAmount` (تخصيصات **`COMPLETED` فقط**)، `remainingAmount`، `sellerCommission`، **`sellerCommissionReversed` مقروءة من الدفتر** (قيود العكس عبر `metadata.reversalOf`، لا معاد حسابها)، `fullyRefunded`، البنود، واستردادات البائع مع `counted`. الطلبات القديمة بلا فرعيات ⇒ `legacy = true`.
+- **المسار `GET /api/payments/orders/:orderId/refund-attribution`** في `packages/server/src/modules/payments/routes.ts` بصلاحية **`REFUND_MANAGE`** (`ADMIN`/`SUPER_ADMIN` فقط).
+- **قرار التصميم — لماذا `REFUND_MANAGE` لا `PAYMENT_READ`؟** `PAYMENT_READ` يملكه أيضاً `MERCHANT`/`SUPPLIER`/`COMPANY`، فلو بوّبنا عليه لاستطاع بائع قراءة **نصيب بائع آخر** (تسرّب تجاري + IDOR). `REFUND_MANAGE` يحصرها في مكتب الاسترداد المصرّح؛ مسارا القراءة الذاتية القائمان يبقيان مقيَّدين بالملكية.
+- **مبدأ ثابت:** كل رقم يُعرض **مأخوذ من الخادم كما هو**؛ الواجهة تصنّف وتُسمّي فقط. الاسترداد غير المكتمل يُعرض بحالته لكنه **لا يُحتسب** (نفس مبدأ LC-04/T2.3).
+- **الواجهة:** مكوّن `packages/web/src/components/RefundAttributionPanel.tsx` (عرض بحت) + زر «عرض تفاصيل التخصيص» في `AdminOrdersPage` + مساعدات عرض بحتة `packages/web/src/lib/refund-attribution.ts` + مفاتيح `admin.refundAttr.*` و`common.yes/no` في اللغات الأربع (ar/en/fr/zh) + `api.orderRefundAttribution(orderId)`.
+- **اختبارات الخادم (مُشغَّلة فعلاً):** `packages/server/tests/m24-t24-refund-attribution-view.test.ts` (جديد) **11/11** على PostgreSQL 16 معزول (`wasit_test` @127.0.0.1:5434، حاوية `wasit-m243-test-pg`): بائع واحد بلا استرداد؛ بائعان بسقفين مستقلين؛ جزئي؛ كامل لبائع واحد (والآخر لا يُمَس)؛ كامل للجميع؛ **العمولة المعكوسة من الدفتر**؛ `CUSTOMER`/`MERCHANT`/`SUPPLIER`/`SUPPORT` ⇒ `403` و`ADMIN` ⇒ `200`؛ بلا استردادات؛ `404`؛ **القراءة لا تكتب**؛ طلب قديم ⇒ `legacy`.
+- **اختبارات الويب (مُشغَّلة فعلاً):** `packages/web/tests/m24-t24-refund-attribution.test.ts` (جديد) **12/12** — عقد الترجمة في اللغات الأربع + تصنيف `NONE`/`PARTIAL`/`FULL` + تصيير فعلي بالمكوّن عبر `react-dom/server` (بلا DOM، بلا اعتماديات جديدة). **حزمة الويب الكاملة 73/73** (7 ملفات). أُضيف alias `@` إلى `packages/web/vitest.config.ts` (مطابق `vite.config.ts`) ليصيّر الاختبار مكوّناً حقيقياً.
+- **الحزمة الكاملة للخادم:** 1619 حالة، 1618 نجحت؛ الفشل الوحيد `sec04b-entity-read-access.test.ts` (حالة دليل الموردين حسّاسة للتوازي على قاعدة مشتركة؛ **12/12 منفردة** — ليست انحداراً). `tsc` (server+web) نظيف.
+- **التوافقية:** بلا تغيير في `createRefund`/`completeRefundWithEvidence`/المخطط؛ بلا Migration جديدة. طبقة القراءة لا تكتب شيئاً.
+- **التوثيق:** §19 في `docs/GAP_REGISTER.md` (`M2.4-REFUND-SUBORDER` → **PARTIAL — T2.1 + T2.2 + T2.3 + T2.4**) + `docs/M2.4-T2.4_REFUND_ATTRIBUTION_VIEW.md`.
+- **حدود:** لا Wallet/clawback، لا إنشاء/إتمام استرداد من هذه الواجهة، لا مزوّد خارجي فعّال، لا DEMO/إنتاج، لا Git مُغيِّر (بلا stage/commit/push).
+
+## WASIT-EXECUTION-M2.5-T3 — تدقيق اتساق حالة الدفع وإغلاق الفجوة (2026-11-16)
+
+- **النوع:** تدقيق قراءة + إغلاق إداري + توثيق. **بلا تعديل منطق تطبيق، بلا Migration، بلا Seed، بلا كتابة على قواعد البيانات، بلا Git مُغيِّر (بلا commit/stage/push).** الحاوية `wasit-m243-test-pg` لم تُمَس.
+- **الغرض:** التأكد أن `orders.payment_status` (دلالة النجاح في `countSellerTransactions`) لا يختلف اختلافاً مؤثّراً عن `transactions.status`.
+- **النتيجة:** كل انتقال يمسّ النجاح يكتب الحقلين **معاً في نفس الدالة** (`applyPaymentSucceeded`: `:798,812`؛ `applyPaymentFailed`: `:852,851`؛ الاسترداد: `:1037,1026`؛ الدفع اليدوي الإداري يمرّ عبر `applyPaymentSucceeded`؛ Webhooks تُفوّض). **إلغاء/انتهاء الصلاحية:** لا كاتب لأي حقل (`CANCELLED`/`EXPIRED` قيم نية دفع فقط). **التسوية** تكتب `settlementStatus` فقط. الحالة الابتدائية `UNPAID`/`PENDING` ليست نجاحاً.
+- **اختبارات التدقيق:** أُضيفت **4** اختبارات اختلاف صناعي (`orders=PAID`+`tx=PENDING` ⇒ ناجح؛ `orders=REFUNDED`+`tx=PAID` ⇒ غير ناجح؛ قديم `orders=PAID`+`tx=FAILED` ⇒ ناجح؛ `orders=UNPAID`+`tx=PAID` ⇒ غير ناجح). الملف: `packages/server/tests/m25-tx-seller-attribution.test.ts` ⇒ **18/18** ✅ (14 من T2 + 4 من T3).
+- **التراجع:** `payments`(19)/`money-path-invariants`(6)/`verification-trust`(11)/`analytics`(15)/`revenue`(16) ✅ + `tsc` (server+web) نظيف ✅.
+- **لقطات الثقة:** **لم تُعَد حساب أي لقطة تاريخية** في `trust_scores` (D3).
+- **القرار:** `M2.5-TX-SELLER-ATTRIBUTION` → **`CLOSED`** (§13 + §22 في `docs/GAP_REGISTER.md`)؛ العدّاد: **المفتوحة 21 → 20** و**المغلقة 38 → 39**.
+
+## WASIT-EXECUTION-M2.5-T2 — تنفيذ إسناد معاملات الثقة لكل بائع (2026-11-16)
+
+- **النوع:** تنفيذ + اختبار + توثيق. **بلا Migration، بلا Seed، بلا Git مُغيِّر (بلا stage/commit/push)، بلا لمس أي قاعدة DEMO/إنتاج/اختبار.** الحاوية `wasit-m243-test-pg` لم تُمَس.
+- **القرارات المعتمدة:** D1 إسناد لكل بائع · D2 اشتقاق من `seller_orders` + احتياطي للبائع الواحد فقط، واستبعاد القديم المختلط · D3 لا إعادة حساب جماعية · D4 حصر التغيير بمسار قراءة الثقة.
+- **ملف جديد:** `packages/server/src/lib/seller-attribution.ts` — `countSellerTransactions(db, sellerIds)` (قراءة فقط): عدّ من `seller_orders` (النجاح = `orders.payment_status='PAID'`، دفعة واحدة) + احتياطي `orders` بلا فرعية + `NOT EXISTS suborder` (منع الازدواج) + استبعاد المختلط غير القابل للإسناد + إزالة التكرار/الفراغ.
+- **تعديل:** `packages/server/src/lib/trust-engine.ts` — استُبدل استعلاما `transactions.sellerId` بنداء واحد `countSellerTransactions(db, [userId, ...ownedSellers])`؛ أُزيل استيراد `transactions`/`inArray`؛ **معادلة الدرجة/الأوزان/الحدود/الشارات دون تغيير**.
+- **الأدلة:** `packages/server/tests/m25-tx-seller-attribution.test.ts` (جديد) **14/14**؛ تراجع `verification-trust`(11)+`analytics`(15)+`revenue`(16)=**42/42**؛ الحزمة الكاملة للخادم **1631/1633** (الفشلان `p6-p7-dispute-webhook` و`sec04b-entity-read-access` نجحا منفردين **31/31** — سباق قاعدة مشتركة، لا انحدار)؛ `tsc` نظيف للخادم والويب.
+- **حدود:** لا تغيير على `transactions.sellerId` كتابةً؛ اللقطات التاريخية في `trust_scores` تبقى كما هي (D3)؛ القديم المختلط يبقى غير مُسنَد.
+- **الحالة:** الفجوة **`IN_PROGRESS`** (لا إغلاق قبل التحقق الكامل). التفاصيل: §12 في `docs/M2.5-TX-SELLER-ATTRIBUTION_DESIGN.md`.
+
+## WASIT-EXECUTION-M2.5-T1 — تصميم إسناد المعاملات والثقة لكل بائع (Discovery & Design) (2026-11-16)
+
+- **النوع:** اكتشاف وتصميم (READ-ONLY). **بلا تعديل كود، بلا Migration، بلا Seed، بلا لمس أي قاعدة، بلا Git مُغيِّر.** الحاوية `wasit-m243-test-pg` لم تُمَس.
+- **الفجوة:** `M2.5-TX-SELLER-ATTRIBUTION` (§13) — تبقى **`OPEN`** (لا إغلاق).
+- **المشكلة المؤكَّدة من الكود:** الطلب متعدّد البائعين يُسجَّل بصف `transactions` **واحد** يُنسب لبائع واحد — الكاتب الوحيد `modules/orders/service.ts:358` (`sellerId: soleSeller ?? firstProduct.sellerId`)؛ والطلب المختلط `soleSeller = null` ⇒ يُنسب لبائع أول المنتجات.
+- **القرّاء (حصر كامل، آلي):** موضعان فقط — `lib/trust-engine.ts:84` و`:100` (يترجمان إلى `totalTransactions`/`successfulTransactions` في درجة الثقة، ثم لقطة `trust_scores`). **لا يوجد** ترتيب/شارات بائعين تقرأ الحقل.
+- **لا أثر مالي:** كل التحليلات/GMV/العمولة/التسوية/الدفتر/التقارير/المخاطر تقرأ `seller_orders`/`orders`/الدفتر بمفاتيح `transaction.id`/`order_id`، لا `transactions.sellerId`. الأثر محصور في **الثقة**.
+- **الحل الموصى به (بلا Migration):** الاشتقاق للقراءة من `seller_orders` (كل بائع يُحتسب نصيب فرعيته) + احتياطي للطلبات القديمة بلا فرعية (`orders.sellerId`) بشرط `NOT EXISTS suborder` لمنع الازدواج. الطلبات المختلطة القديمة لا تُخمَّن. **لا تغيير في `transactions.sellerId` كتابةً.**
+- **البدائل المرفوضة:** عمود مصفوفة `sellerIds`؛ صف `transactions` لكل فرعية (يكسر النموذج المالي)؛ الإبقاء على «البائع الأول»؛ الاعتماد على `orders.sellerId` وحده (فارغ في المختلط)؛ تعبئة رجعية لـ`seller_orders` (اختراع بيانات تاريخية).
+- **قرارات تحتاج موافقة:** تغيير دلالة عدّ الثقة (D1)، الاحتياطي مقابل backfill (D2)، إعادة حساب الثقة (D3)، حصر النطاق بالقراءة (D4).
+- **الاختبارات المخطَّطة:** 11 سيناريو (بائع واحد/بائعان/ثلاثة؛ بائع بلا فرعية؛ بيانات قديمة كاملة/ناقصة/متضاربة؛ عدم مضاعفة GMV؛ ثبات الدفتر؛ عزل/IDOR؛ عدم تغيير بقية عوامل الثقة) — **لم تُشغَّل** (تصميم فقط).
+- **التوثيق:** `docs/M2.5-TX-SELLER-ATTRIBUTION_DESIGN.md` (جديد) + §21 في `docs/GAP_REGISTER.md`.
+
+## WASIT-EXECUTION-M2.4-CLOSE — إغلاق فجوة الاسترداد لكل بائع (M2.4-REFUND-SUBORDER) (2026-11-16)
+
+- **النوع:** مراجعة تحقّق وإغلاق إداري + توثيق. **بلا تعديل منطق تطبيق، بلا Migration، بلا Seed، بلا Git مُغيِّر.**
+- **القرار:** `M2.4-REFUND-SUBORDER` انتقلت **`PARTIAL` → `CLOSED`** بعد مطابقة **11 شرطاً** مقابل الكود والاختبارات الفعلية (لا التقارير). المصفوفة الكاملة في `docs/GAP_REGISTER.md` §20.1.
+- **أبرز الأدلة:** تخصيص فعلي لكل فرعية (`refund_allocations`, Migration 0040) · احتساب `COMPLETED` فقط · السقف `items_total + buyer_commission` · عكس العمولة **مقروء من الدفتر** · عدم مسّ عمولة بائع لم يُسترد · idempotency · منع تسوية الفرعية `REFUNDED` (`evaluateSuborderRow`) · مسار `REFUND_MANAGE` (ADMIN/SUPER_ADMIN) · لا IDOR (`PAYMENT_READ` لا يفتحه) · الواجهة قراءة فقط.
+- **الاختبارات المُشغَّلة فعلياً (2026-11-16):** `m24-t21` **13/13** · `m24-t22` **14/14** · `m24-t23` **7/7** · `m24-t24` (خادم) **11/11** = **45/45** · `m24-t24` (ويب) **12/12** ضمن الحزمة الكاملة **73/73** · `tsc` (server+web) نظيف. البيئة: `wasit_test` @127.0.0.1:5434 (حاوية `wasit-m243-test-pg`).
+- **العدّ (§1):** «المغلقة» **33 → 38** و«المفتوحة» **20 → 21**. **تنبيه:** سلسلة M2 (§13–§19) كانت موثَّقة لكنها **لم تكن مُحتسبة في §1**؛ أُدرجت الآن صراحةً ⇒ القفز يعكس **إدراج 4 بنود M2 مغلقة سابقاً + إغلاق M2.4**، وليس 5 إغلاقات جديدة.
+- **ناقص متبقٍّ:** `sec04b-entity-read-access` حسّاس للتوازي على قاعدة مشتركة (سباق ترقيم صفحات؛ **12/12 منفردة**) — سباق في مُهيّئ الاختبار لا في منطق M2.4/الإنتاج.
+- **التوثيق:** §20 (سجل الإغلاق) + §21 (تعريف المهمة التالية) + §1 + §13 + §19 في `docs/GAP_REGISTER.md`.
+- **المهمة التالية (تعريف فقط، بلا تنفيذ):** `M2.5-TX-SELLER-ATTRIBUTION` — إسناد `transactions.sellerId` لبائع واحد (`soleSeller ?? firstProduct.sellerId`، `orders/service.ts:358`) بينما `trust-engine.ts` (سطور 84/100) يقرأه لمجاميع الثقة ⇒ تضخّم ثقة بائع واحد وإهمال الآخرين في الطلب المختلط. لا أثر مالي (التحليلات تقرأ `seller_orders`). التصميم المقترح: الاشتقاق من `seller_orders`. لا يبدأ في هذه الجولة.
+
+## WASIT-EXECUTION-014 — إغلاق PR-05 (حاسبة الأعمال `/tools/calculator`) (2026-11-03)
+
+- **الفجوة المُغلقة:** `PR-05` (§4 في `docs/GAP_REGISTER.md`) — `/tools/calculator` غير منفَّذ. انتقلت **PENDING → COMPLETE_VERIFIED**.
+- **ما نُفِّذ:** صفحة عامة `BusinessCalculatorPage` على `/tools/calculator` + منطق صرف معزول `packages/web/src/lib/business-calculator.ts` يعكس نموذج رسوم الطلب الفعلي (`orders/service.ts`): عمولة البائع والمشتري على المجموع، رسوم الدفع على البائع، `buyerTotal = المجموع + عمولة المشتري`، `sellerNet = المجموع − عمولة البائع − رسوم الدفع`، تقريب 4 منازل (half-up) كبقية المنصة.
+- **النسب:** افتراضية قابلة للتعديل = سياسة القاعدة الموثّقة (4% عمولة: 2% بائع + 2% مشتري، و2% رسوم دفع). **موسومة صراحةً** كقيم افتراضية لا كالسياسة الحيّة (`commission_policies`/`payment_fee_policies` تُدار من DB) — لا ادّعاء بأنها السعر النهائي.
+- **الرفض:** سعر/كمية غير موجبين، كمية غير صحيحة، نسب سالبة، أو تركيبة تُفرغ صافي البائع → رسالة «قيم غير صالحة» بلا أرقام مضلّلة.
+- **الوصول:** رابط في تذييل الموقع (`PublicLayout` → `nav.businessCalculator`) + مسار عام في `App.tsx`.
+- **الاختبارات:** `packages/web/tests/business-calculator.test.ts` **10/10** معزول (بلا DB/DOM: نموذج المال، الرفض، عقد الترجمة في اللغات الأربع) + `e2e/business-calculator.spec.ts` **4/4** متصفّح حقيقي بلا DB (`playwright.tools.config.ts`) + كامل حزمة الويب **61/61** + Typecheck الويب نظيف + Build ناجح.
+- **بلا Migration/Seed/DB، بلا تغيير على أي مسار قائم، بلا Git مُغيِّر.** العدّ: «المفتوحة» 21 → **20**، «المغلقة» 32 → **33**.
+
+## WASIT-EXECUTION-T3-R1 — دورة حياة إثبات الاسترداد + تثبيت E2E (2026-11-18)
+
+- **النوع:** إصلاح اختبارات فقط (E2E) + استعادة البيئة. **بلا تعديل كود إنتاج، بلا Migration، بلا Seed، بلا Git مُغيِّر.** قاعدة معزولة `wasit_test`/`wasit_dev` على `127.0.0.1:5434`.
+- **استعادة البيئة:** الحاوية أُعيد إنشاؤها فلم تكن Postgres قائمة ولا Playwright browsers مثبّتة. أُعيد تشغيل `dockerd`، وإنشاء حاوية `wasit-m243-test-pg` (postgres:16 على `127.0.0.1:5434` فقط)، وقاعدتا `wasit_test`+`wasit_dev`، ثم `db:migrate` + `seed` + `seed-demo`، و`npx playwright install chromium`. **لا DB reset/drop/push لأي بيانات قائمة، ولا لمس لأي قاعدة خارج 5434.**
+- **القاعدة المالية المحفوظة (لم تُمسّ):** `completeRefundWithEvidence` هو الكاتب الوحيد لإكمال الاسترداد؛ مزوّد offline/manual/demo **لا يثبت حركة الأموال** ⇒ يبقى `REQUESTED` (لا تسوية، لا قيد، لا تغيير طلب). الإكمال فقط بإثبات خارجي موثوق.
+- **جديد:** `e2e/refund-evidence.ts` — مُساعِد اختباري يستدعي الدالة الحقيقية `completeRefundWithEvidence` (عبر `pg`/drizzle لمرة واحدة) + `latestRefundForOrder` لقراءة `/api/payments/orders/:id/refunds`.
+- **مُعدَّل:** خمسة اختبارات E2E (`admin-refunds` · `payments` · `dispute-refund` · `financial-audit` · `settlement-integrity`) + `playwright.config.ts` (سقوف محدّد المعدّل لعمليّة E2E فقط؛ أُضيف `RATE_LIMIT_VIDEO_MAX: '500'`). المحدّد الحقيقي يبقى مُختبَراً بالسقوف الإنتاجية في `tests/rate-limit*.test.ts`.
+- **النتائج:** الخادم **131 ملفاً/1672 اختباراً ناجح** · E2E **235 ناجح/4 فاشل/8 متخطّى (0 سلسلة 429)** · الاسترداد **18/18** · `tsc` (server+web) نظيف.
+- **أعطال باقية (سابقة، خارج نطاق الاسترداد):** `admin-ai:37` (حارس منع الموافقة الذاتية 403) · `admin-finance:240` (بوابة تسوية Payout 409) · `functional-audit:68` (حقلان `commissionSellerRate`/`commissionBuyerRate` مفقودان من ردّ `POST /api/orders` ⇒ NaN) · `order-lifecycle:102` (`aggregateParentStatus` يطوي `DELIVERED` إلى `SHIPPED`).
+- **بوابة السلامة:** `master` @ `98c3a958…` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0. التفاصيل: `docs/WASIT_EXECUTION_REGISTER.md` §10.
+
+## WASIT-EXECUTION-T3-R2 — إصلاح الأعطال الأربعة المتبقية في E2E (2026-11-19)
+
+- **النوع:** إغلاق الأعطال الأربعة الباقية بعد T3-R1 بإثبات تكامل تشغيلي حقيقي. تعديلا إنتاج اثنان **يُعيدان سلوكاً كان في `HEAD`** (انحداران من إعادة كتابة الطلب متعدد البائعين M2)، والباقي اختبارات فقط. **بلا Migration، بلا Seed، بلا Git مُغيِّر.** قاعدة معزولة `wasit_test`/`wasit_dev` على `127.0.0.1:5434`.
+- **بوابة السلامة:** `master` @ `98c3a958a0faa7e1bf174e33900d3c298578b4aa` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0 · Modified 126 · Untracked 144 — مطابق لإغلاق T3-R1.
+- **العطل 1 — `admin-ai.spec.ts:37` (403 موافقة ذاتية):** حارس **فصل المهام** في `agents.ts` (`decideAgentTask`) صحيح ومقصود (طالب المهمة لا يعتمدها). **اختبار فقط:** إنشاء المهمة بمعتمِد مستقل (`admin2`) واعتمادها من الواجهة. أُضيفت 3 اختبارات انحدار (رفض الموافقة الذاتية 403 + نجاح معتمِد مستقل + رفض من لا يملك `ai:manage`).
+- **العطل 2 — `admin-finance.spec.ts:240` (409 دفعة):** بوابة التسوية (M2.3) تتطلّب سطر بائع **مُسلَّماً ومُسوَّى**. **اختبار فقط:** تسليم الطلب بمزود البائع عبر مسار الحالة الرسمي (`CONFIRMED→PROCESSING→SHIPPED→DELIVERED`) + تأكيد التسوية + `reconcile` للفروع (كلها مسارات إنتاج). أُضيف اختبارا انحدار (منع الدفعة المزدوجة، ورفض دفعة لسطر غير مُسوَّى). القاعدة المالية لم تُمسّ.
+- **العطل 3 — `functional-audit.spec.ts:68` (NaN):** **انحدار عقد API** — إعادة كتابة M2 أَسقطت `commissionSellerRate`/`commissionBuyerRate` من ردّ `POST /api/orders`. **إصلاح إنتاج:** أُعيدا إلى كائن الإرجاع وسجل التدقيق في `orders/service.ts`. اختبار خادم جديد: `tests/order-commission-rate-fields.test.ts` (مفرد + متعدد البائعين).
+- **العطل 4 — `order-lifecycle.spec.ts:102` (الأب يعلق عند SHIPPED):** **انحدار M2** — `aggregateParentStatus` كان يطوي `DELIVERED` داخل `SHIPPED`. **إصلاح إنتاج:** فرع `DELIVERED` فوق `SHIPPED`. حالة خادم جديدة في `tests/m2-multi-seller-order.test.ts`.
+- **النتائج:** الخادم **132 ملفاً / 1675 اختباراً ناجح** (منها الجديدان) · E2E الكامل **243 ناجح / 0 فاشل / 8 متخطّى** · `tsc` (server+web) نظيف · Build ناجح.
+- **التوثيق:** `docs/WASIT_EXECUTION_REGISTER.md` §11 (الجلسة كاملة + بوابة السلامة بعدها).
+
+## WASIT-EXECUTION-T3-CLOSE — التحقق النهائي وإغلاق سجل التكامل (2026-11-19)
+
+- **النوع:** READ-ONLY توثيقي بحت. **لا إعادة تشغيل لاختبارات مُثبتة، لا تعديل كود تطبيق أو اختبار، لا Migration، لا Seed، لا تعامل مع قواعد بيانات قائمة، لا Git مُغيِّر.**
+- **بوابة السلامة:** `master` @ `98c3a958a0faa7e1bf174e33900d3c298578b4aa` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0 · Modified 127 · Untracked 145 (172 بـ`-uall`). قاعدة الاختبار معزولة `wasit_test` @127.0.0.1:5434.
+- **أدلة تكامل PostgreSQL الأربعة (كلها مُثبتة وموجودة في الحزمة الخضراء لـT3-R2):** (1) **Live write/read** — `settlement-ledger` · `persistence-invariants` · `m22-t2-suborder-payout` (خدمات إنتاج على DB حقيقي بلا mock)؛ (2) **Rollback** — `order-confirmation-payment-guard:373` (فشل خصم المخزون ⇒ رجوع كامل، الطلب يبقى `PENDING`)؛ (3) **FK enforcement** — `m22-t2-suborder-payout:292` (`payouts_suborder_fk`) · `m23-t2-suborder-settlement:365` (FK `(transaction_id, parent_order_id)`) · `m24-t21-refund-allocation-schema:207`؛ (4) **Concurrency single-winner** — `ai0232-concurrency:127` (سباق حقيقي عبر اتّصالين مستقلّين `db`/`dbB`) + `ai01-agent-scheduling`/`ai023-dispatch`/`m23-t2-suborder-settlement:282`.
+- **آلية العزل:** `tests/setup.ts` (إعادة إنشاء `wasit_test` + migrate + seed) و`tests/test-db-guard.ts` (يرفض أي هدف غير `127.0.0.1:5434/wasit_test`) ⇒ إثبات أن الحزمة حيّة على PostgreSQL حقيقي.
+- **ملخّص T3-R1/T3-R2:** T3-R1 (131 ملفاً/1672 اختباراً · E2E 235/4/8) · T3-R2 (132 ملفاً/1675 اختباراً · E2E 243/0/8 · `tsc` نظيف · Build ناجح).
+- **القرار:** **T3 = `COMPLETED`** — أُغلق إدارياً في `docs/WASIT_EXECUTION_REGISTER.md` (§1 صف T3 + فكّ `B-09` في §5 + §12 سجل الإغلاق). **لا تغيير على `GAP_REGISTER.md`** (T3 ليست فجوة مُدرجة فيه).
+- **أول مهمة PENDING تالية:** **`T1` — تثبيت الرؤية ونطاق MVP في وثيقة رسمية (قرار GM)**. **السبب:** كل المسارات تعتمد على نطاق مثبّت، وهي الخطوة التالية المنطقية بعد إغلاق التكامل (T3)؛ T4/T5 جارية وT6 محجوبة بمزوّدين/بنك.
+- **التوثيق:** `docs/WASIT_EXECUTION_REGISTER.md` §12 (الجلسة كاملة).
+
+## WASIT-EXECUTION-T1.1-CORRECTION + T1.2 — ميثاق GM للرؤية ونطاق MVP (2026-11-19)
+
+- **النوع:** توثيقي بحت. تصحيح استراتيجي لنتائج T1.1 + إعداد ميثاق GM (T1.2). **لا تطوير، لا تعديل كود، لا Migration، لا Seed، لا Git مُغيِّر.** لا إعادة تدقيق شامل.
+- **بوابة السلامة:** `master` @ `98c3a958a0faa7e1bf174e33900d3c298578b4aa` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0 · Modified 127 · Untracked 145.
+- **التصحيح الاستراتيجي المعتمد:** **منظومة الوكلاء المتخصصين (20 Agent) ركيزة أساسية** من رؤية WASIT — **ليست** ميزة ثانوية ولا بند «LATER». التنفيذ التدريجي مقبول، لكن بناء المنظومة العشرين **هدف أساسي**.
+- **وضع الوكلاء الحقيقي (بلا افتراضات):** **11/20** موجودون تقنياً (`AGENT_CATALOGUE` + executors + مسارات + بوابة `requireAction` + موافقة بشرية لستة منهم) — لكنهم **قراءة/توصية فقط** (`db.insert/update/delete = 0`) وبمزوّد `local-heuristic` (**ليس LLM حقيقي**). **9/20 = `NOT DEFINED`** (لا تعريف في المستودع؛ `AD-043` يؤكّد الكود يضم 11). حدود إضافية: لا Tool Gateway · لا Kill Switch · لا ذاكرة · `scope.ts` بلا مستدعٍ.
+- **مسارات الاستكمال:** R1 (تشغيل الـ11 بمزوّد LLM) → R2 (+5) → R3 (+4) → R4 (Tool Gateway/Kill Switch/Copilot). **⚠️ مُحدَّث في T1.2-R2 أدناه:** قائمة التسعة المقترحة **أُلغيت** (لم تكن مرجعاً معتمداً) واستُبدلت بمصفوفة التخصصات المرجعية الثمانية.
+- **جديد:** `docs/T1.2_GM_MVP_CHARTER.md` — ميثاق GM (12 قسماً): الرؤية · نموذج B2B+B2C · منظومة الوكلاء العشرين (تقييم/سجل مرجعي مقترح/أهداف R1–R4) · حدود MVP/Closed Pilot · القدرات · المشمول/المستبعد · دور GM · الضوابط · شروط الانتقال · القرارات · الاقتراح النهائي.
+- **الحالة:** **T1 يبقى `PENDING`** — مسودة القرار جاهزة للاعتماد. تحديث §1 (T1) + §4 (P-01) + §13 في السجل. لا تغيير على `GAP_REGISTER.md`.
+- **التوثيق:** `docs/T1.2_GM_MVP_CHARTER.md` + `docs/WASIT_EXECUTION_REGISTER.md` §13.
+
+## WASIT-EXECUTION-T1.2-R2 — تصحيح الميثاق ومواءمة معمارية الوكلاء (2026-11-19)
+
+- **النوع:** توثيقي بحت. إغلاق تصحيحات T1.2-R1 الأربعة. **لا كود، لا DB/Migration/Seed، لا Git مُغيِّر، لا إعادة Audit شامل.**
+- **بوابة السلامة:** `master` @ `98c3a958a0faa7e1bf174e33900d3c298578b4aa` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0 · Modified 127 · Untracked 146.
+- **التصحيحات المُغلقة:** (1) الوكلاء العشرون ركيزة أساسية **تدريجية داخل R1–R4** — **التدريج ≠ تأجيل**؛ أُزيلوا من «المستبعد» (§7). (2) **Global-first** صريح: «تونس أول سوق تشغيلي، لا قاعدة مضمّنة؛ الدولة/العملة/الجغرافيا قابلة للتكوين». (3) **إلغاء قائمة التسعة المقترحة** واستبدالها بمصفوفة **التخصصات المرجعية الثمانية** (Finance · Payment & Settlement · Compliance · Operations · Customer Intelligence · Outreach · Merchant · Supplier). (4) §3.5 **فصل الاختصاصات** (Risk↔Fraud-Monitor · B2B↔Supplier-Outreach) + «لا تتشارك الصلاحيات؛ التعاون عبر إحالة مهام منظّمة».
+- **إفصاح دقّة حاسم:** **«مخطط الفرق الستة» و«التخصصات الـ19» غير موجودَين في المستودع** (فُحص `docs/` + كل الصور/المرفقات = صفر). المصادر المرجعية الفعلية: `AI_ARCHITECTURE.md §3` · `WASIT_ADMINISTRATIVE_PLATFORM_GUIDE.md §23.أ` · `WASIT_MASTER_PRODUCT_AUDIT.md §7.1` (كلها **11 وكيلاً**). ⇒ **لم يُخترع «الوكيل العشرون»، ولم يُحذف أي تخصص؛ هويته غير محسومة وتنتظر تسليم المرجع.**
+- **قائمة الـ20:** **لا تُعتمد اسمياً** قبل حسم التخصص العشرين وتداخلات الاختصاص. الـ11 الحاليون **بلا تغيير**.
+- **الحالة:** **T1 يبقى `PENDING`** بانتظار اعتماد GM + تسليم المرجع. لا تغيير على `GAP_REGISTER.md`.
+- **التوثيق:** `docs/T1.2_GM_MVP_CHARTER.md` (§1/§3.2–3.5/§4/§7/§11.2/§12) + `docs/WASIT_EXECUTION_REGISTER.md` §14.
+
+## WASIT-EXECUTION-A0 — جرد الوكلاء الحقيقي وتدقيق الواقع (2026-11-19)
+
+- **النوع:** READ-ONLY بالكامل. **لم يُكتب أي ملف.** لا Git مُغيِّر، لا تشغيل اختبارات/خدمات.
+- **النتيجة:** **11 وكيلاً فقط** في `AGENT_CATALOGUE` (لا فئات/مصانع/تعريف ثانٍ). لا «وكيل رقم 20» في الكود.
+- **المستوى:** كل الـ11 = **`L4`** (لا `L5`) — لأن `agent_metrics` (متابعة النتائج) غير مستخدم، والمزوّد `local-heuristic`.
+- **البيانات/الأدوات:** كلهم يقرأون DB حيّة؛ **لا كتابات**؛ `allowedTools=[]` (لا أدوات)؛ لا Tool Gateway.
+- **البنية:** IMPLEMENTED = Runtime/Orchestrator/Supervisor/RBAC/Approval/Scheduling/Retry-Recovery/Handoff/Audit/Cost. NOT IMPLEMENTED = Tool Gateway/Kill Switch. PARTIAL = LLM Provider (لا LLM حقيقي) · Memory (غير موصول) · Monitoring (`agent_metrics` غير مستخدم) · Inter-agent (عبر Orchestrator فقط).
+- **غير موصول:** `scope.ts` (اختبار فقط) · `agent_memory` · `agent_metrics`.
+
+## WASIT-EXECUTION-T1.2-R3 — تثبيت المرجع الرسمي (6 فرق / 19 تخصصاً) ومطابقة A0 (2026-11-19)
+
+- **النوع:** توثيقي بحت (Docs-only). **لا كود، لا اختبارات/Builds، لا DB/Migration/Seed، لا Git مُغيِّر.**
+- **بوابة السلامة:** `master` @ `98c3a958a0faa7e1bf174e33900d3c298578b4aa` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0 · Modified 127 · Untracked 146.
+- **المرجع الرسمي المُثبَّت (الميثاق §3.2):** **19 تخصصاً على 6 فرق** — TECH (1: Development) · FINANCE (2: Finance, Payment & Settlement) · TRUST & RISK (3: Risk, Dispute, Compliance) · OPERATIONS & CUSTOMER SERVICE (4: Support, Customer Intelligence, Analytics, Operations) · MARKETING & GROWTH (4: Marketing, Advertising, Outreach, Market Research) · COMMERCE & SALES (5: Sales, Product, Merchant, Supplier, B2B).
+- **مطابقة A0 (الميثاق §3.3):** **موجود=11** (Sales · Marketing · Advertising · Product · Support · Analytics · Market Research · B2B · Risk · Dispute · Development) · **ناقص=8** (Finance · Payment & Settlement · Compliance · Operations · Customer Intelligence · Outreach · Merchant · Supplier) · **`Agent #20 = UNDECIDED`**.
+- **تمييز الجاهزية (الميثاق §3.4):** A موجود ✅ (11/11) · B مكتمل تخصصياً 🟡 (جزئي) · C قابل للتشغيل ✅ · D متصل بأدوات ❌ (0/11) · E مستقل ضمن حدود ❌ (0/11). ⇒ **الـ11 ليسوا مكتملين تشغيلياً رغم `L4`.**
+- **قيود مُحترمة:** لا تخصصات غير معتمدة أُضيفت (Fraud Monitor وأمثاله **خارج المرجع الـ19** ⇒ مرفوض)؛ لا وكيل قائم حُذف؛ لا اختراع لـ`Agent #20`.
+- **الحالة:** **T1 يبقى `PENDING`** بانتظار اعتماد GM + حسم `Agent #20`. لا تغيير على `GAP_REGISTER.md`.
+- **التوثيق:** `docs/T1.2_GM_MVP_CHARTER.md` (§3.2–3.6/§4/§11.2/§12) + `docs/WASIT_EXECUTION_REGISTER.md` §15.
+
+## WASIT-AI-COMPANY-A1 — مفتاح إيقاف الذكاء الاصطناعي المركزي (2026-11-19)
+
+- **النوع:** ضابط أمان تنفيذي (أول مهمة في خارطة WASIT AI Company). **لا Migrations ولا جداول جديدة.** لا يمنح أي صلاحية جديدة.
+- **بوابة السلامة:** `master` @ `98c3a958…` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0.
+- **التصميم:** مفتاح منطقي **مركزي واحد** في `packages/server/src/lib/ai/kill-switch.ts`، **يفشل مغلقاً** (fail-closed) و**لا يعتمد على الـLLM**. الحارس `assertAiExecutionEnabled()` يرمي `ApiError` (503 `SERVICE_UNAVAILABLE`)؛ الفحص `isAiExecutionBlocked()` للفروع التي تسجّل رفضها.
+- **نقاط التنفيذ المحمية:** `createAgentTask` · `decideAgentTask` (APPROVE) · `planAgentRun` · `dispatchStep` · `runDueAgentSchedules` · `runSupervisorCycle` · `retryStep` · `recoverStuckSteps` · `recoverRun` · **`runAIFeature` (الشبكة الأعمق — كل استدعاء مزوّد)**.
+- **الفحص عند كل خطوة، لا عند البداية فقط:** Run متعدد الخطوات يتوقف قبل الخطوة التالية، ويستأنف بعد التفعيل **بلا إعادة تنفيذ مزدوجة** (الإيقاف يرفض قبل أي انتقال حالة).
+- **التحكم:** `GET/POST /api/admin/ai/kill-switch`، محكوم بـ`AI_MANAGE | ADMIN_AI` (SUPER_ADMIN وADMIN يتحكمان؛ CUSTOMER 403؛ غير مصادَق 401). مفتاح الإيقاف عبر واجهة `AdminAiPage` (تبويب «نظرة عامة»).
+- **المُهيّئ:** `AI_AGENT_EXECUTION_ENABLED` (افتراضي `true`) — لا تغيير في السلوك الحالي.
+- **التدقيق:** `AI.KILL_SWITCH_DISABLED/ENABLED` (واجهة) + `AI.KILL_SWITCH_{SCHEDULE,SUPERVISOR,RECOVERY}_REFUSED` (اجتياحات خلفية، سجل واحد لكل دورة). لا secrets.
+- **BLOCKED:** الإيقاف عبر نسخ متعددة (fleet-wide) يحتاج جدول إعدادات مشترك + Migration ⇒ مؤجّل بقرار GM. الحالة حالياً **عامة على مستوى العملية** ولا تستمر عبر إعادة التشغيل (تُعاد إلى قيمة env).
+- **الاختبارات:** `tests/a1-kill-switch-unit.test.ts` (6 ✅) + `tests/a1-kill-switch.test.ts` (13 ✅). **بلا regressions:** 268 اختبار AI قائم ناجح.
+- **التوثيق:** `docs/AI_KILL_SWITCH.md`.
+
+## WASIT-AI-COMPANY-A2 — فرض نطاق الوكلاء في الإنتاج (2026-11-19)
+
+- **النوع:** ضابط أمان تنفيذي (المهمة الثانية في خارطة WASIT AI Company). **لا Migrations، لا جداول جديدة، لا صلاحيات جديدة، لا Tool Gateway، لا LLM حقيقي، لا Memory.** لا يُعيد كتابة أي Executor ولا يُنشئ وكيلاً.
+- **بوابة السلامة:** `master` @ `98c3a958…` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0.
+- **الفجوة المُغلقة:** `packages/server/src/modules/ai/scope.ts` كان **بلا مستدعٍ إنتاجي** (اختبار فقط). الآن مربوط بمسار الإنتاج عبر `assertRunOwnerScope` في `buildRunContext`.
+- **العقد:** وحدة جديدة `packages/server/src/modules/ai/agent-scope.ts` — عقد نطاق موحّد لكل وكيل (هوية · تخصص · مجالات بيانات مسموحة · جداول مسموحة · قراءة فقط · مجالات ممنوعة · لا تفويض · حدود المالك).
+- **الفرض المركزي (Server-side):** نقطة التنفيذ الوحيدة `executeAgentTask` تُمرّر `db` مُقيَّداً (`withAgentDataScope`) إلى كل Executor؛ يفحص **كل** `from`/`join` (قراءة) و`insert`/`update`/`delete` (كتابة) ويرفض `execute`/`transaction`/`query`. الواجهة لا تُستخدم للفرض.
+- **Fail-closed:** لا سياق · وكيل بلا عقد · جدول خارج النطاق · جدول محظور · كتابة · SQL خام · مالك غائب ⇒ **رفض 403 `AGENT_SCOPE`**. لا توسيع تلقائي.
+- **الأقل صلاحية:** كل وكيل من الـ11 له حدّ مستقل مبني على الجداول التي يقرأها فعلاً؛ لا نطاق موحّد واسع. جداول حركة الأموال/الاعتماد/الجلسات/التدقيق **محظورة على الجميع**.
+- **منع التجاوز:** المنحة تُقرأ من السياق الموثوق وتُتقاطع مع عقد الوكيل (تضييق فقط)، ولا تُقرأ من `input`؛ لا handoff (`canDelegate=false`).
+- **عزل المالك/المستأجر:** `scope.ts` مربوط؛ الجداول المقيَّدة بالمالك (`agent_metrics`/`agent_memory`) تتطلّب نطاق مالك صالحاً. لا توسيع لبيانات عميل لتسهيل تنفيذ وكيل.
+- **الاختبارات:** `tests/unit/agent-scope-contract.test.ts` (23 ✅) + `tests/unit/agent-scope-enforcement.test.ts` (9 ✅) + `tests/a2-agent-scope.test.ts` (10 ✅ على PostgreSQL حقيقي). **بلا regressions:** 294 اختبار AI قائم ناجح. `tsc` نظيف.
+- **حالة A1:** سليم ولم يتغيّر (10 نقاط حماية + 19 اختبار A1 ناجح).
+- **BLOCKED:** أي Executor مستقبلي يحتاج SQL خاماً (`db.execute`) سيُرفض بالتصميم حتى يُمنح مساراً مُدقَّقاً (لا يوجد هذا النوع في الـ11 حالياً).
+- **التوثيق:** `docs/A2_AGENT_SCOPE_ENFORCEMENT.md`.
+
+## WASIT-AI-COMPANY-A3 — قياس أداء الوكلاء وتتبّع النتائج (2026-11-20)
+
+- **النوع:** طبقة قياس **للقراءة فقط** (المهمة الثالثة في خارطة WASIT AI Company). **لا Migrations، لا جداول جديدة، لا صلاحيات جديدة، لا Tool Gateway، لا LLM حقيقي، لا ذاكرة جديدة.** لا يُنشئ وكلاء ولا يُوسّع صلاحيات.
+- **بوابة السلامة:** `master` @ `98c3a958…` (لم يتغيّر) · Staged 0 · Stash 0 · Deleted 0.
+- **الوحدة:** `packages/server/src/modules/ai/agent-metrics.ts` — `buildCompanyMetrics(db, {since, agentKey})` (قراءة فقط، لا تصدّر أي دالة كتابة).
+- **نقطة النهاية:** `GET /api/admin/ai/company-metrics` في `modules/admin/ai-routes.ts`، محكومة بـ`AI_MANAGE | ADMIN_AI` + `derivePlatformScope` (ADMIN/SUPER_ADMIN فقط) ⇒ غير مصادَق 401، غير مدير 403.
+- **مصادر البيانات:** `agent_tasks` (التشغيلات — مصدر الحقيقة، كل صف = تشغيل واحد) · `agent_registry` (الهوية) · `ai_requests` (الكلفة الفعلية + الرموز + النموذج) · `agent_run_steps` (المحاولات) · `audit_logs` (الاستعادة).
+- **لماذا لا تُقرأ `agent_metrics`؟** الجدول مُهاجَر (migration 0033) لكن **بلا كاتب إنتاجي**؛ لا تنضمّ الوحدة إليه إطلاقًا لضمان عدم ازدواج العدّ مستقبلاً.
+- **المؤشرات:** تنفيذ (إجمالي/مكتمل/فاشل/معلّق/جارٍ/معدّل نجاح) · أداء (متوسط/وسيط/P95/بطيء/إعادات/استعادة) · كلفة (فعلية من الدفتر، أو «غير متاحة» صراحةً — لا تقديرات) · نتائج (مهام بنتيجة محفوظة؛ النتيجة التجارية = 0 صراحةً) · حالة صحية (`healthy/degraded/failing/idle/no_data`).
+- **قواعد الإسناد:** «اكتمال المهمة» ≠ «تحقّق نتيجة تجارية»؛ لا تُنسب نتيجة تجارية دون دليل على تنفيذ توصية الوكيل (لا مصدر دليل حاليًا ⇒ 0). لا تُختلق بيانات لوكيل لم يعمل (`no_data`).
+- **النزاهة:** لا مسار كتابة للوكيل؛ التشغيل يُحتسب مرة واحدة؛ إعادات المحاولة لا تُحتسب كتشغيلات؛ الكلفة السالبة/غير الرقمية تُهمَل.
+- **الواجهة:** قسم «صحة شركة الوكلاء (AI Company)» داخل تبويب «نظرة عامة» في `AdminAiPage` (دمج، لا واجهة منفصلة).
+- **الاختبارات:** `tests/unit/agent-metrics.test.ts` (22 ✅) + `tests/a3-agent-metrics.test.ts` (3 ✅ على PostgreSQL حقيقي، تشمل 401/403). `tsc` نظيف (Server + Web).
+- **حالة A1/A2:** لم يُمَس `kill-switch.ts` ولا `agent-scope.ts`/`agent-run-context.ts`/`executors.ts`؛ اختباراتهما كاملة بلا انحدار.
+- **BLOCKED:** (1) الكلفة الفعلية صفر/غير متاحة حتى تشغيل مزوّد حقيقي؛ (2) النتيجة التجارية بلا مصدر دليل؛ (3) `agent_metrics` بلا كاتب؛ (4) التجميع العام يتطلّب نطاق منصّة (ADMIN) — مطابق لنموذج A2.
+- **التوثيق:** `docs/A3_AGENT_METRICS_OUTCOME_TRACKING.md`.

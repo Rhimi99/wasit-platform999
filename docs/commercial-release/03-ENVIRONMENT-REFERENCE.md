@@ -45,6 +45,19 @@ directory**, so the file must be at the root the process is started from (see
 | `RATE_LIMIT_LOGIN_MAX` | `15` | Logins per window. |
 | `RATE_LIMIT_STORE` | `memory` | `memory` (single instance) or `postgres` (**required when running more than one API instance** — counters must be shared). |
 | `RATE_LIMIT_PURGE_INTERVAL_MINUTES` | `15` | Scheduler interval to drop expired buckets. |
+| `RATE_LIMIT_API_MAX` | `300` | General `/api/*` backstop: requests per window per subject (authenticated user, else trusted client IP). Generous by design. `/api/auth` and `/api/health` are exempt (011.4). |
+| `RATE_LIMIT_API_WINDOW_SECONDS` | `60` | Window for the general backstop. |
+| `RATE_LIMIT_AI_MAX` | `60` | AI requests (`/api/ai/*`) per window **per user** (011.4). |
+| `RATE_LIMIT_AI_WINDOW_SECONDS` | `60` | Window for the per-user AI limit. |
+| `RATE_LIMIT_AI_IP_MAX` | `300` | AI requests per window **per client IP** — a backstop against an attacker rotating accounts from one host (011.4). |
+| `RATE_LIMIT_SEARCH_MAX` | `120` | Public search requests (`/api/search/*`) per window per client IP (011.4). |
+| `RATE_LIMIT_SEARCH_WINDOW_SECONDS` | `60` | Window for the search limit. |
+| `RATE_LIMIT_VIDEO_MAX` | `6` | Marketing-video generations per window per user — the tightest limit, on top of the render concurrency cap (011.4). |
+| `RATE_LIMIT_VIDEO_WINDOW_SECONDS` | `60` | Window for the video limit. |
+| `MAX_REQUEST_BODY_BYTES` | `1048576` | Application-level request body cap; a larger body is refused with 413 before any handler reads it (011.4). nginx also caps at the edge. |
+| `AI_AGENT_MAX_ACTIVE_TASKS_PER_USER` | `25` | Maximum non-terminal agent tasks a single user may hold (011.4); further creation is refused with 429. |
+| `TRUSTED_PROXY_HOPS` | `0` | Number of reverse proxies you operate in front of the API (SEC-XFF-01). `0` = direct; the client is the real TCP peer and `X-Forwarded-For`/`X-Real-IP` are ignored. Set to the **exact** proxy count (e.g. `1` behind one nginx) to read the client from the forwarded chain — but only when the socket peer matches `TRUSTED_PROXY_CIDRS`. Never exceed the real count. |
+| `TRUSTED_PROXY_CIDRS` | *(empty)* | Explicit allowlist of proxy networks whose `X-Forwarded-For` is trusted (SEC-XFF-01), comma/space-separated CIDRs (e.g. `10.20.0.0/24,2001:db8::/32`). Empty = no proxy trusted; loopback/RFC1918/ULA are **never** trusted implicitly. Set from the real network layout only. Invalid entries are ignored (warned), never trust-all. See `docs/commercial-release/04-DEPLOYMENT-GUIDE.md` §Trusted client IP. |
 
 ## 4. App URLs / CORS
 
@@ -117,6 +130,8 @@ Only **one** provider is active, selected by `PAYMENT_PROVIDER`.
 | `VIDEO_FONTS_DIR` | *(empty)* | Extra font directory. |
 | `MEDIA_DOWNLOAD_TTL_SECONDS` | `900` | Signed download-link lifetime. |
 | `MEDIA_MAX_VIDEO_BYTES` | `52428800` | 50 MiB output ceiling. |
+| `MEDIA_VIDEO_MAX_CONCURRENCY` | `2` | Concurrent marketing-video renders per process; a request that cannot get a slot within the queue timeout is shed with 503 (011.4). |
+| `MEDIA_VIDEO_QUEUE_TIMEOUT_MS` | `15000` | How long a video request waits for a render slot before being shed (011.4). |
 
 > The **35–120 second** duration window is a business rule held in
 > `@wasit/shared` (`MARKETING_VIDEO_DURATION`), not an env var — the UI and the
@@ -163,7 +178,23 @@ Only **one** provider is active, selected by `PAYMENT_PROVIDER`.
 | `BACKUP_ROOT` | `<repo>/backups` | Output root for `scripts/backup-db.sh`. |
 | `BACKUP_INCLUDE_TEST_DB` | `false` | Also dump `TEST_DATABASE_URL`. |
 | `BACKUP_RETENTION_COUNT` | `7` | Recent folders to keep; `0` = keep all. |
+| `BACKUP_DIR_MODE` | `0700` | Permission mode applied to the backup tree. |
+| `BACKUP_ENCRYPTION` | `off` | `off` (unchanged) or `age` (encrypt every payload file). |
+| `BACKUP_AGE_RECIPIENTS` | *(none)* | age recipient(s), whitespace/newline separated (`age` mode). |
+| `BACKUP_AGE_RECIPIENTS_FILE` | *(none)* | File of recipients, one per line (`age` mode). |
+| `BACKUP_AGE_BIN` | *(PATH)* | Path to the `age` binary if not on `PATH`. |
+| `BACKUP_PLAINTEXT_RETENTION` | `keep` | `keep` or `drop` the plaintext originals (`age` mode). |
+| `BACKUP_AGE_IDENTITY_FILE` | *(none)* | **Restore only:** path to the private age identity (never committed). |
+| `WASIT_PROTECTED_DB_NAMES` | *(none)* | Extra database names the restore must never target. |
 | `PG_BIN` | *(PATH)* | Postgres client bin dir if not on `PATH`. |
+
+In `age` mode each recipient is validated by age's own parser (including its
+Bech32 checksum), and any invalid recipient is refused before `pg_dump` runs.
+Keep each private identity for as long as any backup encrypted to it exists; a
+lost identity makes those backups unrecoverable. Note that `checksums.sha256`
+proves content integrity and `age` provides confidentiality — neither proves the
+backup's origin or authenticity, which would need a separate signing key (out of
+scope for 013.1). See the operations runbook.
 
 ## 13. Test-only variables
 

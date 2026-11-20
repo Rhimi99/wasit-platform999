@@ -1,0 +1,72 @@
+<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><style>@font-face{font-family:'IBM Plex Sans Arabic';font-style:normal;font-weight:400;src:url('assets/fonts/IBMPlexSansArabic-Regular.ttf') format('truetype');}@font-face{font-family:'IBM Plex Sans Arabic';font-style:normal;font-weight:600;src:url('assets/fonts/IBMPlexSansArabic-SemiBold.ttf') format('truetype');}@font-face{font-family:'IBM Plex Sans Arabic';font-style:normal;font-weight:700;src:url('assets/fonts/IBMPlexSansArabic-Bold.ttf') format('truetype');}@font-face{font-family:'Amiri';font-style:normal;font-weight:400;src:url('assets/fonts/Amiri-Regular.ttf') format('truetype');}@font-face{font-family:'Amiri';font-style:normal;font-weight:700;src:url('assets/fonts/Amiri-Bold.ttf') format('truetype');}
+    @page { size: A4; margin: 0; }
+    * { box-sizing: border-box; }
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: 'IBM Plex Sans Arabic', sans-serif; color: #16232f; font-size: 10.4pt; line-height: 1.85; margin: 0; }
+    .mono { font-family: 'DejaVu Sans Mono', monospace; font-size: 8.6pt; direction: ltr; unicode-bidi: embed;
+            background: #eef3f8; padding: 0.5px 4px; border-radius: 3px; color: #123;
+            overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+    h1 { font-size: 15.5pt; color: #0f2f4f; margin: 20px 0 8px; padding-bottom: 6px; border-bottom: 2.5px solid #c9a227; }
+    h1.doc-h1 { margin-top: 0; }
+    h2 { font-size: 12.4pt; color: #12405f; margin: 14px 0 6px; }
+    h3 { font-size: 11.4pt; color: #0f2f4f; margin: 16px 0 6px; padding-right: 9px; border-right: 4px solid #c9a227; }
+    p { margin: 6px 0; text-align: justify; }
+    ul, ol { margin: 6px 0; padding-right: 20px; }
+    li { margin: 3px 0; }
+    .page-break { break-after: page; }
+    table.grid { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 8.7pt; }
+    table.grid th { background: #0f2f4f; color: #fff; padding: 6px 6px; text-align: right; font-weight: 700;
+                    border: 1px solid #0f2f4f; font-size: 8.6pt; }
+    table.grid td { border: 1px solid #d6dee7; padding: 5px 6px; vertical-align: top; }
+    table.grid td, table.grid th { overflow-wrap: anywhere; word-break: break-word; }
+    table.grid tbody tr:nth-child(even) { background: #f5f9fc; }
+    table.grid thead { display: table-header-group; }
+    table.grid tr { break-inside: avoid; }
+    h1, h2, h3 { break-after: avoid; }
+    .callout, .note { break-inside: avoid; }
+    table.grid td.ctr { text-align: center; }
+    table.grid td.ev { color: #3d4b59; font-size: 8.1pt; }
+    table.grid td.loc { font-size: 8.3pt; }
+    .plain-val { font-weight: 700; color: #0f2f4f; white-space: nowrap; }
+    .hint { font-size: 7.6pt; color: #55636f; margin-top: 2px; }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 7.9pt; font-weight: 700;
+             color: #fff; white-space: nowrap; }
+    .b-ok { background: #1e7d4f; } .b-ro { background: #1f6fb2; } .b-part { background: #b8860b; }
+    .b-be { background: #6b4fa1; } .b-none { background: #7b8794; } .b-deny { background: #b3261e; }
+    .legend { background: #f5f9fc; border: 1px solid #d6dee7; border-radius: 6px; padding: 8px 12px; margin: 6px 0 14px; font-size: 8.6pt; }
+    .legend .lg { color: #3d4b59; }
+    .legend-title { margin-top: 10px; }
+    .callout { border-radius: 6px; padding: 8px 12px; margin: 10px 0; font-size: 9.4pt; }
+    .callout.warn { background: #fdf6e3; border: 1px solid #e3c56a; border-right: 5px solid #b8860b; }
+    .callout.ok { background: #eef8f2; border: 1px solid #a9d6bf; border-right: 5px solid #1e7d4f; }
+    .note { background: #eef4fa; border: 1px solid #bcd3e8; border-right: 5px solid #1f6fb2; border-radius: 6px;
+            padding: 8px 12px; margin: 10px 0; font-size: 9.4pt; }
+    pre.code { direction: ltr; text-align: left; background: #0f2436; color: #e6eef6; padding: 9px 12px;
+               border-radius: 6px; font-family: 'DejaVu Sans Mono', monospace; font-size: 8.6pt; overflow-wrap: anywhere; }
+    ul.toc { list-style: none; padding: 0; margin: 10px 0; }
+    ul.toc li { display: flex; gap: 10px; padding: 7px 10px; border-bottom: 1px dashed #cfd9e3; font-size: 10.4pt; }
+    ul.toc li:nth-child(odd) { background: #f7fafc; }
+    .toc-num { min-width: 26px; color: #b8860b; font-weight: 700; }
+    .toc-t { flex: 1; }
+    .closing { margin-top: 16px; color: #55636f; font-size: 9pt; text-align: center; }
+
+    /* Cover */
+    body.cover { margin: 0; padding: 0; }
+    .cover { height: 297mm; width: 210mm; background: linear-gradient(160deg, #0b2137 0%, #0f2f4f 45%, #16436b 100%);
+             color: #fff; display: flex; }
+    .cover-inner { display: flex; flex-direction: column; justify-content: space-between; width: 100%;
+                   padding: 26mm 20mm 18mm; }
+    .brand { font-family: 'IBM Plex Sans Arabic', sans-serif; font-weight: 700; letter-spacing: 3px; font-size: 15pt; color: #fff; }
+    .brand-line { width: 62mm; height: 3px; background: #c9a227; margin-top: 6px; }
+    .cover-kicker { display: inline-block; border: 1px solid #c9a227; color: #e9d18a; border-radius: 999px;
+                    padding: 3px 14px; font-size: 10pt; margin-bottom: 16px; }
+    .cover-title { font-family: 'Amiri', 'IBM Plex Sans Arabic', serif; font-weight: 700; font-size: 31pt; line-height: 1.5;
+                   margin: 0 0 12px; color: #fff; }
+    .cover-sub { font-size: 11pt; color: #b9cde0; letter-spacing: 0.6px; }
+    .cover-rule { width: 40mm; height: 2px; background: #c9a227; margin: 18px 0; }
+    table.cover-meta { border-collapse: collapse; font-size: 9.8pt; }
+    table.cover-meta td { padding: 4px 10px 4px 0; color: #d7e3ee; border-bottom: 1px solid rgba(255,255,255,0.14); }
+    table.cover-meta td:first-child { color: #e9d18a; font-weight: 700; min-width: 40mm; }
+    table.cover-meta .mono { background: rgba(255,255,255,0.10); color: #fff; }
+    .cover-bottom { font-size: 9pt; color: #9fb6c9; border-top: 1px solid rgba(255,255,255,0.18); padding-top: 8px; }
+    </style></head><body class="cover"><div class="cover-inner"><div class="cover-top"><div class="brand">WASIT BUSINESS GLOBAL</div><div class="brand-line"></div></div><div class="cover-mid"><div class="cover-kicker">وثيقة إدارية رسمية</div><h1 class="cover-title">الدليل الإداري لمهام وصلاحيات<br>المدير العام والمدير</h1><div class="cover-sub">WASIT BUSINESS GLOBAL — Administrative Permissions Guide</div><div class="cover-rule"></div><table class="cover-meta"><tr><td>الوثيقة</td><td>دليل الصلاحيات الإدارية</td></tr><tr><td>الإصدار</td><td>1.0</td></tr><tr><td>التاريخ</td><td>2026-11-03</td></tr><tr><td>الفرع</td><td class="mono">master</td></tr><tr><td>الإصدار (commit)</td><td class="mono">e43dee4017d2848e37d03d13025a33890adb483f</td></tr><tr><td>التصنيف</td><td>وثيقة إدارية رسمية — للاستخدام الداخلي</td></tr></table></div><div class="cover-bottom">مصدر المحتوى: الكود الفعلي للمنصة — دون أي تخمين. وجود صلاحية في RBAC لا يعني وجود وظيفة مكتملة.</div></div></body></html>

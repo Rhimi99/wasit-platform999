@@ -69,6 +69,9 @@
 - `GET /:id` — تفاصيل + images/variants/category
 - `POST /` — إنشاء (sellerId, sellerType, sku, categoryId, name, basePrice, currencyCode, moq, quantity)
 - `PATCH /:id` — تعديل الحقول الوصفية/التجارية (name/nameAr/nameFr/description/brand/barcode/categoryId/basePrice/moq/unit/purchaseIntent). **مالك الكيان فقط** (403 لغيره، 401 لغير مصادق)، ويمنع 403 تعديل منتج موقوف إداريًا. الهوية (seller/SKU/currency) والمخزون غير قابلة للتعديل هنا؛ حقول فارغة تُخزَّن NULL، وتُعاد تسمية `slug`. Audit `PRODUCT.UPDATE`. جسم فارغ/فئة مجهولة/سعر سالب ⇒ 422. `PATCH /:id/status` لنشر/إلغاء النشر.
+- **سياسة السلع المحظورة/المقيّدة (LC-03):** كل إنشاء/تعديل يُصنَّف (`lib/prohibited-goods.ts`). منتج **محظور** ⇒ `POST`/`PATCH` يردّان **422 `PROHIBITED_GOODS`** بلا كتابة؛ منتج **مقيّد** ⇒ يُخزَّن **مسودّة غير منشورة** (`DRAFT`, `isPublished=false`) ولا يُفعَّل (`PATCH /:id/status` بـ`ACTIVE` ⇒ **422 `RESTRICTED_GOODS_REVIEW_REQUIRED`**) حتى **مراجعة بشرية**. التعديل يعيد تصنيف المنتج الناتج (منع تحويل منتج قائم إلى محظور أو «تنظيف» منتج مُعلَّم؛ والمنشور الذي يصبح مقيّدًا يُسحَب إلى مسودّة). القرارات مُدقّقة (`PRODUCT.PROHIBITED_REJECTED`/`RESTRICTED_REVIEW_REQUIRED`/`RESTRICTED_PUBLISH_BLOCKED`/`RESTRICTED_APPROVED`/`RESTRICTED_REJECTED`).
+- `GET /compliance/queue` — المنتجات المقيّدة المنتظرة مراجعة. **يتطلب صلاحية `catalog:compliance:review`** (ADMIN/SUPER_ADMIN).
+- `POST /:id/compliance-review` — `{ decision: 'APPROVE' | 'REJECT' }`؛ APPROVE ينشر، REJECT يؤرشف. **يتطلب `catalog:compliance:review`** (403 لغيره)؛ لا يحملها أي دور آلي/وكيل AI.
 - (حذف المنتج الناعم/الأرشفة قيد الإكمال)
 
 ## الموردون (`/api/suppliers`)
@@ -138,10 +141,23 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 ## الخصوصية (`/api/privacy`) — Auth مطلوب
 
 - `GET /consents` / `PUT /consents` — إدارة الموافقات (`consentType`, `granted`) وسجل append-only في `consentEvents`
+- `PATCH /me` — **حق التصحيح (LC-01):** تصحيح الحقول المُدرَجة بيضاء فقط (`firstName`, `lastName`, `phone`, `locale`, `displayName`) على حساب المتصل نفسه. البريد وحالة التحقّق **غير قابلين للتعديل** هنا. التدقيق يسجّل **أسماء الحقول المتغيّرة فقط** لا قيمها.
 - `POST /export` — توليد تصدير بيانات المستخدم (ملكية صارمة، بلا أسرار) + صف `dataExportRequests`
 - `POST /deletion` — طلب حذف: يعطّل الحساب (`DEACTIVATED`) ويخزّن `retentionPolicy` المحلولة من Policy Engine (المدة، `preserves`، `policySource/id/version`، `countryCode`) + `retentionUntil`
 - `GET /deletion` — حالة طلب الحذف الحالي
 - Admin (`admin:privacy`): `GET /admin/privacy/deletions` (فلترة stage) و`PATCH /admin/privacy/deletions/:id` (تقدّم staged؛ `ANONYMIZED` يتطلب انتهاء نافذة الاحتفاظ أو `legalHoldOverride`)
+
+## الوثائق القانونية (`/api/legal` — Auth مطلوب · `/api/public/legal` — عام) — LC-01
+
+- `GET /api/public/legal/documents` — فهرس الوثائق **المنشورة فقط** (بلا جلسة). غير المنشور لا يظهر. الحقول: `code, audience, title{ar,en}, summary{ar,en}, version, effectiveDate, acceptanceRequired`.
+- `GET /api/public/legal/documents/:code` — وثيقة منشورة بالرمز؛ **غير المنشور ⇒ 404** (لا كشف للمسودّات).
+- `GET /api/legal/acceptances/me` — حالة الموافقات للمستخدم الحالي: `acceptedVersions{}` و`pendingAcceptances[]` (وثائق منشورة سارِية لم تُقبل إصدارها الحالي أو تغيّر إصدارها) و`inForce[]`.
+- `GET /api/legal/acceptances/history` — سجل موافقات المتصل نفسه (append-only، الأحدث أولاً): `{ items: [{ documentCode, version, acceptedAt, locale }] }`. لا يُرجع بيانات مستخدم آخر، ولا يُرجع ip/user-agent المخزَّنين.
+- `POST /api/legal/acceptances` — تسجيل قبول **إصدار محدّد**: `{ documentCode, version, locale? }` (مخطط **صارم**: أي حقل إضافي ⇒ 422، فلا يمكن انتحال هوية). يُرفض (409) أي وثيقة غير منشورة/غير سارية أو إصدار غير مطابق. يُسجَّل في `consents`/`consentEvents` (نوع `LEGAL_DOCUMENT`) + تدقيق `LEGAL.DOCUMENT_ACCEPTED`.
+
+> **البوّابة الإلزامية (LC-01.1):** `requireLegalAcceptance()` مثبّتة على كل `/api`، **مطفأة افتراضياً** (`LEGAL_ACCEPTANCE_ENFORCEMENT=off`). عند تفعيلها لا تُحجب إلا المسارات غير المعفاة وعند وجود وثيقة **منشورة وسارية** لم يقبلها المستخدم ⇒ `403 LEGAL_ACCEPTANCE_REQUIRED`. معفاة: `/api/auth`, `/api/health`, `/api/legal/*`, `/api/public/legal/*`.
+
+> **ملاحظة:** كل وثائق الكتالوج تبدأ بحالة `LEGAL_REVIEW_REQUIRED` وبلا تاريخ سريان، فلا يُكشف أي نصّ ولا يُقبل أي إقرار حتى يُنقل صراحةً إلى `PUBLISHED` في تغيير كود مُراجَع (سلوك fail-closed مقصود). المسودّات في `docs/legal/`.
 
 ## الرسائل (`/api/messages`) — Auth مطلوب (أي مستخدم مسجل)
 
@@ -191,16 +207,18 @@ Crawler-facing surfaces: no auth, expose only already-public catalog data.
 - `POST /` — فتح نزاع على طلب (`orderId` + `reasonCode` + `description`)؛ يتحقق `isOrderParticipant`
 - `GET /` — نزاعاتي (مشترك أو من فتحها)
 - `GET /:id` — التفاصيل (أحداث/رسائل/أدلة) — المشاركون والموظفون فقط
-- `POST /:id/messages` — رسالة (مشارك/موظف)
-- `POST /:id/evidence` — إرفاق دليل (`fileRef`, `description`, `contentType`)
+- `POST /:id/messages` — رسالة (مشارك/موظف). **مهلة الردّ (`responseWindowDays`) مُنفَّذة:** الطرف المقابل (غير الفاتح/الموظف) لا يستطيع الردّ بعد انتهائها (409)؛ الفاتح والموظفون يبقون القناة مفتوحة.
+- `POST /:id/withdraw` — سحب النزاع (**الفاتح فقط**، وقبل أي قرار) ⇒ `CLOSED` + حدث + تدقيق `DISPUTE.WITHDRAWN`
+- `POST /:id/evidence` — إرفاق دليل (`fileRef`, `description`, `contentType`)؛ يُرفض (409) بعد `evidenceDeadlineDays`
 - `GET /policies` — قواعد النزاع من Policy Engine (قابلة للتعديل حسب الدولة)
 - `GET /:id/appeals` — استئنافات النزاع (المشاركون والموظفون فقط)
 - `POST /:id/appeals` — رفع استئناف (`reason`) — **أطراف الطلب فقط**؛ النزاع لازمه `DECIDED`/`CLOSED` مع `appealAllowed=true`؛ استئناف `PENDING` واحد كحد أقصى؛ ضمن نافذة `appealWindowDays` وبسقف `maxAppeals` من سياسة `DISPUTE_RESOLUTION`
 - Admin (DISPUTE/ADMIN/SUPER_ADMIN):
   - `GET /admin/disputes` — كل النزاعات
   - `POST /admin/disputes/:id/assign` — إسناد إلى موظف (`reviewerUserId`)
-  - `POST /admin/disputes/:id/status` — تغيير الحالة
+  - `POST /admin/disputes/:id/status` — تغيير الحالة (`OPEN|UNDER_REVIEW|REQUESTED_FURTHER_EVIDENCE|ESCALATED|CLOSED|ARCHIVED`). **`DECIDED` مرفوض (409)** — لا تُسجَّل حالة «مبتوت» بلا قرار/بلا مُبتّ؛ البتّ عبر `decide` فقط.
   - `POST /admin/disputes/:id/decide` — `{decision: IN_FAVOR_OF_BUYER|IN_FAVOR_OF_SELLER|REJECTED|REFUND_ISSUED, note?}`
+  - `POST /admin/disputes/escalate-overdue` — تشغيل مسح التصعيد التلقائي يدوياً (صلاحية `dispute:manage`؛ idempotent)؛ يحرّك النزاعات الحيّة المتجاوزة `autoEscalateDays` إلى `ESCALATED`
   - `GET /admin/disputes/:id/appeals` — استئنافات النزاع للمراجعة
   - `POST /admin/disputes/:id/appeals/:appealId/review` — `{status: ACCEPTED|REJECTED, note?}` — `ACCEPTED` يعيد فتح النزاع (`UNDER_REVIEW`) ويعطّل المزيد من الاستئنافات؛ من أصدر القرار الأصلي **متنحٍّ** (403)
   - كل إجراء يُسجَّل حدثاً (`dispute_events`) + إشعار + Audit
@@ -288,7 +306,7 @@ Query: `currency` (ISO-3، افتراضي TND)، `windowDays` (1–365، افت�
 ## توثيق المعلمات
 
 - Pagination: `page` (1-based), `pageSize` (default 20, max 100)
-- التوطين: `Accept-Language: ar|fr|en`
+- التوطين: `Accept-Language: ar|fr|en|zh` — وحقل `locale` في المسارات (التسجيل، `/api/privacy/me`، قبول الوثائق القانونية) يقبل نفس اللغات الأربع عبر التعريف المركزي `SUPPORTED_LOCALES` في `@wasit/shared`.
 - العملة: كود ISO 3 (مثل TND) — النصوص المعروضة/الحواشي قابلة للتكوين عبر Currency Engine
 
 ## مباشرة التوثيق
