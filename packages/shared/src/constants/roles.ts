@@ -58,3 +58,26 @@ export const ROLE_HIERARCHY: Record<string, number> = {
   ADMIN: 90,
   SUPER_ADMIN: 100,
 };
+
+/**
+ * Internal WASIT staff roles.
+ *
+ * These are the roles provisioned out of band (seeder / super-admin bootstrap)
+ * that operate the platform's desks and administrative surfaces — exactly the
+ * complement of {@link SELF_SELECTABLE_ROLES}. They are the roles for which
+ * mandatory multi-factor authentication is enforced (LC-06): a staff account may
+ * not reach a staff API or hold a fully authenticated staff session until it has
+ * an enabled second factor.
+ *
+ * Kept as a single source of truth so enforcement is derived from the role set,
+ * never from a hand-maintained list at a call site.
+ */
+export const STAFF_ROLES = ['SUPPORT', 'RISK', 'DISPUTE', 'ADMIN', 'SUPER_ADMIN'] as const;
+
+export type StaffRole = (typeof STAFF_ROLES)[number];
+
+/** True when the role set includes at least one internal staff role. */
+export function isStaffRole(roles: readonly string[] | undefined | null): boolean {
+  if (!roles || roles.length === 0) return false;
+  return roles.some((r) => (STAFF_ROLES as readonly string[]).includes(r));
+}

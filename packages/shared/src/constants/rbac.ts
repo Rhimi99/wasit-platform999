@@ -170,6 +170,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     perm('AUTH_READ_OWN'), perm('AUTH_UPDATE_OWN'),
     perm('USER_READ'), perm('USER_CREATE'), perm('USER_UPDATE'), perm('USER_DELETE'), perm('USER_LIST'),
     perm('PRODUCT_READ'), perm('PRODUCT_UPDATE'), perm('PRODUCT_DELETE'), perm('PRODUCT_LIST'), perm('PRODUCT_MANAGE'),
+    // LC-03 — only human reviewers (ADMIN here; SUPER_ADMIN via the full set)
+    // may approve a restricted listing. SUPPORT stays read-only on the catalogue,
+    // so it deliberately does not hold this.
+    perm('CATALOG_COMPLIANCE_REVIEW'),
     perm('SUPPLIER_READ'), perm('SUPPLIER_UPDATE'), perm('SUPPLIER_LIST'),
     perm('MERCHANT_READ'), perm('MERCHANT_UPDATE'), perm('MERCHANT_LIST'),
     perm('COMPANY_READ'), perm('COMPANY_UPDATE'), perm('COMPANY_LIST'),
@@ -177,6 +181,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     perm('TRANSACTION_READ'), perm('TRANSACTION_LIST'),
     perm('LEDGER_READ'),
     perm('COMMISSION_READ'), perm('COMMISSION_MANAGE'),
+    // Administrative visibility only: an administrator may read any seller's
+    // stock for follow-up (`inventory:read:all`) but must never hold the write
+    // permissions (INVENTORY_UPDATE / INVENTORY_MOVEMENT_CREATE), so a seller's
+    // stock stays theirs to change.
+    perm('INVENTORY_READ'), perm('INVENTORY_READ_ALL'),
     perm('PAYMENT_READ'), perm('REFUND_MANAGE'),
     perm('MESSAGE_SEND'),
     perm('VERIFICATION_READ'), perm('VERIFICATION_REVIEW'), perm('VERIFICATION_APPROVE'), perm('VERIFICATION_REJECT'), perm('VERIFICATION_MANAGE'),

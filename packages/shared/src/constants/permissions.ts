@@ -18,6 +18,10 @@ export const PERMISSIONS = {
   PRODUCT_DELETE: 'product:delete',
   PRODUCT_LIST: 'product:list',
   PRODUCT_MANAGE: 'product:manage',
+  // LC-03 — human compliance review of restricted listings. Held only by human
+  // reviewer roles; no automated agent role carries it, so an AI can never clear
+  // a restricted listing on its own.
+  CATALOG_COMPLIANCE_REVIEW: 'catalog:compliance:review',
 
   // Suppliers
   SUPPLIER_CREATE: 'supplier:create',
@@ -62,6 +66,7 @@ export const PERMISSIONS = {
 
   // Inventory
   INVENTORY_READ: 'inventory:read',
+  INVENTORY_READ_ALL: 'inventory:read:all',
   INVENTORY_UPDATE: 'inventory:update',
   INVENTORY_MOVEMENT_CREATE: 'inventory:movement:create',
 
