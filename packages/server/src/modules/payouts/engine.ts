@@ -25,6 +25,11 @@ export interface PayoutRecord {
   id: string;
   orderId: string;
   transactionId: string;
+  /**
+   * The seller suborder this payout settles (M2.2). Set for every payout of an
+   * order that has seller suborders; NULL only for a legacy order that has none.
+   */
+  sellerOrderId?: string | null;
   sellerId: string;
   /** Net amount payable to the seller (items total minus seller commission). */
   amount: string;

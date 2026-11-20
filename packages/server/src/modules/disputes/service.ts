@@ -14,6 +14,13 @@ import {
 } from '../../db/schema/disputes';
 import { users } from '../../db/schema/auth';
 import { resolveOwnedSellerIds, isOrderParticipant } from '../../lib/seller-ownership';
+import {
+  appealDeadline,
+  computeOpenWindowClosesAt,
+  evaluateDeadlines,
+  isWithinWindow,
+  parseDeadlineRules,
+} from '../../lib/disputes/deadlines';
 import { resolveOrderCountry } from '../../lib/country';
 import { resolveMergedPolicy } from '../../lib/policy-engine';
 import { recordCountryPolicyGap, resolveCountryPolicyGap } from '../../lib/country-policy-gaps';
@@ -97,6 +104,23 @@ export interface DisputeDetail extends DisputeSummary {
   countryCode: string | null;
   /** Which dispute-policy layer governs this dispute. */
   policySource: 'COUNTRY' | 'GLOBAL';
+  /** Concrete policy deadlines (ISO strings), null where the policy sets none. */
+  deadlines: {
+    openWindowClosesAt: string | null;
+    responseDeadline: string | null;
+    evidenceDeadline: string | null;
+    decisionDeadline: string | null;
+    autoEscalateAt: string | null;
+  };
+  /** The operational state of those deadlines right now. */
+  deadlineStatus: {
+    responseOpen: boolean;
+    evidenceOpen: boolean;
+    decisionOverdue: boolean;
+    needsEscalation: boolean;
+    daysToEvidence: number | null;
+    daysToDecision: number | null;
+  };
   events: DisputeEventRow[];
   messages: DisputeMessageRow[];
   evidence: DisputeEvidenceRow[];
@@ -110,6 +134,31 @@ export interface DisputeDetail extends DisputeSummary {
 interface AppealRules {
   appealWindowDays: number;
   maxAppeals: number;
+}
+
+/**
+ * Masks an email for a viewer who is not entitled to see it in full. A party to
+ * a dispute needs to recognise *that* the counterparty acted, not to harvest the
+ * counterparty's contact details, so a non-staff viewer sees a redacted form.
+ */
+function maskEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const at = email.indexOf('@');
+  if (at <= 0) return '***';
+  return `${email[0]}***${email.slice(at)}`;
+}
+
+/** The viewer's relationship to a record, deciding what identity may be shown. */
+interface ViewerView {
+  userId: string;
+  isStaff: boolean;
+}
+
+/** The full email for staff or the owner of the record; a masked form otherwise. */
+function visibleEmail(email: string | null | undefined, ownerId: string | null, viewer: ViewerView): string | null {
+  if (!email) return null;
+  if (viewer.isStaff || ownerId === viewer.userId) return email;
+  return maskEmail(email);
 }
 
 function eventRow(r: typeof disputeEvents.$inferSelect): DisputeEventRow {
@@ -167,19 +216,20 @@ async function loadDisputeBase(db: DB, disputeId: string): Promise<(typeof dispu
   return rows[0] ?? null;
 }
 
-async function toDetail(db: DB, d: typeof disputes.$inferSelect): Promise<DisputeDetail> {
+async function toDetail(db: DB, d: typeof disputes.$inferSelect, viewer: ViewerView): Promise<DisputeDetail> {
   const [openedBy] = await db.select({ email: users.email }).from(users).where(eq(users.id, d.openedById)).limit(1);
   let assignedEmail: string | null = null;
   if (d.assignedToId) {
     const ar = await db.select({ email: users.email }).from(users).where(eq(users.id, d.assignedToId)).limit(1);
     assignedEmail = ar?.[0]?.email ?? null;
   }
-  const [events, messages, evidence, appeals, policy] = await Promise.all([
+  const [events, messages, evidence, appeals, policy, order] = await Promise.all([
     db.select().from(disputeEvents).where(eq(disputeEvents.disputeId, d.id)).orderBy(asc(disputeEvents.createdAt)),
     db.select().from(disputeMessages).where(eq(disputeMessages.disputeId, d.id)).orderBy(asc(disputeMessages.createdAt)),
     db.select().from(disputeEvidence).where(eq(disputeEvidence.disputeId, d.id)).orderBy(asc(disputeEvidence.createdAt)),
     db.select().from(disputeAppeals).where(eq(disputeAppeals.disputeId, d.id)).orderBy(asc(disputeAppeals.createdAt)),
     getDisputePolicyForOrder(db, d.orderId),
+    db.select({ createdAt: orders.createdAt }).from(orders).where(eq(orders.id, d.orderId)).limit(1),
   ]);
 
   const senderEmails = new Map<string, string | null>();
@@ -196,29 +246,53 @@ async function toDetail(db: DB, d: typeof disputes.$inferSelect): Promise<Disput
     for (const u of ur) appealEmails.set(u.id, u.email);
   }
 
+  const deadlineStatus = evaluateDeadlines(
+    {
+      disputeCreatedAt: d.createdAt,
+      orderCreatedAt: order[0]?.createdAt ?? d.createdAt,
+      decided: d.status === 'DECIDED',
+    },
+    parseDeadlineRules(policy.rules),
+  );
+
   return {
     id: d.id,
     disputeNumber: d.disputeNumber,
     orderId: d.orderId,
     openedById: d.openedById,
-    openedByEmail: openedBy?.email ?? null,
+    openedByEmail: visibleEmail(openedBy?.email, d.openedById, viewer),
     reasonCode: d.reasonCode,
     description: d.description,
     status: d.status,
     decision: d.decision,
     decisionNote: d.decisionNote,
     assignedToId: d.assignedToId,
-    assignedToEmail: assignedEmail,
+    assignedToEmail: visibleEmail(assignedEmail, d.assignedToId, viewer),
     appealAllowed: d.appealAllowed,
     createdAt: d.createdAt.toISOString(),
     updatedAt: d.updatedAt.toISOString(),
     countryId: policy.countryId,
     countryCode: policy.countryCode,
     policySource: policy.source,
+    deadlines: {
+      openWindowClosesAt: deadlineStatus.deadlines.openWindowClosesAt?.toISOString() ?? null,
+      responseDeadline: deadlineStatus.deadlines.responseDeadline?.toISOString() ?? null,
+      evidenceDeadline: deadlineStatus.deadlines.evidenceDeadline?.toISOString() ?? null,
+      decisionDeadline: deadlineStatus.deadlines.decisionDeadline?.toISOString() ?? null,
+      autoEscalateAt: deadlineStatus.deadlines.autoEscalateAt?.toISOString() ?? null,
+    },
+    deadlineStatus: {
+      responseOpen: deadlineStatus.responseOpen,
+      evidenceOpen: deadlineStatus.evidenceOpen,
+      decisionOverdue: deadlineStatus.decisionOverdue,
+      needsEscalation: deadlineStatus.needsEscalation,
+      daysToEvidence: deadlineStatus.daysToEvidence,
+      daysToDecision: deadlineStatus.daysToDecision,
+    },
     events: events.map(eventRow),
-    messages: messages.map((m) => messageRow(m, senderEmails.get(m.senderId) ?? null)),
+    messages: messages.map((m) => messageRow(m, visibleEmail(senderEmails.get(m.senderId) ?? null, m.senderId, viewer))),
     evidence: evidence.map(evidenceRow),
-    appeals: appeals.map((a) => appealRow(a, appealEmails.get(a.appealedById) ?? null)),
+    appeals: appeals.map((a) => appealRow(a, visibleEmail(appealEmails.get(a.appealedById) ?? null, a.appealedById, viewer))),
   };
 }
 
@@ -298,12 +372,10 @@ export async function getDisputePolicy(db: DB): Promise<Record<string, unknown>>
 /** Appeal limits are policy-driven, never hardcoded. Defaults mirror the seeded policy. */
 async function resolveAppealRules(db: DB, orderId: string): Promise<AppealRules> {
   const policy = await getDisputePolicyForOrder(db, orderId);
-  const rules = policy.rules;
-  const window = Number(rules.appealWindowDays);
-  const max = Number(rules.maxAppeals);
+  const rules = parseDeadlineRules(policy.rules);
   return {
-    appealWindowDays: Number.isFinite(window) && window > 0 ? window : 7,
-    maxAppeals: Number.isFinite(max) && max > 0 ? Math.floor(max) : 1,
+    appealWindowDays: rules.appealWindowDays ?? 7,
+    maxAppeals: rules.maxAppeals ?? 1,
   };
 }
 
@@ -328,6 +400,17 @@ export async function createDispute(
   }
   if (order.status === 'CANCELLED' || order.status === 'REFUNDED' || order.status === 'DISPUTED') {
     throw ApiError.conflict(`Order is ${order.status}; dispute already handled`);
+  }
+
+  // The window in which a dispute may be opened is a policy value, measured from
+  // the order. When the policy sets no window the platform does not invent one —
+  // an unconfigured window is open-ended, not arbitrarily short.
+  const policy = await getDisputePolicyForOrder(db, input.orderId);
+  const rules = parseDeadlineRules(policy.rules);
+  if (!isWithinWindow(new Date(), computeOpenWindowClosesAt(order.createdAt, rules))) {
+    throw ApiError.conflict(
+      `The window to open a dispute on this order (${rules.openWindowDays} day(s)) has closed`,
+    );
   }
 
   const existing = await db
@@ -362,6 +445,58 @@ export async function createDispute(
   return { id };
 }
 
+/** Whether the user holds a staff role that may review any dispute (never a party). */
+async function isDisputeStaff(db: DB, userId: string): Promise<boolean> {
+  const staff = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, userId), sql`id in (select user_id from user_roles where role_id in (select id from roles where name in (${sql.join(PARTY_ROLES.map((r) => sql`${r}`), sql`, `)})))`))
+    .limit(1);
+  return staff.length > 0;
+}
+
+/**
+ * A party who opened a dispute may withdraw it while it is still live. The
+ * withdrawer must be the opener (a seller cannot withdraw a buyer's case) and
+ * the dispute must not yet have an outcome — once decided or closed, the record
+ * is a matter of history and is not erased. Withdrawing closes the dispute; it
+ * moves no money, so an already-applied refund is never reversed here.
+ */
+export async function withdrawDispute(
+  db: DB,
+  userId: string,
+  disputeId: string,
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+): Promise<{ id: string; status: DisputeStatus }> {
+  const d = await loadDisputeBase(db, disputeId);
+  if (!d) throw ApiError.notFound('Dispute');
+  if (d.openedById !== userId) {
+    throw ApiError.forbidden('Only the party who opened the dispute may withdraw it');
+  }
+  if (d.status === 'DECIDED' || d.status === 'CLOSED' || d.status === 'ARCHIVED') {
+    throw ApiError.conflict(`Dispute is ${d.status} and can no longer be withdrawn`);
+  }
+
+  const updated = await db
+    .update(disputes)
+    .set({ status: 'CLOSED', updatedAt: new Date() })
+    .where(and(eq(disputes.id, disputeId), sql`status in ('OPEN','UNDER_REVIEW','REQUESTED_FURTHER_EVIDENCE','ESCALATED')`))
+    .returning({ id: disputes.id });
+  if (updated.length === 0) {
+    throw ApiError.conflict('Dispute changed concurrently and can no longer be withdrawn');
+  }
+
+  await writeDisputeEvent(db, disputeId, userId, 'STATUS_CHANGED', { status: d.status }, { status: 'CLOSED', note: 'Withdrawn by opener' });
+  await writeAudit(db, { actorId: userId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'DISPUTE.WITHDRAWN',
+    entityType: 'DISPUTE',
+    entityId: disputeId,
+    before: { status: d.status },
+    after: { status: 'CLOSED' },
+  });
+  return { id: disputeId, status: 'CLOSED' };
+}
+
 /** Whether the current user can act on / view a dispute (participant or staff). */
 export async function canAccessDispute(db: DB, userId: string, dispute: typeof disputes.$inferSelect): Promise<boolean> {
   if (userId === dispute.openedById) return true;
@@ -369,17 +504,18 @@ export async function canAccessDispute(db: DB, userId: string, dispute: typeof d
   const owned = await resolveOwnedSellerIds(db, userId);
   const order = await db.select({ sellerId: orders.sellerId }).from(orders).where(eq(orders.id, dispute.orderId)).limit(1);
   if (order[0]) {
-    if (owned.includes(order[0].sellerId)) return true;
+    if (order[0].sellerId !== null && owned.includes(order[0].sellerId)) return true;
     // legacy/dev shape: order seller_id may be the user id directly
     if (order[0].sellerId === userId) return true;
+    // M2: a multi-seller parent has no single seller_id — the seller may be a
+    // party through one of its suborders.
+    const sub = await db.execute<{ id: string }>(sql`
+      select id from seller_orders
+      where parent_order_id = ${dispute.orderId} and seller_id = ${userId} limit 1
+    `) as unknown as { rows: { id: string }[] };
+    if (sub.rows.length > 0) return true;
   }
-  // staff roles
-  const staff = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.id, userId), sql`id in (select user_id from user_roles where role_id in (select id from roles where name in (${sql.join(PARTY_ROLES.map((r) => sql`${r}`), sql`, `)})))`))
-    .limit(1);
-  return staff.length > 0;
+  return isDisputeStaff(db, userId);
 }
 
 export async function requireDisputeAccessOrThrow(db: DB, userId: string, dispute: typeof disputes.$inferSelect): Promise<void> {
@@ -405,6 +541,8 @@ export async function listMyDisputes(db: DB, userId: string): Promise<DisputeSum
     .orderBy(desc(disputes.createdAt))
     .limit(100);
 
+  const isStaff = await isDisputeStaff(db, userId);
+  const viewer: ViewerView = { userId, isStaff };
   const result: DisputeSummary[] = [];
   for (const d of rows) {
     const [openedBy] = await db.select({ email: users.email }).from(users).where(eq(users.id, d.openedById)).limit(1);
@@ -418,14 +556,14 @@ export async function listMyDisputes(db: DB, userId: string): Promise<DisputeSum
       disputeNumber: d.disputeNumber,
       orderId: d.orderId,
       openedById: d.openedById,
-      openedByEmail: openedBy?.email ?? null,
+      openedByEmail: visibleEmail(openedBy?.email, d.openedById, viewer),
       reasonCode: d.reasonCode,
       description: d.description,
       status: d.status,
       decision: d.decision,
       decisionNote: d.decisionNote,
       assignedToId: d.assignedToId,
-      assignedToEmail: assignedEmail,
+      assignedToEmail: visibleEmail(assignedEmail, d.assignedToId, viewer),
       appealAllowed: d.appealAllowed,
       createdAt: d.createdAt.toISOString(),
       updatedAt: d.updatedAt.toISOString(),
@@ -438,13 +576,35 @@ export async function getDisputeDetail(db: DB, userId: string, disputeId: string
   const d = await loadDisputeBase(db, disputeId);
   if (!d) throw ApiError.notFound('Dispute');
   await requireDisputeAccessOrThrow(db, userId, d);
-  return toDetail(db, d);
+  // Staff reviewers see full identities; a party sees the counterparty's contact
+  // details masked, so a dispute cannot be used to harvest an email address.
+  const isStaff = await isDisputeStaff(db, userId);
+  return toDetail(db, d, { userId, isStaff });
 }
 
 export async function addDisputeMessage(db: DB, userId: string, disputeId: string, body: string): Promise<{ id: string }> {
   const d = await loadDisputeBase(db, disputeId);
   if (!d) throw ApiError.notFound('Dispute');
   await requireDisputeAccessOrThrow(db, userId, d);
+
+  // The response window is the respondent's turn. A party who did not open the
+  // case may add their reply only inside `responseWindowDays`; once it closes the
+  // back-and-forth is over and their response is refused. The opener, an assigned
+  // reviewer and staff keep the channel open — they are not "responding". This is
+  // the enforcement of a window that would otherwise be display-only.
+  const isRespondent = userId !== d.openedById && userId !== d.assignedToId && !(await isDisputeStaff(db, userId));
+  if (isRespondent) {
+    const order = await db.select({ createdAt: orders.createdAt }).from(orders).where(eq(orders.id, d.orderId)).limit(1);
+    const policy = await getDisputePolicyForOrder(db, d.orderId);
+    const status = evaluateDeadlines(
+      { disputeCreatedAt: d.createdAt, orderCreatedAt: order[0]?.createdAt ?? d.createdAt, decided: d.status === 'DECIDED' },
+      parseDeadlineRules(policy.rules),
+    );
+    if (!status.responseOpen) {
+      throw ApiError.conflict('The response window for this dispute has closed');
+    }
+  }
+
   const id = newId();
   await db.insert(disputeMessages).values({ id, disputeId, senderId: userId, body, isEvidence: false });
   await writeDisputeEvent(db, disputeId, userId, 'MESSAGE_ADDED', null, { bodyLength: body.length });
@@ -535,11 +695,21 @@ export async function assignDispute(db: DB, disputeId: string, actorId: string, 
 export async function updateDisputeStatus(db: DB, disputeId: string, actorId: string, status: DisputeStatus, note?: string): Promise<{ id: string }> {
   const d = await loadDisputeBase(db, disputeId);
   if (!d) throw ApiError.notFound('Dispute');
+
+  // `DECIDED` is not a status a caller may set directly. A decision carries a
+  // decision, a decision-maker and possibly a financial effect; setting the bare
+  // status would record an outcome with none of them (decision NONE, decidedBy
+  // null) and would bypass both the separation-of-duties check and the money
+  // rail. Decisions go through `decideDispute` only.
+  if (status === 'DECIDED') {
+    throw ApiError.conflict('A dispute is decided through the decide endpoint, not by setting its status');
+  }
+
   const allowedTransitions: Record<DisputeStatus, DisputeStatus[]> = {
     OPEN: ['UNDER_REVIEW', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED', 'CLOSED'],
-    UNDER_REVIEW: ['OPEN', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED', 'DECIDED', 'CLOSED'],
+    UNDER_REVIEW: ['OPEN', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED', 'CLOSED'],
     REQUESTED_FURTHER_EVIDENCE: ['OPEN', 'UNDER_REVIEW', 'ESCALATED', 'CLOSED'],
-    ESCALATED: ['UNDER_REVIEW', 'DECIDED', 'CLOSED'],
+    ESCALATED: ['UNDER_REVIEW', 'CLOSED'],
     DECIDED: ['CLOSED'],
     CLOSED: ['ARCHIVED'],
     ARCHIVED: ['OPEN'],
@@ -548,7 +718,16 @@ export async function updateDisputeStatus(db: DB, disputeId: string, actorId: st
     throw ApiError.conflict(`Invalid dispute status transition ${d.status} -> ${status}`);
   }
 
-  await db.update(disputes).set({ status, updatedAt: new Date() }).where(eq(disputes.id, disputeId));
+  // Conditional on the status we just read: a concurrent change cannot be
+  // silently overwritten, and a lost race is reported rather than ignored.
+  const updated = await db
+    .update(disputes)
+    .set({ status, updatedAt: new Date() })
+    .where(and(eq(disputes.id, disputeId), eq(disputes.status, d.status)))
+    .returning({ id: disputes.id });
+  if (updated.length === 0) {
+    throw ApiError.conflict(`Dispute status changed concurrently; expected ${d.status}`);
+  }
   await writeDisputeEvent(db, disputeId, actorId, 'STATUS_CHANGED', { status: d.status }, { status, note: note ?? null });
   await writeAudit(db, { actorId }, { action: 'DISPUTE.STATUS', entityType: 'DISPUTE', entityId: disputeId, before: { status: d.status }, after: { status } });
 
@@ -560,6 +739,71 @@ export async function updateDisputeStatus(db: DB, disputeId: string, actorId: st
     data: { disputeId, status },
   });
   return { id: disputeId };
+}
+
+export interface EscalationSweepResult {
+  scanned: number;
+  escalated: number;
+}
+
+/**
+ * Escalates live disputes that have sat past their policy `autoEscalateDays`
+ * window, so the window is acted on rather than merely displayed. Idempotent and
+ * safe across instances: every transition is a conditional UPDATE that only
+ * matches a still-live dispute, so two sweeps (or two processes) cannot escalate
+ * the same case twice — the loser sees zero rows and writes nothing. A policy
+ * that sets no `autoEscalateDays` never escalates (the window is open-ended), and
+ * a dispute already in a terminal state is never touched.
+ *
+ * The flag a client sees (`deadlineStatus.needsEscalation`) and the decision this
+ * sweep makes both come from `evaluateDeadlines`, so they can never disagree.
+ */
+export async function escalateOverdueDisputes(
+  db: DB,
+  options: { now?: Date; limit?: number } = {},
+): Promise<EscalationSweepResult> {
+  const now = options.now ?? new Date();
+  const limit = Math.min(Math.max(1, options.limit ?? 500), 5000);
+
+  // `autoEscalateDays` is always at least one day (the policy schema floors it at
+  // 1), so nothing younger than a day can be overdue. This bounds the scan
+  // without hardcoding any window; the precise window is resolved per dispute.
+  const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const candidates = await db
+    .select()
+    .from(disputes)
+    .where(sql`status in ('OPEN','UNDER_REVIEW','REQUESTED_FURTHER_EVIDENCE') and created_at <= ${cutoff}`)
+    .orderBy(asc(disputes.createdAt))
+    .limit(limit);
+
+  let escalated = 0;
+  for (const d of candidates) {
+    const policy = await getDisputePolicyForOrder(db, d.orderId);
+    const rules = parseDeadlineRules(policy.rules);
+    const status = evaluateDeadlines(
+      { disputeCreatedAt: d.createdAt, orderCreatedAt: d.createdAt, decided: false, now },
+      rules,
+    );
+    if (!status.needsEscalation) continue;
+
+    const updated = await db
+      .update(disputes)
+      .set({ status: 'ESCALATED', updatedAt: new Date() })
+      .where(and(eq(disputes.id, d.id), sql`status in ('OPEN','UNDER_REVIEW','REQUESTED_FURTHER_EVIDENCE')`))
+      .returning({ id: disputes.id });
+    if (updated.length === 0) continue;
+
+    escalated += 1;
+    await writeDisputeEvent(db, d.id, null, 'STATUS_CHANGED', { status: d.status }, { status: 'ESCALATED', reason: 'auto-escalated past the policy window' });
+    await writeAudit(db, { actorId: null, actorType: 'SYSTEM' }, {
+      action: 'DISPUTE.AUTO_ESCALATED',
+      entityType: 'DISPUTE',
+      entityId: d.id,
+      before: { status: d.status },
+      after: { status: 'ESCALATED', autoEscalateDays: rules.autoEscalateDays },
+    });
+  }
+  return { scanned: candidates.length, escalated };
 }
 
 /**
@@ -596,6 +840,13 @@ export async function decideDispute(
   if (d.status === 'DECIDED') {
     throw ApiError.conflict('Dispute is already decided');
   }
+  // Separation of duties: a party to the order has a direct interest in the
+  // outcome and may never be the decision-maker, whatever staff role they also
+  // hold. Without this, a merchant with a dispute-desk role could rule on their
+  // own case.
+  if (await isOrderParticipant(db, d.orderId, actorId)) {
+    throw ApiError.forbidden('A party to the order cannot decide this dispute');
+  }
 
   // Resolve the financial consequence BEFORE mutating state, so a policy that
   // requires a human decision cannot half-apply a dispute.
@@ -603,13 +854,21 @@ export async function decideDispute(
 
   // Apply the money movement first: if the refund rail refuses (e.g. the order
   // was never paid), the dispute is not marked decided on the strength of an
-  // outcome that did not actually happen.
+  // outcome that did not actually happen. The refund's idempotency key is the
+  // dispute id, so a concurrent second decision can never refund twice.
   const refund = await applyDisputeFinancialEffect(db, d, effect, actorId);
 
-  await db
+  // Transition atomically: the UPDATE only matches an undecided dispute, so of
+  // two concurrent decisions exactly one writes the terminal state and the other
+  // is refused instead of silently overwriting the first outcome.
+  const transitioned = await db
     .update(disputes)
     .set({ decision: input.decision, decisionNote: input.note ?? d.decisionNote, decidedBy: actorId, decidedAt: new Date(), status: 'DECIDED', updatedAt: new Date() })
-    .where(eq(disputes.id, disputeId));
+    .where(and(eq(disputes.id, disputeId), sql`status in ('OPEN','UNDER_REVIEW','REQUESTED_FURTHER_EVIDENCE','ESCALATED')`))
+    .returning({ id: disputes.id });
+  if (transitioned.length === 0) {
+    throw ApiError.conflict('Dispute was decided by another reviewer');
+  }
   await writeDisputeEvent(db, disputeId, actorId, 'DECIDED', { decision: d.decision }, { decision: input.decision, note: input.note ?? null, financialEffect: effect, refund });
   await writeAudit(db, { actorId }, { action: 'DISPUTE.DECIDED', entityType: 'DISPUTE', entityId: disputeId, before: { decision: d.decision }, after: { decision: input.decision, financialEffect: effect, refund } });
 
@@ -723,13 +982,18 @@ async function resolveDisputeFinancialEffect(
  * does so exclusively through `createRefund` (the same audited rail a manual
  * refund uses). The dispute id is the idempotency key, so replaying a decision
  * can never refund twice — `createRefund` returns the original refund instead.
+ *
+ * A dispute decision is NOT proof that money moved: `createRefund` completes the
+ * refund only on trusted external evidence. When no trusted rail is available
+ * the refund stays pending and this returns that pending status, so the decision
+ * never claims a refund that did not happen.
  */
 async function applyDisputeFinancialEffect(
   db: DB,
   d: typeof disputes.$inferSelect,
   effect: DisputeFinancialEffect,
   actorId: string,
-): Promise<{ refundId: string; amount: string; reused: boolean } | null> {
+): Promise<{ refundId: string; amount: string; status: string; reused: boolean } | null> {
   if (effect.kind !== 'REFUND_BUYER') return null;
 
   const result = await createRefund(db, {
@@ -740,7 +1004,7 @@ async function applyDisputeFinancialEffect(
     actorId,
     isOperator: true,
   });
-  return { refundId: result.refund.id, amount: result.refund.amount, reused: result.reused };
+  return { refundId: result.refund.id, amount: result.refund.amount, status: result.refund.status, reused: result.reused };
 }
 
 export async function addEvidence(
@@ -752,6 +1016,19 @@ export async function addEvidence(
   const d = await loadDisputeBase(db, disputeId);
   if (!d) throw ApiError.notFound('Dispute');
   await requireDisputeAccessOrThrow(db, userId, d);
+
+  // Evidence may only be filed inside the policy's evidence window. The window
+  // is measured from the dispute's creation and closes for parties and staff
+  // alike; a closed window is a deliberate stop, not a soft warning.
+  const order = await db.select({ createdAt: orders.createdAt }).from(orders).where(eq(orders.id, d.orderId)).limit(1);
+  const policy = await getDisputePolicyForOrder(db, d.orderId);
+  const status = evaluateDeadlines(
+    { disputeCreatedAt: d.createdAt, orderCreatedAt: order[0]?.createdAt ?? d.createdAt, decided: d.status === 'DECIDED' },
+    parseDeadlineRules(policy.rules),
+  );
+  if (!status.evidenceOpen) {
+    throw ApiError.conflict('The evidence window for this dispute has closed');
+  }
 
   const id = newId();
   await db.insert(disputeEvidence).values({
@@ -813,8 +1090,8 @@ export async function createDisputeAppeal(
   }
 
   const rules = await resolveAppealRules(db, d.orderId);
-  const appealDeadline = new Date(d.decidedAt.getTime() + rules.appealWindowDays * 24 * 60 * 60 * 1000);
-  if (new Date() > appealDeadline) {
+  const closesAt = appealDeadline(d.decidedAt, parseDeadlineRules({ appealWindowDays: rules.appealWindowDays }));
+  if (!isWithinWindow(new Date(), closesAt)) {
     throw ApiError.conflict(`The appeal window of ${rules.appealWindowDays} day(s) has closed`);
   }
 
@@ -876,7 +1153,9 @@ export async function listDisputeAppeals(db: DB, userId: string, disputeId: stri
     const ur = await db.select({ id: users.id, email: users.email }).from(users).where(sql`${users.id} in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
     for (const u of ur) emails.set(u.id, u.email);
   }
-  return rows.map((r) => appealRow(r, emails.get(r.appealedById) ?? null));
+  const isStaff = await isDisputeStaff(db, userId);
+  const viewer: ViewerView = { userId, isStaff };
+  return rows.map((r) => appealRow(r, visibleEmail(emails.get(r.appealedById) ?? null, r.appealedById, viewer)));
 }
 
 /**
@@ -906,8 +1185,14 @@ export async function reviewDisputeAppeal(
   if (d.decidedBy && d.decidedBy === actorId) {
     throw ApiError.forbidden('The original decision-maker cannot review an appeal of their own decision');
   }
+  // A party to the order is never a neutral reviewer, whatever staff role they
+  // hold — the same separation-of-duties rule that guards the first decision.
+  if (await isOrderParticipant(db, d.orderId, actorId)) {
+    throw ApiError.forbidden('A party to the order cannot review this appeal');
+  }
 
-  await db
+  // Claim the pending appeal atomically so two reviewers cannot both act on it.
+  const claimed = await db
     .update(disputeAppeals)
     .set({
       status: input.status,
@@ -916,7 +1201,11 @@ export async function reviewDisputeAppeal(
       decidedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(disputeAppeals.id, appealId));
+    .where(and(eq(disputeAppeals.id, appealId), eq(disputeAppeals.status, 'PENDING')))
+    .returning({ id: disputeAppeals.id });
+  if (claimed.length === 0) {
+    throw ApiError.conflict('Appeal was already reviewed by another reviewer');
+  }
 
   await writeAudit(db, { actorId }, {
     action: 'DISPUTE.APPEAL.REVIEWED',
