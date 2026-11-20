@@ -113,6 +113,9 @@ session_is_important_ignored() {
   local path="$1"
   case "$path" in
     */node_modules/*|node_modules/*) return 1 ;;
+    # Checked before the extension rules: the tooling's own output directory IS
+    # the protection, so its .bundle files must not be reported as unprotected.
+    backups/git/*) return 1 ;;
   esac
   case "$path" in
     .env|.env.*|*/.env|*/.env.*)
@@ -121,10 +124,7 @@ session_is_important_ignored() {
       esac
       return 0 ;;
     *.pem|*.key|*.p12|*.pfx|*.jks|*.keystore|*.kdbx) return 0 ;;
-    *.dump|*.bundle|*.sqlite|*.sqlite3|*.db) return 0 ;;
-    # The session tooling's own output directory IS the protection; listing it
-    # as unprotected would make every close fail right after a backup.
-    backups/git/*) return 1 ;;
+    *.dump|*.sqlite|*.sqlite3|*.db) return 0 ;;
     backups/*|storage/*|e2e/.auth/*|packages/server/.wasit-media/*) return 0 ;;
   esac
   return 1
