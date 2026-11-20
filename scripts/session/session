@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# WASIT BUSINESS GLOBAL — single entry point for the session-continuity tools.
+#
+#   ./scripts/session/session start        # safe-to-work gate + report
+#   ./scripts/session/session checkpoint   # commit + push a small checkpoint
+#   ./scripts/session/session close        # refuse to end the session unsafely
+#   ./scripts/session/session status       # local vs remote vs bundles
+#   ./scripts/session/session recovery     # rebuild a workspace elsewhere
+#   ./scripts/session/session backup       # git bundle + sha256 + manifest
+#
+# Every subcommand is a separate script; this wrapper only forwards arguments.
+
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+  start|checkpoint|close|status|recovery|backup)
+    sub="$1"; shift
+    exec "$DIR/session-$sub.sh" "$@"
+    ;;
+  help|-h|--help|"")
+    usage
+    exit 0
+    ;;
+  *)
+    printf 'unknown subcommand: %s\n\n' "$1" >&2
+    usage >&2
+    exit 3
+    ;;
+esac

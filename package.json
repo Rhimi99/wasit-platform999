@@ -18,7 +18,15 @@
     "db:migrate": "npm run db:migrate -w @wasit/server",
     "db:seed": "npm run db:seed -w @wasit/server",
     "bootstrap:super-admin": "npm run bootstrap:super-admin -w @wasit/server",
-    "web": "npm run dev -w @wasit/web"
+    "web": "npm run dev -w @wasit/web",
+    "session": "bash scripts/session/session",
+    "session:start": "bash scripts/session/session-start.sh",
+    "session:checkpoint": "bash scripts/session/session-checkpoint.sh",
+    "session:close": "bash scripts/session/session-close.sh",
+    "session:status": "bash scripts/session/session-status.sh",
+    "session:recovery": "bash scripts/session/session-recovery.sh",
+    "session:backup": "bash scripts/session/session-backup.sh",
+    "session:selftest": "bash scripts/session/session-selftest.sh"
   },
   "engines": {
     "node": ">=20.0.0"
