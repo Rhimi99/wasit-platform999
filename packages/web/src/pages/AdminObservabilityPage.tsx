@@ -9,9 +9,10 @@ import type {
   ObservabilityLogRecord,
   ObservabilityMetricsSnapshot,
   ObservabilityMetricSeries,
+  WebhookFailureRow,
 } from '@/lib/types';
 
-type Tab = 'overview' | 'metrics' | 'logs' | 'alerts';
+type Tab = 'overview' | 'metrics' | 'logs' | 'alerts' | 'webhooks';
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
@@ -79,6 +80,15 @@ export function AdminObservabilityPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Webhook failure desk — its own pagination, loaded on demand and on refresh.
+  const WEBHOOK_PAGE_SIZE = 50;
+  const [webhookRows, setWebhookRows] = useState<WebhookFailureRow[]>([]);
+  const [webhookTotal, setWebhookTotal] = useState(0);
+  const [webhookOffset, setWebhookOffset] = useState(0);
+  const [webhookLoading, setWebhookLoading] = useState(false);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
+  const [replayingId, setReplayingId] = useState<string | null>(null);
+
   const load = async () => {
     setError(null);
     const [metricsRes, logsRes, alertsRes] = await Promise.all([
@@ -105,11 +115,45 @@ export function AdminObservabilityPage() {
     await load();
   };
 
+  const loadWebhooks = async (offset: number) => {
+    setWebhookLoading(true);
+    setWebhookError(null);
+    const res = await apiCall(() => api.adminWebhookFailures({ limit: WEBHOOK_PAGE_SIZE, offset }));
+    setWebhookLoading(false);
+    if (res.error) { setWebhookError(res.error); return; }
+    setWebhookRows(res.data?.items ?? []);
+    setWebhookTotal(res.data?.meta.total ?? 0);
+    setWebhookOffset(offset);
+  };
+
+  useEffect(() => {
+    if (tab === 'webhooks') void loadWebhooks(webhookOffset);
+    // Re-read whenever the tab is opened; offset changes are driven by the pager.
+  }, [tab]);
+
+  const replay = async (row: WebhookFailureRow) => {
+    // Confirm before any state change: replaying clears the dead-letter flag so
+    // the next provider delivery is retried. It does not itself move money.
+    const ok = window.confirm(`${t('adminObs.webhook.replayConfirm')}\n\n${row.provider} · ${row.eventType} · ${row.eventId}`);
+    if (!ok) return;
+    setReplayingId(row.id);
+    setNotice(null);
+    setWebhookError(null);
+    const res = await apiCall(() => api.adminReplayWebhookFailure(row.id));
+    setReplayingId(null);
+    if (res.error) { setWebhookError(res.error); return; }
+    // Honest wording: the event is back to RECEIVED and will be retried on the
+    // next provider delivery — it has NOT been re-processed yet.
+    setNotice(t('adminObs.webhook.replayed'));
+    await loadWebhooks(webhookOffset);
+  };
+
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: t('adminObs.tab.overview') },
     { id: 'metrics', label: t('adminObs.tab.metrics') },
     { id: 'logs', label: t('adminObs.tab.logs') },
     { id: 'alerts', label: t('adminObs.tab.alerts') },
+    { id: 'webhooks', label: t('adminObs.tab.webhooks') },
   ];
 
   const snapshot = dashboard?.metrics ?? null;
@@ -403,6 +447,106 @@ export function AdminObservabilityPage() {
               )}
             </div>
           )}
+            {tab === 'webhooks' && (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs text-slate-500" data-testid="admin-obs-webhook-count">
+                    {t('adminObs.webhook.total')}: {webhookTotal}
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="admin-obs-webhook-refresh"
+                    disabled={webhookLoading}
+                    onClick={() => void loadWebhooks(webhookOffset)}
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {t('common.refresh')}
+                  </button>
+                </div>
+
+                {webhookError && (
+                  <div role="alert" data-testid="admin-obs-webhook-error" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    {webhookError}
+                  </div>
+                )}
+
+                {webhookLoading ? <Spinner /> : webhookRows.length === 0 ? (
+                  <EmptyState title={t('common.noData')} hint={t('adminObs.webhook.empty')} />
+                ) : (
+                  <Card className="overflow-x-auto" testId="admin-obs-webhooks">
+                    <table className="table-base">
+                      <thead>
+                        <tr>
+                          <th>{t('adminObs.webhook.provider')}</th>
+                          <th>{t('adminObs.webhook.eventType')}</th>
+                          <th>{t('common.status')}</th>
+                          <th>{t('adminObs.webhook.attempts')}</th>
+                          <th>{t('adminObs.webhook.lastError')}</th>
+                          <th>{t('adminObs.webhook.failedAt')}</th>
+                          <th>{t('adminObs.webhook.action')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {webhookRows.map((r) => (
+                          <tr key={r.id} data-testid={`admin-obs-webhook-row-${r.id}`} data-event-id={r.eventId}>
+                            <td className="text-xs" dir="ltr">{r.provider}</td>
+                            <td className="text-xs" dir="ltr">
+                              {r.eventType}
+                              <div className="text-[10px] text-slate-400">{r.eventId}</div>
+                            </td>
+                            <td>
+                              <Badge color={r.status === 'DEAD_LETTERED' ? 'red' : 'amber'} testId={`admin-obs-webhook-status-${r.id}`}>
+                                {r.status}
+                              </Badge>
+                            </td>
+                            <td className="text-xs" dir="ltr">{r.attempts}</td>
+                            <td className="max-w-xs truncate text-xs" dir="ltr" title={r.lastError ?? ''}>{r.lastError ?? '—'}</td>
+                            <td className="text-xs">{formatDate(r.deadLetteredAt ?? r.createdAt)}</td>
+                            <td>
+                              <button
+                                type="button"
+                                data-testid={`admin-obs-webhook-replay-${r.id}`}
+                                disabled={r.status !== 'DEAD_LETTERED' || replayingId === r.id}
+                                onClick={() => void replay(r)}
+                                className="rounded-md bg-wasit-600 px-3 py-1 text-xs font-medium text-white hover:bg-wasit-700 disabled:opacity-40"
+                              >
+                                {replayingId === r.id ? t('common.processing') : t('adminObs.webhook.replay')}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Card>
+                )}
+
+                {webhookTotal > WEBHOOK_PAGE_SIZE && (
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      data-testid="admin-obs-webhook-prev"
+                      disabled={webhookOffset <= 0 || webhookLoading}
+                      onClick={() => void loadWebhooks(Math.max(0, webhookOffset - WEBHOOK_PAGE_SIZE))}
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                    >
+                      {t('adminObs.webhook.prev')}
+                    </button>
+                    <span className="text-xs text-slate-500" dir="ltr">
+                      {webhookOffset + 1}–{Math.min(webhookOffset + WEBHOOK_PAGE_SIZE, webhookTotal)} / {webhookTotal}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="admin-obs-webhook-next"
+                      disabled={webhookOffset + WEBHOOK_PAGE_SIZE >= webhookTotal || webhookLoading}
+                      onClick={() => void loadWebhooks(webhookOffset + WEBHOOK_PAGE_SIZE)}
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                    >
+                      {t('adminObs.webhook.next')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
         </>
       )}
     </AppLayout>

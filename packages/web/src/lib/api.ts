@@ -1,6 +1,7 @@
 // عميل الـ API الموحّد — يستخدم fetch مع إرسال الجلسة كـ cookie (same-origin عبر Vite proxy).
 // يعالج استجابة {success,data,error} الموحّدة من الـ Backend.
 
+import { shouldRedirectToLegalAcceptance, redirectToLegalAcceptance } from './legal-gate';
 import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
@@ -15,10 +16,19 @@ import type {
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
-  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision,
+  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
+  WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
+  PayoutProvidersResponse, PayoutRecord, SettlementResult, PayoutDispatchResult, PayoutSyncResult,
+  SuborderSettlementResult,
+  OrderRefundAttribution,
+  ReconciliationImportResult, ReceiptResult, ReceiptSource, ManualPaymentView, ManualCompletionResult,
+  PublicLegalDocument,
+  PublicRefundPolicy,
+  LegalAcceptanceState,
+  LegalAcceptanceHistoryEntry,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -26,14 +36,17 @@ export class ApiClientError extends Error {
   statusCode?: number;
   fieldErrors?: FieldError[];
   traceId?: string;
+  /** Safe, error-specific context (e.g. the legal `pending` list). */
+  details?: unknown;
 
-  constructor(message: string, code: string, statusCode?: number, fieldErrors?: FieldError[], traceId?: string) {
+  constructor(message: string, code: string, statusCode?: number, fieldErrors?: FieldError[], traceId?: string, details?: unknown) {
     super(message);
     this.name = 'ApiClientError';
     this.code = code;
     this.statusCode = statusCode;
     this.fieldErrors = fieldErrors;
     this.traceId = traceId;
+    this.details = details;
   }
 }
 
@@ -68,13 +81,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok || !body?.success) {
     const err = body?.error;
-    throw new ApiClientError(
+    const statusCode = err?.statusCode ?? res.status;
+    const error = new ApiClientError(
       err?.message ?? 'Request failed',
       err?.code ?? 'UNKNOWN',
-      err?.statusCode ?? res.status,
+      statusCode,
       err?.fieldErrors,
       err?.traceId,
+      (err as { details?: unknown } | undefined)?.details,
     );
+    // Central, single place that reacts to a pending legal acceptance: route the
+    // signed-in user to the acceptance page. The guard inside the helper keeps
+    // this from looping (not already there, and not a request *for* that page).
+    if (shouldRedirectToLegalAcceptance({ statusCode, code: error.code }, path, window.location.pathname)) {
+      redirectToLegalAcceptance();
+    }
+    throw error;
   }
 
   return body.data as T;
@@ -90,6 +112,24 @@ export const api = {
   },
   async mfaChallenge(challengeToken: string, code: string) {
     return request<User>('/api/auth/mfa/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken, code }),
+    });
+  },
+  /**
+   * LC-06: begin mandatory staff MFA enrollment. Takes the enrollment challenge
+   * token returned by `login` (when `mfaEnrollmentRequired` is set) and returns a
+   * fresh TOTP secret, the otpauth URI and the one-time recovery codes.
+   */
+  async mfaStaffEnroll(challengeToken: string) {
+    return request<MfaEnrollment>('/api/auth/mfa/staff-enroll', {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken }),
+    });
+  },
+  /** LC-06: complete mandatory staff MFA enrollment and open the session. */
+  async mfaStaffConfirm(challengeToken: string, code: string) {
+    return request<User>('/api/auth/mfa/staff-confirm', {
       method: 'POST',
       body: JSON.stringify({ challengeToken, code }),
     });
@@ -407,11 +447,91 @@ export const api = {
       `/api/payments/orders/${orderId}/refunds`,
     );
   },
+  /**
+   * M2.4-T2.4 — the per-seller refund attribution view. Admin-only
+   * (`refund:manage`); a customer/merchant/supplier caller gets a 403.
+   */
+  async orderRefundAttribution(orderId: string) {
+    return request<OrderRefundAttribution>(`/api/payments/orders/${orderId}/refund-attribution`);
+  },
   async adminTransactions() {
     return request<{ items: Transaction[] }>('/api/admin/transactions');
   },
   async adminLedger() {
     return request<{ items: LedgerEntry[] }>('/api/admin/ledger');
+  },
+  // ---- Admin Finance Desk (PS-01) ----
+  // These mirror the existing money-movement routes 1:1; no new backend surface.
+  async financePayoutProviders() {
+    return request<PayoutProvidersResponse>('/api/admin/finance/payout-providers');
+  },
+  async financeConfirmSettlement(body: {
+    externalRef: string;
+    amount: string;
+    currencyCode: string;
+    providerId: string;
+    settlementRef: string;
+    providerRef?: string | null;
+  }) {
+    return request<SettlementResult>('/api/admin/finance/settlements/confirm', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  /** M2.3 — re-processes seller-suborder settlements for one order, or all pending ones. */
+  async financeReconcileSettlements(body: { orderId?: string | null }) {
+    return request<SuborderSettlementResult[]>('/api/admin/finance/settlements/suborders/reconcile', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  async financeCreatePayout(body: { transactionId: string; providerId: string; sellerOrderId?: string | null; idempotencyKey?: string | null }) {
+    return request<PayoutRecord>('/api/admin/finance/payouts', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async financeGetPayout(id: string) {
+    return request<PayoutRecord>(`/api/admin/finance/payouts/${id}`);
+  },
+  async financeDispatchPayout(id: string, body: { beneficiaryRef: string; providerId?: string }) {
+    return request<PayoutDispatchResult>(`/api/admin/finance/payouts/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  async financeSyncPayout(id: string) {
+    return request<PayoutSyncResult>(`/api/admin/finance/payouts/${id}/sync`, { method: 'POST', body: JSON.stringify({}) });
+  },
+  async financeImportReconciliation(body: {
+    source: 'PROVIDER' | 'BANK';
+    currencyCode: string;
+    importKey?: string | null;
+    providerId?: string | null;
+    provider: Array<Record<string, unknown>>;
+    bank: Array<Record<string, unknown>>;
+    ledger: Array<Record<string, unknown>>;
+  }) {
+    return request<ReconciliationImportResult>('/api/admin/finance/reconciliation/import', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  async financeRecordReceipt(body: {
+    transactionId: string;
+    evidence: { source: ReceiptSource; reference: string; amount: string; currencyCode: string };
+  }) {
+    return request<ReceiptResult>('/api/admin/finance/receipts', { method: 'POST', body: JSON.stringify(body) });
+  },
+  // ---- PS-02 manual payment completion (DEMO only) ----
+  async financeManualPaymentAvailability() {
+    return request<{ demoMode: boolean; provider: string }>('/api/admin/finance/manual-payment-availability');
+  },
+  async financeGetManualPaymentView(orderId: string) {
+    return request<ManualPaymentView>(`/api/admin/finance/manual-completions/${orderId}`);
+  },
+  async financeCompleteManualPayment(body: { orderId: string; paymentReference: string }) {
+    return request<ManualCompletionResult>('/api/admin/finance/manual-completions', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
   async adminAuditLogs() {
     return request<{ items: Array<Record<string, unknown>> }>('/api/admin/audit-logs');
@@ -473,6 +593,37 @@ export const api = {
   async disputePolicies(orderId?: string) {
     const qs = orderId ? `?orderId=${encodeURIComponent(orderId)}` : '';
     return request<{ rules: Record<string, unknown> }>(`/api/disputes/policies${qs}`);
+  },
+  async withdrawDispute(id: string) {
+    return request<{ id: string; status: string }>(`/api/disputes/${id}/withdraw`, { method: 'POST' });
+  },
+  /** Public legal-document index (no session). Only published documents appear. */
+  async publicLegalDocuments() {
+    return request<{ items: PublicLegalDocument[] }>('/api/public/legal/documents');
+  },
+  /** Public legal-document detail by code (no session). Unpublished → 404. */
+  async publicLegalDocument(code: string) {
+    return request<PublicLegalDocument>(`/api/public/legal/documents/${encodeURIComponent(code)}`);
+  },
+  /** The caller's own legal state: accepted versions, pending acceptances, docs in force. */
+  async legalAcceptances() {
+    return request<LegalAcceptanceState>('/api/legal/acceptances/me');
+  },
+  /** The caller's own acceptance history (append-only), newest first. */
+  async legalAcceptanceHistory() {
+    return request<{ items: LegalAcceptanceHistoryEntry[] }>('/api/legal/acceptances/history');
+  },
+  /** Records acceptance of a published version currently in force. */
+  async acceptLegalDocument(documentCode: string, version: string, locale?: string) {
+    return request<{ documentCode: string; version: string; acceptedAt: string }>('/api/legal/acceptances', {
+      method: 'POST',
+      body: JSON.stringify({ documentCode, version, locale }),
+    });
+  },
+  /** Public refund/dispute policy summary (no session). */
+  async publicRefundPolicy(country?: string) {
+    const qs = country ? `?country=${encodeURIComponent(country)}` : '';
+    return request<PublicRefundPolicy>(`/api/public/disputes/refund-policy${qs}`);
   },
   async adminDisputePolicies() {
     return request<{
@@ -952,6 +1103,22 @@ export const api = {
   async adminAiUsage() {
     return request<AiAdminUsage>('/api/admin/ai/usage');
   },
+  async adminAiCompanyMetrics(params: { agentKey?: string; since?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.since) qs.set('since', params.since);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<CompanyMetrics>(`/api/admin/ai/company-metrics${suffix}`);
+  },
+  async adminAiKillSwitch() {
+    return request<AiKillSwitchState>('/api/admin/ai/kill-switch');
+  },
+  async adminSetAiKillSwitch(enabled: boolean, reason?: string | null) {
+    return request<AiKillSwitchState>('/api/admin/ai/kill-switch', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, reason: reason ?? null }),
+    });
+  },
   async adminAiRequests(limit = 50) {
     return request<{ items: AiAdminRequestRow[] }>(`/api/admin/ai/requests?limit=${limit}`);
   },
@@ -1033,6 +1200,18 @@ export const api = {
     return request<AlertEvaluationResult>('/api/admin/observability/alerts/evaluate', { method: 'POST' });
   },
 
+  // ---- Webhook failure desk (server enforces REFUND_MANAGE → ADMIN/SUPER_ADMIN) ----
+  async adminWebhookFailures(params: { limit?: number; offset?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<WebhookFailuresResponse>(`/api/payments/webhook-failures${suffix}`);
+  },
+  async adminReplayWebhookFailure(id: string) {
+    return request<{ replayed: boolean }>(`/api/payments/webhook-failures/${id}/replay`, { method: 'POST' });
+  },
+
   // ---- Admin privacy / data-deletion desk (server enforces ADMIN/SUPER_ADMIN) ----
   async adminDeletionRequests(params: { stage?: string } = {}) {
     const qs = new URLSearchParams();
@@ -1097,11 +1276,16 @@ export function formatDate(value: string | Date | undefined | null): string {
   return d.toLocaleDateString('fr-TN', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-export async function apiCall<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
+export async function apiCall<T>(
+  fn: () => Promise<T>,
+): Promise<{ data: T | null; error: string | null; errorObject?: ApiClientError }> {
   try {
     const data = await fn();
     return { data, error: null };
   } catch (e) {
-    return { data: null, error: apiErrorMessage(e) };
+    // `errorObject` is additive: existing `{ data, error }` destructuring is
+    // unchanged, while a caller that needs the structured error — e.g. the
+    // legal acceptance UI reading `details.pending` — can reach it here.
+    return { data: null, error: apiErrorMessage(e), errorObject: e instanceof ApiClientError ? e : undefined };
   }
 }

@@ -396,6 +396,17 @@ export function DashboardDisputesPage() {
     openDetail(selectedId);
   }
 
+  async function withdraw() {
+    if (!selectedId) return;
+    setSending(true);
+    const res = await apiCall(() => api.withdrawDispute(selectedId));
+    setSending(false);
+    if (res.error) { setError(res.error); return; }
+    setError(null);
+    await loadList();
+    openDetail(selectedId);
+  }
+
   return (
     <AppLayout>
       <SectionHeader title={t('disputes.badge')} subtitle={t('disputes.subtitle')} />
@@ -484,6 +495,29 @@ export function DashboardDisputesPage() {
                   <p className="mt-2 text-sm text-slate-600">{detail.description}</p>
                   <p className="mt-1 text-xs text-slate-500">{t('disputes.openedBy')}: {detail.openedByEmail ?? detail.openedById}</p>
                   {detail.decisionNote && <p className="mt-1 text-xs text-slate-500">{t('disputes.decisionNote')}: {detail.decisionNote}</p>}
+                  {['OPEN', 'UNDER_REVIEW', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED'].includes(detail.status) && (
+                    <button className="btn-secondary mt-3" onClick={withdraw} disabled={sending} data-testid="dispute-withdraw">
+                      {t('disputes.withdraw')}
+                    </button>
+                  )}
+                </Card>
+
+                <Card>
+                  <h4 className="mb-2 text-sm font-semibold text-slate-700">{t('disputes.deadlines.title')}</h4>
+                  <ul className="space-y-1 text-xs text-slate-600" data-testid="dispute-deadlines">
+                    <li>{t('disputes.deadlines.evidence')}: {detail.deadlines.evidenceDeadline ? formatDate(detail.deadlines.evidenceDeadline) : '—'}</li>
+                    <li>{t('disputes.deadlines.decision')}: {detail.deadlines.decisionDeadline ? formatDate(detail.deadlines.decisionDeadline) : '—'}</li>
+                  </ul>
+                  {(!detail.deadlineStatus.responseOpen || !detail.deadlineStatus.evidenceOpen) && (
+                    <p className="mt-2 text-xs font-medium text-amber-700" data-testid="dispute-window-closed">
+                      {t('disputes.deadlines.windowClosed')}
+                    </p>
+                  )}
+                  {detail.deadlineStatus.needsEscalation && (
+                    <p className="mt-1 text-xs font-medium text-red-700" data-testid="dispute-escalation-due">
+                      {t('disputes.deadlines.escalationDue')}
+                    </p>
+                  )}
                 </Card>
 
                 <Card>

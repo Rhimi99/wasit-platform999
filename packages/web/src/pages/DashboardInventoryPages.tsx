@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
+import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import type { ComparisonGroup, InventoryItem, InventoryMovement, MyAnalyticsOverview } from '@/lib/types';
@@ -15,6 +16,10 @@ interface MovementModalState {
 
 export function DashboardInventoryPage() {
   const { t } = useI18n();
+  const { can } = useAuth();
+  // A read-only holder (ADMIN) may see stock but must not change it — the server
+  // refuses the writes anyway, so the controls are hidden rather than failing.
+  const mayManage = can('inventory.manage');
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -165,7 +170,7 @@ export function DashboardInventoryPage() {
                       <span className="ms-2 text-xs text-slate-400" data-testid={`inventory-archived-${it.id}`}>
                         {t('inventory.archivedNotice')}
                       </span>
-                    ) : (
+                    ) : mayManage ? (
                       <>
                         <span className="mx-1 text-slate-300">|</span>
                         <button className="text-sm font-medium text-wasit-700 hover:underline" type="button" onClick={() => setModal({ item: it, mode: 'add' })}>
@@ -180,7 +185,7 @@ export function DashboardInventoryPage() {
                           {t('inventory.settings')}
                         </button>
                       </>
-                    )}
+                    ) : null}
                   </td>
                 </tr>
               ))}

@@ -20,6 +20,7 @@ export type Feature =
   | 'admin.buildDashboard'
   | 'billing.payments'
   | 'billing.commissions'
+  | 'inventory.read'
   | 'inventory.manage'
   | 'ads.manage'
   | 'campaign.manage'
@@ -38,24 +39,24 @@ export type Feature =
 // الدور -> الميزات. تُقرأ الصلاحيات الفعلية من RBAC الخادم عند الحاجة؛ هنا عيّنة واضحة للواجهة.
 const ROLE_FEATURES: Record<UserRole, ReadonlySet<Feature>> = {
   CUSTOMER: new Set<Feature>([
-    'order.create', 'verification.submit', 'payment.view' as Feature, 'messages', 'library',
+    'order.create', 'verification.submit', 'messages', 'library',
     'subscription.own',
   ]),
   MERCHANT: new Set<Feature>([
     'product.create', 'product.manage.own', 'order.create', 'order.manage',
-    'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
+    'inventory.read', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
     'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
     'subscription.own',
   ]),
   SUPPLIER: new Set<Feature>([
     'product.create', 'product.manage.own', 'supplier.create', 'supplier.update',
-    'order.manage', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use',
+    'order.manage', 'inventory.read', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use',
     'analytics.own', 'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
     'subscription.own',
   ]),
   COMPANY: new Set<Feature>([
     'company.create', 'company.update', 'order.create', 'order.manage',
-    'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
+    'inventory.read', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
     'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
     'subscription.own',
   ]),
@@ -74,12 +75,12 @@ const ROLE_FEATURES: Record<UserRole, ReadonlySet<Feature>> = {
   ADMIN: new Set<Feature>([
     'admin', 'admin.buildDashboard', 'billing.payments', 'billing.commissions',
     'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.all', 'disputes.manage',
-    'risk.manage', 'subscriptions.manage', 'inventory.manage',
+    'risk.manage', 'subscriptions.manage', 'inventory.read',
   ]),
   SUPER_ADMIN: new Set<Feature>([
     'admin', 'admin.buildDashboard', 'billing.payments', 'billing.commissions',
     'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.all', 'disputes.manage',
-    'risk.manage', 'subscriptions.manage', 'inventory.manage',
+    'risk.manage', 'subscriptions.manage', 'inventory.read',
   ]),
 };
 

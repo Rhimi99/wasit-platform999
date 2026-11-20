@@ -9,6 +9,9 @@ import { ProductDetailsPage } from './pages/ProductDetailsPage';
 import { SuppliersPage, SuppliersDetailPage } from './pages/SuppliersPage';
 import { MerchantsPage, MerchantsDetailPage } from './pages/MerchantsPage';
 import { CompaniesPage, CompaniesDetailPage } from './pages/CompaniesPage';
+import { LegalPage } from './pages/LegalPage';
+import { BusinessCalculatorPage } from './pages/BusinessCalculatorPage';
+import { LegalAcceptancePage } from './pages/LegalAcceptancePage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/AuthPages';
@@ -34,8 +37,10 @@ import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
+import { AdminFinancePage } from './pages/AdminFinancePages';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
 import { DemoBanner } from './components/DemoBanner';
+import { CookieConsent } from './components/CookieConsent';
 import { DemoCustomerEntryPage } from './pages/DemoCustomerEntryPage';
 import { DemoOwnerAuditPage } from './pages/DemoOwnerAuditPage';
 
@@ -46,6 +51,7 @@ export default function App() {
   return (
     <>
       {DEMO_MODE && <DemoBanner />}
+      <CookieConsent />
       <Routes>
       {/* Public */}
       <Route path="/" element={<HomePage />} />
@@ -62,6 +68,8 @@ export default function App() {
       <Route path="/merchants/:id" element={<MerchantsDetailPage />} />
       <Route path="/companies" element={<CompaniesPage />} />
       <Route path="/companies/:id" element={<CompaniesDetailPage />} />
+      <Route path="/legal" element={<LegalPage />} />
+      <Route path="/tools/calculator" element={<BusinessCalculatorPage />} />
 
       {/* Auth */}
       <Route path="/login" element={<LoginPage />} />
@@ -88,6 +96,7 @@ export default function App() {
       <Route path="/dashboard" element={<RequireAuth><DashboardOverviewPage /></RequireAuth>} />
       <Route path="/dashboard/profile" element={<RequireAuth><DashboardProfilePage /></RequireAuth>} />
       <Route path="/dashboard/settings" element={<RequireAuth><DashboardSettingsPage /></RequireAuth>} />
+      <Route path="/dashboard/legal" element={<RequireAuth><LegalAcceptancePage /></RequireAuth>} />
       <Route path="/dashboard/security" element={<RequireAuth><DashboardSecurityPage /></RequireAuth>} />
       <Route path="/dashboard/messages" element={<RequireAuth><DashboardMessagesPage /></RequireAuth>} />
       <Route path="/dashboard/orders" element={<RequireAuth><DashboardOrdersPage /></RequireAuth>} />
@@ -126,11 +135,12 @@ export default function App() {
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ledger" element={<RequireAuth><AdminOnly><AdminLedgerPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/finance" element={<RequireAuth><AdminOnly><AdminFinancePage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/audit" element={<RequireAuth><AdminOnly><AdminAuditPage /></AdminOnly></RequireAuth>} />
-      <Route path="/admin/verification" element={<RequireAuth><StaffOnly><AdminVerificationPage /></StaffOnly></RequireAuth>} />
-      <Route path="/admin/trust" element={<RequireAuth><StaffOnly><AdminTrustPage /></StaffOnly></RequireAuth>} />
-      <Route path="/admin/risk" element={<RequireAuth><StaffOnly><AdminRiskPage /></StaffOnly></RequireAuth>} />
-      <Route path="/admin/disputes" element={<RequireAuth><StaffOnly><AdminDisputesPage /></StaffOnly></RequireAuth>} />
+      <Route path="/admin/verification" element={<RequireAuth><StaffOnly desk="verification"><AdminVerificationPage /></StaffOnly></RequireAuth>} />
+      <Route path="/admin/trust" element={<RequireAuth><StaffOnly desk="trust"><AdminTrustPage /></StaffOnly></RequireAuth>} />
+      <Route path="/admin/risk" element={<RequireAuth><StaffOnly desk="risk"><AdminRiskPage /></StaffOnly></RequireAuth>} />
+      <Route path="/admin/disputes" element={<RequireAuth><StaffOnly desk="disputes"><AdminDisputesPage /></StaffOnly></RequireAuth>} />
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ai" element={<RequireAuth><AdminOnly><AdminAiPage /></AdminOnly></RequireAuth>} />

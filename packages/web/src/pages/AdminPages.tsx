@@ -4,7 +4,8 @@ import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { AdminStats, CohortRow, ConversionSnapshot, DailyKpiRow, LedgerEntry, Order, PlatformOverview, RetentionSnapshot, RevenueBreakdown, Transaction, UnitEconomics } from '@/lib/types';
+import { RefundAttributionPanel } from '@/components/RefundAttributionPanel';
+import type { AdminStats, CohortRow, ConversionSnapshot, DailyKpiRow, LedgerEntry, Order, OrderRefundAttribution, PlatformOverview, RetentionSnapshot, RevenueBreakdown, Transaction, UnitEconomics } from '@/lib/types';
 
 const LEDGER_ENTRY_KEYS: Record<string, string> = {
   TRANSACTION_VALUE: 'ledger.entry.transactionValue',
@@ -32,11 +33,30 @@ export function AdminOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Wrapper for staff engine pages (verification/trust/risk/disputes).
-// The server enforces granular permissions per endpoint (requirePermission).
-export function StaffOnly({ children }: { children: React.ReactNode }) {
+// Wrapper for the specialised staff desks (verification/trust/risk/disputes).
+// The server enforces granular permissions per endpoint (requirePermission), and
+// this mirror keeps the UI from offering a desk a role cannot actually use — so
+// each desk lists exactly the roles that hold its server-side desk permission.
+export type StaffDesk = 'verification' | 'trust' | 'risk' | 'disputes';
+
+const STAFF_DESK_ROLES: Record<StaffDesk, string[]> = {
+  // verification:review
+  verification: ['ADMIN', 'SUPER_ADMIN'],
+  // trust:read
+  trust: ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'RISK'],
+  // risk:read
+  risk: ['ADMIN', 'SUPER_ADMIN', 'RISK'],
+  // dispute:review / dispute:manage
+  disputes: ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'DISPUTE'],
+};
+
+export function StaffOnly({ desk, children }: { desk?: StaffDesk; children: React.ReactNode }) {
   const { user } = useAuth();
-  const allowed = user?.roles.some((r) => ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'RISK', 'DISPUTE'].includes(r));
+  const allowed = user?.roles.some((r) =>
+    desk
+      ? STAFF_DESK_ROLES[desk].includes(r)
+      : ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'RISK', 'DISPUTE'].includes(r),
+  );
   if (user && !allowed) {
     return (
       <AppLayout>
@@ -359,6 +379,9 @@ export function AdminOrdersPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [refundError, setRefundError] = useState<string | null>(null);
+  const [attribution, setAttribution] = useState<OrderRefundAttribution | null>(null);
+  const [attributionError, setAttributionError] = useState<string | null>(null);
+  const [attributionLoading, setAttributionLoading] = useState(false);
 
   useEffect(() => {
     apiCall(() => api.adminOrders()).then((res) => {
@@ -376,8 +399,22 @@ export function AdminOrdersPage() {
     setReason('');
     setNotice(null);
     setRefundError(null);
+    setAttribution(null);
+    setAttributionError(null);
     const res = await apiCall(() => api.orderRefunds(order.id));
     setRefunds(res.data ?? []);
+  }
+
+  // M2.4-T2.4 — load the read-only per-seller attribution breakdown for the open
+  // order. It is a separate, admin-only read (`refund:manage`); it changes no
+  // order state and offers no money-moving action.
+  async function loadAttribution(order: Order) {
+    setAttributionLoading(true);
+    setAttributionError(null);
+    const res = await apiCall(() => api.orderRefundAttribution(order.id));
+    setAttribution(res.data);
+    setAttributionError(res.error);
+    setAttributionLoading(false);
   }
 
   async function submitRefund(order: Order) {
@@ -492,7 +529,31 @@ export function AdminOrdersPage() {
             </button>
           </div>
           {refundError && <p className="mt-2 text-sm text-red-600" role="alert">{refundError}</p>}
+
+          {/* M2.4-T2.4 — read-only per-seller attribution breakdown. */}
+          <div className="mt-3 border-t border-slate-200 pt-3">
+            <button
+              type="button"
+              data-testid="admin-refund-attribution-load"
+              disabled={attributionLoading}
+              onClick={() => void loadAttribution(active)}
+              className="text-xs font-medium text-wasit-700 hover:underline disabled:opacity-50"
+            >
+              {attributionLoading ? t('common.loading') : t('admin.refundAttr.load')}
+            </button>
+          </div>
         </Card>
+      )}
+
+      {active && attribution && (
+        <RefundAttributionPanel
+          data={attribution}
+          error={attributionError}
+          onClose={() => {
+            setAttribution(null);
+            setAttributionError(null);
+          }}
+        />
       )}
     </AppLayout>
   );

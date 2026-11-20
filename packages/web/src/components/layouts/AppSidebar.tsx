@@ -6,6 +6,7 @@ import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { Brand } from '@/components/brand/Brand';
 import { AxisMark } from '@/components/brand/AxisMark';
 import { NotificationsBell } from '@/components/layouts/NotificationsBell';
+import { CookieSettingsLink } from '@/components/CookieConsent';
 
 export interface NavItem {
   to: string;
@@ -22,6 +23,7 @@ function baseNav(roleKey: string): NavItem[] {
     { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
     { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
     { to: '/dashboard/security', key: 'dashboard.security', icon: '🔐' },
+    { to: '/dashboard/legal', key: 'legal.navAcceptance', icon: '📜' },
     { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
   ];
 
@@ -47,7 +49,8 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
         { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
         { to: '/dashboard/security', key: 'dashboard.security', icon: '🔐' },
-        { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
+        { to: '/dashboard/legal', key: 'legal.navAcceptance', icon: '📜' },
+    { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
       ];
     case 'COMPANY':
       return [
@@ -70,7 +73,8 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
         { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
         { to: '/dashboard/security', key: 'dashboard.security', icon: '🔐' },
-        { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
+        { to: '/dashboard/legal', key: 'legal.navAcceptance', icon: '📜' },
+    { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
       ];
     case 'SUPPLIER':
       return [
@@ -94,7 +98,8 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
         { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
         { to: '/dashboard/security', key: 'dashboard.security', icon: '🔐' },
-        { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
+        { to: '/dashboard/legal', key: 'legal.navAcceptance', icon: '📜' },
+    { to: '/dashboard/settings', key: 'dashboard.settings', icon: '⚙️' },
       ];
     default:
       return common;
@@ -110,6 +115,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/orders', key: 'admin.orders', icon: '🧾' },
   { to: '/admin/transactions', key: 'admin.transactions', icon: '💳' },
   { to: '/admin/ledger', key: 'admin.ledger', icon: '📒' },
+  { to: '/admin/finance', key: 'admin.financeDesk', icon: '💰' },
   { to: '/admin/verification', key: 'admin.verification', icon: '✅' },
   { to: '/admin/trust', key: 'admin.trust', icon: '🛡️' },
   { to: '/admin/risk', key: 'admin.risk', icon: '⚠️' },
@@ -164,6 +170,7 @@ export function AppSidebar() {
         <Link to="/" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50">
           🏠 {t('nav.home')}
         </Link>
+        <CookieSettingsLink className="block w-full rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50" />
         <button onClick={handleLogout} className="block w-full rounded-md px-3 py-2 text-start text-sm font-medium text-red-600 hover:bg-red-50">
           🚪 {t('nav.logout')}
         </button>

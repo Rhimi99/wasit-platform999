@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
+import { CookieSettingsLink } from '@/components/CookieConsent';
 import { Brand } from '@/components/brand/Brand';
 
 /** Enabled only on the public demo build; production builds leave it unset. */
@@ -228,6 +229,7 @@ export function Footer() {
               <li><Link to="/suppliers" className="transition-colors hover:text-brand-700">{t('nav.suppliers')}</Link></li>
               <li><Link to="/merchants" className="transition-colors hover:text-brand-700">{t('nav.merchants')}</Link></li>
               <li><Link to="/companies" className="transition-colors hover:text-brand-700">{t('nav.companies')}</Link></li>
+              <li><Link to="/legal" className="transition-colors hover:text-brand-700">{t('nav.legal')}</Link></li>
             </ul>
           </div>
 
@@ -235,6 +237,7 @@ export function Footer() {
             <h4 className="mb-4 text-xs font-bold uppercase tracking-wider text-slate-400">{t('lp.footer.platform')}</h4>
             <ul className="space-y-2.5 text-sm text-slate-500">
               <li><Link to="/price-comparison" className="transition-colors hover:text-brand-700">{t('nav.priceComparison')}</Link></li>
+              <li><Link to="/tools/calculator" className="transition-colors hover:text-brand-700">{t('nav.businessCalculator')}</Link></li>
               <li><Link to="/#ai" className="transition-colors hover:text-brand-700">{t('nav.ai')}</Link></li>
               <li><Link to="/#how-it-works" className="transition-colors hover:text-brand-700">{t('nav.howItWorks')}</Link></li>
               <li><Link to="/#trust" className="transition-colors hover:text-brand-700">{t('home.trust.title')}</Link></li>
@@ -257,6 +260,7 @@ export function Footer() {
 
         <div className="mt-12 flex flex-col items-center justify-between gap-3 border-t border-slate-200 pt-6 text-xs text-slate-400 sm:flex-row">
           <span>© {year} · {t('footer.rights')}</span>
+          <CookieSettingsLink className="text-xs text-slate-400 underline-offset-2 hover:underline" />
           <span className="font-semibold tracking-[0.2em] text-brand-700">BUSINESS GLOBAL</span>
         </div>
       </div>

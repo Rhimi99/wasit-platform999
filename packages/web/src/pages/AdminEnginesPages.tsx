@@ -398,7 +398,7 @@ export function AdminDisputesPage() {
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">{t('disputes.admin.statusUpdate')}</h4>
                 <div className="flex flex-wrap gap-2">
                   <select className="input" value={statusValue} onChange={(e) => setStatusValue(e.target.value)} data-testid="admin-dispute-status-select">
-                    {['OPEN', 'UNDER_REVIEW', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED', 'DECIDED', 'CLOSED'].map((s) => <option key={s} value={s}>{t(`disputes.status.${s}`)}</option>)}
+                    {['OPEN', 'UNDER_REVIEW', 'REQUESTED_FURTHER_EVIDENCE', 'ESCALATED', 'CLOSED'].map((s) => <option key={s} value={s}>{t(`disputes.status.${s}`)}</option>)}
                   </select>
                   <input className="input flex-1" value={statusNote} onChange={(e) => setStatusNote(e.target.value)} placeholder="Note" data-testid="admin-dispute-status-note" />
                   <button className="btn-secondary" onClick={() => updateStatus(detail.id)} data-testid="admin-dispute-status-submit">✓</button>

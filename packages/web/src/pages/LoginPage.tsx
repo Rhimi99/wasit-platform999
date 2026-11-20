@@ -15,6 +15,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  const [enrollment, setEnrollment] = useState<{ secretBase32: string; qrUri: string; recoveryCodes: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -31,6 +32,12 @@ export function LoginPage() {
       const res = await api.login(email, password);
       if (res.mfaRequired) {
         setChallengeToken(res.challengeToken);
+        // LC-06: an internal staff account with no second factor must enroll
+        // before it can obtain a session. Fetch the fresh secret + QR to show.
+        if (res.mfaEnrollmentRequired) {
+          const enrolled = await api.mfaStaffEnroll(res.challengeToken);
+          setEnrollment(enrolled);
+        }
       } else {
         afterLogin(res);
       }
@@ -47,7 +54,9 @@ export function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const user = await api.mfaChallenge(challengeToken, code);
+      const user = enrollment
+        ? await api.mfaStaffConfirm(challengeToken, code)
+        : await api.mfaChallenge(challengeToken, code);
       afterLogin(user);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : String(err));
@@ -64,6 +73,18 @@ export function LoginPage() {
           {challengeToken ? (
             <form onSubmit={submitChallenge} className="mt-6 space-y-4">
               <p className="text-sm text-slate-600">{t('mfa.challengePrompt')}</p>
+              {enrollment && (
+                <div className="space-y-2 rounded-md bg-slate-50 p-3 text-xs text-slate-700">
+                  <p>{t('mfa.scanHint')}</p>
+                  <p className="break-all font-mono" dir="ltr">{enrollment.secretBase32}</p>
+                  <p>{t('mfa.recoveryHint')}</p>
+                  <ul className="grid grid-cols-2 gap-1 font-mono" dir="ltr">
+                    {enrollment.recoveryCodes.map((rc) => (
+                      <li key={rc}>{rc}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div>
                 <label className="label">{t('mfa.code')}</label>
                 <input

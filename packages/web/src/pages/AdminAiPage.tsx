@@ -10,6 +10,9 @@ import type {
   AiAdminModel,
   AiAdminRequestRow,
   AiAdminUsage,
+  AiKillSwitchState,
+  CompanyMetrics,
+  AgentHealth,
 } from '@/lib/types';
 
 type Tab = 'overview' | 'requests' | 'models' | 'budgets' | 'agents' | 'tasks';
@@ -29,6 +32,27 @@ function statusColor(s: string): 'green' | 'amber' | 'red' | 'teal' | 'slate' | 
   return STATUS_COLOR[s] ?? 'slate';
 }
 
+const HEALTH_COLOR: Record<AgentHealth, 'green' | 'amber' | 'red' | 'slate' | 'teal'> = {
+  healthy: 'green',
+  degraded: 'amber',
+  failing: 'red',
+  idle: 'slate',
+  no_data: 'slate',
+};
+
+/** Formats a duration in ms for a non-technical reader. */
+function formatDuration(ms: number | null): string {
+  if (ms === null) return '—';
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${(ms / 60_000).toFixed(1)} min`;
+}
+
+function formatPercent(rate: number | null): string {
+  if (rate === null) return '—';
+  return `${Math.round(rate * 100)}%`;
+}
+
 export function AdminAiPage() {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('overview');
@@ -38,10 +62,14 @@ export function AdminAiPage() {
   const [budgets, setBudgets] = useState<AiAdminBudget[]>([]);
   const [agents, setAgents] = useState<AgentRegistryRow[]>([]);
   const [tasks, setTasks] = useState<AgentTaskRow[]>([]);
+  // A3 — AI Company metrics (read-only, from the trusted backend).
+  const [companyMetrics, setCompanyMetrics] = useState<CompanyMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Central AI Kill Switch state (A1) — one central control for AI execution.
+  const [killSwitch, setKillSwitch] = useState<AiKillSwitchState | null>(null);
 
   // Model catalogue form — POST /api/admin/ai/models is an upsert keyed by `key`.
   const [modelForm, setModelForm] = useState({
@@ -58,13 +86,15 @@ export function AdminAiPage() {
 
   const load = async () => {
     setError(null);
-    const [usageRes, reqRes, modelRes, budgetRes, agentRes, taskRes] = await Promise.all([
+    const [usageRes, reqRes, modelRes, budgetRes, agentRes, taskRes, killRes, metricsRes] = await Promise.all([
       apiCall(() => api.adminAiUsage()),
       apiCall(() => api.adminAiRequests()),
       apiCall(() => api.adminAiModels()),
       apiCall(() => api.adminAiBudgets()),
       apiCall(() => api.adminAiAgents()),
       apiCall(() => api.adminAiTasks()),
+      apiCall(() => api.adminAiKillSwitch()),
+      apiCall(() => api.adminAiCompanyMetrics()),
     ]);
     setUsage(usageRes.data ?? null);
     setRequests(reqRes.data?.items ?? []);
@@ -72,6 +102,8 @@ export function AdminAiPage() {
     setBudgets(budgetRes.data?.items ?? []);
     setAgents(agentRes.data?.items ?? []);
     setTasks(taskRes.data?.items ?? []);
+    setKillSwitch(killRes.data ?? null);
+    setCompanyMetrics(metricsRes.data ?? null);
     setError(usageRes.error ?? reqRes.error ?? modelRes.error ?? budgetRes.error ?? agentRes.error ?? taskRes.error);
     setLoading(false);
   };
@@ -94,6 +126,20 @@ export function AdminAiPage() {
       () => api.decideAgentTask(task.id, decision, undefined),
       decision === 'APPROVE' ? 'adminAi.taskApproved' : 'adminAi.taskRejected',
     );
+
+  // Central AI Kill Switch (A1). Disabling is an emergency action, so it asks for
+  // confirmation; enabling is safe and immediate. The server enforces RBAC
+  // (AI_MANAGE | ADMIN_AI) and records an audit entry either way.
+  const toggleKillSwitch = () => {
+    if (!killSwitch) return;
+    const next = !killSwitch.enabled;
+    if (!next && !window.confirm(t('adminAi.killSwitch.confirmDisable'))) return;
+    return run(
+      'kill-switch',
+      () => api.adminSetAiKillSwitch(next),
+      next ? 'adminAi.killSwitch.enabledNotice' : 'adminAi.killSwitch.disabledNotice',
+    );
+  };
 
   const editModel = (m: AiAdminModel) => {
     setEditingModelKey(m.key);
@@ -254,6 +300,39 @@ export function AdminAiPage() {
           {tab === 'overview' && (
             usage ? (
               <div className="space-y-4">
+                {killSwitch && (
+                  <Card
+                    testId="admin-ai-kill-switch"
+                    className={killSwitch.enabled ? 'border-green-200 bg-green-50' : 'border-red-300 bg-red-50'}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{t('adminAi.killSwitch.title')}</p>
+                        <p className="mt-1 text-xs text-slate-600">{t('adminAi.killSwitch.hint')}</p>
+                        <p className="mt-2 text-xs">
+                          <span
+                            data-testid="admin-ai-kill-switch-state"
+                            className={`rounded px-2 py-0.5 font-medium ${killSwitch.enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                          >
+                            {killSwitch.enabled ? t('adminAi.killSwitch.stateEnabled') : t('adminAi.killSwitch.stateDisabled')}
+                          </span>
+                          <span className="ms-2 text-slate-500">
+                            {killSwitch.source === 'runtime' ? t('adminAi.killSwitch.sourceRuntime') : t('adminAi.killSwitch.sourceEnv')}
+                          </span>
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="admin-ai-kill-switch-toggle"
+                        disabled={busy !== null}
+                        onClick={() => void toggleKillSwitch()}
+                        className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${killSwitch.enabled ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`}
+                      >
+                        {killSwitch.enabled ? t('adminAi.killSwitch.disable') : t('adminAi.killSwitch.enable')}
+                      </button>
+                    </div>
+                  </Card>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                   <Card testId="admin-ai-kpi-requests">
                     <p className="text-xs text-slate-500">{t('adminAi.totals.requests')}</p>
@@ -282,6 +361,124 @@ export function AdminAiPage() {
                     {formatDate(usage.window.start)} → {formatDate(usage.window.end)}
                   </p>
                 </Card>
+
+                {/* A3 — AI Company health: real execution/performance/cost/outcome metrics. */}
+                {companyMetrics && (
+                  <div className="space-y-4" data-testid="admin-ai-company">
+                    <Card className="border-wasit-200 bg-wasit-50/40">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{t('adminAi.company.title')}</p>
+                          <p className="mt-1 text-xs text-slate-600">{t('adminAi.company.hint')}</p>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          {t('adminAi.company.generatedAt')}: <span dir="ltr">{formatDate(companyMetrics.generatedAt)}</span>
+                        </p>
+                      </div>
+                    </Card>
+
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <Card testId="admin-ai-company-runs">
+                        <p className="text-xs text-slate-500">{t('adminAi.company.kpi.runs')}</p>
+                        <p className="mt-1 text-2xl font-bold text-slate-900">{companyMetrics.overall.execution.totalRuns}</p>
+                      </Card>
+                      <Card testId="admin-ai-company-completion">
+                        <p className="text-xs text-slate-500">{t('adminAi.company.kpi.completionRate')}</p>
+                        <p className="mt-1 text-2xl font-bold text-slate-900">{formatPercent(companyMetrics.overall.execution.successRate)}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {t('adminAi.company.kpi.failed')}: {companyMetrics.overall.execution.failed} · {t('adminAi.company.kpi.open')}: {companyMetrics.overall.execution.pending + companyMetrics.overall.execution.running}
+                        </p>
+                      </Card>
+                      <Card testId="admin-ai-company-duration">
+                        <p className="text-xs text-slate-500">{t('adminAi.company.kpi.avgDuration')}</p>
+                        <p className="mt-1 text-2xl font-bold text-slate-900" dir="ltr">{formatDuration(companyMetrics.overall.performance.avgDurationMs)}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {t('adminAi.company.kpi.medianDuration')}: <span dir="ltr">{formatDuration(companyMetrics.overall.performance.medianDurationMs)}</span> · {t('adminAi.company.kpi.slow')}: {companyMetrics.overall.performance.slowRuns}
+                        </p>
+                      </Card>
+                      <Card testId="admin-ai-company-cost">
+                        <p className="text-xs text-slate-500">{t('adminAi.company.kpi.cost')}</p>
+                        {companyMetrics.overall.cost.available ? (
+                          <>
+                            <p className="mt-1 text-2xl font-bold text-slate-900" dir="ltr">
+                              {companyMetrics.overall.cost.actualProviderCostUsd} {companyMetrics.overall.cost.currencyCode}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500" dir="ltr">
+                              {t('adminAi.company.kpi.tokens')}: {companyMetrics.overall.cost.tokensInput} / {companyMetrics.overall.cost.tokensOutput}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-1 text-sm text-slate-500">{t('adminAi.company.kpi.costUnavailable')}</p>
+                        )}
+                      </Card>
+                    </div>
+
+                    <Card testId="admin-ai-company-attention">
+                      <p className="text-sm font-semibold text-slate-900">{t('adminAi.company.attention.title')}</p>
+                      {companyMetrics.attention.length === 0 ? (
+                        <p className="mt-1 text-xs text-slate-500">{t('adminAi.company.attention.empty')}</p>
+                      ) : (
+                        <ul className="mt-2 space-y-1">
+                          {companyMetrics.attention.map((a) => (
+                            <li key={a.agentKey} data-testid={`admin-ai-company-attention-${a.agentKey}`} className="text-xs">
+                              <Badge color={HEALTH_COLOR[a.health]}>{t(`adminAi.company.health.${a.health}`)}</Badge>
+                              <span className="ms-2 font-medium text-slate-700">{a.name}</span>
+                              <span className="ms-2 text-slate-500">{a.reason}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </Card>
+
+                    <Card className="overflow-x-auto" testId="admin-ai-company-agents">
+                      <p className="mb-2 text-sm font-semibold text-slate-900">{t('adminAi.company.agents.title')}</p>
+                      {companyMetrics.agents.length === 0 ? (
+                        <EmptyState title={t('common.noData')} />
+                      ) : (
+                        <table className="table-base">
+                          <thead>
+                            <tr>
+                              <th>{t('adminAi.company.col.agent')}</th>
+                              <th>{t('adminAi.company.col.health')}</th>
+                              <th>{t('adminAi.company.col.runs')}</th>
+                              <th>{t('adminAi.company.col.success')}</th>
+                              <th>{t('adminAi.company.col.avg')}</th>
+                              <th>{t('adminAi.company.col.retries')}</th>
+                              <th>{t('adminAi.company.col.outcomes')}</th>
+                              <th>{t('adminAi.company.col.cost')}</th>
+                              <th>{t('adminAi.company.col.lastActivity')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {companyMetrics.agents.map((a) => (
+                              <tr key={a.agentKey} data-testid={`admin-ai-company-agent-${a.agentKey}`}>
+                                <td className="text-xs font-medium text-slate-700">{a.name}</td>
+                                <td><Badge color={HEALTH_COLOR[a.health]}>{t(`adminAi.company.health.${a.health}`)}</Badge></td>
+                                <td className="text-xs" dir="ltr">{a.execution.totalRuns}</td>
+                                <td className="text-xs" dir="ltr">{formatPercent(a.execution.successRate)}</td>
+                                <td className="text-xs" dir="ltr">{formatDuration(a.performance.avgDurationMs)}</td>
+                                <td className="text-xs" dir="ltr">{a.performance.retriedSteps} · {a.performance.recoveredRuns}</td>
+                                <td className="text-xs" dir="ltr">{a.outcomes.tasksWithStoredResult} / {a.outcomes.businessOutcomesAchieved}</td>
+                                <td className="text-xs" dir="ltr">{a.cost.available ? `${a.cost.actualProviderCostUsd} ${a.cost.currencyCode}` : '—'}</td>
+                                <td className="text-xs">{a.lastActivityAt ? formatDate(a.lastActivityAt) : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </Card>
+
+                    <Card testId="admin-ai-company-freshness">
+                      <p className="text-sm font-semibold text-slate-900">{t('adminAi.company.freshness.title')}</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        {t('adminAi.company.freshness.latestActivity')}: <span dir="ltr">{companyMetrics.dataFreshness.latestActivityAt ? formatDate(companyMetrics.dataFreshness.latestActivityAt) : '—'}</span>
+                        {' · '}
+                        {t('adminAi.company.freshness.latestMetric')}: <span dir="ltr">{companyMetrics.dataFreshness.latestMetricAt ? formatDate(companyMetrics.dataFreshness.latestMetricAt) : '—'}</span>
+                      </p>
+                      <p className="mt-2 text-xs text-slate-500">{t('adminAi.company.outcomes.note')}</p>
+                    </Card>
+                  </div>
+                )}
               </div>
             ) : <EmptyState title={t('common.noData')} />
           )}

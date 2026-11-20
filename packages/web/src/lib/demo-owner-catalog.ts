@@ -30,7 +30,13 @@ export interface AuditModule {
 }
 
 export const ADMIN_ROLES: UserRole[] = ['ADMIN', 'SUPER_ADMIN'];
-export const STAFF_ROLES: UserRole[] = ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'RISK', 'DISPUTE'];
+// Specialised desk roles mirror the server-side desk permission in
+// `admin/engines-routes.ts`, so a module is only marked usable for a role that
+// the server would actually admit.
+export const VERIFICATION_DESK_ROLES: UserRole[] = ['ADMIN', 'SUPER_ADMIN'];
+export const TRUST_DESK_ROLES: UserRole[] = ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'RISK'];
+export const RISK_DESK_ROLES: UserRole[] = ['ADMIN', 'SUPER_ADMIN', 'RISK'];
+export const DISPUTE_DESK_ROLES: UserRole[] = ['ADMIN', 'SUPER_ADMIN', 'SUPPORT', 'DISPUTE'];
 
 /** Ordered groups, each a coherent slice of the platform. */
 export const AUDIT_MODULE_GROUPS: { id: string; labelKey: string; modules: AuditModule[] }[] = [
@@ -41,7 +47,7 @@ export const AUDIT_MODULE_GROUPS: { id: string; labelKey: string; modules: Audit
       { id: 'dashboard', labelKey: 'dashboard.overview', path: '/dashboard', probe: { method: 'GET', path: '/api/auth/me' } },
       { id: 'admin-dashboard', labelKey: 'admin.title', path: '/admin', probe: { method: 'GET', path: '/api/admin/stats' }, roles: ADMIN_ROLES },
       { id: 'admin-analytics', labelKey: 'admin.analytics', path: '/admin/analytics', probe: { method: 'GET', path: '/api/admin/analytics/overview' }, roles: ADMIN_ROLES },
-      { id: 'admin-reports', labelKey: 'admin.reports', path: '/admin/reports', probe: { method: 'GET', path: '/api/admin/reports' }, roles: ADMIN_ROLES },
+      { id: 'admin-reports', labelKey: 'admin.reports', path: '/admin/reports', probe: { method: 'GET', path: '/api/admin/analytics/reports' }, roles: ADMIN_ROLES },
     ],
   },
   {
@@ -54,7 +60,7 @@ export const AUDIT_MODULE_GROUPS: { id: string; labelKey: string; modules: Audit
       { id: 'categories', labelKey: 'nav.categories', path: '/categories', probe: { method: 'GET', path: '/api/categories' } },
       { id: 'products-manage', labelKey: 'dashboard.products', path: '/dashboard/products', probe: { method: 'GET', path: '/api/products/mine' }, features: ['product.manage.own'] },
       { id: 'product-new', labelKey: 'demo.owner.lbl.newProduct', path: '/dashboard/products/new', probe: { method: 'GET', path: '/api/products/mine' }, features: ['product.create'] },
-      { id: 'inventory', labelKey: 'dashboard.inventory', path: '/dashboard/inventory', probe: { method: 'GET', path: '/api/inventory' }, features: ['inventory.manage'] },
+      { id: 'inventory', labelKey: 'dashboard.inventory', path: '/dashboard/inventory', probe: { method: 'GET', path: '/api/inventory' }, features: ['inventory.read'] },
       { id: 'comparison', labelKey: 'dashboard.priceComparison', path: '/dashboard/comparison', probe: { method: 'GET', path: '/api/price-comparison?productName=olive' }, features: ['product.manage.own'] },
     ],
   },
@@ -69,6 +75,7 @@ export const AUDIT_MODULE_GROUPS: { id: string; labelKey: string; modules: Audit
       { id: 'admin-orders', labelKey: 'admin.orders', path: '/admin/orders', probe: { method: 'GET', path: '/api/admin/orders' }, roles: ADMIN_ROLES },
       { id: 'admin-transactions', labelKey: 'admin.transactions', path: '/admin/transactions', probe: { method: 'GET', path: '/api/admin/transactions' }, roles: ADMIN_ROLES },
       { id: 'admin-ledger', labelKey: 'admin.ledger', path: '/admin/ledger', probe: { method: 'GET', path: '/api/admin/ledger' }, roles: ADMIN_ROLES },
+      { id: 'admin-finance', labelKey: 'admin.financeDesk', path: '/admin/finance', probe: { method: 'GET', path: '/api/admin/finance/payout-providers' }, roles: ADMIN_ROLES },
     ],
   },
   {
@@ -113,10 +120,10 @@ export const AUDIT_MODULE_GROUPS: { id: string; labelKey: string; modules: Audit
       { id: 'verification', labelKey: 'dashboard.verification', path: '/dashboard/verification', probe: { method: 'GET', path: '/api/verification/me' }, features: ['verification.submit'] },
       { id: 'trust', labelKey: 'dashboard.trust', path: '/dashboard/trust', probe: { method: 'GET', path: '/api/trust/me' }, features: ['verification.submit'] },
       { id: 'disputes', labelKey: 'dashboard.disputes', path: '/dashboard/disputes', probe: { method: 'GET', path: '/api/disputes' }, features: ['order.create', 'order.manage'] },
-      { id: 'admin-verification', labelKey: 'admin.verification', path: '/admin/verification', probe: { method: 'GET', path: '/api/admin/verification/requests' }, roles: STAFF_ROLES },
-      { id: 'admin-trust', labelKey: 'admin.trust', path: '/admin/trust', probe: { method: 'GET', path: '/api/admin/trust' }, roles: STAFF_ROLES },
-      { id: 'admin-risk', labelKey: 'admin.risk', path: '/admin/risk', probe: { method: 'GET', path: '/api/admin/risk/profiles' }, roles: STAFF_ROLES },
-      { id: 'admin-disputes', labelKey: 'admin.disputes', path: '/admin/disputes', probe: { method: 'GET', path: '/api/admin/disputes' }, roles: STAFF_ROLES },
+      { id: 'admin-verification', labelKey: 'admin.verification', path: '/admin/verification', probe: { method: 'GET', path: '/api/admin/verification/requests' }, roles: VERIFICATION_DESK_ROLES },
+      { id: 'admin-trust', labelKey: 'admin.trust', path: '/admin/trust', probe: { method: 'GET', path: '/api/admin/trust' }, roles: TRUST_DESK_ROLES },
+      { id: 'admin-risk', labelKey: 'admin.risk', path: '/admin/risk', probe: { method: 'GET', path: '/api/admin/risk/profiles' }, roles: RISK_DESK_ROLES },
+      { id: 'admin-disputes', labelKey: 'admin.disputes', path: '/admin/disputes', probe: { method: 'GET', path: '/api/admin/disputes' }, roles: DISPUTE_DESK_ROLES },
     ],
   },
   {

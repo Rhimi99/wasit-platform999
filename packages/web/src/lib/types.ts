@@ -18,7 +18,7 @@ export interface User {
 /** Login either returns a User or, when MFA is enabled, a pending challenge. */
 export type LoginResponse =
   | (User & { mfaRequired: false })
-  | { mfaRequired: true; challengeToken: string; expiresAt: string };
+  | { mfaRequired: true; challengeToken: string; expiresAt: string; mfaEnrollmentRequired?: boolean };
 
 export interface MfaStatus {
   mfaEnabled: boolean;
@@ -42,6 +42,8 @@ export interface ApiErrorShape {
   message: string;
   statusCode?: number;
   fieldErrors?: FieldError[];
+  /** Safe, error-specific context (e.g. the legal-acceptance `pending` list). */
+  details?: unknown;
   traceId?: string;
 }
 
@@ -313,6 +315,71 @@ export interface Order {
   items?: OrderItem[];
   seller?: { id: string; name: string | null; type: SellerType };
   viewerRole?: 'SELLER' | 'BUYER' | 'NONE';
+}
+
+/**
+ * M2.4-T2.4 — the per-seller refund attribution view for one order (admin desk).
+ * Every amount is read from the server; nothing here is computed in the UI.
+ */
+export interface RefundAttributionRefund {
+  refundId: string;
+  status: OrderRefundStatus;
+  amount: string;
+  /** True only for a COMPLETED refund — a pending/failed refund is not money back. */
+  counted: boolean;
+  reason: string | null;
+  externalRef: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RefundAttributionSeller {
+  sellerOrderId: string;
+  sellerOrderNumber: string;
+  sellerId: string;
+  sellerType: string;
+  status: OrderStatus;
+  settlementStatus: string;
+  refundableCap: string;
+  refundedAmount: string;
+  remainingAmount: string;
+  sellerCommission: string;
+  sellerCommissionReversed: string;
+  fullyRefunded: boolean;
+  lineItems: Array<{ orderItemId: string; refundedAmount: string }>;
+  refunds: RefundAttributionRefund[];
+}
+
+export interface RefundAttributionOrderRefund {
+  id: string;
+  amount: string;
+  currencyCode: string;
+  status: OrderRefundStatus;
+  reason: string | null;
+  externalRef: string | null;
+  requestedById: string | null;
+  processedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  allocatedTo: string[];
+}
+
+export interface OrderRefundAttribution {
+  order: {
+    id: string;
+    orderNumber: string;
+    currencyCode: string;
+    status: OrderStatus;
+    paymentStatus: OrderPaymentStatus;
+    refundStatus: OrderRefundStatus;
+    grandTotal: string;
+    refundedTotal: string;
+    remainingTotal: string;
+    fullyRefunded: boolean;
+  };
+  refunds: RefundAttributionOrderRefund[];
+  sellers: RefundAttributionSeller[];
+  legacy: boolean;
 }
 
 // ---- Inventory ----
@@ -737,6 +804,12 @@ export interface AiAdminUsage {
   budgets: AiAdminBudget[];
 }
 
+/** Central AI Kill Switch state (A1). `source` is where the state comes from. */
+export interface AiKillSwitchState {
+  enabled: boolean;
+  source: 'runtime' | 'env';
+}
+
 export interface AiAdminRequestRow {
   id: string;
   userId: string;
@@ -782,6 +855,75 @@ export interface AgentTaskRow {
 export interface AgentTaskDecision {
   id: string;
   status: AgentTaskStatus;
+}
+
+// ----- A3: AI Company agent metrics ----------------------------------------
+export type AgentHealth = 'healthy' | 'degraded' | 'failing' | 'idle' | 'no_data';
+
+export interface AgentMetricsExecution {
+  totalRuns: number;
+  completed: number;
+  failed: number;
+  cancelledOrBlocked: number;
+  pending: number;
+  running: number;
+  successRate: number | null;
+}
+
+export interface AgentMetricsPerformance {
+  avgDurationMs: number | null;
+  medianDurationMs: number | null;
+  p95DurationMs: number | null;
+  slowRuns: number;
+  measuredRuns: number;
+  retriedSteps: number;
+  failedSteps: number;
+  recoveredRuns: number;
+}
+
+export interface AgentMetricsCost {
+  available: boolean;
+  actualProviderCostUsd: string;
+  currencyCode: string;
+  tokensInput: number;
+  tokensOutput: number;
+  requests: number;
+  byModel: { model: string; provider: string | null; requests: number; costUsd: string }[];
+}
+
+export interface AgentMetricsOutcomes {
+  tasksWithStoredResult: number;
+  businessOutcomesAchieved: number;
+  note: string;
+}
+
+export interface AgentMetricsRow {
+  agentKey: string;
+  name: string;
+  requiresHumanApproval: boolean;
+  active: boolean;
+  execution: AgentMetricsExecution;
+  performance: AgentMetricsPerformance;
+  cost: AgentMetricsCost;
+  outcomes: AgentMetricsOutcomes;
+  lastActivityAt: string | null;
+  health: AgentHealth;
+  healthReason: string;
+}
+
+export interface CompanyMetrics {
+  generatedAt: string;
+  window: { since: string | null; until: string };
+  overall: {
+    execution: AgentMetricsExecution;
+    performance: AgentMetricsPerformance;
+    cost: AgentMetricsCost;
+    outcomes: AgentMetricsOutcomes;
+  };
+  agents: AgentMetricsRow[];
+  attention: { agentKey: string; name: string; health: AgentHealth; reason: string }[];
+  dataFreshness: { latestActivityAt: string | null; latestMetricAt: string | null };
+  notes: string[];
 }
 
 
@@ -1000,10 +1142,83 @@ export interface DisputeDetail extends DisputeSummary {
   countryId: string | null;
   countryCode: string | null;
   policySource: 'COUNTRY' | 'GLOBAL';
+  deadlines: {
+    openWindowClosesAt: string | null;
+    responseDeadline: string | null;
+    evidenceDeadline: string | null;
+    decisionDeadline: string | null;
+    autoEscalateAt: string | null;
+  };
+  deadlineStatus: {
+    responseOpen: boolean;
+    evidenceOpen: boolean;
+    decisionOverdue: boolean;
+    needsEscalation: boolean;
+    daysToEvidence: number | null;
+    daysToDecision: number | null;
+  };
   events: DisputeEventRow[];
   messages: DisputeMessageRow[];
   evidence: DisputeEvidenceRow[];
   appeals: DisputeAppealRow[];
+}
+
+/** Public legal document as disclosed by GET /api/public/legal/documents (no session). */
+export interface PublicLegalDocument {
+  code: string;
+  audience: string;
+  title: { ar: string; en: string };
+  summary: { ar: string; en: string };
+  version: string;
+  effectiveDate: string | null;
+  acceptanceRequired: boolean;
+}
+
+/** One legal document currently in force and open for acceptance. */
+export interface LegalDocumentInForce {
+  code: string;
+  title: { ar: string; en: string };
+  version: string;
+  effectiveDate: string | null;
+}
+
+/** A legal document this user must (re-)accept, from the code catalogue. */
+export interface PendingLegalAcceptance {
+  code: string;
+  title: { ar: string; en: string };
+  version: string;
+}
+
+/** The caller's own legal state (session-scoped; no other user's data). */
+export interface LegalAcceptanceState {
+  acceptedVersions: Record<string, string>;
+  pendingAcceptances: PendingLegalAcceptance[];
+  inForce: LegalDocumentInForce[];
+}
+
+/** One entry of the caller's own legal-acceptance history. */
+export interface LegalAcceptanceHistoryEntry {
+  documentCode: string;
+  version: string;
+  acceptedAt: string | null;
+  locale: string | null;
+}
+
+/** Public, client-safe refund/dispute policy summary (no session required). */
+export interface PublicRefundPolicy {
+  countryCode: string | null;
+  source: 'COUNTRY' | 'GLOBAL';
+  version: number | null;
+  windows: {
+    openWindowDays: number | null;
+    responseWindowDays: number | null;
+    evidenceDeadlineDays: number | null;
+    decisionDeadlineDays: number | null;
+    appealWindowDays: number | null;
+    maxAppeals: number | null;
+  };
+  refundsBuyerOnBuyerFavourableDecision: boolean;
+  operationalSummaryOnly: true;
 }
 
 export interface AdminDisputePolicy {
@@ -1193,6 +1408,28 @@ export interface AlertEvaluationResult {
   resolved: string[];
 }
 
+/**
+ * One terminal (FAILED / DEAD_LETTERED) provider webhook event, as surfaced to
+ * an operator. Deliberately carries no raw `payload`/signature — only what an
+ * operator needs to identify the stuck event and decide to replay it.
+ */
+export interface WebhookFailureRow {
+  id: string;
+  provider: string;
+  eventId: string;
+  eventType: string;
+  status: 'FAILED' | 'DEAD_LETTERED';
+  attempts: number;
+  lastError: string | null;
+  deadLetteredAt: string | null;
+  createdAt: string;
+}
+
+export interface WebhookFailuresResponse {
+  items: WebhookFailureRow[];
+  meta: { total: number; limit: number; offset: number };
+}
+
 // ---- Admin privacy / data-deletion desk (server enforces ADMIN/SUPER_ADMIN) ----
 
 export type DeletionStage =
@@ -1273,8 +1510,9 @@ export interface DirectorySupplierRow {
   cityId: string | null;
   logoUrl: string | null;
   description: string | null;
-  contactEmail: string | null;
-  contactPhone: string | null;
+  /** Returned only when the caller may see supplier contact PII. */
+  contactEmail?: string | null;
+  contactPhone?: string | null;
 }
 
 export interface DirectoryMerchantRow {
@@ -1290,4 +1528,135 @@ export interface DirectoryMerchantRow {
 export interface DirectoryListResponse<T> {
   items: T[];
   pagination: PaginationInfo;
+}
+
+// ---- PS-01: Admin Finance Desk (settlement / payout / reconciliation / receipts) ----
+
+/** A payout rail as described by `GET /api/admin/finance/payout-providers`. */
+export interface PayoutProviderInfo {
+  id: string;
+  functional: boolean;
+  available: boolean;
+  demo: boolean;
+  transferReference: boolean;
+}
+
+export interface PayoutProvidersResponse {
+  active: string;
+  providers: PayoutProviderInfo[];
+}
+
+export type PayoutStatus = 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'HELD';
+
+export interface PayoutRecord {
+  id: string;
+  orderId: string;
+  transactionId: string;
+  sellerOrderId?: string | null;
+  sellerId: string;
+  amount: string;
+  currencyCode: string;
+  providerId: string;
+  status: PayoutStatus;
+  payoutRef: string | null;
+  providerRef: string | null;
+  failureReason: string | null;
+}
+
+export interface SettlementResult {
+  applied: boolean;
+  duplicate: boolean;
+  settlementEntryId: string | null;
+}
+
+/** M2.3 — why a seller suborder could not be settled. */
+export type SuborderSettlementReason =
+  | 'SUBORDER_NOT_FOUND'
+  | 'SUBORDER_NOT_DELIVERED'
+  | 'ALREADY_SETTLED'
+  | 'PARENT_TRANSACTION_NOT_SETTLED'
+  | 'PARENT_ORDER_NOT_PAID'
+  | 'REFUND_PRESENT'
+  | 'DISPUTE_OPEN';
+
+/** M2.3 — the outcome of re-processing one seller suborder's settlement. */
+export interface SuborderSettlementResult {
+  sellerOrderId: string;
+  settled: boolean;
+  duplicate: boolean;
+  reason?: SuborderSettlementReason;
+}
+
+export interface PayoutDispatchResult {
+  payout: PayoutRecord;
+  providerRef: string;
+}
+
+export interface PayoutSyncResult {
+  payout: PayoutRecord;
+  providerStatus: string;
+}
+
+export type ReconciliationStatus = 'MATCHED' | 'MISMATCH';
+
+export interface ReconciliationDecision {
+  reference: string;
+  status: ReconciliationStatus;
+  mismatches: string[];
+  provider: { reference: string } | null;
+  bank: { reference: string } | null;
+  ledger: { reference: string } | null;
+}
+
+export interface ReconciliationReport {
+  currencyCode: string;
+  decisions: ReconciliationDecision[];
+  matched: number;
+  mismatched: number;
+}
+
+export interface ReconciliationImportResult {
+  importId: string;
+  duplicate: boolean;
+  insertedLines: number;
+  report: ReconciliationReport;
+}
+
+export type ReceiptSource = 'BANK_STATEMENT' | 'ACQUIRER' | 'PROVIDER';
+
+export interface ReceiptResult {
+  id: string;
+  status: 'RECEIVED';
+  reference: string;
+  amount: string;
+  currencyCode: string;
+  source: ReceiptSource;
+  duplicate: boolean;
+}
+
+/** PS-02 — read-only view of an order's manual-payment eligibility. */
+export interface ManualPaymentView {
+  order: {
+    id: string;
+    orderNumber: string;
+    paymentStatus: string;
+    settlementStatus: string;
+    grandTotal: string;
+    currencyCode: string;
+  };
+  intent: { id: string; provider: string; status: string; externalRef: string | null } | null;
+  payment: { id: string; provider: string; status: string } | null;
+  demoMode: boolean;
+  eligible: boolean;
+}
+
+/** PS-02 — the result of recording a manual (offline-desk) payment completion. */
+export interface ManualCompletionResult {
+  orderId: string;
+  intentId: string;
+  externalRef: string;
+  paymentReference: string;
+  amount: string;
+  currencyCode: string;
+  alreadyPaid: boolean;
 }

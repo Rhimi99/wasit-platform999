@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { api, apiCall } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { Badge } from '@/components/ui';
+import { CONSENT_CHANGED_EVENT, consentAllows } from '@/lib/consent-context';
 import type { ServedAdRow } from '@/lib/types';
 
 /**
  * Anonymous per-tab id so the Advertising Engine can group a visit's impressions
  * without persisting anything identifying. Kept in sessionStorage: a reload keeps
- * the same visit, closing the tab starts a new one.
+ * the same visit, closing the tab starts a new one. Cleared when marketing
+ * consent is withdrawn (see cookie-consent.storageKeysForCategory).
  */
 function visitSessionId(): string {
   const key = 'wasit.adSession';
@@ -26,13 +28,35 @@ function visitSessionId(): string {
  * Renders the sponsored creatives the Advertising Engine serves for a placement
  * and reports the impression. A click is reported before navigation so the
  * campaign's CTR reflects real activity rather than being permanently zero.
+ *
+ * LC-02: advertising is a marketing/tracking activity, so nothing is fetched,
+ * rendered or reported until marketing consent is granted — and it stops the
+ * moment consent is withdrawn. The gate reads the same stored consent the banner
+ * writes, so hiding it in the UI is not the enforcement.
  */
 export function AdSlot({ placement, className = '' }: { placement: string; className?: string }) {
   const { t } = useI18n();
   const [ads, setAds] = useState<ServedAdRow[]>([]);
+  const [marketingAllowed, setMarketingAllowed] = useState<boolean>(() => consentAllows('marketing'));
   const reported = useRef<Set<string>>(new Set());
 
+  // Track consent changes live (grant → start, revoke → stop and clear).
   useEffect(() => {
+    const sync = () => setMarketingAllowed(consentAllows('marketing'));
+    window.addEventListener(CONSENT_CHANGED_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(CONSENT_CHANGED_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!marketingAllowed) {
+      setAds([]);
+      reported.current.clear();
+      return;
+    }
     let mounted = true;
     apiCall(() => api.servedAds({ placement })).then((res) => {
       if (!mounted) return;
@@ -41,9 +65,10 @@ export function AdSlot({ placement, className = '' }: { placement: string; class
     return () => {
       mounted = false;
     };
-  }, [placement]);
+  }, [placement, marketingAllowed]);
 
   useEffect(() => {
+    if (!marketingAllowed) return;
     const session = visitSessionId();
     for (const ad of ads) {
       if (reported.current.has(ad.creativeId)) continue;
@@ -55,9 +80,11 @@ export function AdSlot({ placement, className = '' }: { placement: string; class
         sessionId: session,
       });
     }
-  }, [ads]);
+  }, [ads, marketingAllowed]);
 
   const onClick = (ad: ServedAdRow) => {
+    // No marketing consent → no click tracking.
+    if (!marketingAllowed) return;
     const payload = JSON.stringify({
       campaignId: ad.campaignId,
       creativeId: ad.creativeId,
@@ -78,6 +105,7 @@ export function AdSlot({ placement, className = '' }: { placement: string; class
     });
   };
 
+  if (!marketingAllowed) return null;
   if (ads.length === 0) return null;
 
   return (
