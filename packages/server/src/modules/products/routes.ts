@@ -1,14 +1,17 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
+import { desc, sql } from 'drizzle-orm';
+import { ApiError, PERMISSIONS, userHasAnyRole, type UserRole } from '@wasit/shared';
+import { products } from '../../db/schema/products.js';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody, validateQuery, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
-import { createProduct, getProduct, listMyProducts, listMySellerEntities, listProducts, updateProduct, updateProductStatus } from './service.js';
+import { createProduct, getProduct, listMyProducts, listMySellerEntities, listProducts, updateProduct, updateProductStatus, reviewRestrictedListing } from './service.js';
 import { db } from '../../db/client.js';
 import { assertSellerOwnership as assertSellerOwnershipDb } from '../../lib/seller-ownership.js';
 
 const PERM_PRODUCT_MANAGE = PERMISSIONS.PRODUCT_MANAGE;
+const PERM_COMPLIANCE_REVIEW = PERMISSIONS.CATALOG_COMPLIANCE_REVIEW;
 
 const createProductSchema = z.object({
   sellerId: z.string().min(1),
@@ -66,6 +69,18 @@ const updateProductSchema = z.object({
 
 const SELLER_TYPES = ['MERCHANT', 'SUPPLIER', 'COMPANY'] as const;
 
+/**
+ * Administrative catalogue authority. Derived from RBAC (`product:manage`, held
+ * by ADMIN and SUPER_ADMIN only) rather than a hardcoded role list, so a role
+ * can never gain administrative power over products merely by appearing in an
+ * array here. `SUPPORT` deliberately does NOT hold `product:manage`: it is a
+ * read-only desk for catalogue content, so it must not suspend, edit or publish
+ * on another seller's behalf.
+ */
+function hasProductManageAuthority(roles: UserRole[]): boolean {
+  return userHasAnyRole(roles, PERM_PRODUCT_MANAGE);
+}
+
 async function assertSellerOwnership(userId: string, sellerId: string, sellerType: string): Promise<void> {
   await assertSellerOwnershipDb(db, userId, sellerId, sellerType);
 }
@@ -111,8 +126,9 @@ productsRoutes.post('/', requireAuth, validateBody(createProductSchema), async (
   const user = ctx.user!;
   const sellerRole = body.sellerType as UserRole;
 
-  // A user may publish under their own business entity only, unless admin.
-  const isAdmin = user.roles.some((r) => ['ADMIN', 'SUPER_ADMIN', 'SUPPORT'].includes(r));
+  // A user may publish under their own business entity only, unless the caller
+  // holds administrative catalogue authority (RBAC `product:manage`).
+  const isAdmin = hasProductManageAuthority(user.roles);
   if (!isAdmin) {
     const allowed = user.roles.includes(sellerRole as never) || user.roles.includes('MERCHANT' as never) || user.roles.includes('COMPANY' as never) || user.roles.includes('SUPPLIER' as never);
     if (!allowed) throw ApiError.forbidden();
@@ -128,7 +144,7 @@ productsRoutes.patch('/:id/status', requireAuth, validateBody(statusSchema), asy
   const ctx = getContext(c);
   const user = ctx.user!;
   const product = await getProduct(ctx.db, c.req.param('id')!);
-  const isAdmin = user.roles.some((r) => ['ADMIN', 'SUPER_ADMIN', 'SUPPORT'].includes(r));
+  const isAdmin = hasProductManageAuthority(user.roles);
 
   if (!isAdmin) {
     // Only the owning seller may change status
@@ -140,6 +156,9 @@ productsRoutes.patch('/:id/status', requireAuth, validateBody(statusSchema), asy
       throw ApiError.forbidden('A suspended product can only be reactivated by an administrator');
     }
   }
+  // A status change never clears a compliance hold: activation of an unapproved
+  // RESTRICTED listing is refused here (the dedicated review route is the only
+  // approver), so `canReviewRestricted` is intentionally not passed.
   await updateProductStatus(ctx.db, product.id, body.status, { actorId: user.id });
   return c.json({ success: true });
 });
@@ -150,7 +169,7 @@ productsRoutes.patch('/:id', requireAuth, validateBody(updateProductSchema), asy
   const user = ctx.user!;
   const product = await getProduct(ctx.db, c.req.param('id')!);
 
-  const isAdmin = user.roles.some((r) => ['ADMIN', 'SUPER_ADMIN', 'SUPPORT'].includes(r));
+  const isAdmin = hasProductManageAuthority(user.roles);
   if (!isAdmin) {
     await assertSellerOwnership(user.id, product.sellerId, product.sellerType);
     // An administrative suspension is not lifted by editing content.
@@ -168,5 +187,42 @@ productsRoutes.patch('/:id/suspend', requireAuth, requirePermission(PERM_PRODUCT
   const ctx = getContext(c);
   const product = await getProduct(ctx.db, c.req.param('id')!);
   await updateProductStatus(ctx.db, product.id, 'SUSPENDED', { actorId: ctx.user!.id });
+  return c.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// LC-03 — compliance review of RESTRICTED listings.
+//
+// Only a caller holding `catalog:compliance:review` may approve or reject a
+// restricted listing. No agent role carries that permission, so an AI can never
+// clear the human gate. The queue is read-only for reviewers.
+// ---------------------------------------------------------------------------
+
+productsRoutes.get('/compliance/queue', requireAuth, requirePermission(PERM_COMPLIANCE_REVIEW), async (c) => {
+  const ctx = getContext(c);
+  const rows = await ctx.db
+    .select({
+      id: products.id,
+      name: products.name,
+      sellerId: products.sellerId,
+      status: products.status,
+      tags: products.tags,
+      createdAt: products.createdAt,
+    })
+    .from(products)
+    .where(sql`${products.tags} -> 'lc03' ->> 'severity' = 'RESTRICTED'`)
+    .orderBy(desc(products.createdAt));
+  return c.json({ success: true, data: { items: rows } });
+});
+
+const reviewSchema = z.object({ decision: z.enum(['APPROVE', 'REJECT']) });
+
+productsRoutes.post('/:id/compliance-review', requireAuth, requirePermission(PERM_COMPLIANCE_REVIEW), validateBody(reviewSchema), async (c) => {
+  const body = getValidatedBody<z.infer<typeof reviewSchema>>(c);
+  const ctx = getContext(c);
+  await reviewRestrictedListing(ctx.db, c.req.param('id')!, body.decision, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+  });
   return c.json({ success: true });
 });

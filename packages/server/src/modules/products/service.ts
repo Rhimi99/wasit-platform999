@@ -13,8 +13,74 @@ import { toDecimal, assertNonNegative } from '../../lib/money.js';
 import { ensureInventoryItem } from '../../lib/inventory-engine.js';
 import { inventoryItems } from '../../db/schema/commerce_extras.js';
 import { resolveOwnedSellerIds, listOwnedSellerEntities, type OwnedSellerEntity } from '../../lib/seller-ownership.js';
+import { classifyListing, type GoodsClassification } from '../../lib/prohibited-goods.js';
 
 export type SellerType = 'MERCHANT' | 'SUPPLIER' | 'COMPANY';
+
+/**
+ * LC-03 — the single enforcement point for the prohibited/restricted goods policy.
+ *
+ * Every listing is classified from its user-controllable text (names in all
+ * locales, description, brand, category, and any extra free text such as specs
+ * or variant names). The decision is recorded in the audit trail and then:
+ *   - PROHIBITED  -> rejected outright, nothing is written;
+ *   - RESTRICTED  -> accepted only as an unpublished DRAFT that no automated
+ *                    caller can publish (a human reviewer must approve it);
+ *   - ALLOWED     -> published as before.
+ *
+ * It lives in the service, not the route, so every entry point — HTTP, seed, a
+ * future import job — is judged by the same rule and cannot bypass it by calling
+ * the service directly.
+ */
+export interface ListingPolicyOutcome {
+  classification: GoodsClassification;
+  /** Status to persist: DRAFT for restricted, ACTIVE otherwise. */
+  status: 'ACTIVE' | 'DRAFT';
+  /** Whether the listing may be visible in the public catalogue. */
+  isPublished: boolean;
+}
+
+export async function enforceListingPolicy(
+  db: DB,
+  fields: Parameters<typeof classifyListing>[0],
+  ctx: { actorId: string | null; entityId?: string | null },
+): Promise<ListingPolicyOutcome> {
+  const classification = classifyListing(fields);
+
+  if (classification.severity === 'PROHIBITED') {
+    await writeAudit(db, { actorId: ctx.actorId }, {
+      action: 'PRODUCT.PROHIBITED_REJECTED',
+      entityType: 'PRODUCT',
+      entityId: ctx.entityId ?? null,
+      metadata: {
+        ruleId: classification.ruleId,
+        category: classification.category,
+        reason: classification.reason,
+      },
+    });
+    throw ApiError.prohibitedGoods(classification.reason ?? undefined, {
+      ruleId: classification.ruleId,
+      category: classification.category,
+    });
+  }
+
+  if (classification.severity === 'RESTRICTED') {
+    await writeAudit(db, { actorId: ctx.actorId }, {
+      action: 'PRODUCT.RESTRICTED_REVIEW_REQUIRED',
+      entityType: 'PRODUCT',
+      entityId: ctx.entityId ?? null,
+      metadata: {
+        ruleId: classification.ruleId,
+        category: classification.category,
+        reason: classification.reason,
+      },
+    });
+    return { classification, status: 'DRAFT', isPublished: false };
+  }
+
+  return { classification, status: 'ACTIVE', isPublished: true };
+}
+
 
 /** Normalizes optional localised names so a blank form field is stored as NULL, not ''. */
 function blankToNull(value: string | undefined | null): string | null {
@@ -144,6 +210,26 @@ export async function createProduct(
   const productId = newId();
   const slug = slugify(input.name);
 
+  // LC-03 — classify before any write. A prohibited listing throws (nothing is
+  // inserted); a restricted one is forced to an unpublished DRAFT.
+  const policy = await enforceListingPolicy(
+    db,
+    {
+      name: input.name,
+      nameAr: input.nameAr,
+      nameFr: input.nameFr,
+      description: input.description,
+      brand: input.brand,
+      category: input.categoryId,
+      extraTexts: [
+        ...(input.variants ?? []).map((v) => v.name),
+        ...(input.images ?? []).map((img) => img.altText),
+        input.specifications ? JSON.stringify(input.specifications) : null,
+      ],
+    },
+    { actorId: ctx.actorId, entityId: productId },
+  );
+
   await db.insert(products).values({
     id: productId,
     sellerId: input.sellerId,
@@ -162,9 +248,11 @@ export async function createProduct(
     basePrice: toDecimal(input.basePrice).toFixed(4),
     moq: input.moq ?? 1,
     unit: input.unit ?? 'piece',
-    status: 'ACTIVE',
-    isPublished: true,
-    tags: null,
+    status: policy.status,
+    isPublished: policy.isPublished,
+    tags: policy.classification.severity === 'ALLOWED'
+      ? null
+      : { lc03: { severity: policy.classification.severity, ruleId: policy.classification.ruleId, category: policy.classification.category } },
     specifications: input.specifications ? (input.specifications as unknown as Record<string, unknown>) : null,
     purchaseIntent: input.purchaseIntent ?? 'B2B',
   });
@@ -351,10 +439,25 @@ export async function updateProductStatus(
   db: DB,
   productId: string,
   status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED' | 'SUSPENDED',
-  ctx: { actorId: string },
+  ctx: { actorId: string; canReviewRestricted?: boolean },
 ): Promise<void> {
   const existing = await db.select().from(products).where(eq(products.id, productId)).limit(1);
   if (existing.length === 0) throw ApiError.notFound('Product not found');
+
+  // LC-03 — a listing that the policy classified as RESTRICTED stays unpublished
+  // until a human reviewer approves it. Without that permission, activating such
+  // a listing is refused here, in the service, so no route can publish it by
+  // changing its status (including the admin suspend/reactivate path).
+  const lc03 = (existing[0].tags as { lc03?: { severity?: string; ruleId?: string } } | null)?.lc03;
+  if (lc03?.severity === 'RESTRICTED' && status === 'ACTIVE' && !ctx.canReviewRestricted) {
+    await writeAudit(db, { actorId: ctx.actorId }, {
+      action: 'PRODUCT.RESTRICTED_PUBLISH_BLOCKED',
+      entityType: 'PRODUCT',
+      entityId: productId,
+      metadata: { ruleId: lc03.ruleId ?? null },
+    });
+    throw ApiError.restrictedGoodsReviewRequired('This listing is restricted and needs compliance approval before it can be activated');
+  }
 
   await db.update(products).set({ status, updatedAt: new Date() }).where(eq(products.id, productId));
 
@@ -364,6 +467,50 @@ export async function updateProductStatus(
     entityId: productId,
     before: { status: existing[0].status },
     after: { status },
+  });
+}
+
+/**
+ * LC-03 — human compliance review of a RESTRICTED listing.
+ *
+ * APPROVE clears the restriction marker and publishes the listing; REJECT
+ * archives it. The caller must hold `catalog:compliance:review` (enforced at the
+ * route); an automated agent never holds it, so this is the only path that can
+ * clear a restricted listing — the publish guard in `updateProductStatus` cannot
+ * be worked around by any other route.
+ */
+export async function reviewRestrictedListing(
+  db: DB,
+  productId: string,
+  decision: 'APPROVE' | 'REJECT',
+  ctx: { actorId: string; ipAddress?: string | null },
+): Promise<void> {
+  const existing = await db.select().from(products).where(eq(products.id, productId)).limit(1);
+  if (existing.length === 0) throw ApiError.notFound('Product not found');
+  const before = existing[0];
+  const lc03 = (before.tags as { lc03?: Record<string, unknown> } | null)?.lc03;
+  if (!lc03 || lc03.severity !== 'RESTRICTED') {
+    throw ApiError.validation([{ field: 'productId', message: 'Product is not awaiting a restricted-goods review', code: 'VALIDATION_FAILED' }]);
+  }
+
+  const approved = decision === 'APPROVE';
+  await db
+    .update(products)
+    .set({
+      status: approved ? 'ACTIVE' : 'ARCHIVED',
+      isPublished: approved,
+      tags: approved ? { lc03: { ...lc03, approved: true, approvedBy: ctx.actorId, approvedAt: new Date().toISOString() } } : before.tags,
+      updatedAt: new Date(),
+    })
+    .where(eq(products.id, productId));
+
+  await writeAudit(db, { actorId: ctx.actorId, ipAddress: ctx.ipAddress }, {
+    action: approved ? 'PRODUCT.RESTRICTED_APPROVED' : 'PRODUCT.RESTRICTED_REJECTED',
+    entityType: 'PRODUCT',
+    entityId: productId,
+    before: { status: before.status },
+    after: { status: approved ? 'ACTIVE' : 'ARCHIVED' },
+    metadata: { ruleId: (lc03.ruleId as string | undefined) ?? null, category: (lc03.category as string | undefined) ?? null },
   });
 }
 
@@ -428,6 +575,38 @@ export async function updateProduct(
   if (input.purchaseIntent !== undefined) patch.purchaseIntent = input.purchaseIntent;
 
   if (Object.keys(patch).length === 0) return;
+
+  // LC-03 — re-classify the *resulting* listing, not just the changed fields, so
+  // a seller cannot rename or re-describe an existing listing into a prohibited
+  // or restricted one, nor edit a flagged listing back to a clean state. The
+  // classification runs before the write and can throw (prohibited), leaving the
+  // stored row untouched.
+  const effective = {
+    name: (patch.name as string | undefined) ?? before.name,
+    nameAr: (patch.nameAr as string | null | undefined) ?? before.nameAr,
+    nameFr: (patch.nameFr as string | null | undefined) ?? before.nameFr,
+    description: (patch.description as string | null | undefined) ?? before.description,
+    brand: (patch.brand as string | null | undefined) ?? before.brand,
+    category: (patch.categoryId as string | undefined) ?? before.categoryId,
+    extraTexts: [before.specifications ? JSON.stringify(before.specifications) : null],
+  };
+  const policy = await enforceListingPolicy(db, effective, { actorId: ctx.actorId, entityId: productId });
+  if (policy.classification.severity === 'ALLOWED') {
+    patch.tags = null;
+  } else {
+    patch.tags = {
+      lc03: {
+        severity: policy.classification.severity,
+        ruleId: policy.classification.ruleId,
+        category: policy.classification.category,
+      },
+    };
+    // A listing that becomes restricted must not stay published.
+    if (policy.classification.severity === 'RESTRICTED' && before.status === 'ACTIVE') {
+      patch.status = 'DRAFT';
+      patch.isPublished = false;
+    }
+  }
 
   patch.updatedAt = new Date();
   await db.update(products).set(patch).where(eq(products.id, productId));
