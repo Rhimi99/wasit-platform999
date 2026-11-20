@@ -13,7 +13,9 @@ import {
   listDisputeAppeals,
   listDisputePolicyRules,
   listMyDisputes,
+  withdrawDispute,
 } from './service';
+import { getPublicDisputePolicy } from './public-service';
 
 const createSchema = z.object({
   orderId: z.string().min(1).max(36),
@@ -36,6 +38,17 @@ const appealSchema = z.object({
 });
 
 export const disputeRoutes = new Hono();
+
+// Public, unauthenticated disclosure of the dispute/refund windows. Mounted
+// before the auth guard so an anonymous visitor can read the policy summary; it
+// exposes no case data and no internal configuration.
+export const publicDisputeRoutes = new Hono();
+
+publicDisputeRoutes.get('/refund-policy', async (c) => {
+  const countryCode = c.req.query('country') ?? null;
+  const policy = await getPublicDisputePolicy(getContext(c).db, countryCode);
+  return c.json({ success: true, data: policy });
+});
 
 disputeRoutes.use('*', requireAuth, requirePermission(
   PERMISSIONS.DISPUTE_CREATE,
@@ -82,6 +95,17 @@ disputeRoutes.post('/:id/messages', validateBody(messageSchema), requirePermissi
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof messageSchema>>(c);
   const result = await addDisputeMessage(ctx.db, ctx.user!.id, c.req.param('id')!, body.body);
+  return c.json({ success: true, data: result });
+});
+
+// A party who opened the dispute may withdraw it while it is still live. The
+// service enforces that only the opener, and only before a decision, may do so.
+disputeRoutes.post('/:id/withdraw', requirePermission(PERMISSIONS.DISPUTE_READ_OWN), async (c) => {
+  const ctx = getContext(c);
+  const result = await withdrawDispute(ctx.db, ctx.user!.id, c.req.param('id')!, {
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
   return c.json({ success: true, data: result });
 });
 

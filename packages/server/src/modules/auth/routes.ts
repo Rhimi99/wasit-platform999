@@ -19,6 +19,8 @@ import {
 import {
   loginUser,
   completeMfaLogin,
+  beginStaffMfaEnrollment,
+  completeStaffMfaEnrollment,
   logoutUser,
   registerUser,
   verifyEmail,
@@ -33,7 +35,7 @@ import {
   verifyPhoneCode,
   devPhoneCode,
 } from './service';
-import { ApiError, SELF_SELECTABLE_ROLES } from '@wasit/shared';
+import { ApiError, SELF_SELECTABLE_ROLES, SUPPORTED_LOCALES, DEFAULT_LOCALE } from '@wasit/shared';
 import { env, devToolingActive, cookieSecure } from '../../lib/env';
 import { hashToken } from '../../lib/security';
 
@@ -46,6 +48,16 @@ const mfaChallengeSchema = z.object({
   challengeToken: z.string().min(16).max(200),
   code: z.string().min(1).max(20),
 });
+// LC-06: mandatory staff MFA enrollment at login. The begin step takes only the
+// pending token; the confirm step adds the TOTP the client generated from the
+// secret it just enrolled.
+const staffMfaBeginSchema = z.object({
+  challengeToken: z.string().min(16).max(200),
+});
+const staffMfaEnrollSchema = z.object({
+  challengeToken: z.string().min(16).max(200),
+  code: z.string().length(6).regex(/^\d{6}$/),
+});
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -53,7 +65,7 @@ const registerSchema = z.object({
   firstName: z.string().max(100).optional(),
   lastName: z.string().max(100).optional(),
   phone: z.string().max(32).optional(),
-  locale: z.enum(['ar', 'fr', 'en']).default('ar'),
+  locale: z.enum(SUPPORTED_LOCALES).default(DEFAULT_LOCALE),
   // Only the roles a visitor may self-select. A privileged role (ADMIN,
   // SUPER_ADMIN, SUPPORT, RISK, DISPUTE) is rejected here as a validation
   // error, so it never reaches the service — the service enforces the same
@@ -123,6 +135,20 @@ authRoutes.post(
       return c.json({
         success: true,
         data: { mfaRequired: true, challengeToken: result.challengeToken, expiresAt: result.expiresAt },
+      });
+    }
+
+    if (result.kind === 'staff_enrollment_required') {
+      // Staff account without a second factor: no session, only an enrollment
+      // challenge. The client must call /mfa/staff-enroll then /mfa/staff-confirm.
+      return c.json({
+        success: true,
+        data: {
+          mfaRequired: true,
+          mfaEnrollmentRequired: true,
+          challengeToken: result.challengeToken,
+          expiresAt: result.expiresAt,
+        },
       });
     }
 
@@ -220,6 +246,51 @@ authRoutes.post(
       maxAge: 30 * 86400,
     });
     return c.json({ success: true, data: { ...session.user, mfaRequired: false } });
+  },
+);
+
+// POST /api/auth/mfa/staff-enroll — LC-06: begin mandatory staff enrollment.
+// Takes the pending enrollment challenge token from the login step and returns a
+// fresh TOTP secret, the otpauth URI, and the one-time recovery codes. No session
+// is issued; the staff member must confirm a code at /mfa/staff-confirm.
+authRoutes.post(
+  '/mfa/staff-enroll',
+  rateLimit({ windowSeconds: 60, max: 5, keyPrefix: 'auth-staff-mfa-enroll' }),
+  validateBody(staffMfaBeginSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof staffMfaBeginSchema>>(c);
+    const ctx = getContext(c);
+    const result = await beginStaffMfaEnrollment(ctx.db, { challengeToken: body.challengeToken }, {
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
+// POST /api/auth/mfa/staff-confirm — LC-06: complete mandatory staff enrollment.
+// Verifies the challenge token and the TOTP for the freshly enrolled secret,
+// enables the factor, and only then issues the session cookie.
+authRoutes.post(
+  '/mfa/staff-confirm',
+  rateLimit({ windowSeconds: 60, max: 10, keyPrefix: 'auth-staff-mfa-confirm' }),
+  validateBody(staffMfaEnrollSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof staffMfaEnrollSchema>>(c);
+    const ctx = getContext(c);
+    const result = await completeStaffMfaEnrollment(
+      ctx.db,
+      { challengeToken: body.challengeToken, code: body.code },
+      { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    );
+    setCookie(c, SESSION_COOKIE, result.token, {
+      httpOnly: true,
+      sameSite: 'Lax',
+      path: '/',
+      secure: cookieSecure,
+      maxAge: 30 * 86400,
+    });
+    return c.json({ success: true, data: { ...result.user, mfaRequired: false } });
   },
 );
 

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { SUPPORTED_LOCALES } from '@wasit/shared';
 import { requireAuth, requireRole } from '../../middleware/auth.js';
 import { getContext } from '../../lib/request-context.js';
 import { rateLimit } from '../../middleware/rate-limit.js';
@@ -18,6 +19,7 @@ import {
   listDeletionRequests,
   advanceDeletionStage,
   advanceDueDeletionRetentions,
+  rectifyOwnProfile,
 } from './service.js';
 
 /**
@@ -31,6 +33,13 @@ export const privacyRoutes = new Hono();
 const consentSchema = z.object({
   consentType: z.string().min(1).max(100),
   granted: z.boolean(),
+});
+const rectificationSchema = z.object({
+  firstName: z.string().max(100).nullable().optional(),
+  lastName: z.string().max(100).nullable().optional(),
+  phone: z.string().max(32).nullable().optional(),
+  locale: z.enum(SUPPORTED_LOCALES).nullable().optional(),
+  displayName: z.string().max(150).nullable().optional(),
 });
 const deletionSchema = z.object({
   reason: z.string().max(500).optional(),
@@ -76,6 +85,21 @@ privacyRoutes.put(
     const body = getValidatedBody<z.infer<typeof consentSchema>>(c);
     await setConsent(ctx.db, { userId: ctx.user!.id }, body.consentType, body.granted, 'USER');
     return c.json({ success: true });
+  },
+);
+
+// PATCH /api/privacy/me — rectify the caller's own profile (right to correct).
+// Whitelisted fields only; email and verification status are unreachable here.
+privacyRoutes.patch(
+  '/me',
+  rateLimit({ windowSeconds: 60, max: 20, keyPrefix: 'privacy-rectify' }),
+  requireAuth,
+  validateBody(rectificationSchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<z.infer<typeof rectificationSchema>>(c);
+    const result = await rectifyOwnProfile(ctx.db, { userId: ctx.user!.id, actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, body);
+    return c.json({ success: true, data: result });
   },
 );
 

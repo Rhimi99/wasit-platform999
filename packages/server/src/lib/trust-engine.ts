@@ -1,10 +1,10 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import { users } from '../db/schema/auth';
 import { trustScores, verificationRequests } from '../db/schema/trust';
 import { disputes } from '../db/schema/disputes';
-import { transactions } from '../db/schema/commerce';
 import { resolveOwnedSellerIds } from './seller-ownership';
+import { countSellerTransactions } from './seller-attribution';
 import { newId } from './ids';
 
 export type TrustFactors = {
@@ -74,33 +74,14 @@ export async function computeTrustScore(db: DB, userId: string): Promise<{
     ),
   );
 
-  const txResult = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-      successful: sql<number>`count(*) filter (where status = 'PAID')::int`,
-    })
-    .from(transactions)
-    .where(
-      eq(transactions.sellerId, userId),
-    );
-
-  let totalTransactions = txResult[0]?.total ?? 0;
-  let successfulTransactions = txResult[0]?.successful ?? 0;
-
-  // Seller transactions are stored against seller entity ids; aggregate the
-  // entities owned by this user so the score reflects all their activity.
+  // M2.5 — count the seller's transactions from `seller_orders` (per-seller
+  // truth), not from the single `transactions.sellerId` column, which a
+  // multi-seller basket collapses onto one seller. A user's own id and the
+  // entity ids they own are merged so both shapes count. The score equation
+  // below is unchanged; only the two inputs are now attributed correctly.
   const ownedSellers = await resolveOwnedSellerIds(db, userId);
-  if (ownedSellers.length > 0) {
-    const entityTx = await db
-      .select({
-        total: sql<number>`count(*)::int`,
-        successful: sql<number>`count(*) filter (where status = 'PAID')::int`,
-      })
-      .from(transactions)
-      .where(inArray(transactions.sellerId, ownedSellers));
-    totalTransactions += entityTx[0]?.total ?? 0;
-    successfulTransactions += entityTx[0]?.successful ?? 0;
-  }
+  const { total: totalTransactions, successful: successfulTransactions } =
+    await countSellerTransactions(db, [userId, ...ownedSellers]);
 
   const disputeCountRow = await db
     .select({ count: sql<number>`count(*)::int` })

@@ -33,6 +33,10 @@ if (env.SCHEDULER_ENABLED) {
     agentRunsRecoveryEnabled: env.AI_AGENT_RUNS_RECOVERY_ENABLED,
     agentRunsRecoveryIntervalMinutes: env.AI_AGENT_RUNS_RECOVERY_INTERVAL_MINUTES,
     agentRunStepStuckSeconds: env.AI_AGENT_RUN_STEP_STUCK_SECONDS,
+    agentRunsSupervisorEnabled: env.AI_AGENT_RUNS_SUPERVISOR_ENABLED,
+    agentRunsSupervisorIntervalMinutes: env.AI_AGENT_RUNS_SUPERVISOR_INTERVAL_MINUTES,
+    disputeEscalationEnabled: env.DISPUTE_ESCALATION_ENABLED,
+    disputeEscalationIntervalMinutes: env.DISPUTE_ESCALATION_INTERVAL_MINUTES,
   });
   const shutdown = (): void => {
     handle.stop();

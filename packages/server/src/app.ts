@@ -1,8 +1,13 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { coreMiddleware } from './middleware/core.js';
-import { resolveCorsOrigin } from './lib/env.js';
+import { resolveCorsOrigin, env } from './lib/env.js';
 import { securityHeaders } from './middleware/security-headers.js';
+import { csrfProtection } from './middleware/csrf.js';
+import { requestBodyLimit } from './middleware/body-limit.js';
+import { rateLimit } from './middleware/rate-limit.js';
+import { requireStaffMfa } from './middleware/mfa.js';
+import { requireLegalAcceptance } from './modules/legal/enforcement.js';
 import { observabilityMiddleware } from './middleware/observability.js';
 import { errorBody, errorHandlerMiddleware } from './middleware/errors.js';
 import { getTraceId } from './lib/request-context.js';
@@ -23,7 +28,7 @@ import { notificationRoutes } from './modules/notifications/routes.js';
 import { verificationRoutes } from './modules/verification/routes.js';
 import { trustRoutes } from './modules/trust/routes.js';
 import { riskRoutes } from './modules/risk/routes.js';
-import { disputeRoutes } from './modules/disputes/routes.js';
+import { disputeRoutes, publicDisputeRoutes } from './modules/disputes/routes.js';
 import { adminRoutes } from './modules/admin/routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
@@ -38,6 +43,7 @@ import { revenueRoutes } from './modules/revenue/routes.js';
 import { geoRoutes } from './modules/geo/routes.js';
 import { subscriptionRoutes } from './modules/subscriptions/routes.js';
 import { privacyRoutes, adminPrivacyRoutes } from './modules/privacy/routes.js';
+import { publicLegalRoutes, legalRoutes } from './modules/legal/routes.js';
 import { customerLibraryRoutes } from './modules/customer-library/routes.js';
 import { seoRoutes, seoApiRoutes } from './modules/seo/routes.js';
 import { paymentsRoutes, paymentWebhookRoutes } from './modules/payments/routes.js';
@@ -53,6 +59,9 @@ export function createApp(): Hono {
   app.use('*', errorHandlerMiddleware);
   app.use('*', coreMiddleware);
   app.use('*', securityHeaders);
+  // Reject an oversized request body before any handler (or the JSON parse)
+  // reads it, so a large payload cannot be buffered by an expensive route.
+  app.use('*', requestBodyLimit());
   // Structured request logging + metrics, tagged with the trace id. Replaces
   // Hono's `logger()` so there is exactly one log line per request.
   app.use('*', observabilityMiddleware());
@@ -66,6 +75,89 @@ export function createApp(): Hono {
       credentials: true,
     }),
   );
+
+  // CSRF: reject cookie-authenticated state-changing requests whose origin is
+  // not our own front-end (see `middleware/csrf.ts`). Runs after CORS so the
+  // rejection still carries CORS headers, and before routing so no write route
+  // can be reached first.
+  app.use('*', csrfProtection());
+
+  // Resource-exhaustion backstop (011.4). A generous general limit over `/api`
+  // plus tighter limits on the expensive surfaces (AI, search, video render).
+  // These are additions to — never replacements for — auth/RBAC/approval, and
+  // they run before the MFA/legal gates so a flood is shed before any of that
+  // work happens. `/api/auth` and `/api/health` are exempt: the former carries
+  // its own per-action limits, the latter is a cheap operational probe.
+  app.use(
+    '/api/*',
+    rateLimit({
+      windowSeconds: env.RATE_LIMIT_API_WINDOW_SECONDS,
+      max: () => env.RATE_LIMIT_API_MAX,
+      keyPrefix: 'api',
+      exemptPaths: ['/api/auth', '/api/health'],
+    }),
+  );
+  // AI: a tight per-user limit plus a per-IP backstop (an attacker rotating
+  // accounts from one host still trips the host limit).
+  app.use(
+    '/api/ai/*',
+    rateLimit({
+      windowSeconds: env.RATE_LIMIT_AI_WINDOW_SECONDS,
+      max: () => env.RATE_LIMIT_AI_MAX,
+      keyPrefix: 'ai-user',
+      subject: 'user',
+    }),
+  );
+  app.use(
+    '/api/ai/*',
+    rateLimit({
+      windowSeconds: env.RATE_LIMIT_AI_WINDOW_SECONDS,
+      max: () => env.RATE_LIMIT_AI_IP_MAX,
+      keyPrefix: 'ai-ip',
+      subject: 'ip',
+    }),
+  );
+  // Search is public and relatively costly → limit per trusted client IP.
+  app.use(
+    '/api/search/*',
+    rateLimit({
+      windowSeconds: env.RATE_LIMIT_SEARCH_WINDOW_SECONDS,
+      max: () => env.RATE_LIMIT_SEARCH_MAX,
+      keyPrefix: 'search-ip',
+      subject: 'ip',
+    }),
+  );
+  // Video generation renders synchronously with ffmpeg → the tightest per-user
+  // limit, on top of the in-process concurrency cap in the media service.
+  app.use(
+    '/api/media/marketing-videos',
+    rateLimit({
+      windowSeconds: env.RATE_LIMIT_VIDEO_WINDOW_SECONDS,
+      max: () => env.RATE_LIMIT_VIDEO_MAX,
+      keyPrefix: 'media-video',
+      subject: 'user',
+    }),
+  );
+
+  // Mandatory MFA for internal staff (LC-06). Mounted once over the whole /api
+  // surface, after CSRF and before any router, so a staff account without an
+  // enabled second factor is refused on *every* staff-reachable route — admin,
+  // the desks (verification/trust/risk/disputes), revenue, and the mixed routes a
+  // staff role can reach (orders, payments, subscriptions, ai, media, analytics,
+  // tax, finance, observability, …). It only ever blocks the five staff roles, so
+  // customers, merchants, suppliers, companies and marketers are untouched; it is
+  // inert unless `STAFF_MFA_ENFORCEMENT` resolves to enforced. `/api/auth` and
+  // `/api/health` are exempt so a staff member can sign in and enroll a factor.
+  app.use('/api/*', requireStaffMfa());
+
+  // Mandatory legal-document acceptance (LC-01). Mounted over the whole `/api`
+  // surface, after CSRF. It is **inert by default** (`LEGAL_ACCEPTANCE_ENFORCEMENT`
+  // defaults to `off`) and, even when switched on, it only blocks once a document
+  // is actually published-and-in-force — so an unapproved draft can never lock
+  // anyone out or be presented as binding. `/api/auth`, `/api/health` and the
+  // legal module's own routes are exempt so a user can sign in, read the pending
+  // list, and record acceptance without first clearing the gate.
+  app.use('/api/*', requireLegalAcceptance());
 
   app.onError((err, c) => errorBody(err, c));
 
@@ -103,11 +195,18 @@ export function createApp(): Hono {
   app.route('/api/trust', trustRoutes);
   app.route('/api/risk', riskRoutes);
   app.route('/api/disputes', disputeRoutes);
+  // Public refund/dispute policy summary: no session, no case data, disclosure
+  // only. Kept on its own prefix so it is obviously outside the auth boundary.
+  app.route('/api/public/disputes', publicDisputeRoutes);
+  // Public legal documents: published texts only, no session. Same boundary
+  // rationale as the public dispute policy above.
+  app.route('/api/public/legal', publicLegalRoutes);
   app.route('/api/analytics', analyticsRoutes);
   app.route('/api/revenue', revenueRoutes);
   app.route('/api/geo', geoRoutes);
   app.route('/api/subscriptions', subscriptionRoutes);
   app.route('/api/privacy', privacyRoutes);
+  app.route('/api/legal', legalRoutes);
   app.route('/api/payments', paymentsRoutes);
   // Provider webhooks authenticate via HMAC signature, not a user session,
   // so they live on a separate mount path outside the session-guarded router.

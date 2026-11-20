@@ -384,6 +384,7 @@ async function seedPolicies(): Promise<void> {
         description: 'Default dispute resolution rules (per-country override supported)',
         rules: {
           openWindowDays: 30,
+          responseWindowDays: 7,
           evidenceDeadlineDays: 14,
           decisionDeadlineDays: 30,
           appealWindowDays: 7,

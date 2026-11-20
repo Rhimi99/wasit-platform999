@@ -1,5 +1,5 @@
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
-import { ApiError, isSelfSelectableRole, type UserRole } from '@wasit/shared';
+import { ApiError, isSelfSelectableRole, isStaffRole, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
   emailVerificationTokens,
@@ -13,14 +13,16 @@ import {
 } from '../../db/schema/auth';
 import { newId } from '../../lib/ids';
 import {
+  DUMMY_ARGON2_HASH,
   generateOtpCode,
   generateSessionToken,
   hashPassword,
   hashToken,
   verifyPassword,
 } from '../../lib/security';
-import { verifyMfaChallenge } from '../../lib/mfa';
-import { env, demoEmailVerificationSkipped, demoAutoLoginEnabled } from '../../lib/env';
+import { verifyMfaChallenge, enrollMfa, confirmMfa } from '../../lib/mfa';
+import { env, demoEmailVerificationSkipped, demoAutoLoginEnabled, staffMfaEnforced } from '../../lib/env';
+import { isLoginBlocked, lockoutPolicy } from '../../lib/lockout';
 import { DEMO_TEST_ACCOUNT_EMAIL, resolveDemoAuditPersona } from '../../lib/demo-account';
 import { writeAudit } from '../../lib/audit';
 import { sendMail } from '../../lib/mail/send';
@@ -53,10 +55,26 @@ export interface LoginResult {
  * Login outcome. When the account has MFA enabled the password step returns a
  * pending challenge instead of a session token — the session is only issued by
  * `completeMfaLogin` after a valid TOTP/recovery code.
+ *
+ * `staff_enrollment_required` is the LC-06 variant for an internal staff account
+ * that has no second factor yet: the password step returns an enrollment
+ * challenge instead of a session, and the session is only issued by
+ * `completeStaffMfaEnrollment` after the staff member enrolls and confirms a TOTP.
  */
 export type LoginOutcome =
   | { kind: 'session'; session: LoginResult }
-  | { kind: 'mfa_required'; challengeToken: string; expiresAt: Date };
+  | { kind: 'mfa_required'; challengeToken: string; expiresAt: Date }
+  | { kind: 'staff_enrollment_required'; challengeToken: string; expiresAt: Date };
+
+/** Reads the role names held by a user. Used to decide staff MFA policy. */
+async function getUserRoles(db: DB, userId: string): Promise<UserRole[]> {
+  const rows = await db
+    .select({ roleName: roles.name })
+    .from(userRoles)
+    .innerJoin(roles, eq(userRoles.roleId, roles.id))
+    .where(eq(userRoles.userId, userId));
+  return rows.map((r) => r.roleName as UserRole);
+}
 
 /** Creates a session, stamps last-login, and returns the login payload. */
 async function issueSession(
@@ -396,21 +414,37 @@ export async function loginUser(
   const email = input.email.trim().toLowerCase();
   const row = await db.select().from(users).where(eq(users.email, email)).limit(1);
 
+  // The three "no session" early paths — unknown account, locked account, disabled
+  // account — all run one password verification against the parameter-matched
+  // dummy hash and then throw the same 401 body. Without it, a locked or unknown
+  // address would answer in ~0ms (no argon2 work) while a wrong password costs a
+  // full hash, which is a response-time oracle for account existence/state. The
+  // 403 below is intentional and documented: it is the historical contract for a
+  // disabled account, and the dummy verify keeps its *timing* indistinguishable.
   if (row.length === 0) {
-    await verifyPassword('dummy-password-for-timing', '$argon2id$v=19$m=65536,t=2,p=1$S97ew0ZM2fLFdTUgS5/+bA$Y7Y9w4UBJh7rqfFIhaWf7vO3X0Zxnh0I2m1l6vMCzXM');
+    await verifyPassword(input.password, DUMMY_ARGON2_HASH);
     throw ApiError.unauthorized('Invalid credentials');
   }
 
   const user = row[0];
-  if (user.isLocked) {
-    throw ApiError.forbidden('Account locked. Please reset your password or contact support.');
+
+  // LC-07: an active temporary brute-force lock is refused *before* the password
+  // is checked, so a locked account leaks nothing about whether the password was
+  // right. A permanent administrative lock (`isLocked` with no `lockedUntil`)
+  // keeps its historical 403. A lapsed temporary lock is cleared lazily below,
+  // on the next wrong password, rather than here.
+  if (isLoginBlocked(user)) {
+    await verifyPassword(input.password, DUMMY_ARGON2_HASH);
+    throw ApiError.unauthorized('Invalid credentials');
   }
   if (!user.isActive) {
+    await verifyPassword(input.password, DUMMY_ARGON2_HASH);
     throw ApiError.forbidden('Account disabled');
   }
 
   const valid = await verifyPassword(input.password, user.passwordHash);
   if (!valid) {
+    await registerFailedLogin(db, user);
     throw ApiError.unauthorized('Invalid credentials');
   }
 
@@ -450,6 +484,41 @@ export async function loginUser(
     return { kind: 'mfa_required', challengeToken: token, expiresAt };
   }
 
+  // Mandatory MFA for internal staff (LC-06). A staff account without an enabled
+  // second factor gets no session: the password step yields a short-lived,
+  // single-use *enrollment* challenge, and the session is only issued by
+  // `completeStaffMfaEnrollment` once the staff member has enrolled and confirmed
+  // a TOTP. Staff roles are read from the database, never from the request, and
+  // only when enforcement is on — so a deployment with it off pays no extra query.
+  if (staffMfaEnforced()) {
+    const staffRoles = await getUserRoles(db, user.id);
+    if (isStaffRole(staffRoles)) {
+      const { token, tokenHash } = generateSessionToken();
+      const expiresAt = new Date(Date.now() + env.MFA_ENROLLMENT_TOKEN_TTL_MINUTES * 60_000);
+      await db.insert(mfaChallenges).values({
+        id: newId(),
+        userId: user.id,
+        tokenHash,
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        expiresAt,
+      });
+      await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+        action: 'AUTH.MFA_ENROLLMENT_REQUIRED',
+        entityType: 'USER',
+        entityId: user.id,
+      });
+      return { kind: 'staff_enrollment_required', challengeToken: token, expiresAt };
+    }
+  }
+
+  // Authentication is now complete (password valid and no second factor pending):
+  // only here does the failure streak reset. Resetting it earlier — on the password
+  // alone — would let an attacker who knows the password clear a near-threshold
+  // counter and then keep guessing TOTP codes; and it would erase a lock the user
+  // had not yet cleared at the second factor.
+  await clearFailedLogin(db, user, ctx);
+
   const session = await issueSession(db, user, ctx);
 
   await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
@@ -459,6 +528,82 @@ export async function loginUser(
   });
 
   return { kind: 'session', session };
+}
+
+/**
+ * Applies one wrong-password result atomically (LC-07).
+ *
+ * A single conditional `UPDATE` both increments the streak and, on reaching the
+ * configured maximum, stamps `lockedUntil`. The increment reads the current
+ * column value in the database (`failed_login_attempts + 1`), so two concurrent
+ * failures cannot lose a count the way a read-modify-write in JavaScript would.
+ * The `WHERE` matches a lapsed temporary lock back to zero, so the counter never
+ * carries over from a previous lock once it has expired.
+ *
+ * A lock is logged once — at the moment it is set — with the attempt count and
+ * duration, never the password or any secret.
+ */
+async function registerFailedLogin(db: DB, user: typeof users.$inferSelect): Promise<void> {
+  const { maxAttempts, lockMinutes } = lockoutPolicy();
+
+  const res = (await db.execute(sql`
+    update users
+    set
+      failed_login_attempts = case
+        when locked_until is not null and locked_until <= now() then 1
+        else failed_login_attempts + 1
+      end,
+      locked_until = case
+        when (case
+          when locked_until is not null and locked_until <= now() then 1
+          else failed_login_attempts + 1
+        end) >= ${maxAttempts} then now() + (${lockMinutes}::int * interval '1 minute')
+        else null
+      end,
+      updated_at = now()
+    where id = ${user.id}
+    returning failed_login_attempts, locked_until
+  `)) as unknown as { rows: { failed_login_attempts: number; locked_until: Date | null }[] };
+
+  const row = res.rows?.[0];
+  if (row?.locked_until) {
+    await writeAudit(db, { actorId: user.id }, {
+      action: 'AUTH.ACCOUNT_LOCKED',
+      entityType: 'USER',
+      entityId: user.id,
+      metadata: { attempts: row.failed_login_attempts, lockMinutes },
+    });
+  }
+}
+
+/**
+ * Resets the failure streak after a correct password (LC-07), and logs the
+ * automatic release of a temporary lock that had lapsed. A no-op when the streak
+ * and lock are already clear, so an ordinary login writes nothing extra.
+ */
+async function clearFailedLogin(
+  db: DB,
+  user: typeof users.$inferSelect,
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+): Promise<void> {
+  if (user.failedLoginAttempts === 0 && user.lockedUntil === null) return;
+
+  await db
+    .update(users)
+    .set({ failedLoginAttempts: 0, lockedUntil: null, updatedAt: new Date() })
+    .where(eq(users.id, user.id));
+
+  // Reaching here means the password was correct and no active lock was in force
+  // (an active lock throws before the password check). So a non-null `lockedUntil`
+  // can only be a lapsed temporary lock: log its automatic release.
+  if (user.lockedUntil !== null) {
+    await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+      action: 'AUTH.ACCOUNT_UNLOCKED',
+      entityType: 'USER',
+      entityId: user.id,
+      metadata: { reason: 'expired' },
+    });
+  }
 }
 
 /**
@@ -557,7 +702,7 @@ async function openDemoSession(
   }
 
   const user = row[0];
-  if (user.isLocked) {
+  if (isLoginBlocked(user)) {
     throw ApiError.forbidden('Account locked. Please reset your password or contact support.');
   }
   if (!user.isActive) {
@@ -629,7 +774,7 @@ export async function completeMfaLogin(
   }
 
   const userRows = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
-  if (userRows.length === 0 || !userRows[0].isActive || userRows[0].isLocked || !userRows[0].mfaEnabled) {
+  if (userRows.length === 0 || !userRows[0].isActive || isLoginBlocked(userRows[0]) || !userRows[0].mfaEnabled) {
     throw ApiError.unauthorized('Invalid or expired challenge');
   }
   const user = userRows[0];
@@ -642,9 +787,14 @@ export async function completeMfaLogin(
   }
 
   if (!result.valid) {
+    // Atomic increment (LC-07 review): `attempts = attempts + 1` in SQL, so
+    // parallel wrong codes cannot lose updates and slip past the cap the way a
+    // read-modify-write (`set({ attempts: challenge.attempts + 1 })`) would. This
+    // per-challenge cap is the *independent* MFA brute-force protection; a wrong
+    // code never touches the password streak.
     await db
       .update(mfaChallenges)
-      .set({ attempts: challenge.attempts + 1 })
+      .set({ attempts: sql`${mfaChallenges.attempts} + 1` })
       .where(eq(mfaChallenges.id, challenge.id));
     await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
       action: 'AUTH.MFA_CHALLENGE_FAILED',
@@ -659,8 +809,154 @@ export async function completeMfaLogin(
     .set({ consumedAt: new Date() })
     .where(eq(mfaChallenges.id, challenge.id));
 
+  // Full authentication now complete (password + second factor): reset the
+  // password failure streak here, not at the password step.
+  await clearFailedLogin(db, user, ctx);
+
   const session = await issueSession(db, user, ctx);
 
+  await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'AUTH.LOGIN',
+    entityType: 'USER',
+    entityId: user.id,
+  });
+
+  return session;
+}
+
+/**
+ * Loads and validates a pending staff MFA *enrollment* challenge, returning the
+ * challenge row and the account. Shared by the enroll and confirm steps so both
+ * apply the same single-use/expiry/attempt and staff-policy rules.
+ *
+ * The challenge is NOT consumed here; only the confirm step consumes it.
+ */
+async function loadStaffEnrollmentChallenge(db: DB, challengeToken: string) {
+  const tokenHash = hashToken(challengeToken);
+  const rows = await db
+    .select()
+    .from(mfaChallenges)
+    .where(eq(mfaChallenges.tokenHash, tokenHash))
+    .limit(1);
+  if (rows.length === 0) throw ApiError.unauthorized('Invalid or expired challenge');
+  const challenge = rows[0];
+  if (challenge.consumedAt || challenge.expiresAt.getTime() <= Date.now()) {
+    throw ApiError.unauthorized('Invalid or expired challenge');
+  }
+  if (challenge.attempts >= env.MFA_CHALLENGE_MAX_ATTEMPTS) {
+    throw ApiError.unauthorized('Too many attempts. Please sign in again.');
+  }
+
+  const userRows = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
+  if (userRows.length === 0 || !userRows[0].isActive || isLoginBlocked(userRows[0])) {
+    throw ApiError.unauthorized('Invalid or expired challenge');
+  }
+  const user = userRows[0];
+
+  const staffRoles = await getUserRoles(db, user.id);
+  // Refuse when enrollment is no longer the correct step (already enrolled, or no
+  // longer staff) — the challenge must not be usable to replace an existing factor.
+  if (user.mfaEnabled || !staffMfaEnforced() || !isStaffRole(staffRoles)) {
+    throw ApiError.unauthorized('Invalid or expired challenge');
+  }
+
+  return { challenge, user };
+}
+
+/**
+ * Begins the mandatory staff MFA enrollment (LC-06).
+ *
+ * Validates the enrollment challenge issued at login and creates a pending
+ * authenticator for the account, returning the TOTP secret, the otpauth URI and
+ * the one-time recovery codes. No session is issued here — the staff member must
+ * confirm a code at {@link completeStaffMfaEnrollment}, which enables the factor
+ * and opens the session. The challenge is not consumed yet, so a failed confirm
+ * can be retried with the same secret.
+ */
+export async function beginStaffMfaEnrollment(
+  db: DB,
+  input: { challengeToken: string },
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+): Promise<{ secretBase32: string; qrUri: string; recoveryCodes: string[] }> {
+  const { user } = await loadStaffEnrollmentChallenge(db, input.challengeToken);
+  const enrollment = await enrollMfa(db, user.id, user.email);
+  await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'AUTH.MFA_ENROLLMENT_STARTED',
+    entityType: 'USER',
+    entityId: user.id,
+  });
+  return {
+    secretBase32: enrollment.secretBase32,
+    qrUri: enrollment.qrUri,
+    recoveryCodes: enrollment.recoveryCodes,
+  };
+}
+
+/**
+ * Completes the mandatory staff MFA enrollment challenge (LC-06).
+ *
+ * Used when an internal staff account has no second factor: the login step
+ * returned a `staff_enrollment_required` challenge instead of a session. This
+ * validates the challenge token and the TOTP for the secret the staff member
+ * enrolled at `/mfa/staff-enroll`, enables the factor, and only then issues the
+ * session. The staff member therefore cannot obtain a staff session without a
+ * working second factor.
+ *
+ * The challenge is single-use and invalidated after too many wrong codes. It is
+ * refused outright if MFA is no longer required for the account (already enabled,
+ * or the role set changed), so it cannot be replayed to re-enroll over an
+ * existing factor.
+ */
+export async function completeStaffMfaEnrollment(
+  db: DB,
+  input: { challengeToken: string; code: string },
+  ctx: { ipAddress?: string | null; userAgent?: string | null },
+): Promise<LoginResult> {
+  const { challenge, user } = await loadStaffEnrollmentChallenge(db, input.challengeToken);
+
+  // Confirms against the pending authenticator created by `/mfa/staff-enroll`
+  // (never re-enrolls here, or the code the staff member generated from the
+  // displayed secret would no longer match). A missing pending row is a failure.
+  let enrolled = false;
+  try {
+    await confirmMfa(db, user.id, input.code);
+    enrolled = true;
+  } catch {
+    enrolled = false;
+  }
+
+  if (!enrolled) {
+    // Atomic increment, same rationale as `completeMfaLogin`: parallel wrong
+    // codes must not lose attempts and outrun the per-challenge cap. A wrong code
+    // does not touch the password streak.
+    await db
+      .update(mfaChallenges)
+      .set({ attempts: sql`${mfaChallenges.attempts} + 1` })
+      .where(eq(mfaChallenges.id, challenge.id));
+    await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+      action: 'AUTH.MFA_ENROLLMENT_FAILED',
+      entityType: 'USER',
+      entityId: user.id,
+    });
+    throw ApiError.unauthorized('Invalid verification code');
+  }
+
+  await db
+    .update(mfaChallenges)
+    .set({ consumedAt: new Date() })
+    .where(eq(mfaChallenges.id, challenge.id));
+
+  // Full authentication now complete (password + enrollment TOTP): reset the
+  // password failure streak here, not at the password step.
+  await clearFailedLogin(db, user, ctx);
+
+  const session = await issueSession(db, user, ctx);
+
+  await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'AUTH.MFA_ENROLLED_AT_LOGIN',
+    entityType: 'USER',
+    entityId: user.id,
+  });
   await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
     action: 'AUTH.LOGIN',
     entityType: 'USER',

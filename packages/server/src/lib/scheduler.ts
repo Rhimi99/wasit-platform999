@@ -4,6 +4,8 @@ import { expireLapsedSubscriptions } from '../modules/subscriptions/collection';
 import { advanceDueDeletionRetentions } from '../modules/privacy/service';
 import { runDueAgentSchedules, reclaimExpiredLeases } from '../modules/ai/scheduling';
 import { recoverStuckSteps } from '../modules/ai/dispatcher';
+import { runSupervisorCycle, createSupervisorCycleGuard } from '../modules/ai/supervisor';
+import { escalateOverdueDisputes } from '../modules/disputes/service';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
@@ -57,6 +59,10 @@ export function startScheduler(options: {
   agentRunsRecoveryEnabled?: boolean;
   agentRunsRecoveryIntervalMinutes?: number;
   agentRunStepStuckSeconds?: number;
+  agentRunsSupervisorEnabled?: boolean;
+  agentRunsSupervisorIntervalMinutes?: number;
+  disputeEscalationEnabled?: boolean;
+  disputeEscalationIntervalMinutes?: number;
 }): SchedulerHandle {
   const intervalMs = options.rolloverIntervalMinutes * 60 * 1000;
   const purgeIntervalMs = (options.rateLimitPurgeIntervalMinutes ?? 15) * 60 * 1000;
@@ -65,6 +71,8 @@ export function startScheduler(options: {
   const agentLeaseSeconds = options.agentScheduleLeaseSeconds ?? 300;
   const recoveryIntervalMs = (options.agentRunsRecoveryIntervalMinutes ?? 5) * 60 * 1000;
   const recoveryStuckSeconds = options.agentRunStepStuckSeconds ?? 300;
+  const supervisorIntervalMs = (options.agentRunsSupervisorIntervalMinutes ?? 5) * 60 * 1000;
+  const disputeEscalationIntervalMs = (options.disputeEscalationIntervalMinutes ?? 30) * 60 * 1000;
   // Stable per-process worker id; the DB lease (not this string) is what keeps
   // two instances from running the same schedule.
   const workerId = `sched-${newId()}`;
@@ -72,6 +80,8 @@ export function startScheduler(options: {
   let agentRunInFlight = false;
   // In-process guard for the recovery sweep; see runAgentRunRecovery below.
   const recoveryGuard = createInFlightGuard();
+  // In-process guard for the supervisor cycle; see runSupervisor below.
+  const supervisorGuard = createSupervisorCycleGuard();
 
   const runRollover = async (): Promise<void> => {
     try {
@@ -155,6 +165,18 @@ export function startScheduler(options: {
     }
   };
 
+  const runDisputeEscalation = async (): Promise<void> => {
+    try {
+      const result = await escalateOverdueDisputes(db);
+      if (result.escalated > 0) {
+        logger.info('dispute escalation sweep', { scanned: result.scanned, escalated: result.escalated });
+      }
+    } catch (err) {
+      // A failed background job must never take the process down; the next tick retries.
+      logger.error('dispute escalation sweep failed', { error: (err as Error).message });
+    }
+  };
+
   const runAgentRunRecovery = async (): Promise<void> => {
     // In-process guard: never overlap two recovery sweeps in this instance. The
     // DB lease inside recoverStuckSteps is what keeps separate instances apart;
@@ -197,6 +219,33 @@ export function startScheduler(options: {
     });
   };
 
+  const runSupervisor = async (): Promise<void> => {
+    // In-process guard: never overlap two supervisor cycles in this instance.
+    // Cross-instance safety is the conditional DB writes inside the cycle.
+    await supervisorGuard(async () => {
+      const startedAt = Date.now();
+      try {
+        const result = await runSupervisorCycle(db, { actorId: null, actorType: 'SYSTEM' });
+        // Log every cycle (including a clean no-op) so operators can see it alive.
+        logger.info('agent run supervisor cycle', {
+          status: result.status,
+          scanned: result.scanned,
+          contained: result.contained,
+          retried: result.retried,
+          errors: result.errors,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch (err) {
+        // A supervisor failure must never take the scheduler down or stop the
+        // agents' own work; the next tick retries. Per-run failures are isolated.
+        logger.error('agent run supervisor cycle failed', {
+          durationMs: Date.now() - startedAt,
+          error: (err as Error).message,
+        });
+      }
+    });
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
@@ -225,12 +274,22 @@ export function startScheduler(options: {
   const recoveryTimer = options.agentRunsRecoveryEnabled ? setInterval(runAgentRunRecovery, recoveryIntervalMs) : null;
   recoveryTimer?.unref();
 
+  // Agent-run supervisor cycle on its own cadence. Off unless enabled.
+  const supervisorTimer = options.agentRunsSupervisorEnabled ? setInterval(runSupervisor, supervisorIntervalMs) : null;
+  supervisorTimer?.unref();
+
+  // Dispute auto-escalation sweep on its own cadence. Off unless enabled.
+  const disputeTimer = options.disputeEscalationEnabled ? setInterval(runDisputeEscalation, disputeEscalationIntervalMs) : null;
+  disputeTimer?.unref();
+
   return {
     stop: () => {
       clearInterval(timer);
       if (alertTimer) clearInterval(alertTimer);
       if (agentTimer) clearInterval(agentTimer);
       if (recoveryTimer) clearInterval(recoveryTimer);
+      if (supervisorTimer) clearInterval(supervisorTimer);
+      if (disputeTimer) clearInterval(disputeTimer);
     },
   };
 }
