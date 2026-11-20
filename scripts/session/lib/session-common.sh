@@ -122,6 +122,9 @@ session_is_important_ignored() {
       return 0 ;;
     *.pem|*.key|*.p12|*.pfx|*.jks|*.keystore|*.kdbx) return 0 ;;
     *.dump|*.bundle|*.sqlite|*.sqlite3|*.db) return 0 ;;
+    # The session tooling's own output directory IS the protection; listing it
+    # as unprotected would make every close fail right after a backup.
+    backups/git/*) return 1 ;;
     backups/*|storage/*|e2e/.auth/*|packages/server/.wasit-media/*) return 0 ;;
   esac
   return 1
