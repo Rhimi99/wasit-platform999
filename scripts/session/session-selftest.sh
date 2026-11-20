@@ -58,6 +58,14 @@ run() {
 }
 show_log() { sed 's/^/      /' "$LOGS/$1.log" | tail -12; }
 
+# run_in <dir> <log-name> <cmd...> — like run(), but inside the workspace under
+# test. The tools resolve the repository from PWD on purpose, so calling them
+# from the source checkout would test the wrong tree.
+run_in() {
+  local dir="$1" name="$2"; shift 2
+  ( cd "$dir" && "$@" ) > "$LOGS/$name.log" 2>&1
+}
+
 cleanup() {
   if [ "$KEEP" -eq 1 ] || [ "$FAIL" -gt 0 ]; then
     printf '\nTemp workspace kept for inspection: %s\n' "$WORK"
@@ -80,7 +88,7 @@ if run 01-clone git clone -q "$REPO_URL" "$WORK/repo-a"; then
 else
   bad "clone failed"; show_log 01-clone; exit 1
 fi
-if run 01-start "$WORK/repo-a/scripts/session/session-start.sh" --report-only; then
+if run_in "$WORK/repo-a" 01-start "$WORK/repo-a/scripts/session/session-start.sh" --report-only; then
   if grep -q "SAFE — workspace matches GitHub" "$LOGS/01-start.log"; then
     ok "session-start: SAFE on a clean clone"
   else
@@ -100,7 +108,7 @@ if run 03-switch git -C "$WORK/repo-a" switch -c "$BRANCH"; then
 else
   bad "could not create the test branch"; show_log 03-switch
 fi
-if run 03-checkpoint "$WORK/repo-a/scripts/session/session-checkpoint.sh" -m "test: session selftest checkpoint"; then
+if run_in "$WORK/repo-a" 03-checkpoint "$WORK/repo-a/scripts/session/session-checkpoint.sh" -m "test: session selftest checkpoint"; then
   ok "checkpoint committed and pushed"
 else
   bad "checkpoint failed"; show_log 03-checkpoint
@@ -145,7 +153,7 @@ fi
 # --- 10-13. Detect unsaved work and refuse to close -------------------------
 step "10. untracked files are detected"
 printf 'scratch\n' > "$WORK/repo-b/untracked-note.txt"
-run 10-status "$WORK/repo-b/scripts/session/session-status.sh" --strict
+run_in "$WORK/repo-b" 10-status "$WORK/repo-b/scripts/session/session-status.sh" --strict
 if [ $? -eq 1 ] && grep -q "untracked 1" "$LOGS/10-status.log"; then
   ok "session-status --strict exits 1 and reports 1 untracked file"
 else
@@ -154,7 +162,7 @@ fi
 
 step "11. ignored-but-important files are detected"
 printf 'DEMO=1\n' > "$WORK/repo-b/.env"
-run 11-status "$WORK/repo-b/scripts/session/session-status.sh"
+run_in "$WORK/repo-b" 11-status "$WORK/repo-b/scripts/session/session-status.sh"
 if grep -q "^  - \.env$" "$LOGS/11-status.log"; then
   ok ".env listed under 'ignored but important'"
 else
@@ -163,7 +171,7 @@ fi
 
 step "12. unpushed commits are detected"
 run 12-commit git -C "$WORK/repo-b" commit -qam "test: local-only commit" --allow-empty
-run 12-status "$WORK/repo-b/scripts/session/session-status.sh" --strict
+run_in "$WORK/repo-b" 12-status "$WORK/repo-b/scripts/session/session-status.sh" --strict
 if [ $? -eq 1 ] && grep -q "ahead    : 1" "$LOGS/12-status.log"; then
   ok "session-status reports 1 unpushed commit and exits 1"
 else
@@ -171,7 +179,7 @@ else
 fi
 
 step "13. session-close refuses an unsafe workspace"
-run 13-close "$WORK/repo-b/scripts/session/session-close.sh"
+run_in "$WORK/repo-b" 13-close "$WORK/repo-b/scripts/session/session-close.sh"
 if [ $? -eq 1 ] && grep -q "NOT SAFE TO CLOSE" "$LOGS/13-close.log"; then
   ok "session-close refused (dirty tree + unpushed commit + .env)"
 else
@@ -183,7 +191,7 @@ step "14. checkpoint refuses staged secrets"
 HEAD_BEFORE="$(git -C "$WORK/repo-b" rev-parse HEAD)"
 # Deliberately fake: shape of a GitHub token, no real credential.
 printf 'token = "ghp_%s"\n' "$(printf 'A%.0s' {1..36})" > "$WORK/repo-b/secret-fixture.txt"
-run 14-checkpoint "$WORK/repo-b/scripts/session/session-checkpoint.sh" -m "test: must be refused"
+run_in "$WORK/repo-b" 14-checkpoint "$WORK/repo-b/scripts/session/session-checkpoint.sh" -m "test: must be refused"
 STATUS=$?
 HEAD_AFTER="$(git -C "$WORK/repo-b" rev-parse HEAD)"
 if [ "$STATUS" -eq 1 ] && grep -q "github-token" "$LOGS/14-checkpoint.log" && [ "$HEAD_BEFORE" = "$HEAD_AFTER" ]; then
@@ -197,7 +205,7 @@ rm -f -- "$WORK/repo-b/secret-fixture.txt"
 step "15. a network failure during push is reported, then recovered"
 printf 'push-failure line\n' >> "$WORK/repo-b/docs/session/selftest-fixture.txt"
 git -C "$WORK/repo-b" remote set-url origin "http://127.0.0.1:9/wasit-unreachable.git"
-run 15-checkpoint-fail "$WORK/repo-b/scripts/session/session-checkpoint.sh" -m "test: push will fail"
+run_in "$WORK/repo-b" 15-checkpoint-fail "$WORK/repo-b/scripts/session/session-checkpoint.sh" -m "test: push will fail"
 STATUS=$?
 LOCAL_SHA="$(git -C "$WORK/repo-b" rev-parse HEAD)"
 if [ "$STATUS" -eq 1 ] && grep -q "NOT on GitHub" "$LOGS/15-checkpoint-fail.log" && [ "$LOCAL_SHA" != "$HEAD_AFTER" ]; then
@@ -206,7 +214,7 @@ else
   bad "push failure not handled (status=$STATUS)"; show_log 15-checkpoint-fail
 fi
 git -C "$WORK/repo-b" remote set-url origin "$REPO_URL"
-run 15-checkpoint-retry "$WORK/repo-b/scripts/session/session-checkpoint.sh" --push-only
+run_in "$WORK/repo-b" 15-checkpoint-retry "$WORK/repo-b/scripts/session/session-checkpoint.sh" --push-only
 if [ $? -eq 0 ]; then
   RETRY_SHA="$(GIT_TERMINAL_PROMPT=0 git ls-remote --heads "$REPO_URL" "refs/heads/$BRANCH" | awk '{print $1}')"
   if [ "$RETRY_SHA" = "$LOCAL_SHA" ]; then
@@ -220,14 +228,20 @@ fi
 
 # --- 16. Bundle backup + restore -------------------------------------------
 step "16. bundle backup, SHA-256 verification and restore"
-if run 16-backup "$WORK/repo-b/scripts/session/session-backup.sh" --dest "$WORK/bundles" --label selftest; then
+if run_in "$WORK/repo-b" 16-backup "$WORK/repo-b/scripts/session/session-backup.sh" --dest "$WORK/bundles" --label selftest; then
   ok "bundle created"
 else
   bad "bundle creation failed"; show_log 16-backup
 fi
-BUNDLE="$(find "$WORK/bundles" -maxdepth 1 -name 'wasit-*.bundle' | head -1)"
-BUNDLE_SHA="$(sha256sum "$BUNDLE" | awk '{print $1}')"
-if run 16-recovery "$WORK/repo-b/scripts/session/session-recovery.sh" \
+BUNDLE="$(find "$WORK/bundles" -maxdepth 1 -name 'wasit-*.bundle' 2>/dev/null | head -1)"
+if [ -z "$BUNDLE" ]; then
+  bad "no bundle file was produced — restore cannot be tested"
+  BUNDLE_SHA=""
+else
+  BUNDLE_SHA="$(sha256sum "$BUNDLE" | awk '{print $1}')"
+  ok "bundle present ($(basename "$BUNDLE"), sha256 ${BUNDLE_SHA:0:16}…)"
+fi
+if run_in "$WORK/repo-b" 16-recovery "$WORK/repo-b/scripts/session/session-recovery.sh" \
     --bundle "$BUNDLE" --sha256 "$BUNDLE_SHA" --repo "$REPO_URL" \
     --branch "$BRANCH" --target "$WORK/repo-c"; then
   ok "restored from the bundle into a new directory"
@@ -244,7 +258,7 @@ fi
 step "16b. a corrupted bundle is refused (SHA-256 mismatch)"
 cp "$BUNDLE" "$WORK/tampered.bundle"
 printf '\x00' | dd of="$WORK/tampered.bundle" bs=1 seek=2048 conv=notrunc status=none
-run 16-tampered "$WORK/repo-b/scripts/session/session-recovery.sh" \
+run_in "$WORK/repo-b" 16-tampered "$WORK/repo-b/scripts/session/session-recovery.sh" \
   --bundle "$WORK/tampered.bundle" --sha256 "$BUNDLE_SHA" --target "$WORK/repo-d"
 if [ $? -eq 1 ] && grep -q "SHA-256 mismatch" "$LOGS/16-tampered.log"; then
   ok "tampered bundle refused before any write"
@@ -253,7 +267,7 @@ else
 fi
 
 step "16c. a safe workspace closes cleanly"
-if run 16c-close "$WORK/repo-c/scripts/session/session-close.sh"; then
+if run_in "$WORK/repo-c" 16c-close "$WORK/repo-c/scripts/session/session-close.sh"; then
   ok "session-close: SAFE TO CLOSE on the restored workspace"
 else
   bad "session-close refused a safe workspace"; show_log 16c-close

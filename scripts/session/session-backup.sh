@@ -43,15 +43,20 @@ session_require sha256sum
 
 [ -n "$DEST" ] || DEST="$(session_bundle_dir)"
 
-# Refuse to write where Git would track the bundle: a 12 MB binary in a public
-# repository is both noise and a leak risk.
-if git check-ignore -q "$DEST" 2>/dev/null || git check-ignore -q "$DEST/probe.bundle" 2>/dev/null; then
-  :
-else
-  serr "destination '$DEST' is not git-ignored — refusing to write a bundle there"
-  serr "add it to .gitignore or choose another --dest"
-  exit 1
-fi
+# Refuse to write inside the repository unless Git ignores the path: a 12 MB
+# binary in a public repository is both noise and a leak risk. A destination
+# outside the work tree (an attached disk, /tmp, a mounted volume) is allowed.
+DEST_ABS="$(realpath -m "$DEST")"
+ROOT_ABS="$(session_root)"
+case "$DEST_ABS" in
+  "$ROOT_ABS"|"$ROOT_ABS"/*)
+    if ! git check-ignore -q "$DEST_ABS/probe.bundle" 2>/dev/null; then
+      serr "destination '$DEST_ABS' is inside the repository and not git-ignored"
+      serr "add it to .gitignore or choose an external --dest"
+      exit 1
+    fi
+    ;;
+esac
 
 mkdir -p "$DEST"
 chmod 0700 "$DEST"
