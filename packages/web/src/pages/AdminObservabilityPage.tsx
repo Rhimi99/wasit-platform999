@@ -481,6 +481,8 @@ export function AdminObservabilityPage() {
                           <th>{t('adminObs.webhook.eventType')}</th>
                           <th>{t('common.status')}</th>
                           <th>{t('adminObs.webhook.attempts')}</th>
+                          <th>{t('adminObs.webhook.failureClass')}</th>
+                          <th>{t('adminObs.webhook.nextAttempt')}</th>
                           <th>{t('adminObs.webhook.lastError')}</th>
                           <th>{t('adminObs.webhook.failedAt')}</th>
                           <th>{t('adminObs.webhook.action')}</th>
@@ -499,7 +501,12 @@ export function AdminObservabilityPage() {
                                 {r.status}
                               </Badge>
                             </td>
-                            <td className="text-xs" dir="ltr">{r.attempts}</td>
+                            <td className="text-xs" dir="ltr">
+                              {r.attempts}
+                              {r.replayCount > 0 && <div className="text-[10px] text-slate-400">replay ×{r.replayCount}</div>}
+                            </td>
+                            <td className="text-xs" dir="ltr">{r.failureClass ?? '—'}</td>
+                            <td className="text-xs">{r.status === 'FAILED' && r.nextAttemptAt ? formatDate(r.nextAttemptAt) : '—'}</td>
                             <td className="max-w-xs truncate text-xs" dir="ltr" title={r.lastError ?? ''}>{r.lastError ?? '—'}</td>
                             <td className="text-xs">{formatDate(r.deadLetteredAt ?? r.createdAt)}</td>
                             <td>

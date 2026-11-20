@@ -14,8 +14,10 @@ import {
   getOrderRefundAttribution,
   listOrderRefunds,
   handlePaymentWebhook,
+  listWebhookAttempts,
   listWebhookFailures,
   replayDeadLetter,
+  resolveWebhookRetryPolicy,
 } from './service.js';
 
 const methodSchema = z.object({
@@ -156,16 +158,34 @@ paymentsRoutes.get('/webhook-failures', requirePermission(PERMISSIONS.REFUND_MAN
   });
 });
 
+// Attempt history for one event: the audit trail of every apply attempt, its
+// failure class and the backoff slot that followed. Read-only, no payload.
+paymentsRoutes.get('/webhook-failures/:id/attempts', requirePermission(PERMISSIONS.REFUND_MANAGE), async (c) => {
+  const ctx = getContext(c);
+  const result = await listWebhookAttempts(ctx.db, c.req.param('id')!);
+  if (!result) throw ApiError.notFound('Webhook event');
+  return c.json({ success: true, data: result });
+});
+
 // Explicit operator replay of a dead-lettered event: resets the attempt counter
 // so the next provider delivery is retried instead of refused as dead-lettered.
+// It never applies the side effect itself, and it is capped so a broken event
+// cannot become an unbounded replay loop.
 paymentsRoutes.post('/webhook-failures/:id/replay', requirePermission(PERMISSIONS.REFUND_MANAGE), async (c) => {
   const ctx = getContext(c);
-  const result = await replayDeadLetter(ctx.db, c.req.param('id')!);
-  if (!result.replayed) throw ApiError.notFound('Dead-lettered webhook event');
+  const policy = resolveWebhookRetryPolicy();
+  const result = await replayDeadLetter(ctx.db, c.req.param('id')!, { maxReplays: policy.maxReplays });
+  if (!result.replayed) {
+    if (result.reason === 'REPLAY_LIMIT_REACHED') {
+      throw ApiError.conflict('Replay limit reached for this webhook event');
+    }
+    throw ApiError.notFound('Dead-lettered webhook event');
+  }
   await writeAudit(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
     action: 'PAYMENT.WEBHOOK_REPLAY',
     entityType: 'PAYMENT_WEBHOOK_EVENT',
     entityId: c.req.param('id')!,
+    metadata: { replayCount: result.replayCount ?? null, maxReplays: policy.maxReplays },
   });
   return c.json({ success: true, data: result });
 });

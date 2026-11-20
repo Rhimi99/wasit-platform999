@@ -1420,6 +1420,13 @@ export interface WebhookFailureRow {
   eventType: string;
   status: 'FAILED' | 'DEAD_LETTERED';
   attempts: number;
+  /** OBS-01 — why the last attempt failed (TRANSIENT/PERMANENT/CONFLICT/CAPABILITY/STALE). */
+  failureClass: string | null;
+  /** OBS-01 — earliest moment a provider re-delivery may retry the event. */
+  nextAttemptAt: string | null;
+  firstFailedAt: string | null;
+  /** OBS-01 — how many operator replays this event has consumed. */
+  replayCount: number;
   lastError: string | null;
   deadLetteredAt: string | null;
   createdAt: string;

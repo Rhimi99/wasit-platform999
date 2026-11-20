@@ -887,3 +887,14 @@ npx playwright install --with-deps chromium
 - **حالة A1/A2:** لم يُمَس `kill-switch.ts` ولا `agent-scope.ts`/`agent-run-context.ts`/`executors.ts`؛ اختباراتهما كاملة بلا انحدار.
 - **BLOCKED:** (1) الكلفة الفعلية صفر/غير متاحة حتى تشغيل مزوّد حقيقي؛ (2) النتيجة التجارية بلا مصدر دليل؛ (3) `agent_metrics` بلا كاتب؛ (4) التجميع العام يتطلّب نطاق منصّة (ADMIN) — مطابق لنموذج A2.
 - **التوثيق:** `docs/A3_AGENT_METRICS_OUTCOME_TRACKING.md`.
+
+## OBS-01 — Webhook Failure Recovery (2026-11-20)
+
+- **`lib/payments/webhook-retry.ts`**: تصنيف الفشل + backoff أسي. `TRANSIENT` فقط قابل لإعادة المحاولة؛ `CONFLICT`/`PERMANENT`/`CAPABILITY` تُسدَّل فورًا؛ `STALE` تُسجَّل `PROCESSED` ولا تُطبَّق.
+- **`claimWebhookEvent`** (`modules/payments/service.ts`): الإدراج يحمل `claim_token` مباشرة (لا فجوة إدراج→حيازة)، والاستلام `UPDATE … RETURNING` بشرط `status IN ('RECEIVED','FAILED')` + انقضاء الـlease + `next_attempt_at <= now()`. الخاسر يحصل على `inProgress`/`duplicate`/`retryScheduled`/`deadLettered` ولا يطبّق أبدًا.
+- **المزوّد هو محرّك إعادة المحاولة**: لا مؤقّت خلفي يطبّق أثرًا ماليًا. أي اختبار يعيد تسليم حدث فاشل **يجب** أن يقدّم `next_attempt_at` (مثال `makeRetryDue` في `tests/p6-p7-dispute-webhook.test.ts`) وإلا يعود `retryScheduled` بلا محاولة.
+- **سجل `payment_webhook_attempts`** لكل محاولة (`SUCCESS`/`FAILURE`/`STALE`/`REPLAY`) — لا يحتوي `payload` ولا توقيعًا؛ `GET /api/payments/webhook-failures/:id/attempts`.
+- **`replay` مسقوف** بـ`WEBHOOK_REPLAY_MAX` (بعد الاستنفاد 409) ولا يطبّق أثرًا ماليًا؛ يصفّر العدّاد فقط.
+- **Migration `0041_flimsy_winter_soldier`** إضافية (أعمدة + جدول + فهرسين) — لا DROP.
+- **بيئة الاختبار المحلية**: PostgreSQL 17 على `127.0.0.1:5434`، والدخول عبر `TEST_DATABASE_URL=postgresql://wasit:wasit_test_password@127.0.0.1:5434/wasit_test` (حرّاس `tests/test-db-guard.ts` تمنع أي هدف آخر).
+- **إخفاقان بيئيان معروفان في الحزمة الكاملة المتوازية**: `a1-kill-switch` يحسب `ai_requests` عالميًا (يمرّ منفردًا)، و`marketing-video` يحتاج ثنائية `ffmpeg-static` (`node node_modules/ffmpeg-static/install.js`).

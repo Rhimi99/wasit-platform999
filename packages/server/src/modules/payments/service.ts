@@ -12,10 +12,18 @@ import {
   transactionLedger,
   transactions,
 } from '../../db/schema/commerce';
-import { paymentIntents, paymentWebhookEvents } from '../../db/schema/payments_extras';
+import { paymentIntents, paymentWebhookAttempts, paymentWebhookEvents } from '../../db/schema/payments_extras';
 import { newId } from '../../lib/ids';
 import { roundMoney, toDecimal } from '../../lib/money';
 import { writeAudit } from '../../lib/audit';
+import {
+  DEFAULT_WEBHOOK_RETRY_POLICY,
+  classifyWebhookFailure,
+  computeNextAttemptAt,
+  shouldDeadLetter,
+  type WebhookFailureClass,
+  type WebhookRetryPolicy,
+} from '../../lib/payments/webhook-retry';
 import { createNotification } from '../../lib/notifications-service.js';
 import { resolvePaymentProvider, resolvePaymentProviderById } from '../../lib/payments/resolve';
 import {
@@ -25,7 +33,7 @@ import {
   isTrustedEvidenceSource,
   type RefundEvidence,
 } from '../../lib/payments/refund-integrity';
-import { demoPaymentMode } from '../../lib/env';
+import { demoPaymentMode, env } from '../../lib/env';
 import { ManualPaymentProvider } from '../../lib/payments/providers';
 import type { PaymentMethod, PaymentProvider } from '../../lib/payments/port';
 import { confirmSettlement } from '../settlements/service.js';
@@ -319,45 +327,41 @@ export async function handlePaymentWebhook(
     return { duplicate: false, applied: false, eventType: effectiveType, stale: true, reason: stale.reason };
   }
 
-  const inserted = await db
-    .insert(paymentWebhookEvents)
-    .values({
-      id: newId(),
-      provider: provider.id,
-      eventId: event.eventId,
+  const policy = resolveWebhookRetryPolicy();
+  const claim = await claimWebhookEvent(db, {
+    providerId: provider.id,
+    eventId: event.eventId,
+    eventType: effectiveType,
+    raw: event.raw,
+    policy,
+  });
+
+  if (claim.kind === 'DUPLICATE') {
+    return { duplicate: true, applied: false, eventType: effectiveType };
+  }
+  if (claim.kind === 'DEAD_LETTERED') {
+    // The platform already gave up; an operator must intervene. Never retried
+    // silently, and never replayed without an explicit, audited action.
+    return { duplicate: false, applied: false, eventType: effectiveType, deadLettered: true };
+  }
+  if (claim.kind === 'IN_PROGRESS') {
+    // Another delivery of the same event is applying it right now. Acknowledge
+    // without applying: two concurrent deliveries must never move money twice.
+    return { duplicate: false, applied: false, eventType: effectiveType, inProgress: true };
+  }
+  if (claim.kind === 'NOT_DUE') {
+    // Bounded retry: the failure is still within its attempt budget, but its
+    // exponential-backoff slot has not elapsed yet.
+    return {
+      duplicate: false,
+      applied: false,
       eventType: effectiveType,
-      payload: event.raw as never,
-      signatureValid: 'true',
-      status: 'RECEIVED',
-    })
-    .onConflictDoNothing()
-    .returning({ id: paymentWebhookEvents.id });
-
-  if (inserted.length === 0) {
-    // The claim already exists. Whether this is a no-op or a retry depends on
-    // where the previous attempt left it: a PROCESSED claim is a genuine
-    // duplicate; a DEAD_LETTERED claim is refused (the platform already gave up
-    // and an operator must intervene); a RECEIVED/FAILED claim is an incomplete
-    // attempt that this delivery may retry.
-    const [existing] = await db
-      .select({ status: paymentWebhookEvents.status })
-      .from(paymentWebhookEvents)
-      .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)))
-      .limit(1);
-
-    if (!existing) {
-      // Raced with a concurrent delete; treat as duplicate to stay idempotent.
-      return { duplicate: true, applied: false, eventType: effectiveType };
-    }
-    if (existing.status === 'PROCESSED') {
-      return { duplicate: true, applied: false, eventType: effectiveType };
-    }
-    if (existing.status === 'DEAD_LETTERED') {
-      return { duplicate: false, applied: false, eventType: effectiveType, deadLettered: true };
-    }
-    // RECEIVED / FAILED: fall through and retry the side-effect below.
+      retryScheduled: true,
+      nextAttemptAt: claim.nextAttemptAt?.toISOString() ?? null,
+    };
   }
 
+  const startedAt = Date.now();
   let applied = false;
   try {
     if (effectiveType === 'PAYMENT_SUCCEEDED' && effectiveRef) {
@@ -406,23 +410,254 @@ export async function handlePaymentWebhook(
   } catch (err) {
     // The side-effect failed. The claim is NOT deleted — deleting it was how the
     // failure became invisible and how an unbounded retry loop stayed silent.
-    // It is now recorded: the attempt count rises, the reason is kept, and once
-    // the cap is reached the row is dead-lettered so operators can see exactly
-    // which event is stuck and why. A retry may still claim it below the cap.
-    const failure = await recordWebhookFailure(db, provider.id, event.eventId, err);
+    // It is now recorded: the attempt count rises, the failure is classified, a
+    // backoff slot is scheduled, and once the budget is spent the row is
+    // dead-lettered so operators can see exactly which event is stuck and why.
+    const failure = await recordWebhookFailure(db, claim.eventRowId, claim.attemptNumber, err, startedAt, policy);
     throw Object.assign(err instanceof Error ? err : new Error(String(err)), { webhook: failure });
   }
 
-  await db
-    .update(paymentWebhookEvents)
-    .set({ processedAt: new Date(), status: 'PROCESSED' })
-    .where(and(eq(paymentWebhookEvents.provider, provider.id), eq(paymentWebhookEvents.eventId, event.eventId)));
-
+  await markWebhookProcessed(db, claim.eventRowId, claim.attemptNumber, startedAt);
   return { duplicate: false, applied, eventType: effectiveType };
 }
 
-/** How many failed apply attempts a terminal event gets before it is dead-lettered. */
-export const MAX_WEBHOOK_ATTEMPTS = 5;
+/**
+ * How many failed apply attempts a terminal event gets before it is dead-lettered.
+ * The effective value is configurable (`WEBHOOK_RETRY_MAX_ATTEMPTS`); this
+ * constant is the documented default.
+ */
+export const MAX_WEBHOOK_ATTEMPTS = DEFAULT_WEBHOOK_RETRY_POLICY.maxAttempts;
+
+/** Builds the retry policy from configuration. Pure, so tests can inspect it. */
+export function resolveWebhookRetryPolicy(): WebhookRetryPolicy {
+  return {
+    maxAttempts: env.WEBHOOK_RETRY_MAX_ATTEMPTS,
+    baseDelayMs: env.WEBHOOK_RETRY_BASE_DELAY_MS,
+    maxDelayMs: env.WEBHOOK_RETRY_MAX_DELAY_MS,
+    factor: 2,
+    claimLeaseMs: env.WEBHOOK_CLAIM_LEASE_MS,
+    maxReplays: env.WEBHOOK_REPLAY_MAX,
+  };
+}
+
+type WebhookClaim =
+  | { kind: 'CLAIMED'; eventRowId: string; attemptNumber: number }
+  | { kind: 'DUPLICATE' }
+  | { kind: 'DEAD_LETTERED' }
+  | { kind: 'IN_PROGRESS' }
+  | { kind: 'NOT_DUE'; nextAttemptAt: Date | null };
+
+/**
+ * Claims exclusive processing rights for one event.
+ *
+ * The unique (provider, eventId) key makes the insert the idempotency gate; the
+ * conditional `UPDATE … RETURNING` makes the retry claim atomic, so of two
+ * concurrent deliveries exactly one proceeds to the side-effect while the other
+ * is told the event is in progress. A claim is a lease: if a process dies while
+ * applying, a later delivery may take it over once the lease expires.
+ */
+async function claimWebhookEvent(
+  db: DB,
+  args: {
+    providerId: string;
+    eventId: string;
+    eventType: string;
+    raw: unknown;
+    policy: WebhookRetryPolicy;
+  },
+): Promise<WebhookClaim> {
+  const { providerId, eventId, eventType, raw, policy } = args;
+  const claimToken = newId();
+  const now = new Date();
+
+  const inserted = await db
+    .insert(paymentWebhookEvents)
+    .values({
+      id: newId(),
+      provider: providerId,
+      eventId,
+      eventType,
+      payload: raw as never,
+      signatureValid: 'true',
+      status: 'RECEIVED',
+      nextAttemptAt: now,
+      // The claim is part of the insert: a second delivery must never observe
+      // the row between "inserted" and "claimed" and start applying it too.
+      claimToken,
+      claimedAt: now,
+    })
+    .onConflictDoNothing()
+    .returning({ id: paymentWebhookEvents.id });
+
+  if (inserted.length > 0) {
+    return { kind: 'CLAIMED', eventRowId: inserted[0].id, attemptNumber: 1 };
+  }
+
+  const leaseSeconds = Math.max(1, Math.ceil(policy.claimLeaseMs / 1000));
+  const taken = (await db.execute(sql`
+    update payment_webhook_events
+       set claim_token = ${claimToken}, claimed_at = now()
+     where provider = ${providerId}
+       and event_id = ${eventId}
+       and status in ('RECEIVED', 'FAILED')
+       and (claim_token is null or claimed_at < now() - make_interval(secs => ${leaseSeconds}))
+       and (next_attempt_at is null or next_attempt_at <= now())
+    returning id, attempts
+  `)) as unknown as { rows: { id: string; attempts: number }[] };
+
+  if (taken.rows.length > 0) {
+    return { kind: 'CLAIMED', eventRowId: taken.rows[0].id, attemptNumber: taken.rows[0].attempts + 1 };
+  }
+
+  const [existing] = await db
+    .select({
+      status: paymentWebhookEvents.status,
+      claimToken: paymentWebhookEvents.claimToken,
+      claimedAt: paymentWebhookEvents.claimedAt,
+      nextAttemptAt: paymentWebhookEvents.nextAttemptAt,
+    })
+    .from(paymentWebhookEvents)
+    .where(and(eq(paymentWebhookEvents.provider, providerId), eq(paymentWebhookEvents.eventId, eventId)))
+    .limit(1);
+
+  // Raced with a concurrent delete: treat as duplicate to stay idempotent.
+  if (!existing || existing.status === 'PROCESSED') return { kind: 'DUPLICATE' };
+  if (existing.status === 'DEAD_LETTERED') return { kind: 'DEAD_LETTERED' };
+  if (existing.claimToken && existing.claimedAt && existing.claimedAt.getTime() > Date.now() - policy.claimLeaseMs) {
+    return { kind: 'IN_PROGRESS' };
+  }
+  return { kind: 'NOT_DUE', nextAttemptAt: existing.nextAttemptAt };
+}
+
+/** Marks a claimed event processed and records the successful attempt. */
+async function markWebhookProcessed(
+  db: DB,
+  eventRowId: string,
+  attemptNumber: number,
+  startedAt: number,
+): Promise<void> {
+  await db
+    .update(paymentWebhookEvents)
+    .set({
+      status: 'PROCESSED',
+      processedAt: new Date(),
+      attempts: attemptNumber,
+      claimToken: null,
+      claimedAt: null,
+      nextAttemptAt: null,
+      failureClass: null,
+    })
+    .where(eq(paymentWebhookEvents.id, eventRowId));
+  await recordWebhookAttempt(db, {
+    eventRowId,
+    attemptNumber,
+    outcome: 'SUCCESS',
+    durationMs: Date.now() - startedAt,
+  });
+}
+
+/** Appends one row to the per-attempt audit trail. */
+async function recordWebhookAttempt(
+  db: DB,
+  row: {
+    eventRowId: string;
+    attemptNumber: number;
+    outcome: 'SUCCESS' | 'FAILURE' | 'STALE' | 'REPLAY';
+    failureClass?: string | null;
+    errorMessage?: string | null;
+    retryScheduled?: boolean;
+    nextAttemptAt?: Date | null;
+    durationMs?: number | null;
+  },
+): Promise<void> {
+  await db.insert(paymentWebhookAttempts).values({
+    id: newId(),
+    webhookEventId: row.eventRowId,
+    attemptNumber: row.attemptNumber,
+    outcome: row.outcome,
+    failureClass: row.failureClass ?? null,
+    errorMessage: row.errorMessage?.slice(0, 2000) ?? null,
+    retryScheduled: row.retryScheduled ?? false,
+    nextAttemptAt: row.nextAttemptAt ?? null,
+    durationMs: row.durationMs ?? null,
+  });
+}
+
+/**
+ * Records one failed apply attempt: classifies the failure, schedules the next
+ * backoff slot (or dead-letters when the budget is spent), releases the claim
+ * and writes the attempt row. A dead-letter is audited with a SYSTEM actor —
+ * no human caused it, and it must not be attributed to one.
+ */
+async function recordWebhookFailure(
+  db: DB,
+  eventRowId: string,
+  attemptNumber: number,
+  err: unknown,
+  startedAt: number,
+  policy: WebhookRetryPolicy,
+): Promise<{
+  attempts: number;
+  deadLettered: boolean;
+  message: string;
+  failureClass: WebhookFailureClass;
+  retryScheduled: boolean;
+  nextAttemptAt: Date | null;
+}> {
+  const description = classifyWebhookFailure(err);
+  const now = new Date();
+  const deadLettered = shouldDeadLetter(attemptNumber, description.retryable, policy);
+  const nextAttemptAt = deadLettered ? null : computeNextAttemptAt(now, attemptNumber, policy);
+
+  await db
+    .update(paymentWebhookEvents)
+    .set({
+      attempts: attemptNumber,
+      lastError: description.message.slice(0, 2000),
+      failureClass: description.failureClass,
+      status: deadLettered ? 'DEAD_LETTERED' : 'FAILED',
+      deadLetteredAt: deadLettered ? now : null,
+      nextAttemptAt,
+      claimToken: null,
+      claimedAt: null,
+      firstFailedAt: sql`coalesce(${paymentWebhookEvents.firstFailedAt}, ${now})`,
+    })
+    .where(eq(paymentWebhookEvents.id, eventRowId));
+
+  await recordWebhookAttempt(db, {
+    eventRowId,
+    attemptNumber,
+    outcome: 'FAILURE',
+    failureClass: description.failureClass,
+    errorMessage: description.message,
+    retryScheduled: !deadLettered,
+    nextAttemptAt,
+    durationMs: Date.now() - startedAt,
+  });
+
+  if (deadLettered) {
+    await writeAudit(db, { actorId: null, actorType: 'SYSTEM' }, {
+      action: 'PAYMENT.WEBHOOK_DEAD_LETTERED',
+      entityType: 'PAYMENT_WEBHOOK_EVENT',
+      entityId: eventRowId,
+      after: {
+        attempts: attemptNumber,
+        failureClass: description.failureClass,
+        errorCode: description.code,
+        message: description.message.slice(0, 500),
+      },
+    });
+  }
+
+  return {
+    attempts: attemptNumber,
+    deadLettered,
+    message: description.message,
+    failureClass: description.failureClass,
+    retryScheduled: !deadLettered,
+    nextAttemptAt,
+  };
+}
 
 /**
  * A terminal event is stale when applying it would move the target backwards.
@@ -460,7 +695,7 @@ async function recordStaleEvent(
   raw: unknown,
   reason?: string,
 ): Promise<void> {
-  await db
+  const inserted = await db
     .insert(paymentWebhookEvents)
     .values({
       id: newId(),
@@ -472,39 +707,22 @@ async function recordStaleEvent(
       status: 'PROCESSED',
       attempts: 1,
       lastError: reason ?? 'stale event',
+      failureClass: 'STALE',
       processedAt: new Date(),
     })
-    .onConflictDoNothing();
-}
+    .onConflictDoNothing()
+    .returning({ id: paymentWebhookEvents.id });
 
-/**
- * Records one failed apply attempt and returns the resulting retry state. Once
- * the attempt cap is reached the event is dead-lettered and will not be retried.
- */
-async function recordWebhookFailure(
-  db: DB,
-  providerId: string,
-  eventId: string,
-  err: unknown,
-): Promise<{ attempts: number; deadLettered: boolean; message: string }> {
-  const message = err instanceof Error ? err.message : String(err);
-  const [row] = await db
-    .select({ attempts: paymentWebhookEvents.attempts })
-    .from(paymentWebhookEvents)
-    .where(and(eq(paymentWebhookEvents.provider, providerId), eq(paymentWebhookEvents.eventId, eventId)))
-    .limit(1);
-  const attempts = (row?.attempts ?? 0) + 1;
-  const deadLettered = attempts >= MAX_WEBHOOK_ATTEMPTS;
-  await db
-    .update(paymentWebhookEvents)
-    .set({
-      attempts,
-      lastError: message.slice(0, 2000),
-      status: deadLettered ? 'DEAD_LETTERED' : 'FAILED',
-      deadLetteredAt: deadLettered ? new Date() : null,
-    })
-    .where(and(eq(paymentWebhookEvents.provider, providerId), eq(paymentWebhookEvents.eventId, eventId)));
-  return { attempts, deadLettered, message };
+  if (inserted.length > 0) {
+    await recordWebhookAttempt(db, {
+      eventRowId: inserted[0].id,
+      attemptNumber: 1,
+      outcome: 'STALE',
+      failureClass: 'STALE',
+      errorMessage: reason ?? 'stale event',
+      retryScheduled: false,
+    });
+  }
 }
 
 /**
@@ -515,6 +733,9 @@ async function recordWebhookFailure(
  * `offset` exists so an operator can reach failures older than the newest page —
  * without it, anything past the first `limit` rows is invisible. The total is
  * returned alongside so the UI can page and show a real count.
+ *
+ * The failure class and the next backoff slot are included so an operator can
+ * tell "waiting for its retry" apart from "gave up".
  */
 export async function listWebhookFailures(db: DB, opts: { limit?: number; offset?: number } = {}) {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -529,8 +750,12 @@ export async function listWebhookFailures(db: DB, opts: { limit?: number; offset
         eventType: paymentWebhookEvents.eventType,
         status: paymentWebhookEvents.status,
         attempts: paymentWebhookEvents.attempts,
+        failureClass: paymentWebhookEvents.failureClass,
         lastError: paymentWebhookEvents.lastError,
+        nextAttemptAt: paymentWebhookEvents.nextAttemptAt,
+        firstFailedAt: paymentWebhookEvents.firstFailedAt,
         deadLetteredAt: paymentWebhookEvents.deadLetteredAt,
+        replayCount: paymentWebhookEvents.replayCount,
         createdAt: paymentWebhookEvents.createdAt,
       })
       .from(paymentWebhookEvents)
@@ -543,18 +768,89 @@ export async function listWebhookFailures(db: DB, opts: { limit?: number; offset
   return { items, total: totalRow[0]?.count ?? 0 };
 }
 
+/** Attempt history for one event, oldest first. Never includes the raw payload. */
+export async function listWebhookAttempts(db: DB, eventRowId: string) {
+  const [event] = await db
+    .select({ id: paymentWebhookEvents.id })
+    .from(paymentWebhookEvents)
+    .where(eq(paymentWebhookEvents.id, eventRowId))
+    .limit(1);
+  if (!event) return null;
+  const items = await db
+    .select({
+      id: paymentWebhookAttempts.id,
+      attemptNumber: paymentWebhookAttempts.attemptNumber,
+      outcome: paymentWebhookAttempts.outcome,
+      failureClass: paymentWebhookAttempts.failureClass,
+      errorMessage: paymentWebhookAttempts.errorMessage,
+      retryScheduled: paymentWebhookAttempts.retryScheduled,
+      nextAttemptAt: paymentWebhookAttempts.nextAttemptAt,
+      durationMs: paymentWebhookAttempts.durationMs,
+      createdAt: paymentWebhookAttempts.createdAt,
+    })
+    .from(paymentWebhookAttempts)
+    .where(eq(paymentWebhookAttempts.webhookEventId, eventRowId))
+    .orderBy(asc(paymentWebhookAttempts.createdAt), asc(paymentWebhookAttempts.attemptNumber));
+  return { items };
+}
+
+export type WebhookReplayResult = {
+  replayed: boolean;
+  reason?: 'NOT_DEAD_LETTERED' | 'REPLAY_LIMIT_REACHED';
+  replayCount?: number;
+};
+
 /**
  * Explicitly resets a DEAD_LETTERED event so the next delivery can retry it.
+ *
  * This is an operator action, not an automatic loop: it clears the attempt
- * counter back to zero and returns the event to RECEIVED.
+ * counter back to zero and returns the event to RECEIVED. It never applies the
+ * side effect itself — the next provider delivery does, through the same guarded
+ * path. Each replay is capped and counted, so an operator cannot turn a broken
+ * event into an unbounded replay loop, and every replay leaves an attempt row.
  */
-export async function replayDeadLetter(db: DB, eventRowId: string): Promise<{ replayed: boolean }> {
+export async function replayDeadLetter(
+  db: DB,
+  eventRowId: string,
+  opts: { maxReplays?: number } = {},
+): Promise<WebhookReplayResult> {
+  const maxReplays = Math.max(0, opts.maxReplays ?? DEFAULT_WEBHOOK_RETRY_POLICY.maxReplays);
+  const [row] = await db
+    .select({ status: paymentWebhookEvents.status, replayCount: paymentWebhookEvents.replayCount })
+    .from(paymentWebhookEvents)
+    .where(eq(paymentWebhookEvents.id, eventRowId))
+    .limit(1);
+  if (!row || row.status !== 'DEAD_LETTERED') return { replayed: false, reason: 'NOT_DEAD_LETTERED' };
+  if (row.replayCount >= maxReplays) {
+    return { replayed: false, reason: 'REPLAY_LIMIT_REACHED', replayCount: row.replayCount };
+  }
+
   const updated = await db
     .update(paymentWebhookEvents)
-    .set({ status: 'RECEIVED', attempts: 0, deadLetteredAt: null })
+    .set({
+      status: 'RECEIVED',
+      attempts: 0,
+      deadLetteredAt: null,
+      failureClass: null,
+      firstFailedAt: null,
+      nextAttemptAt: new Date(),
+      claimToken: null,
+      claimedAt: null,
+      replayCount: row.replayCount + 1,
+    })
     .where(and(eq(paymentWebhookEvents.id, eventRowId), eq(paymentWebhookEvents.status, 'DEAD_LETTERED')))
     .returning({ id: paymentWebhookEvents.id });
-  return { replayed: updated.length > 0 };
+
+  if (updated.length === 0) return { replayed: false, reason: 'NOT_DEAD_LETTERED' };
+
+  await recordWebhookAttempt(db, {
+    eventRowId,
+    attemptNumber: 0,
+    outcome: 'REPLAY',
+    retryScheduled: false,
+  });
+
+  return { replayed: true, replayCount: row.replayCount + 1 };
 }
 
 /**

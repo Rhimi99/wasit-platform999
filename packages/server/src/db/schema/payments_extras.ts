@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -92,10 +93,50 @@ export const paymentWebhookEvents = pgTable(
     deadLetteredAt: timestamp('dead_lettered_at', { withTimezone: true }),
     processedAt: timestamp('processed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // OBS-01 — failure recovery. `failureClass` says *why* the last attempt
+    // failed; `nextAttemptAt` is the earliest moment a delivery may retry it
+    // (exponential backoff); the claim pair makes processing exclusive so two
+    // concurrent deliveries cannot apply the same side effect twice.
+    failureClass: varchar('failure_class', { length: 32 }),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+    claimToken: varchar('claim_token', { length: 64 }),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    firstFailedAt: timestamp('first_failed_at', { withTimezone: true }),
+    replayCount: integer('replay_count').notNull().default(0),
   },
   (t) => ({
     eventIdx: uniqueIndex('payment_webhook_events_provider_event_idx').on(t.provider, t.eventId),
     typeIdx: index('payment_webhook_events_type_idx').on(t.eventType),
     statusIdx: index('payment_webhook_events_status_idx').on(t.status),
+    retryIdx: index('payment_webhook_events_retry_idx').on(t.status, t.nextAttemptAt),
+  }),
+);
+
+/**
+ * One row per apply attempt (OBS-01). This is the audit trail: it records every
+ * retry, its outcome, the failure class and when the next attempt is due, so an
+ * operator can reconstruct the whole history of a stuck event without reading
+ * the raw payload. Duplicate deliveries that never reach the apply path are not
+ * attempts and are deliberately not recorded here.
+ */
+export const paymentWebhookAttempts = pgTable(
+  'payment_webhook_attempts',
+  {
+    id: varchar('id', { length: 36 }).primaryKey(),
+    webhookEventId: varchar('webhook_event_id', { length: 36 })
+      .notNull()
+      .references(() => paymentWebhookEvents.id, { onDelete: 'cascade' }),
+    attemptNumber: integer('attempt_number').notNull(),
+    /** SUCCESS | FAILURE | STALE | REPLAY */
+    outcome: varchar('outcome', { length: 20 }).notNull(),
+    failureClass: varchar('failure_class', { length: 32 }),
+    errorMessage: text('error_message'),
+    retryScheduled: boolean('retry_scheduled').notNull().default(false),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+    durationMs: integer('duration_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    eventIdx: index('payment_webhook_attempts_event_idx').on(t.webhookEventId, t.attemptNumber),
   }),
 );

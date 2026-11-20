@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import argon2 from 'argon2';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
@@ -161,6 +161,21 @@ async function postWebhook(body: Record<string, unknown>) {
 afterAll(() => {
   closeDb();
 });
+
+/**
+ * OBS-01: a failed event is retried only once its exponential-backoff slot has
+ * elapsed. Tests that exercise the retry path move the slot into the past, which
+ * is what a provider re-delivery after the delay does in production.
+ */
+async function makeRetryDue(eventId: string) {
+  await db.execute(sql`
+    update payment_webhook_events
+       set next_attempt_at = now() - interval '1 second',
+           claim_token = null,
+           claimed_at = null
+     where provider = 'manual' and event_id = ${eventId}
+  `);
+}
 
 describe('P6 — dispute decisions have a real, policy-driven financial effect', () => {
   it('IN_FAVOR_OF_BUYER requests a refund but the decision alone does NOT complete it', async () => {
@@ -371,7 +386,8 @@ describe('P7 — webhook ordering, retry and dead-letter queue', () => {
       status: 'CREATED',
     });
 
-    // Second delivery retries and succeeds.
+    // Second delivery, after the backoff slot has elapsed, retries and succeeds.
+    await makeRetryDue(eventId);
     const second = await postWebhook({ eventId, type: 'payment.succeeded', externalRef });
     expect(second.status).toBe(200);
     expect(second.data.data.applied).toBe(true);
@@ -391,6 +407,7 @@ describe('P7 — webhook ordering, retry and dead-letter queue', () => {
     const externalRef = `ref-ghost-${Date.now()}`;
 
     for (let i = 0; i < MAX_WEBHOOK_ATTEMPTS; i += 1) {
+      if (i > 0) await makeRetryDue(eventId);
       const r = await postWebhook({ eventId, type: 'payment.succeeded', externalRef });
       expect(r.status).toBe(404);
     }
@@ -421,6 +438,7 @@ describe('P7 — webhook ordering, retry and dead-letter queue', () => {
     const eventId = `evt-dlq-list-${Date.now()}`;
     const externalRef = `ref-ghost-list-${Date.now()}`;
     for (let i = 0; i < MAX_WEBHOOK_ATTEMPTS; i += 1) {
+      if (i > 0) await makeRetryDue(eventId);
       await postWebhook({ eventId, type: 'payment.succeeded', externalRef });
     }
 
@@ -460,6 +478,7 @@ describe('P7 — webhook ordering, retry and dead-letter queue', () => {
     const eventId = `evt-${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     const externalRef = `ref-ghost-${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     for (let i = 0; i < MAX_WEBHOOK_ATTEMPTS; i += 1) {
+      if (i > 0) await makeRetryDue(eventId);
       await postWebhook({ eventId, type: 'payment.succeeded', externalRef });
     }
     return { eventId, externalRef };

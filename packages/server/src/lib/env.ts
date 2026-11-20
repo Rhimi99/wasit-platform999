@@ -66,6 +66,18 @@ const envSchema = z.object({
   /** HMAC secret used to sign/verify provider webhooks (manual / open-checkout). */
   PAYMENT_WEBHOOK_SECRET: z.string().default(''),
   /**
+   * OBS-01 — bounded webhook retry. The provider drives retries (WASIT never
+   * re-applies a financial side effect on its own timer); these bounds decide
+   * whether an incoming delivery may retry a failed event, how long it must
+   * wait (exponential backoff), how long one processing claim stays exclusive,
+   * and how many operator replays a dead-lettered event gets.
+   */
+  WEBHOOK_RETRY_MAX_ATTEMPTS: z.coerce.number().int().positive().max(50).default(5),
+  WEBHOOK_RETRY_BASE_DELAY_MS: z.coerce.number().int().nonnegative().default(30_000),
+  WEBHOOK_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().default(3_600_000),
+  WEBHOOK_CLAIM_LEASE_MS: z.coerce.number().int().positive().default(60_000),
+  WEBHOOK_REPLAY_MAX: z.coerce.number().int().nonnegative().max(50).default(3),
+  /**
    * Explicitly marks this deployment as a public demo. The offline `manual`
    * provider and the offline refund path move no real money, so they are only
    * accepted where this is `true`. Default off: an unspecified environment is
