@@ -1,3 +1,4 @@
 selftest fixture
 created: 20261120-192915
 second line
+push-failure line
