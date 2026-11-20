@@ -19,6 +19,21 @@ export async function verifyPassword(password: string, hashValue: string): Promi
   }
 }
 
+/**
+ * A fixed argon2id hash whose parameters match {@link hashPassword} exactly
+ * (`m=19456,t=2,p=1`). Verifying a candidate against it burns the same work as a
+ * real check, so the "no such account" and "account locked" paths cannot be told
+ * apart from a wrong-password path by response time. It is not a credential for
+ * any account — its pre-image is unknown and never used — and it is never stored
+ * on a user row.
+ *
+ * `security-timing.test.ts` pins the parameters against `hashPassword`, so a
+ * future change to the hashing cost that is not mirrored here fails the suite
+ * instead of silently reopening the oracle.
+ */
+export const DUMMY_ARGON2_HASH =
+  '$argon2id$v=19$m=19456,t=2,p=1$LKoVUWP67O0CHO21wGjCXg$UGulVdL6meTv9UnO3QVizCSDfvmZzpzF83wK0+Zz8TY';
+
 export function generateSessionToken(): { token: string; tokenHash: string } {
   const token = randomBytes(48).toString('base64url');
   return { token, tokenHash: hashToken(token) };
