@@ -66,7 +66,24 @@ wasit-20261120T193125Z-selftest.bundle
 20261120T193125Z  4ffe3742…ff0f7  12970042  c0aa1a39…3629  session-selftest-20261120-193115  10  wasit-20261120T193125Z-selftest.bundle
 ```
 
+## Drill على النسخة الحقيقية (بعد إصلاح shallow)
+
+| الخطوة | النتيجة |
+| --- | --- |
+| `session backup --label shallow-guard` على clone ضحل | ✅ رفض الحزمة (لا تُستنسخ) وحذفها، ولم تُسجَّل في manifest |
+| `session backup --unshallow` | ✅ `restore-verified: a fresh clone reproduces f58f14b` |
+| أثر unshallow | `commits 37 → 136`، `shallow true → false`، HEAD والمراجع بلا تغيير |
+| bundle الإنتاجي | `wasit-20261120T193323Z-post-session-system.bundle` |
+| sha256 | `57707a2ebc6bfb528835be210b1e9602e2075b82cef15d161df9b876b60f202d` |
+| الحجم / المراجع | 12,204,760 bytes / 5 |
+| `session recovery` من الـbundle | ✅ HEAD = `f58f14b…` = `origin/master`، شجرة نظيفة، 136 commit |
+
+> هذا الـdrill كشف عيبًا حقيقيًا: `git bundle verify` ينجح على حزمة من clone
+> ضحل بينما `git clone` منها يفشل. لذلك صار `session-backup` يستنسخ الحزمة
+> تجريبيًا قبل قبولها، ويرفض ما لا يُستعاد.
+
 ## شفافية: التشغيلات السابقة وإصلاحاتها
+
 
 | التشغيل | النتيجة | السبب | الإصلاح |
 | --- | --- | --- | --- |

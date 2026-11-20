@@ -16,6 +16,10 @@
 #   --prune        delete OLD bundles beyond the retention target. Never runs by
 #                  default, never deletes anything younger than 7 days, and only
 #                  touches files matching wasit-*.bundle in the destination.
+#   --unshallow    if this clone is shallow, download the missing history first
+#                  (git fetch --unshallow). Adds objects only: no ref is
+#                  rewritten and no file is touched. Required for a bundle that
+#                  can actually be cloned back.
 
 set -euo pipefail
 
@@ -25,6 +29,7 @@ DEST=""
 LABEL=""
 KEEP="${SESSION_BUNDLE_KEEP:-10}"
 PRUNE=0
+UNSHALLOW=0
 MIN_AGE_DAYS="${SESSION_BUNDLE_MIN_AGE_DAYS:-7}"
 
 while [ "$#" -gt 0 ]; do
@@ -33,6 +38,7 @@ while [ "$#" -gt 0 ]; do
     --label) LABEL="${2:-}"; shift 2 ;;
     --keep) KEEP="${2:-}"; shift 2 ;;
     --prune) PRUNE=1; shift ;;
+    --unshallow) UNSHALLOW=1; shift ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) serr "unknown option: $1"; exit 3 ;;
   esac
@@ -69,6 +75,23 @@ TMP="$DEST/.$NAME.partial"
 HEAD_SHA="$(session_head)"
 BRANCH="$(session_branch)"
 
+# A bundle made from a shallow clone verifies but cannot be cloned back: the
+# missing parents are not in the bundle. Download the history first, or the
+# "backup" is worthless exactly when it is needed.
+if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+  if [ "$UNSHALLOW" -eq 1 ]; then
+    shead "Unshallowing (adds objects only — no ref or file changes)"
+    GIT_TERMINAL_PROMPT=0 timeout 600 git fetch --unshallow origin >/dev/null 2>&1 || {
+      serr "git fetch --unshallow failed — bundle not created"
+      exit 1
+    }
+    sok "history completed"
+  else
+    swarn "this clone is shallow: the bundle will verify but may not clone back"
+    swarn "re-run with --unshallow to make a restorable backup"
+  fi
+fi
+
 shead "Creating bundle"
 slog "dest : $DEST"
 slog "head : ${HEAD_SHA:0:12} ($BRANCH)"
@@ -78,6 +101,27 @@ slog "head : ${HEAD_SHA:0:12} ($BRANCH)"
 git bundle create "$TMP" --all >/dev/null
 git bundle verify "$TMP" >/dev/null
 mv "$TMP" "$FINAL"
+
+# Verification that matters: can a fresh clone actually be produced from it?
+VERIFY_ROOT="$(mktemp -d)"
+if ! git clone -q "$FINAL" "$VERIFY_ROOT/repo" 2>"$VERIFY_ROOT/err"; then
+  serr "the bundle cannot be cloned back — refusing to keep it"
+  sed 's/^/    /' "$VERIFY_ROOT/err" | head -5 >&2
+  if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+    serr "cause: this clone is shallow (see --unshallow)"
+  fi
+  rm -rf -- "$VERIFY_ROOT"
+  rm -f -- "$FINAL"
+  exit 1
+fi
+VERIFIED_HEAD="$(git -C "$VERIFY_ROOT/repo" rev-parse HEAD)"
+rm -rf -- "$VERIFY_ROOT"
+if [ "$VERIFIED_HEAD" != "$HEAD_SHA" ]; then
+  serr "restored HEAD ${VERIFIED_HEAD:0:12} != ${HEAD_SHA:0:12} — bundle discarded"
+  rm -f -- "$FINAL"
+  exit 1
+fi
+sok "restore-verified: a fresh clone reproduces ${HEAD_SHA:0:12}"
 
 SHA="$(sha256sum "$FINAL" | awk '{print $1}')"
 SIZE="$(stat -c %s "$FINAL")"

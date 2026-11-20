@@ -932,7 +932,7 @@ npx playwright install --with-deps chromium
 - **`session-start`** يرفض الحالة إذا: شجرة غير نظيفة، commits غير مدفوعة، متأخر عن البعيد، detached HEAD، stashes، أو تعذّر التحقق من GitHub. `--report-only` للعرض فقط — **لا تستخدمه لتجاوز المنع**.
 - **`session-checkpoint`** يرفض افتراضيًا العمل على `master` (استخدم فرع مهمة، أو `--allow-master` للمسار المعتمد fast-forward). يفحص السطور المضافة في الـstaged diff بأنماط أسرار عالية الثقة؛ عند الرفض لا commit ولا push. `--push-only` لإكمال دفع انقطع.
 - **`session-close`** يفشل عند: تعارضات، شجرة غير نظيفة، stashes (إلا `--ack-stash`)، commits غير مدفوعة، تعذّر التحقق من البعيد (لا `--no-fetch` للنجاح)، أو ملفات مهمة متجاهَلة (إلا `--ack-ignored`).
-- **`session-backup`** يكتب `wasit-<UTC>-<label>.bundle` في `backups/git` (مستثنى من Git) مع `manifest.tsv` (sha256/size/head/branch/refs). `--prune` وحده يحذف، ولا يحذف ما عمره < 7 أيام.
+- **`session-backup`** يكتب `wasit-<UTC>-<label>.bundle` في `backups/git` (مستثنى من Git) مع `manifest.tsv` (sha256/size/head/branch/refs). **لا يقبل حزمة لا تُستنسخ**: يجري `git clone` تجريبيًا ويقارن HEAD قبل التسجيل. clone ضحل ينتج حزمة تمرّ من `verify` وتفشل عند `clone` ⇒ استخدم `--unshallow` (يضيف كائنات فقط: HEAD/المراجع/الشجرة بلا تغيير). `--prune` وحده يحذف، ولا يحذف ما عمره < 7 أيام.
 - **`session-recovery`** يرفض هدفًا موجودًا غير فارغ، ويطلب `--sha256` للـbundle قبل `git bundle verify`. لا يحذف ولا يستبدل شيئًا.
 - **ملفات لا يحميها Git أبدًا**: `.env*`، `backups/*.dump`، `packages/server/.wasit-media/`، `e2e/.auth/`، `node_modules/`. تُبلَّغ دائمًا؛ انسخها خارجيًا قبل نهاية الجلسة.
 - **الاختبار العملي**: `./scripts/session/session-selftest.sh` (22 فحصًا على فرع اختبار، لا master) — النتائج في `docs/session/08-test-results.md`.

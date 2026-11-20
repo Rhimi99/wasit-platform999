@@ -125,7 +125,15 @@ shead "Restoring"
 mkdir -p "$(dirname "$TARGET")"
 
 if [ -n "$BUNDLE" ]; then
-  git clone -q "$BUNDLE" "$TARGET"
+  if ! git clone -q "$BUNDLE" "$TARGET" 2>/tmp/.wasit-recovery-err.$$; then
+    serr "clone from the bundle failed:"
+    sed 's/^/    /' /tmp/.wasit-recovery-err.$$ | head -5 >&2
+    serr "a bundle created from a shallow clone verifies but cannot be cloned;"
+    serr "recreate it with: scripts/session/session-backup.sh --unshallow"
+    rm -f /tmp/.wasit-recovery-err.$$
+    exit 1
+  fi
+  rm -f /tmp/.wasit-recovery-err.$$
   if [ -n "$REPO" ]; then
     git -C "$TARGET" remote set-url origin "$REPO"
   else
