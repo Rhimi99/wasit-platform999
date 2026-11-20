@@ -107,7 +107,7 @@ IMPORTANT="$(session_important_ignored_files || true)"
 if [ -n "$IMPORTANT" ]; then
   COUNT=$(printf '%s\n' "$IMPORTANT" | grep -c . || true)
   if [ "$ACK_IGNORED" -eq 1 ]; then
-    NOTE+=("$COUNT ignored file(s) acknowledged as backed up outside Git")
+    NOTE+=("$COUNT ignored file(s) acknowledged by the operator — this tool cannot verify an external copy")
   else
     FAIL+=("$COUNT ignored file(s) exist only on this machine (e.g. .env, dumps, media)")
     printf '%s\n' "$IMPORTANT" | head -10 | sed 's/^/  • /' >&2
