@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { PERMISSIONS } from '@wasit/shared';
+import { PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
@@ -26,6 +26,13 @@ import {
   getAgentSchedule,
   MIN_SCHEDULE_INTERVAL_MINUTES,
 } from '../ai/scheduling.js';
+import { buildSupervisorOverview, containRunManually } from '../ai/supervisor.js';
+import { buildCompanyMetricsForAdmin } from '../ai/agent-metrics.js';
+import { derivePlatformScope } from '../ai/scope.js';
+import {
+  getAiExecutionSwitchState,
+  setAiExecutionEnabled,
+} from '../../lib/ai/kill-switch.js';
 
 const budgetSchema = z
   .object({
@@ -80,6 +87,10 @@ const scheduleUpdateSchema = z
     message: 'Provide at least one of intervalMinutes, isActive, input',
   });
 
+const containSchema = z.object({
+  reason: z.string().min(1).max(300),
+});
+
 export const adminAiRoutes = new Hono();
 
 adminAiRoutes.use('*', requireAuth, requirePermission(PERMISSIONS.AI_MANAGE, PERMISSIONS.ADMIN_AI));
@@ -89,6 +100,32 @@ adminAiRoutes.get('/usage', async (c) => {
   const ctx = getContext(c);
   const summary = await adminUsageSummary(ctx.db);
   return c.json({ success: true, data: summary });
+});
+
+// ----- AI Company metrics (A3) ---------------------------------------------
+// Agent execution / performance / cost / outcome metrics for the GM. Read-only:
+// derived entirely from durable rows (agent_tasks, ai_requests, agent_run_steps,
+// audit_logs). The platform scope is derived SERVER-SIDE from the authenticated
+// identity — never from request input — so cross-owner aggregation is granted
+// only to an admin, and a non-admin is refused by `derivePlatformScope`.
+const companyMetricsQuerySchema = z.object({
+  agentKey: z.string().max(64).optional(),
+  since: z.string().datetime().optional(),
+});
+
+adminAiRoutes.get('/company-metrics', async (c) => {
+  const ctx = getContext(c);
+  const qs = companyMetricsQuerySchema.safeParse(c.req.query());
+  const query = qs.success ? qs.data : {};
+  const scope = derivePlatformScope(
+    { userId: ctx.user!.id },
+    { roles: ctx.user!.roles as UserRole[] },
+  );
+  const data = await buildCompanyMetricsForAdmin(ctx.db, scope, {
+    agentKey: query.agentKey,
+    since: query.since ? new Date(query.since) : undefined,
+  });
+  return c.json({ success: true, data });
 });
 
 adminAiRoutes.get('/requests', async (c) => {
@@ -352,4 +389,69 @@ adminAiRoutes.post('/agent-runs/:runId/recover', async (c) => {
     userAgent: ctx.userAgent,
   });
   return c.json({ success: true, data: { runId: c.req.param('runId')!, status } });
+});
+
+// ----- Supervisor (AI-02.S1) -----------------------------------------------
+// Read-only operational overview plus a single, explicit manual containment
+// action. The router is already gated by AI_MANAGE | ADMIN_AI (see `.use('*')`),
+// so no new permission is introduced. Containment only ever walks a run to
+// FAILED through the state machine — it never completes one.
+adminAiRoutes.get('/supervisor/overview', async (c) => {
+  const ctx = getContext(c);
+  const data = await buildSupervisorOverview(ctx.db);
+  return c.json({ success: true, data });
+});
+
+adminAiRoutes.post('/supervisor/runs/:runId/contain', validateBody(containSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof containSchema>>(c);
+  const result = await containRunManually(ctx.db, c.req.param('runId')!, body.reason, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: result });
+});
+
+// ----- Central AI Kill Switch (A1) -----------------------------------------
+// ONE central control for AI execution. The router is already gated by
+// AI_MANAGE | ADMIN_AI (see `.use('*')`), so no new permission is introduced and
+// an unprivileged user (e.g. CUSTOMER) is refused before reaching the handler.
+// The switch is an emergency *subsystem* stop, not a permission: it grants no
+// authority and RBAC/approvals/budgets/audit all still apply on top of it.
+const killSwitchSchema = z.object({
+  enabled: z.boolean(),
+  reason: z.string().max(300).optional().nullable(),
+});
+
+adminAiRoutes.get('/kill-switch', async (c) => {
+  const state = getAiExecutionSwitchState();
+  return c.json({ success: true, data: state });
+});
+
+adminAiRoutes.post('/kill-switch', validateBody(killSwitchSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof killSwitchSchema>>(c);
+  const before = getAiExecutionSwitchState();
+  setAiExecutionEnabled(body.enabled);
+  const after = getAiExecutionSwitchState();
+  await writeAudit(
+    ctx.db,
+    {
+      actorId: ctx.user!.id,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    },
+    {
+      action: body.enabled ? 'AI.KILL_SWITCH_ENABLED' : 'AI.KILL_SWITCH_DISABLED',
+      entityType: 'AI_KILL_SWITCH',
+      entityId: null,
+      before: { enabled: before.enabled, source: before.source },
+      after: { enabled: after.enabled, source: after.source },
+      // A reason is free text supplied by the operator; never a secret. Kept
+      // short and optional so the audit stays a decision record, not a log dump.
+      metadata: { reason: body.reason ?? null },
+    },
+  );
+  return c.json({ success: true, data: after });
 });
