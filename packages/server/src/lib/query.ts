@@ -21,3 +21,17 @@ export function parsePositiveIntParam(value: string | undefined): number | undef
   if (!Number.isInteger(parsed) || parsed < 1) return undefined;
   return parsed;
 }
+
+/**
+ * Parses a numeric query parameter that must be a non-negative integer (0 allowed).
+ *
+ * Used for `offset`, where 0 is the legitimate first page. The same `NaN`/`Infinity`
+ * hazards documented on `parsePositiveIntParam` apply: a malformed value must fall
+ * back to the caller's default rather than reach `OFFSET` as `NaN`.
+ */
+export function parseNonNegativeIntParam(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
+  return parsed;
+}

@@ -4,12 +4,17 @@ import { PERMISSIONS } from '@wasit/shared';
 import { requirePermission } from '../../middleware/auth';
 import { validateBody, getValidatedBody } from '../../middleware/validate';
 import { getContext } from '../../lib/request-context';
-import { confirmSettlement } from '../settlements/service';
+import { confirmSettlement, reconcileSellerSettlements } from '../settlements/service';
 import { createPayout, getPayout } from '../payouts/service';
 import { dispatchPayoutToProvider, syncPayoutFromProvider } from '../payouts/provider-service';
 import { describePayoutProviders } from '../../lib/payments/payout-resolve';
 import { importReconciliationFeed } from '../reconciliation/service';
 import { recordReceipt } from '../reconciliation/receipt-service';
+import {
+  completeManualPayment,
+  getManualPaymentView,
+  manualCompletionAvailability,
+} from '../payments/service';
 
 /**
  * P3 — HTTP surface for the money-movement layers (settlement, payout,
@@ -38,6 +43,9 @@ const settlementSchema = z.object({
 const payoutSchema = z.object({
   transactionId: z.string().min(1),
   providerId: z.string().min(1),
+  // M2.2 — required when the order is settled per seller suborder; must be
+  // omitted for a legacy order that has no suborders. Enforced in the service.
+  sellerOrderId: z.string().min(1).nullish(),
   idempotencyKey: z.string().nullish(),
 });
 
@@ -101,6 +109,12 @@ const receiptSchema = z.object({
   }),
 });
 
+/** PS-02 — manual completion: an order plus the operator's payment reference. */
+const manualCompletionSchema = z.object({
+  orderId: z.string().min(1),
+  paymentReference: z.string().min(1).max(200),
+});
+
 /** Parses an optional ISO timestamp into a Date, ignoring an unparseable value. */
 function isoOrNull(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -142,6 +156,35 @@ financeRoutes.get(
   (c) => c.json({ success: true, data: describePayoutProviders() }),
 );
 
+/**
+ * M2.3 — admin re-processing of seller-suborder settlements.
+ *
+ * Settles every eligible suborder of one order (when `orderId` is given) or every
+ * still-pending suborder (when it is omitted). Idempotent: an already-settled
+ * suborder is reported as a duplicate, and a rejected one carries the reason
+ * instead of failing the whole batch. Writes NO ledger entry — it only attributes
+ * an existing parent SETTLEMENT to each seller.
+ */
+const reconcileSettlementsSchema = z.object({
+  orderId: z.string().min(1).nullish(),
+});
+
+financeRoutes.post(
+  '/settlements/suborders/reconcile',
+  requirePermission(PERMISSIONS.COMMISSION_MANAGE, PERMISSIONS.PAYMENT_READ),
+  validateBody(reconcileSettlementsSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof reconcileSettlementsSchema>>(c);
+    const ctx = getContext(c);
+    const results = await reconcileSellerSettlements(ctx.db, body.orderId ?? null, {
+      actorId: ctx.user?.id ?? null,
+      actorType: 'USER',
+      ipAddress: ctx.ipAddress ?? null,
+    });
+    return c.json({ success: true, data: results });
+  },
+);
+
 /** Creates the seller payout for a settled transaction. Amount is derived, never supplied. */
 financeRoutes.post(
   '/payouts',
@@ -153,6 +196,7 @@ financeRoutes.post(
     const payout = await createPayout(ctx.db, {
       transactionId: body.transactionId,
       providerId: body.providerId,
+      sellerOrderId: body.sellerOrderId ?? null,
       idempotencyKey: body.idempotencyKey ?? null,
       actorId: ctx.user?.id ?? null,
       ipAddress: ctx.ipAddress ?? null,
@@ -248,6 +292,55 @@ financeRoutes.post(
         currencyCode: body.evidence.currencyCode,
       },
       actorId: ctx.user?.id ?? null,
+      ipAddress: ctx.ipAddress ?? null,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
+/**
+ * PS-02 — Manual payment completion desk.
+ *
+ * Lets an operator record that an offline `manual` payment was received. The
+ * write itself lives in the payments service (`completeManualPayment`), which
+ * reuses the single trusted PAID writer and refuses everything outside demo mode
+ * or belonging to another provider. These routes add no money rule: they
+ * validate input, enforce the permission, then call that service.
+ *
+ * Permission choice mirrors the sibling money-movement routes: these are
+ * money-movement acts, so they reuse `payment:read` / `commission:manage` rather
+ * than inventing a permission no role holds. The `/api/admin` blanket guard
+ * (ADMIN/SUPER_ADMIN) already sits in front, so no trading role — not even a
+ * MERCHANT that holds `payment:read` — can reach them.
+ */
+financeRoutes.get(
+  '/manual-completions/:orderId',
+  requirePermission(PERMISSIONS.PAYMENT_READ, PERMISSIONS.COMMISSION_MANAGE),
+  async (c) => {
+    const ctx = getContext(c);
+    const view = await getManualPaymentView(ctx.db, c.req.param('orderId')!);
+    return c.json({ success: true, data: view });
+  },
+);
+
+/** Reports whether the manual-completion action is offered on this deployment. */
+financeRoutes.get(
+  '/manual-payment-availability',
+  requirePermission(PERMISSIONS.PAYMENT_READ, PERMISSIONS.COMMISSION_MANAGE),
+  (c) => c.json({ success: true, data: manualCompletionAvailability() }),
+);
+
+financeRoutes.post(
+  '/manual-completions',
+  requirePermission(PERMISSIONS.COMMISSION_MANAGE, PERMISSIONS.PAYMENT_READ),
+  validateBody(manualCompletionSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof manualCompletionSchema>>(c);
+    const ctx = getContext(c);
+    const result = await completeManualPayment(ctx.db, {
+      orderId: body.orderId,
+      paymentReference: body.paymentReference,
+      actorId: ctx.user!.id,
       ipAddress: ctx.ipAddress ?? null,
     });
     return c.json({ success: true, data: result });

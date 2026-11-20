@@ -6,11 +6,12 @@ import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import { describePaymentProviders } from '../../lib/payments/resolve.js';
 import { writeAudit } from '../../lib/audit.js';
-import { parsePositiveIntParam } from '../../lib/query.js';
+import { parsePositiveIntParam, parseNonNegativeIntParam } from '../../lib/query.js';
 import {
   createPaymentIntent,
   createRefund,
   getOrderPayment,
+  getOrderRefundAttribution,
   listOrderRefunds,
   handlePaymentWebhook,
   listWebhookFailures,
@@ -27,10 +28,22 @@ const intentSchema = z.object({
   method: methodSchema.optional(),
 });
 
+const refundAllocationSchema = z.object({
+  sellerOrderId: z.string().min(1).max(36),
+  orderItemId: z.string().min(1).max(36).optional(),
+  amount: z.string().regex(/^\d+(\.\d{1,4})?$/),
+});
+
 const refundSchema = z.object({
   amount: z.string().regex(/^\d+(\.\d{1,4})?$/).optional(),
   reason: z.string().max(1000).optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
+  /**
+   * Per-seller-suborder attribution. Omit for a full refund (distributed across
+   * every suborder by its own refundable amount); a partial refund must name its
+   * suborders precisely.
+   */
+  allocations: z.array(refundAllocationSchema).max(200).optional(),
 });
 
 export const paymentsRoutes = new Hono();
@@ -89,6 +102,27 @@ paymentsRoutes.get('/orders/:orderId/refunds', async (c) => {
   return c.json({ success: true, data: result });
 });
 
+// M2.4-T2.4 — the per-seller refund attribution view for one order. This is the
+// admin desk's read-only breakdown (per seller: owed, refunded, remaining,
+// suborder status, reversed commission). It exposes every seller's money on the
+// order, so it is gated on `REFUND_MANAGE` — the refund desk, held only by
+// ADMIN / SUPER_ADMIN. `PAYMENT_READ` would be too broad here: MERCHANT, SUPPLIER
+// and COMPANY hold it, so one seller could read another seller's share. CUSTOMER,
+// MERCHANT, SUPPLIER and COMPANY are all refused, even on their own order: their
+// own-order access stays on the ownership-scoped `/orders/:orderId` and
+// `/orders/:orderId/refunds` routes above, which never reveal another seller.
+paymentsRoutes.get(
+  '/orders/:orderId/refund-attribution',
+  requirePermission(PERMISSIONS.REFUND_MANAGE),
+  async (c) => {
+    const ctx = getContext(c);
+    const result = await getOrderRefundAttribution(ctx.db, c.req.param('orderId')!, ctx.user!.id, {
+      isOperator: true,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
 // Refunds are a privileged operation (refund:manage), matching the RBAC matrix.
 paymentsRoutes.post('/orders/:orderId/refunds', requirePermission(PERMISSIONS.REFUND_MANAGE), validateBody(refundSchema), async (c) => {
   const body = getValidatedBody<z.infer<typeof refundSchema>>(c);
@@ -99,6 +133,7 @@ paymentsRoutes.post('/orders/:orderId/refunds', requirePermission(PERMISSIONS.RE
     amount: body.amount,
     reason: body.reason,
     idempotencyKey: body.idempotencyKey,
+    allocations: body.allocations,
     actorId: ctx.user!.id,
     ipAddress: ctx.ipAddress,
     // Operators (support/risk/dispute/admin) may refund orders they are not party to.
@@ -111,9 +146,14 @@ paymentsRoutes.post('/orders/:orderId/refunds', requirePermission(PERMISSIONS.RE
 // visible so a stuck payment is an operator-observable incident, not silent.
 paymentsRoutes.get('/webhook-failures', requirePermission(PERMISSIONS.REFUND_MANAGE), async (c) => {
   const ctx = getContext(c);
-  const { limit } = c.req.query();
-  const items = await listWebhookFailures(ctx.db, { limit: parsePositiveIntParam(limit) });
-  return c.json({ success: true, data: { items } });
+  const { limit, offset } = c.req.query();
+  const parsedLimit = parsePositiveIntParam(limit);
+  const parsedOffset = parseNonNegativeIntParam(offset);
+  const { items, total } = await listWebhookFailures(ctx.db, { limit: parsedLimit, offset: parsedOffset });
+  return c.json({
+    success: true,
+    data: { items, meta: { total, limit: parsedLimit ?? 50, offset: parsedOffset ?? 0 } },
+  });
 });
 
 // Explicit operator replay of a dead-lettered event: resets the attempt counter
@@ -122,7 +162,7 @@ paymentsRoutes.post('/webhook-failures/:id/replay', requirePermission(PERMISSION
   const ctx = getContext(c);
   const result = await replayDeadLetter(ctx.db, c.req.param('id')!);
   if (!result.replayed) throw ApiError.notFound('Dead-lettered webhook event');
-  await writeAudit(ctx.db, ctx, {
+  await writeAudit(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
     action: 'PAYMENT.WEBHOOK_REPLAY',
     entityType: 'PAYMENT_WEBHOOK_EVENT',
     entityId: c.req.param('id')!,
