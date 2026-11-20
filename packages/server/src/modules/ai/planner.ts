@@ -7,6 +7,7 @@ import { users, userRoles, roles } from '../../db/schema/auth';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { newId } from '../../lib/ids';
 import { isBudgetExhausted } from '../../lib/ai/cost-control';
+import { assertAiExecutionEnabled } from '../../lib/ai/kill-switch';
 import { env } from '../../lib/env';
 import { assertValidDependencies, type StepDependency } from './run-state-machine.js';
 
@@ -286,6 +287,9 @@ export async function planAgentRun(
   input: PlanAgentRunInput,
   audit: AuditContext,
 ): Promise<PersistedPlan> {
+  // Central AI Kill Switch (A1): planning creates a new run, so a global disable
+  // refuses it up front — no run or step row is written while disabled.
+  assertAiExecutionEnabled();
   if (typeof input.title !== 'string' || input.title.trim() === '') {
     throw validationError('title', 'A run needs a title', 'REQUIRED');
   }

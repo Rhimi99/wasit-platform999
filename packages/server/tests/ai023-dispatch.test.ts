@@ -2,13 +2,14 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db, closeDb } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { agentTasks, agentRegistry } from '../src/db/schema/agents.js';
 import { aiBudgets } from '../src/db/schema/ai.js';
 import { agentRuns, agentRunSteps } from '../src/db/schema/agent_runs.js';
 import { auditLogs } from '../src/db/schema/audit.js';
+import { cleanupOwnedRows } from './support/ownership-cleanup.js';
 import { ensureAgentRegistrySeeded } from '../src/modules/ai/agents.js';
 import { planAgentRun, type ProposedStep } from '../src/modules/ai/planner.js';
 import { dispatchStep, approveRunStep, cancelRun, reconcileRun } from '../src/modules/ai/dispatcher.js';
@@ -79,17 +80,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (createdTaskIds.length) await db.delete(agentTasks).where(inArray(agentTasks.id, createdTaskIds));
-  if (createdRunIds.length) {
-    await db.delete(agentRunSteps).where(inArray(agentRunSteps.runId, createdRunIds));
-    await db.delete(agentRuns).where(inArray(agentRuns.id, createdRunIds));
-  }
-  if (createdBudgetIds.length) await db.delete(aiBudgets).where(inArray(aiBudgets.id, createdBudgetIds));
-  if (createdRegistryKeys.length) await db.delete(agentRegistry).where(inArray(agentRegistry.key, createdRegistryKeys));
-  if (createdUserIds.length) {
-    await db.delete(userRoles).where(inArray(userRoles.userId, createdUserIds));
-    await db.delete(users).where(inArray(users.id, createdUserIds));
-  }
+  // Ownership-scoped teardown. Passing the spec's user ids also removes the
+  // ai_requests/ai_usage rows that dispatched executions recorded under those
+  // requesters — rows the id-only cleanup used to leave behind.
+  await cleanupOwnedRows(db, {
+    userIds: createdUserIds,
+    runIds: createdRunIds,
+    taskIds: createdTaskIds,
+    budgetIds: createdBudgetIds,
+    registryKeys: createdRegistryKeys,
+  });
   await closeDb();
 });
 

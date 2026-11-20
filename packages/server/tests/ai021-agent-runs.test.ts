@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { db, closeDb } from '../src/db/client.js';
 import { agentRuns, agentRunSteps } from '../src/db/schema/agent_runs.js';
 import { agentTasks } from '../src/db/schema/agents.js';
@@ -41,6 +41,18 @@ import {
  */
 
 const createdRunIds: string[] = [];
+
+/** Counts agent tasks attributed to a specific requester (ownership-scoped). */
+async function ownedTaskCount(owner: string): Promise<number> {
+  const rows = await db.select().from(agentTasks).where(eq(agentTasks.requestedBy, owner));
+  return rows.length;
+}
+
+/** Counts schedules created by a specific user (ownership-scoped). */
+async function ownedScheduleCount(owner: string): Promise<number> {
+  const rows = await db.select().from(agentSchedules).where(eq(agentSchedules.createdBy, owner));
+  return rows.length;
+}
 
 /** Runs `fn` and returns the `fieldErrors[0].code` of the thrown ApiError. */
 function validationCode(fn: () => void): string {
@@ -186,16 +198,28 @@ describe('AI-02.1 — persistence: agent_runs and agent_run_steps', () => {
   it('does not touch AI-01 tables (agent_tasks / agent_schedules)', async () => {
     // AI-02.1 is additive: creating runs and steps must not read or write the
     // scheduling/task tables introduced by AI-01.
-    const beforeTasks = (await db.select().from(agentTasks)).length;
-    const beforeSchedules = (await db.select().from(agentSchedules)).length;
+    //
+    // Ownership-scoped: the run's requester is a value unique to this test, so we
+    // count only rows that would be attributed to it, and tasks linked to this
+    // run via the existing `input.__runId` correlation. Other spec files writing
+    // tasks/schedules concurrently cannot perturb the comparison.
+    const owner = randomUUID();
+    const beforeTasks = await ownedTaskCount(owner);
+    const beforeSchedules = await ownedScheduleCount(owner);
 
-    const runId = await insertRun();
+    const runId = await insertRun({ requestedBy: owner });
     await insertStep(runId, { stepKey: 'independent-step' });
 
-    const afterTasks = (await db.select().from(agentTasks)).length;
-    const afterSchedules = (await db.select().from(agentSchedules)).length;
+    const afterTasks = await ownedTaskCount(owner);
+    const afterSchedules = await ownedScheduleCount(owner);
     expect(afterTasks).toBe(beforeTasks);
     expect(afterSchedules).toBe(beforeSchedules);
+
+    const linkedTasks = await db
+      .select()
+      .from(agentTasks)
+      .where(sql`${agentTasks.input}->>'__runId' = ${runId}`);
+    expect(linkedTasks.length).toBe(0);
   });
 });
 

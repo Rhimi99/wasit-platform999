@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
 import { and, eq } from 'drizzle-orm';
@@ -7,6 +7,7 @@ import { db } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { agentTasks } from '../src/db/schema/agents.js';
+import { cleanupOwnedRows } from './support/ownership-cleanup.js';
 
 /**
  * AI-02.P0 — separation of duties on agent-task approval.
@@ -45,8 +46,11 @@ function makeClient() {
   };
 }
 
+const createdUserIds: string[] = [];
+
 async function createStaffUser(roleName: 'ADMIN' | 'SUPER_ADMIN') {
   const id = randomUUID();
+  createdUserIds.push(id);
   const email = `it-ai02p0-${roleName.toLowerCase()}-${Date.now()}-${Math.floor(Math.random() * 1e5)}@wasit.tn`;
   const passwordHash = await argon2.hash('StaffPass123!');
   await db.insert(users).values({
@@ -192,4 +196,10 @@ describe('AI-02.P0 — separation of duties on agent-task approval', () => {
 
     await db.delete(agentTasks).where(eq(agentTasks.id, taskId));
   });
+});
+
+afterAll(async () => {
+  // Remove the gated tasks and the staff users this spec created (plus their
+  // user_roles). No unqualified DELETE, so other specs' rows are never touched.
+  await cleanupOwnedRows(db, { userIds: createdUserIds });
 });

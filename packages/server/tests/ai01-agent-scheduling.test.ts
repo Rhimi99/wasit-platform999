@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
 import { db } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
@@ -9,6 +9,7 @@ import { auditLogs } from '../src/db/schema/audit.js';
 import { agentTasks } from '../src/db/schema/agents.js';
 import { agentSchedules } from '../src/db/schema/agent_schedules.js';
 import { aiBudgets, aiRequests } from '../src/db/schema/ai.js';
+import { cleanupOwnedRows } from './support/ownership-cleanup.js';
 import {
   createAgentSchedule,
   claimDueSchedule,
@@ -103,8 +104,11 @@ async function makeDue(scheduleId: string): Promise<void> {
 }
 
 afterAll(async () => {
-  if (createdScheduleIds.length) await db.delete(agentSchedules).where(inArray(agentSchedules.id, createdScheduleIds));
-  if (createdUserIds.length) await db.delete(userRoles).where(inArray(userRoles.userId, createdUserIds));
+  // Ownership-scoped teardown: removes the schedules, tasks and AI requests
+  // caused by this spec's own users — including the request the scheduler
+  // creates during an end-to-end run, which is not tracked by id. Rows owned by
+  // other specs (or pre-existing data) are never touched.
+  await cleanupOwnedRows(db, { userIds: createdUserIds, scheduleIds: createdScheduleIds });
 });
 
 describe('AI-01 — agent scheduling (real DB)', () => {
@@ -249,8 +253,9 @@ describe('AI-01 — agent scheduling (real DB)', () => {
     await makeDue(row.id);
 
     // Exhaust the request budget with a real recorded request row.
+    const requestId = randomUUID();
     await db.insert(aiRequests).values({
-      id: randomUUID(),
+      id: requestId,
       userId: admin,
       requestType: 'CHAT',
       model: 'local-heuristic',

@@ -7,6 +7,7 @@ import { agentTasks, agentRegistry } from '../src/db/schema/agents.js';
 import { aiRequests, aiBudgets } from '../src/db/schema/ai.js';
 import { agentRuns, agentRunSteps } from '../src/db/schema/agent_runs.js';
 import { auditLogs } from '../src/db/schema/audit.js';
+import { cleanupOwnedRows } from './support/ownership-cleanup.js';
 import { ensureAgentRegistrySeeded, createAgentTask, decideAgentTask } from '../src/modules/ai/agents.js';
 import {
   planAgentRun,
@@ -71,8 +72,13 @@ async function rejectionCode(fn: () => Promise<unknown>): Promise<string> {
   throw new Error('Expected the call to reject, but it resolved');
 }
 
-async function countRows(table: typeof agentTasks | typeof aiRequests): Promise<number> {
-  const rows = await db.select().from(table);
+async function ownedTaskCount(userId: string): Promise<number> {
+  const rows = await db.select().from(agentTasks).where(eq(agentTasks.requestedBy, userId));
+  return rows.length;
+}
+
+async function ownedRequestCount(userId: string): Promise<number> {
+  const rows = await db.select().from(aiRequests).where(eq(aiRequests.userId, userId));
   return rows.length;
 }
 
@@ -81,14 +87,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (createdRunIds.length) {
-    await db.delete(agentRunSteps).where(inArray(agentRunSteps.runId, createdRunIds));
-    await db.delete(agentRuns).where(inArray(agentRuns.id, createdRunIds));
-  }
-  if (createdUserIds.length) {
-    await db.delete(userRoles).where(inArray(userRoles.userId, createdUserIds));
-    await db.delete(users).where(inArray(users.id, createdUserIds));
-  }
+  await cleanupOwnedRows(db, { userIds: createdUserIds, runIds: createdRunIds });
   await closeDb();
 });
 
@@ -439,7 +438,7 @@ describe('AI-02.2 — permissions and approvals', () => {
 
   it('does not treat planning as an approval (run stays PLANNING, no task created)', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    const beforeTasks = await countRows(agentTasks);
+    const beforeTasks = await ownedTaskCount(admin);
     const plan = await planAgentRun(
       db,
       admin,
@@ -447,7 +446,7 @@ describe('AI-02.2 — permissions and approvals', () => {
       auditCtx,
     );
     createdRunIds.push(plan.runId);
-    const afterTasks = await countRows(agentTasks);
+    const afterTasks = await ownedTaskCount(admin);
     expect(afterTasks).toBe(beforeTasks);
     const runRows = await db.select().from(agentRuns).where(eq(agentRuns.id, plan.runId));
     expect(runRows[0].status).toBe('PLANNING');
@@ -498,8 +497,10 @@ describe('AI-02.2 — permissions and approvals', () => {
 describe('AI-02.2 — planning never executes agents', () => {
   it('runs no executor and creates no agent task or AI request', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    const tasksBefore = await countRows(agentTasks);
-    const requestsBefore = await countRows(aiRequests);
+    // Ownership-scoped: count only rows attributed to this spec's fresh user, so
+    // concurrent inserts by other spec files cannot perturb the comparison.
+    const tasksBefore = await ownedTaskCount(admin);
+    const requestsBefore = await ownedRequestCount(admin);
 
     const plan = await planAgentRun(
       db,
@@ -515,8 +516,8 @@ describe('AI-02.2 — planning never executes agents', () => {
     );
     createdRunIds.push(plan.runId);
 
-    expect(await countRows(agentTasks)).toBe(tasksBefore);
-    expect(await countRows(aiRequests)).toBe(requestsBefore);
+    expect(await ownedTaskCount(admin)).toBe(tasksBefore);
+    expect(await ownedRequestCount(admin)).toBe(requestsBefore);
   });
 
   it('never advances the run beyond PLANNING (no DISPATCHING / RUNNING)', async () => {

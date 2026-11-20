@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db, closeDb } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
-import { agentTasks, agentRegistry } from '../src/db/schema/agents.js';
+import { agentTasks } from '../src/db/schema/agents.js';
 import { agentRuns, agentRunSteps } from '../src/db/schema/agent_runs.js';
 import { auditLogs } from '../src/db/schema/audit.js';
+import { cleanupOwnedRows } from './support/ownership-cleanup.js';
 import { ensureAgentRegistrySeeded } from '../src/modules/ai/agents.js';
 import { planAgentRun, type ProposedStep } from '../src/modules/ai/planner.js';
 import {
@@ -128,16 +129,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (createdTaskIds.length) await db.delete(agentTasks).where(inArray(agentTasks.id, createdTaskIds));
-  if (createdRunIds.length) {
-    await db.delete(agentRunSteps).where(inArray(agentRunSteps.runId, createdRunIds));
-    await db.delete(agentRuns).where(inArray(agentRuns.id, createdRunIds));
-  }
-  if (createdRegistryKeys.length) await db.delete(agentRegistry).where(inArray(agentRegistry.key, createdRegistryKeys));
-  if (createdUserIds.length) {
-    await db.delete(userRoles).where(inArray(userRoles.userId, createdUserIds));
-    await db.delete(users).where(inArray(users.id, createdUserIds));
-  }
+  // Ownership-scoped: removes the spec's tasks/runs/registry rows and any
+  // ai_requests/ai_usage recorded under its users, without a table-wide DELETE.
+  await cleanupOwnedRows(db, {
+    userIds: createdUserIds,
+    runIds: createdRunIds,
+    taskIds: createdTaskIds,
+    registryKeys: createdRegistryKeys,
+  });
   await closeDb();
 });
 

@@ -10,6 +10,7 @@ import { newId } from '../../lib/ids';
 import { env } from '../../lib/env';
 import { logger } from '../../lib/observability/logger';
 import { isBudgetExhausted } from '../../lib/ai/cost-control';
+import { isAiExecutionBlocked } from '../../lib/ai/kill-switch';
 import { createAgentTask, ensureAgentRegistrySeeded } from './agents.js';
 
 /**
@@ -400,6 +401,19 @@ export async function runDueAgentSchedules(
   workerId: string,
   options: { leaseSeconds?: number; maxPerSweep?: number } = {},
 ): Promise<RunDueResult> {
+  // Central AI Kill Switch (A1): while disabled, no schedule is claimed and no
+  // task is created — the sweep short-circuits to a no-op and records ONE
+  // refusal audit entry. It does not throw, so the scheduler loop stays healthy
+  // and simply idles until AI is re-enabled (schedules are preserved, not lost).
+  if (isAiExecutionBlocked()) {
+    await writeAudit(db, { actorId: null, actorType: 'SYSTEM' }, {
+      action: 'AI.KILL_SWITCH_SCHEDULE_REFUSED',
+      entityType: 'AI_KILL_SWITCH',
+      entityId: null,
+      metadata: { reason: 'ai-execution-disabled', workerId },
+    });
+    return { claimed: 0, created: 0, skippedApproval: 0, budgetBlocked: 0, failed: 0 };
+  }
   const leaseSeconds = options.leaseSeconds ?? DEFAULT_LEASE_SECONDS;
   const maxPerSweep = options.maxPerSweep ?? 25;
   const result: RunDueResult = { claimed: 0, created: 0, skippedApproval: 0, budgetBlocked: 0, failed: 0 };

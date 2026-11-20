@@ -6,6 +6,7 @@ import { agentTasks, agentRegistry } from '../../db/schema/agents';
 import { userRoles, roles } from '../../db/schema/auth';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { isBudgetExhausted } from '../../lib/ai/cost-control';
+import { isAiExecutionBlocked, assertAiExecutionEnabled } from '../../lib/ai/kill-switch';
 import { env } from '../../lib/env';
 import { createAgentTask, decideAgentTask } from './agents.js';
 import {
@@ -203,6 +204,10 @@ export async function dispatchStep(
   audit: AuditContext,
   fence?: DispatchFence,
 ): Promise<DispatchResult> {
+  // Central AI Kill Switch (A1): dispatch starts a step, so a global disable
+  // refuses it BEFORE the run/step is touched — no step is marked RUNNING and no
+  // task is created. Uniform across the admin route and the supervisor retry.
+  assertAiExecutionEnabled();
   const run = await loadRun(db, runId);
   const steps = await loadSteps(db, runId);
   const step = steps.find((s) => s.stepKey === stepKey);
@@ -271,9 +276,11 @@ export async function dispatchStep(
     throw ApiError.conflict(`Step ${stepKey} already has an agent task; refusing to create a duplicate`);
   }
 
-  // Atomic claim: only one caller can move a PENDING/READY step to RUNNING.
-  // `attemptCount` is incremented here and returned; it is the fencing token
-  // (claim generation) that every later write must present to prove ownership.
+  // Atomic claim: only one caller can move a PENDING/READY/RETRYING step to
+  // RUNNING. RETRYING is included because AI-02.S1's retry policy moves an
+  // eligible FAILED step to RETRYING (FAILED → RETRYING → RUNNING is the AI-02.1
+  // state machine, unchanged); the claim below is still the single winner, and
+  // `attemptCount` remains the fencing token every later write must present.
   const claimed = await db
     .update(agentRunSteps)
     .set({
@@ -282,7 +289,7 @@ export async function dispatchStep(
       startedAt: sql`coalesce(${agentRunSteps.startedAt}, now())`,
       updatedAt: new Date(),
     })
-    .where(and(eq(agentRunSteps.id, step.id), inArray(agentRunSteps.status, ['PENDING', 'READY'])))
+    .where(and(eq(agentRunSteps.id, step.id), inArray(agentRunSteps.status, ['PENDING', 'READY', 'RETRYING'])))
     .returning({ id: agentRunSteps.id, attemptCount: agentRunSteps.attemptCount });
   if (claimed.length === 0) {
     throw ApiError.conflict(`Step ${stepKey} was already claimed by another dispatch`);
@@ -767,6 +774,28 @@ export async function recoverStuckSteps(
   audit: AuditContext,
   hooks?: SyncHooks,
 ): Promise<RecoverResult> {
+  // Central AI Kill Switch (A1): recovery must not re-drive anything during a
+  // stop. It short-circuits to a clean no-op (nothing scanned, nothing settled,
+  // no run reconciled) and records ONE refusal audit entry — never per-row. It
+  // does not throw, so the scheduler loop stays healthy and simply idles.
+  if (isAiExecutionBlocked()) {
+    await writeAudit(db, audit, {
+      action: 'AI.KILL_SWITCH_RECOVERY_REFUSED',
+      entityType: 'AI_KILL_SWITCH',
+      entityId: null,
+      metadata: { reason: 'ai-execution-disabled', sweep: 'recoverStuckSteps' },
+    });
+    return {
+      scanned: 0,
+      recovered: 0,
+      reconciledRuns: 0,
+      skippedLease: 0,
+      lostRace: 0,
+      errors: 0,
+      status: 'SUCCESS',
+      details: [{ stepId: '-', stepKey: '-', reason: 'ai-execution-disabled', outcome: 'refused' }],
+    };
+  }
   const leaseSeconds = options.leaseSeconds ?? Math.max(options.stuckSeconds, 60);
   const limit = options.limit ?? 50;
   const result: RecoverResult = {
@@ -873,6 +902,10 @@ export async function recoverStuckSteps(
  * task, then re-derives the run status. Returns the run's status afterwards.
  */
 export async function recoverRun(db: DB, runId: string, audit: AuditContext): Promise<AgentRunStatus> {
+  // Central AI Kill Switch (A1): the manual recovery route must not re-drive a
+  // run during a stop. Refuse loudly (503) so the operator sees why, without
+  // touching the run — its state stays exactly as it was, nothing is lost.
+  assertAiExecutionEnabled();
   const steps = await loadSteps(db, runId);
   for (const step of steps) {
     if (step.status === 'RUNNING') {
