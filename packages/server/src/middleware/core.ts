@@ -2,6 +2,7 @@ import type { Context, Next } from 'hono';
 import { db } from '../db/client';
 import { setContext, setDb, setTraceId, setTraceInfo } from '../lib/request-context';
 import { traceFromHeaders } from '../lib/observability/trace';
+import { resolveClientIp } from '../lib/net/client-ip';
 
 export async function coreMiddleware(c: Context, next: Next): Promise<Response | void> {
   // Adopt an inbound W3C trace when present so a request keeps one trace id
@@ -20,10 +21,7 @@ export async function coreMiddleware(c: Context, next: Next): Promise<Response |
   });
   setDb(c, db);
 
-  const ipAddress =
-    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
-    c.req.header('x-real-ip') ??
-    null;
+  const ipAddress = resolveClientIp(c);
   const userAgent = c.req.header('user-agent') ?? null;
 
   setContext(c, {
