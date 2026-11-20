@@ -8,6 +8,8 @@ const ALLOWED_HOSTS = [
   'work-2-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
   'work-1-qpzssfljriaoounj.prod-runtime.all-hands.dev',
   'work-2-qpzssfljriaoounj.prod-runtime.all-hands.dev',
+  'work-1-wqozutzaflweunqz.prod-runtime.all-hands.dev',
+  'work-2-wqozutzaflweunqz.prod-runtime.all-hands.dev',
 ] as const;
 
 const API_FALLBACK = 'http://localhost:3000';
