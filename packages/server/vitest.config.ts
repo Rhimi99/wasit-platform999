@@ -36,6 +36,7 @@ const CALLER_SHELL_LEAKS = [
   'RATE_LIMIT_DELETION_MAX',
   'RATE_LIMIT_LOGIN_MAX',
   'RATE_LIMIT_REGISTER_MAX',
+  'MEDIA_STORAGE_DIR',
 ] as const;
 for (const key of CALLER_SHELL_LEAKS) delete process.env[key];
 
@@ -78,6 +79,11 @@ export default defineConfig({
       // Keep the suite output readable: the observability middleware logs every
       // request, and tests make thousands of them.
       OBS_LOG_LEVEL: 'error',
+      // Video specs render real MP4s. Keep them out of the store that holds
+      // user assets: `LocalMediaStorage` refuses the production directory when
+      // it detects a test runtime, so a leaked value fails loudly instead of
+      // mixing test output with real media.
+      MEDIA_STORAGE_DIR: '.wasit-media-test',
     },
   },
 });

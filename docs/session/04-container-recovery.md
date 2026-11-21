@@ -78,7 +78,8 @@ cd /workspace/project/wasit-platform999-restored
 | --- | --- |
 | `.env` / `.env.demo` | من مدير الأسرار أو نسخة خارجية آمنة |
 | `backups/*.dump` | نسخ PostgreSQL الخارجية (`scripts/restore-db.sh`) |
-| `packages/server/.wasit-media/` | تُعاد توليدها |
+| `packages/server/.wasit-media/` | تُعاد توليدها (وسائط حقيقية — لا تُحذف) |
+| `packages/server/.wasit-media-test/` | مخرجات اختبارات الفيديو — تُمسح تلقائيًا قبل/بعد كل تشغيل |
 | `e2e/.auth/` | يُعاد توليدها بتشغيل E2E |
 | `node_modules/` | `npm ci` |
 

@@ -23,6 +23,8 @@ e2e/.auth/
 .wasit-media/
 .wasit-media-demo/
 packages/server/.wasit-media/
+.wasit-media-test/
+packages/server/.wasit-media-test/
 
 # Staging env with real secrets — never commit.
 .env.staging

@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { env } from '../env.js';
+import { assertIsolatedMediaDir } from './isolation.js';
 import type { MediaStorage, PutObjectInput, StoredObject } from './port.js';
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
@@ -26,7 +27,9 @@ function validateKey(key: string): void {
  */
 export class LocalMediaStorage implements MediaStorage {
   readonly id = 'local';
-  constructor(private readonly baseDir: string = env.MEDIA_STORAGE_DIR) {}
+  constructor(private readonly baseDir: string = env.MEDIA_STORAGE_DIR) {
+    assertIsolatedMediaDir(baseDir);
+  }
 
   private resolveKey(key: string): string {
     validateKey(key);

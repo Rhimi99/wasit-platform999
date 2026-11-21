@@ -116,3 +116,17 @@ wasit-20261120T193125Z-selftest.bundle
 
 لم تُحذف: الحذف ممنوع في سياسة هذه المهمة. يمكن للمالك حذفها من GitHub عند
 الرغبة؛ لا تؤثر على `master`.
+
+## عزل وسائط الاختبار (2026-11-21)
+
+| الفحص | الأمر | النتيجة |
+| --- | --- | --- |
+| اختبار العزل (DB-free) | `SKIP_DB_SETUP=1 npx vitest run tests/media-storage-isolation.test.ts` | **6/6** |
+| بصمة المخزن الحقيقي قبل/بعد | `find .wasit-media -type f \| sort \| xargs sha256sum \| sha256sum` | `ef88dc4e9c32bca4…` — **متطابقة** |
+| مجلد الاختبار بعد التشغيل | `ls -d packages/server/.wasit-media-test` | غير موجود (نظّفه الـteardown) |
+| حارس المخزن الإنتاجي | `VITEST=true MEDIA_STORAGE_DIR=.wasit-media` → `resolveMediaStorage()` | **REFUSED** |
+| المسار المسموح | `VITEST=true MEDIA_STORAGE_DIR=.wasit-media-test` | `driver=local` |
+
+ملاحظة: المجموعة التكاملية الكاملة لم تُشغَّل في هذه الجلسة (لا PostgreSQL على
+`127.0.0.1:5434`، وتشغيل migrations/seeds ممنوع في هذه المهمة). اختبار العزل
+يمرّ عبر `globalSetup` الحقيقي (إنشاء + إزالة `.wasit-media-test`).

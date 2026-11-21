@@ -936,4 +936,5 @@ npx playwright install --with-deps chromium
 - **`session-recovery`** يرفض هدفًا موجودًا غير فارغ، ويطلب `--sha256` للـbundle قبل `git bundle verify`. لا يحذف ولا يستبدل شيئًا.
 - **ملفات لا يحميها Git أبدًا**: `.env*`، `backups/*.dump`، `packages/server/.wasit-media/`، `e2e/.auth/`، `node_modules/`. تُبلَّغ دائمًا؛ انسخها خارجيًا قبل نهاية الجلسة.
 - **الاختبار العملي**: `./scripts/session/session-selftest.sh` (22 فحصًا على فرع اختبار، لا master) — النتائج في `docs/session/08-test-results.md`.
-- **الأدلة**: `docs/session/README.md` + 8 أدلة (بداية، checkpoint، إغلاق، استعادة، backup، تعارضات، احتفاظ، نتائج).
+- **الأدلة**: `docs/session/README.md` + 9 أدلة (بداية، checkpoint، إغلاق، استعادة، backup، تعارضات، احتفاظ، نتائج، نسخة خارجية).
+- **عزل وسائط الاختبار (2026-11-21)**: `vitest.config.ts` يفرض `MEDIA_STORAGE_DIR=.wasit-media-test` (ويحذف أي قيمة موروثة من الـshell)، و`tests/setup.ts` يمسح المجلد قبل التشغيل وبعده عبر `tests/test-media-dir.ts` (حارس مسار يمنع أي هدف غير `.wasit-media-test`). `LocalMediaStorage` يرمي استثناءً عند `NODE_ENV=test`/`VITEST` إذا أُشير إلى `.wasit-media` الحقيقي — فوسائط المستخدم لا تُلمس. إثبات: `tests/media-storage-isolation.test.ts` (6 حالات، DB-free).

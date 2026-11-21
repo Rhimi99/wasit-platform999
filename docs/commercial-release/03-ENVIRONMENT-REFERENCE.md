@@ -120,7 +120,7 @@ Only **one** provider is active, selected by `PAYMENT_PROVIDER`.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `MEDIA_STORAGE` | `local` | On-disk driver. Assets are private, written under opaque keys and served only via signed short-lived links. |
-| `MEDIA_STORAGE_DIR` | `.wasit-media` | Storage root. Must be a persistent volume in production. |
+| `MEDIA_STORAGE_DIR` | `.wasit-media` | Storage root. Must be a persistent volume in production. The test suite pins it to `.wasit-media-test` (wiped before/after a run); a test runtime refuses the production directory. |
 | `VIDEO_PROVIDER` | `structural` | `structural` = real MP4 render via bundled ffmpeg + libass (Arabic shaping). `noop` fails loudly. |
 | `VIDEO_FFMPEG_PATH` | *(empty)* | Override the bundled `ffmpeg-static` binary. |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` | `720` / `1280` | Portrait output. |
