@@ -248,6 +248,30 @@ const envSchema = z.object({
    */
   AI_AGENT_MAX_ACTIVE_TASKS_PER_USER: z.coerce.number().int().positive().default(25),
   /**
+   * AI-MEM-01 — bounds of the institutional agent memory layer. Every memory is
+   * a short operational note, so the text cap is small on purpose: a row that
+   * needs more space belongs in a business table, not in memory.
+   */
+  AI_MEMORY_MAX_TEXT_CHARS: z.coerce.number().int().positive().default(2000),
+  /** Maximum live memories per (owner, agent) pair; expired rows are evicted first. */
+  AI_MEMORY_MAX_PER_AGENT: z.coerce.number().int().positive().default(200),
+  /** Maximum live memories per owner across every agent. */
+  AI_MEMORY_MAX_PER_OWNER: z.coerce.number().int().positive().default(1000),
+  /** Retention used when a caller does not ask for a specific TTL. */
+  AI_MEMORY_DEFAULT_TTL_DAYS: z.coerce.number().int().positive().default(90),
+  /** Upper bound on a caller-requested TTL. */
+  AI_MEMORY_MAX_TTL_DAYS: z.coerce.number().int().positive().default(365),
+  /** Character budget of the per-run recall injected into an agent run context. */
+  AI_MEMORY_RUN_CONTEXT_CHARS: z.coerce.number().int().positive().default(600),
+  /**
+   * Record one deterministic `task_result` memory per terminal agent task. It
+   * carries status/latency/code only — never a model guess, never task output.
+   */
+  AI_MEMORY_AUTO_RECORD: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /**
    * Number of reverse proxies we operate in front of the API (LC-08). `0`
    * (default) means the API is reached directly, so `X-Forwarded-For`/`X-Real-IP`
    * are attacker-controlled and ignored: the client is the real TCP peer. Set it

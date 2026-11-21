@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
-import { validateBody, getValidatedBody } from '../../middleware/validate.js';
+import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import { writeAudit } from '../../lib/audit.js';
 import { newId } from '../../lib/ids.js';
@@ -28,6 +28,12 @@ import {
 } from '../ai/scheduling.js';
 import { buildSupervisorOverview, containRunManually } from '../ai/supervisor.js';
 import { buildCompanyMetricsForAdmin } from '../ai/agent-metrics.js';
+import {
+  memorySummaryForAdmin,
+  listMemoryMetadataForAdmin,
+  inspectMemoryForAdmin,
+  purgeExpiredMemories,
+} from '../ai/memory.js';
 import { derivePlatformScope } from '../ai/scope.js';
 import {
   getAiExecutionSwitchState,
@@ -460,4 +466,92 @@ adminAiRoutes.post('/kill-switch', validateBody(killSwitchSchema), async (c) => 
     },
   );
   return c.json({ success: true, data: after });
+});
+
+// ----- Agent memory supervision (AI-MEM-01) -------------------------------
+// A supervisor gets an accountable interface, not a master key: aggregates and
+// metadata by default, one note's content only with a stated reason, and every
+// call audited. There is no bulk content export and no cross-owner write.
+
+const memoryTypeEnum = z.enum(['operational', 'contextual', 'procedural', 'task_result']);
+
+const memoryListSchema = z
+  .object({
+    ownerId: z.string().max(36).optional(),
+    agentKey: z.string().max(64).optional(),
+    type: memoryTypeEnum.optional(),
+    includeExpired: z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
+    limit: z.coerce.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+const memoryInspectSchema = z
+  .object({ reason: z.string().min(10).max(500) })
+  .strict();
+
+const memoryPurgeSchema = z
+  .object({ ownerId: z.string().max(36).optional().nullable(), limit: z.number().int().positive().max(5000).optional() })
+  .strict();
+
+adminAiRoutes.get('/memory/summary', async (c) => {
+  const summary = await memorySummaryForAdmin(getContext(c).db);
+  return c.json({ success: true, data: summary });
+});
+
+adminAiRoutes.get('/memory/entries', validateQuery(memoryListSchema), async (c) => {
+  const ctx = getContext(c);
+  const query = getValidatedQuery<z.infer<typeof memoryListSchema>>(c);
+  const items = await listMemoryMetadataForAdmin(ctx.db, {
+    ownerId: query.ownerId ?? null,
+    agentKey: query.agentKey ?? null,
+    type: query.type ?? null,
+    includeExpired: query.includeExpired ?? false,
+    limit: query.limit,
+  });
+  await writeAudit(
+    ctx.db,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    {
+      action: 'AI.MEMORY_METADATA_LISTED',
+      entityType: 'AGENT_MEMORY',
+      metadata: {
+        ownerId: query.ownerId ?? null,
+        agentKey: query.agentKey ?? null,
+        type: query.type ?? null,
+        includeExpired: query.includeExpired ?? false,
+        count: items.length,
+      },
+    },
+  );
+  return c.json({ success: true, data: { items } });
+});
+
+adminAiRoutes.get('/memory/entries/:memoryId', validateQuery(memoryInspectSchema), async (c) => {
+  const ctx = getContext(c);
+  const { reason } = getValidatedQuery<z.infer<typeof memoryInspectSchema>>(c);
+  const memory = await inspectMemoryForAdmin(ctx.db, c.req.param('memoryId')!, reason, {
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: memory });
+});
+
+adminAiRoutes.post('/memory/purge', validateBody(memoryPurgeSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof memoryPurgeSchema>>(c);
+  const deleted = await purgeExpiredMemories(ctx.db, {
+    ownerId: body.ownerId ?? undefined,
+    limit: body.limit,
+  });
+  await writeAudit(
+    ctx.db,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    {
+      action: 'AI.MEMORY_EXPIRED_PURGED',
+      entityType: 'AGENT_MEMORY',
+      metadata: { ownerId: body.ownerId ?? null, deleted },
+    },
+  );
+  return c.json({ success: true, data: { deleted } });
 });

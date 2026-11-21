@@ -1184,3 +1184,41 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 **ملاحظة بيئية (ليست انحدارًا):** تشغيل الحزمة في shell ورث `APP_URL` من `.env.demo` يُفشل
 `tests/seo.test.ts` (3 حالات) لأن sitemap/robots يعكسان الأصل العام؛ مع `APP_URL=http://localhost:5173`
 تمرّ **10/10**. نفس فخ تهريب `.env.demo` الموثّق في `AGENTS.md`.
+
+---
+
+## §26 — AI-MEM-01: ذاكرة الوكلاء المؤسسية المعزولة (CLOSED / VERIFIED — 2026-11-21)
+
+**الفحص أولًا.** `agent_memory` كان **جدولًا بلا ذاكرة**: موجود منذ migration `0033`، صفر صفوف في
+`wasit_demo` و`wasit_test`، ولا كاتب ولا قارئ في الكود — فقط تعليق في `agent-run-context.ts` يدّعي أن
+`priorContext` يُجمَّع منه. كل ما يلزم للطبقة كان ناقصًا: هوية، عزل، أنواع، انتهاء صلاحية، فاحص أسرار،
+تدقيق قراءة، حدود، وواجهة إشراف.
+
+**ما بُني (كود إنتاج):**
+
+| القدرة | التنفيذ |
+| --- | --- |
+| حفظ/استرجاع/تحديث/حذف | `modules/ai/memory.ts` + `GET/POST/PATCH/DELETE /api/ai/memory` |
+| هوية الوكيل المالك | `agent_key` إلزامي في كل عملية؛ المالك من الجلسة فقط (`ctx.user.id`) |
+| عزل الوكلاء | كل استعلام `owner + agent_key`؛ معرّف صف وكيل آخر ⇒ 404 |
+| عزل المالكين | `scope_owner` في كل استعلام؛ `.strict()` يرفض `scopeOwner` في الجسم (422) |
+| النطاق | `taskId` (يُتحقق أنه للمالك ونفس الوكيل)، `entityType/entityId` من قائمة مغلقة |
+| الأنواع | `operational` / `contextual` / `procedural` / `task_result` |
+| التواريخ والانتهاء | `createdAt` + `updatedAt` + `expiresAt` مع TTL لكل نوع وسقف 365 يومًا |
+| منع الأسرار | 12 نمطًا + Luhn + IBAN + بريد ⇒ 422 `MEMORY_CONTENT_REFUSED` |
+| التدقيق | 11 إجراء `AI.MEMORY_*` يشمل القراءة (`READ`/`LISTED`/`RECALLED`) |
+| الحدود والاحتفاظ | 2000 حرفًا · 200/وكيل · 1000/مالك · حذف المنتهي فعليًا |
+| السلامة | checksum لكل صف + `revision` + 409 عند التلاعب |
+| الإشراف | `AI_MANAGE` فقط: ملخص/بيانات وصفية/فحص بسبب مُسجَّل/تنظيف — بلا تصدير نصوص جماعي |
+| ربط التشغيل | `priorContext` من ذاكرة الوكيل نفسه + `task_result` تلقائي لكل مهمة منتهية |
+
+**القيود المحفوظة:** لا migration، لا seed، لا تغيير في `wasit_demo`/الإنتاج، لا صلاحية RBAC جديدة
+(`AI_USE` للذاكرة الخاصة، `AI_MANAGE` للإشراف)، ولا توسيع `allowedTables` لأي وكيل — اختبارات
+`agent-scope-contract` التي تشترط ألّا يقرأ أي وكيل `agent_memory` عبر نطاق التشغيل ما زالت تمرّ.
+
+**الدليل:** `tests/ai-mem01-agent-memory.test.ts` **15/15** · `tests/unit/agent-memory-policy.test.ts`
+**6/6** · الحزمة الكاملة **149 ملفًا / 1926 اختبارًا — كلها ناجحة** · `tsc --noEmit` **0 أخطاء**.
+
+**فجوة متبقية (معلنة لا مخفية):** لا واجهة ويب للذاكرة بعد — الطبقة API فقط؛ إضافة لوحة للمستخدم
+قرار منفصل. الترقية إلى أعمدة `updated_at`/`expires_at` مفهرسة مؤجَّلة إلى ما بعد موافقة على migration
+على القواعد المشتركة (الخطة في AD-046).

@@ -310,6 +310,28 @@ npx playwright install --with-deps chromium
 - **اختبارات**: `tests/unit/ai-reg01-agent-layer.test.ts` (9) + `tests/ai-reg01-agent-layer.test.ts` (7). التشغيل يتطلب `TEST_DATABASE_URL` صريحًا على 127.0.0.1:5434/wasit_test (بوابة `vitest.config.ts`).
 - **الحالة**: **146 ملف · 1895 اختبار · 0 فشل** — server tsc 0 — web tsc 0 — web build نظيف.
 
+## AI-MEM-01 — ذاكرة الوكلاء المؤسسية (2026-11-21)
+
+- **`agent_memory` كان جدولًا فارغًا بلا كود** منذ migration `0033`؛ الطبقة الآن في
+  `packages/server/src/modules/ai/memory.ts`. كل عملية تحمل `scope_owner` (من الجلسة، لا من الجسم)
+  و`agent_key` معًا؛ `.strict()` على مخططات zod يرفض `scopeOwner`/`ownerId` بدل تجاهله.
+- **المسارات**: `/api/ai/memory` (GET list, POST, GET/PATCH/DELETE `/:memoryId?agentKey=`) بـ`AI_USE`؛
+  الإشراف `/api/admin/ai/memory/{summary,entries,entries/:id,purge}` بـ`AI_MANAGE` (لا صلاحية جديدة).
+  فحص صف واحد يتطلب `reason` ≥ 10 أحرف ويُدقَّق `AI.MEMORY_INSPECTED`.
+- **الأنواع** `operational|contextual|procedural|task_result`؛ TTL افتراضي 30/7/180/90 يومًا بسقف
+  `AI_MEMORY_MAX_TTL_DAYS`. `task_result` يُكتب تلقائيًا لكل مهمة منتهية (حالة/زمن/رمز فقط) وسجل
+  متدحرج يحذف أقدم `task_result` فقط — لا يحذف ملاحظات المالك.
+- **رفض الأسرار**: 422 `MEMORY_CONTENT_REFUSED` (مفاتيح، رموز API/JWT/Bearer، كلمات مرور، بطاقات
+  Luhn، IBAN، بريد). **السلامة**: checksum لكل صف ⇒ 409 `MEMORY_INTEGRITY_FAILED` عند التلاعب؛
+  `revision` + `expectedRevision` ⇒ 409 `MEMORY_REVISION_MISMATCH`.
+- **لا توسيع صلاحيات**: `agent_memory` ليست في `allowedTables` لأي وكيل (اختبارات
+  `agent-scope-contract` تفرض ذلك)؛ `priorContext` يُبنى في `buildRunContext` من ذاكرة الوكيل نفسه
+  ويمنح معلومات لا سلطة. فشل الذاكرة لا يُفشل المهمة.
+- **بلا migration**: الظرف `{text,updatedAt,expiresAt,taskId,entityType,entityId,revision,checksum}`
+  داخل `content` jsonb؛ الترقية إلى أعمدة مؤجَّلة (AD-046). لا واجهة ويب بعد.
+- **اختبارات**: `tests/ai-mem01-agent-memory.test.ts` (15) + `tests/unit/agent-memory-policy.test.ts` (6).
+  عند اختبار الحدود عدّل `env.AI_MEMORY_MAX_*` مؤقتًا وأعِدها في `finally` (بيئة الاختبار مشتركة).
+
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
 
 - ✅ **MFA (TOTP RFC 6238)** `modules/auth` + `lib/mfa.ts`: enroll/confirm/disable/status/verify/recovery-codes/dev-totp. كل endpoint: `requireAuth` + `rateLimit` + Audit (`AUTH.MFA_*`). `dev-totp` محجوب في `NODE_ENV=production` (403).

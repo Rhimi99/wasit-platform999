@@ -33,7 +33,13 @@ export type ErrorCode =
   | 'COMMISSION_POLICY_MISSING'
   | 'PROHIBITED_GOODS'
   | 'RESTRICTED_GOODS_REVIEW_REQUIRED'
-  | 'LEGAL_ACCEPTANCE_REQUIRED';
+  | 'LEGAL_ACCEPTANCE_REQUIRED'
+  // AI-MEM-01 — agent memory policy refusals. Distinct codes so a client can
+  // react (rephrase / prune / re-read) without parsing a message.
+  | 'MEMORY_CONTENT_REFUSED'
+  | 'MEMORY_LIMIT_REACHED'
+  | 'MEMORY_INTEGRITY_FAILED'
+  | 'MEMORY_REVISION_MISMATCH';
 
 export interface ApiErrorBody {
   error: {

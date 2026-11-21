@@ -476,3 +476,35 @@
   التكامل التي تغطي نفس القواعد عبر `createApp()` الحقيقي.
 - كلمة المرور الجديدة محفوظة في `/tmp/demo_accounts_pw.txt` (0600) و`.env.demo` (0600، git-ignored)،
   ولم تُطبع في أي سجل.
+
+## 18. AI-MEM-01 — ذاكرة الوكلاء المؤسسية المعزولة (2026-11-21)
+
+### 18.1 الفحص
+- `agent_memory` موجود (migration `0033`) لكن بلا أي استخدام: صفر صفوف، ولا استيراد للجدول خارج
+  `schema/agents.ts`، ولا كتابة/قراءة في أي مسار.
+- `AgentRunContext.priorContext` موثَّق بأنه يُجمَّع من الذاكرة — لم يكن يُجمَّع.
+- البنية القائمة (A2 `agent-scope.ts`، `scope.ts`، `writeAudit`، `AI_USE`/`AI_MANAGE`) كافية للبناء
+  بلا توسيع صلاحيات.
+
+### 18.2 ما نُفِّذ
+- `src/modules/ai/memory.ts` (جديد): الأنواع، السياسة، فاحص الأسرار، TTL، checksum، الخدمة الكاملة،
+  `buildPriorContext`, `recordTaskOutcomeMemory`, وواجهات الإشراف.
+- `src/modules/ai/routes.ts`: خمسة مسارات `/api/ai/memory` بـ`AI_USE` + zod `.strict()`.
+- `src/modules/admin/ai-routes.ts`: أربعة مسارات إشراف على `/api/admin/ai/memory` (summary/entries/
+  entries/:id/purge) بـ`AI_MANAGE` الموجود.
+- `src/modules/ai/agents.ts`: `priorContext` في `buildRunContext` + تسجيل `task_result` في المسارين
+  (المباشر وبعد الموافقة) عبر `recordOutcomeSafely` (فشل الذاكرة لا يُفشل المهمة).
+- `src/lib/env.ts`: سبعة حدود `AI_MEMORY_*`.
+- `packages/shared/src/errors/api-error.ts`: أربعة رموز خطأ ذاكرة (إضافة نوعية، لا سلوك عام).
+
+### 18.3 الاختبارات
+- `tests/unit/agent-memory-policy.test.ts` (6): الأنواع، الفاحص، Luhn، TTL، checksum.
+- `tests/ai-mem01-agent-memory.test.ts` (15): دورة كاملة، عزل مالكين، عزل وكلاء، انتحال مالك،
+  رفض الأسرار، وكيل مجهول/Copilot/مشرف، 401، انتهاء صلاحية + purge، الحدود، سجل متدحرج، سلامة
+  الصف، ربط المهمة، تسجيل `task_result` + `priorContext`، إشراف محصور ومساءَل.
+- الحزمة الكاملة: **149 ملفًا / 1926 اختبارًا — ناجحة** (كانت 147/1905).
+
+### 18.4 القيود
+- لا migration: الطبقة تعمل على المخطط الحالي (الظرف في `content`). ترقية الأعمدة مؤجَّلة (AD-046).
+- لا واجهة ويب: API فقط.
+- لا لمس لقاعدة العرض أو الإنتاج: التغييرات كود + اختبارات + وثائق فقط.

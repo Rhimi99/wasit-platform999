@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
-import { validateBody, getValidatedBody } from '../../middleware/validate.js';
+import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import {
   analyzeProduct,
@@ -38,6 +38,13 @@ import {
 } from '../../lib/ai/routing.js';
 import { currentPeriodWindow, aiUsageForPeriod } from '../../lib/ai/cost-control.js';
 import { writeAudit } from '../../lib/audit.js';
+import {
+  rememberMemory,
+  recallMemories,
+  getMemory,
+  updateMemory,
+  forgetMemory,
+} from './memory.js';
 
 const runSchema = z.object({
   requestType: z.string().min(1).max(50),
@@ -67,6 +74,51 @@ const decideSchema = z.object({
   decision: z.enum(['APPROVE', 'REJECT']),
   reason: z.string().max(1000).optional().nullable(),
 });
+
+// AI-MEM-01. `strict()` is the anti-spoofing guard: a body that names
+// `scopeOwner`/`ownerId`/`requestedBy` is rejected instead of silently ignored,
+// so a caller cannot even express "write this into someone else's memory".
+const memoryTypeEnum = z.enum(['operational', 'contextual', 'procedural', 'task_result']);
+
+const rememberSchema = z
+  .object({
+    agentKey: z.string().min(1).max(64),
+    type: memoryTypeEnum,
+    text: z.string().min(1).max(20_000),
+    taskId: z.string().min(1).max(36).optional().nullable(),
+    entityType: z.string().min(1).max(32).optional().nullable(),
+    entityId: z.string().min(1).max(36).optional().nullable(),
+    ttlDays: z.number().int().min(1).max(3650).optional().nullable(),
+  })
+  .strict();
+
+const updateMemorySchema = z
+  .object({
+    type: memoryTypeEnum.optional(),
+    text: z.string().min(1).max(20_000).optional(),
+    ttlDays: z.number().int().min(1).max(3650).optional().nullable(),
+    entityType: z.string().min(1).max(32).optional().nullable(),
+    entityId: z.string().min(1).max(36).optional().nullable(),
+    expectedRevision: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const recallQuerySchema = z
+  .object({
+    agentKey: z.string().min(1).max(64),
+    type: z
+      .union([memoryTypeEnum, z.array(memoryTypeEnum)])
+      .optional()
+      .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v])),
+    taskId: z.string().max(36).optional(),
+    entityType: z.string().max(32).optional(),
+    entityId: z.string().max(36).optional(),
+    q: z.string().max(80).optional(),
+    limit: z.coerce.number().int().positive().max(100).optional(),
+  })
+  .strict();
+
+const memoryScopeSchema = z.object({ agentKey: z.string().min(1).max(64) }).strict();
 
 export const aiRoutes = new Hono();
 
@@ -289,6 +341,86 @@ aiRoutes.post('/tasks/:taskId/reject', requirePermission(PERMISSIONS.AI_MANAGE),
     ctx.user!.id,
     body.decision,
     body.reason ?? null,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: result });
+});
+// ----- Agent memory (AI-MEM-01) -------------------------------------------
+// Owner-scoped by construction: `scope.ownerId` is always `ctx.user.id`, and the
+// agent key must be named on every operation, so one agent's memory is never
+// reachable through another agent's path.
+
+aiRoutes.get('/memory', requirePermission(PERMISSIONS.AI_USE), validateQuery(recallQuerySchema), async (c) => {
+  const ctx = getContext(c);
+  const query = getValidatedQuery<z.infer<typeof recallQuerySchema>>(c);
+  const items = await recallMemories(
+    ctx.db,
+    { ownerId: ctx.user!.id, agentKey: query.agentKey },
+    {
+      agentKey: query.agentKey,
+      types: query.type,
+      taskId: query.taskId ?? null,
+      entityType: query.entityType ?? null,
+      entityId: query.entityId ?? null,
+      q: query.q ?? null,
+      limit: query.limit,
+    },
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: { items } });
+});
+
+aiRoutes.post('/memory', requirePermission(PERMISSIONS.AI_USE), validateBody(rememberSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof rememberSchema>>(c);
+  const memory = await rememberMemory(
+    ctx.db,
+    { ownerId: ctx.user!.id, agentKey: body.agentKey },
+    body,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: memory }, 201);
+});
+
+aiRoutes.get('/memory/:memoryId', requirePermission(PERMISSIONS.AI_USE), validateQuery(memoryScopeSchema), async (c) => {
+  const ctx = getContext(c);
+  const { agentKey } = getValidatedQuery<z.infer<typeof memoryScopeSchema>>(c);
+  const memory = await getMemory(
+    ctx.db,
+    { ownerId: ctx.user!.id, agentKey },
+    c.req.param('memoryId')!,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: memory });
+});
+
+aiRoutes.patch(
+  '/memory/:memoryId',
+  requirePermission(PERMISSIONS.AI_USE),
+  validateQuery(memoryScopeSchema),
+  validateBody(updateMemorySchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const { agentKey } = getValidatedQuery<z.infer<typeof memoryScopeSchema>>(c);
+    const body = getValidatedBody<z.infer<typeof updateMemorySchema>>(c);
+    const memory = await updateMemory(
+      ctx.db,
+      { ownerId: ctx.user!.id, agentKey },
+      c.req.param('memoryId')!,
+      body,
+      { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    );
+    return c.json({ success: true, data: memory });
+  },
+);
+
+aiRoutes.delete('/memory/:memoryId', requirePermission(PERMISSIONS.AI_USE), validateQuery(memoryScopeSchema), async (c) => {
+  const ctx = getContext(c);
+  const { agentKey } = getValidatedQuery<z.infer<typeof memoryScopeSchema>>(c);
+  const result = await forgetMemory(
+    ctx.db,
+    { ownerId: ctx.user!.id, agentKey },
+    c.req.param('memoryId')!,
     { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
   );
   return c.json({ success: true, data: result });

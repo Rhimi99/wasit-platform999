@@ -7,6 +7,7 @@ import { agentRunSteps } from '../../db/schema/agent_runs';
 import { aiRequests } from '../../db/schema/ai';
 import { roles, userRoles } from '../../db/schema/auth';
 import { writeAudit, type AuditContext } from '../../lib/audit';
+import { buildPriorContext, recordTaskOutcomeMemory } from './memory.js';
 import { newId } from '../../lib/ids';
 import { createNotification } from '../../lib/notifications-service';
 import type { AgentDefinition, AgentTaskStatus, CreateAgentTaskInput, ResolvedAgentTask } from '../../lib/ai/types';
@@ -30,6 +31,7 @@ import {
   type AgentLayerCounts,
 } from './catalogue.js';
 import { assertAgentScopeContract, assertRunOwnerScope } from './agent-scope.js';
+import { SYSTEM_PRINCIPAL } from './scope.js';
 import { assertAiExecutionEnabled } from '../../lib/ai/kill-switch.js';
 import { env } from '../../lib/env.js';
 import { logger } from '../../lib/observability/logger';
@@ -207,6 +209,33 @@ function measuredCostFromError(err: unknown): string | null {
   return parseStoredCostUsd(raw).gt(0) ? raw : null;
 }
 
+/**
+ * A short machine code for a failed run, for the deterministic task-result
+ * memory. Only the error's own `code` is used — never its message, which may
+ * carry request data.
+ */
+function failureCodeOf(err: unknown): string | null {
+  if (err && typeof err === 'object' && 'code' in err && typeof (err as { code?: unknown }).code === 'string') {
+    return (err as { code: string }).code.slice(0, 64);
+  }
+  return null;
+}
+
+/** Records a terminal task outcome as memory; never fails the task it describes. */
+async function recordOutcomeSafely(
+  db: DB,
+  input: { agentKey: string; ownerId: string; taskId: string; status: string; latencyMs: number; taskType?: string | null; errorCode?: string | null },
+): Promise<void> {
+  try {
+    await recordTaskOutcomeMemory(db, input);
+  } catch (err) {
+    logger.warn('agent memory task-result write failed', {
+      taskId: input.taskId,
+      error: err instanceof Error ? err.message : 'unknown',
+    });
+  }
+}
+
 /** Roles the requester currently holds, resolved server-side (never from input). */
 async function rolesOfUser(db: DB, userId: string): Promise<UserRole[]> {
   const rows = await db
@@ -265,6 +294,13 @@ async function buildRunContext(
     authorizedActions,
     allowedTables,
     allowedTools,
+    // AI-MEM-01: a bounded recall of THIS agent's own memories for THIS owner.
+    // It is advisory context only — it grants no authority, and a failure to
+    // read it never fails the run.
+    priorContext: await buildPriorContext(db, task.agentKey, task.requestedBy, {
+      actorId: task.requestedBy === SYSTEM_PRINCIPAL ? null : task.requestedBy,
+      actorType: task.requestedBy === SYSTEM_PRINCIPAL ? 'SYSTEM' : 'USER',
+    }),
   };
   // A retry is seeded with the cost the task already recorded, so the ceiling
   // bounds the whole task across attempts and cannot be reset by re-running.
@@ -454,6 +490,7 @@ export async function createAgentTask(
       cost = advice.cost ?? null;
       result = { agentKey: agent.key, advice: advice.content, readOnly: true };
       status = 'succeeded';
+      const latencyMs = Date.now() - started;
       await db
         .update(agentTasks)
         .set({
@@ -464,7 +501,7 @@ export async function createAgentTask(
           ...(cost !== null ? { cost } : {}),
           model,
           completedAt: new Date(),
-          latencyMs: Date.now() - started,
+          latencyMs,
         })
         .where(eq(agentTasks.id, id));
       await writeAudit(db, audit, {
@@ -472,6 +509,14 @@ export async function createAgentTask(
         entityType: 'AGENT_TASK',
         entityId: id,
         after: result as never,
+      });
+      await recordOutcomeSafely(db, {
+        agentKey: agent.key,
+        ownerId: requestedBy,
+        taskId: id,
+        status: 'succeeded',
+        latencyMs,
+        taskType: input.input && typeof input.input === 'object' ? ((input.input as Record<string, unknown>).taskType as string | undefined) ?? null : null,
       });
     } catch (err) {
       status = 'failed';
@@ -491,6 +536,14 @@ export async function createAgentTask(
         entityType: 'AGENT_TASK',
         entityId: id,
         metadata: { error: err instanceof Error ? err.message : 'Unknown error' },
+      });
+      await recordOutcomeSafely(db, {
+        agentKey: agent.key,
+        ownerId: requestedBy,
+        taskId: id,
+        status: 'failed',
+        latencyMs: Date.now() - started,
+        errorCode: failureCodeOf(err),
       });
     }
   }
@@ -750,6 +803,13 @@ export async function decideAgentTask(
       entityId: taskId,
       after: result as never,
     });
+    await recordOutcomeSafely(db, {
+      agentKey: agent.key,
+      ownerId: task.requestedBy,
+      taskId,
+      status: 'approved',
+      latencyMs: Date.now() - started,
+    });
 
     // Notify the requester that their task is complete.
     await createNotification(db, {
@@ -783,6 +843,14 @@ export async function decideAgentTask(
       entityType: 'AGENT_TASK',
       entityId: taskId,
       metadata: error,
+    });
+    await recordOutcomeSafely(db, {
+      agentKey: agent.key,
+      ownerId: task.requestedBy,
+      taskId,
+      status: 'failed',
+      latencyMs: Date.now() - started,
+      errorCode: failureCodeOf(err),
     });
     return getTask(db, taskId);
   }
