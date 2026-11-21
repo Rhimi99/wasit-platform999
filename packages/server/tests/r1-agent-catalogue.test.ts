@@ -99,9 +99,9 @@ describe('R1 — catalogue integrity: unique keys, no duplicates', () => {
 });
 
 describe('R1 — no new execution authority is granted', () => {
-  it('marks exactly the 11 already-wired agents executable', () => {
+  it('marks exactly the 13 wired agents executable', () => {
     const executable = AGENT_CATALOGUE.filter((a) => a.executable === true).map((a) => a.key);
-    expect(executable).toHaveLength(11);
+    expect(executable).toHaveLength(13);
     for (const key of executable) {
       expect(EXECUTABLE_CATALOGUE.some((a) => a.key === key), key).toBe(true);
     }
@@ -115,10 +115,8 @@ describe('R1 — no new execution authority is granted', () => {
         'marketing-video-agent',
         'compliance-agent',
         'customer-intelligence-agent',
-        'finance-agent',
         'merchant-agent',
         'operations-agent',
-        'outreach-acquisition-agent',
         'payment-settlement-agent',
         'supplier-agent',
       ].sort(),
@@ -132,12 +130,12 @@ describe('R1 — no new execution authority is granted', () => {
     }
   });
 
-  it('leaves the runtime catalogue at 11 — R1 changes no execution', () => {
-    expect(EXECUTABLE_CATALOGUE).toHaveLength(11);
+  it('keeps the runtime catalogue in step with the executable set (13)', () => {
+    expect(EXECUTABLE_CATALOGUE).toHaveLength(13);
   });
 
-  it('does not widen the A2 scope contracts (still 11)', () => {
-    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(11);
+  it('gives every executable agent exactly one A2 scope contract (13)', () => {
+    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(13);
     for (const a of AGENT_CATALOGUE.filter((x) => x.executable !== true)) {
       expect(AGENT_SCOPE_CONTRACTS[a.key], a.key).toBeUndefined();
     }

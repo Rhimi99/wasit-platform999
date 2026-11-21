@@ -263,10 +263,13 @@ describe('R2 — unbound tools stay inert', () => {
     }
   });
 
-  it('reports the finance agent as having an unbound ledger tool', () => {
-    const finance = AGENT_CATALOGUE.find((a) => a.key === 'finance-agent')!;
-    expect(unboundToolsForAgent(finance)).toContain(FINANCE_READ_LEDGER);
-    expect(toolGrantForAgent(finance)).not.toContain(FINANCE_READ_LEDGER);
+  it('reports the settlement agent as having an unbound settlement tool', () => {
+    // AI-AGENT-MERGE-01: the finance agent no longer declares the ledger tool
+    // (the ledger is hard-denied, so accounting reads order aggregates instead).
+    // The unbound-tool invariant is asserted on an agent that still declares one.
+    const settlement = AGENT_CATALOGUE.find((a) => a.key === 'payment-settlement-agent')!;
+    expect(unboundToolsForAgent(settlement)).toContain(PAYMENTS_READ_SETTLEMENTS);
+    expect(toolGrantForAgent(settlement)).not.toContain(PAYMENTS_READ_SETTLEMENTS);
   });
 });
 

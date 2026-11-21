@@ -200,8 +200,10 @@ describe('AI-ARCH-ALIGN-01 — runnability is not identity', () => {
     }
   });
 
-  it('keeps the executable set at eleven agents after the structure alignment', () => {
-    expect(executableAgents()).toHaveLength(11);
+  it('keeps the executable set at eleven core specialists after AI-AGENT-MERGE-01', () => {
+    // The three new executors are supporting/growth agents; the twelve core
+    // specialists still carry exactly eleven executors (video is identity-only).
     expect(coreSpecialistAgents().filter((a) => a.executable === true)).toHaveLength(11);
+    expect(executableAgents()).toHaveLength(13);
   });
 });

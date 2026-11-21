@@ -87,6 +87,9 @@ export const SENSITIVE_ACTIONS: ReadonlySet<string> = new Set([
   'commission.change',
   'prod.deploy',
   'prod.migrate',
+  'code.apply_patch',
+  'code.merge',
+  'growth.paid_campaign',
   'risk.block_account',
   'dispute.final_decision',
   'compliance.final_ruling',
@@ -565,17 +568,43 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   {
     key: 'development-agent',
     tier: 'CORE_SPECIALIST',
-    name: 'Development Agent',
-    nameAr: 'وكيل التطوير',
-    mission: 'Support engineering work: specs, checks and safe changes.',
+    name: 'Platform Maintenance & Repair Agent',
+    nameAr: 'وكيل صيانة المنصة وإصلاحها',
+    mission:
+      'Keep the platform healthy: watch failures, analyse run/task signals, name the probable cause and prepare a reviewable repair (patch, tests, report) for the General Manager to approve.',
     category: 'platform',
-    description: 'Summarizes technical context and recommends implementation steps.',
-    capabilities: [{ action: 'dev_plan', description: 'Produce a technical plan' }],
+    description:
+      'Diagnoses the platform from real run and task data and drafts repairs. Diagnosis runs automatically; any change to project files, any migration and any deployment stays behind an explicit General Manager approval, and the agent can never approve its own work.',
+    capabilities: [
+      { action: 'diagnose_platform', description: 'Diagnose failures, stuck work and error trends' },
+      { action: 'propose_patch', description: 'Propose a patch/diff with the tests that cover it' },
+      { action: 'write_tests', description: 'Write the regression tests a repair requires' },
+      { action: 'dev_plan', description: 'Produce a technical plan' },
+      {
+        action: 'apply_patch',
+        description: 'Apply a patch to project files (requires General Manager approval)',
+        requiresApproval: true,
+      },
+      {
+        action: 'merge_change',
+        description: 'Merge a change (requires General Manager approval)',
+        requiresApproval: true,
+      },
+    ],
     allowedTools: ['platform.metrics', 'report.generate', 'development.read_platform'],
-    approvalActions: ['prod.deploy', 'prod.migrate'],
-    limits: { maxCostUsdPerRun: 2 },
-    taskTypes: ['dev.plan_change'],
+    approvalActions: ['code.apply_patch', 'code.merge', 'prod.deploy', 'prod.migrate'],
+    limits: { maxCostUsdPerRun: 2, maxFindingsPerRun: 25, diagnosisWindowDays: 7 },
+    taskTypes: ['dev.diagnose', 'dev.plan_change', 'dev.repair'],
     objectives: [
+      {
+        id: 'dev.diagnoses',
+        statement: 'Diagnose platform failures from real run data',
+        metric: 'diagnoses',
+        target: 1,
+        unit: 'count',
+        direction: 'increase',
+        window: 'daily',
+      },
       {
         id: 'dev.technical_plans',
         statement: 'Produce technical plans',
@@ -598,7 +627,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     requiresPlatformScope: true,
-    requiresHumanApproval: true,
+    // Diagnosis is read-only and runs on request; every mutating action stays in
+    // `approvalActions` and has no executor at all (fail-closed).
+    requiresHumanApproval: false,
     executable: true,
   },
 
@@ -675,44 +706,63 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   {
     key: 'finance-agent',
     tier: 'SUPPORTING',
-    name: 'Finance Agent',
-    nameAr: 'وكيل المالية',
-    mission: 'Produce financial summaries and reconcile commissions from the ledger.',
+    name: 'Finance & Cost Accounting Agent',
+    nameAr: 'وكيل المحاسبة المالية وتحليل التكاليف',
+    mission:
+      'Account for the platform in read-only terms: order volume and value, WASIT commission and payment fees (accrued versus realised), AI cost per request type and advertising spend, and the resulting contribution — with the source, currency and period of every figure.',
     category: 'finance',
     description:
-      'Summarizes commission, payment-fee and refund flows from aggregated, authorised financial data; never moves funds.',
+      'Read-only accountant. Reads orders, campaigns and AI usage aggregates; it never touches the transaction ledger, never moves funds and never edits a financial record.',
     capabilities: [
-      { action: 'reconcile', description: 'Produce a financial reconciliation summary' },
+      { action: 'report_pnl', description: 'Report revenue, cost and contribution for a window' },
+      { action: 'report_revenue', description: 'Report order volume, GMV, commission and fees' },
+      { action: 'report_costs', description: 'Report AI cost per request type and advertising spend' },
+      { action: 'report_forecast', description: 'Project the next window from the same figures' },
     ],
-    allowedTools: [...READ_TOOLS, 'finance.read_ledger'],
+    // `finance.read_ledger` was declared but can never be served: the ledger and
+    // the commission policies are hard-denied to every agent. Accounting is done
+    // from order-level aggregates (which already carry the recorded commission),
+    // so the declared tool list no longer promises an impossible read.
+    allowedTools: READ_TOOLS,
     approvalActions: ['finance.payout', 'finance.refund', 'commission.change'],
-    limits: { maxCostUsdPerRun: 1 },
-    taskTypes: ['finance.reconcile'],
+    limits: { maxCostUsdPerRun: 1, defaultWindowDays: 30, maxWindowDays: 365 },
+    taskTypes: ['finance.report_pnl', 'finance.reconcile'],
     objectives: [
       {
-        id: 'finance.reconciliations',
-        statement: 'Reconcile commissions and fees from the ledger',
-        metric: 'reconciliations',
+        id: 'finance.pnl_reports',
+        statement: 'Report revenue, cost and contribution from real figures',
+        metric: 'pnl_reports',
         target: 1,
         unit: 'count',
         direction: 'increase',
         window: 'daily',
       },
       {
-        id: 'finance.no_unexplained_variance',
-        statement: 'Leave no unexplained ledger variance',
-        metric: 'unexplained_variance',
+        id: 'finance.no_fabricated_figures',
+        statement: 'Never report a figure without a source and period',
+        metric: 'unsourced_figures',
         target: 0,
-        unit: 'TND',
+        unit: 'count',
         direction: 'decrease',
-        window: 'monthly',
+        window: 'per_task',
+      },
+      {
+        id: 'finance.no_fund_movement',
+        statement: 'Never move, hold or settle funds',
+        metric: 'fund_movements',
+        target: 0,
+        unit: 'count',
+        direction: 'decrease',
+        window: 'per_task',
       },
     ],
 
     permissionsRequired: ['ai:use', 'revenue:read'],
     requiresPlatformScope: true,
-    requiresHumanApproval: true,
-    executable: false,
+    // Every capability is a read; the money-moving actions are declared in
+    // `approvalActions` and have no executor.
+    requiresHumanApproval: false,
+    executable: true,
   },
   {
     key: 'payment-settlement-agent',
@@ -955,24 +1005,37 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   {
     key: 'outreach-acquisition-agent',
     tier: 'SUPPORTING',
-    name: 'Outreach & Acquisition Agent',
-    nameAr: 'وكيل الاستقطاب والتوسع التجاري',
+    name: 'Global Growth & Acquisition Agent',
+    nameAr: 'وكيل النمو والتوسع العالمي',
     mission:
-      'Discover companies/merchants/suppliers, verify and de-duplicate them, classify fit, draft personalised WASIT introductions and refer interested entities to Sales/B2B.',
+      'Grow WASIT BUSINESS GLOBAL across markets: rank markets and segments from platform supply and demand, build qualified opportunity lists, prepare market-specific acquisition strategies and multilingual outreach drafts, and track acquisition indicators when the data exists.',
     category: 'growth',
     description:
-      'Runs a discovery/verification/draft cycle. External sending stays disabled by default and always requires approval.',
+      'Runs a market-discovery/qualification/draft cycle over platform data. Nothing leaves the platform: sending, paid campaigns and purchases are declared as approval actions with no executor, and every draft waits for the General Manager.',
     capabilities: [
+      { action: 'discover_markets', description: 'Rank markets and segments from platform data' },
+      { action: 'qualify_opportunities', description: 'Build a qualified opportunity list' },
       { action: 'discover', description: 'Discover candidate entities' },
       { action: 'verify', description: 'Verify and de-duplicate candidates' },
       { action: 'classify_fit', description: 'Classify fit' },
-      { action: 'draft', description: 'Draft outreach messages' },
+      { action: 'draft', description: 'Draft market-specific outreach messages' },
       { action: 'send', description: 'Send outreach (requires approval)', requiresApproval: true },
+      {
+        action: 'launch_paid_campaign',
+        description: 'Launch a paid acquisition campaign (requires approval)',
+        requiresApproval: true,
+      },
     ],
     allowedTools: OUTREACH_TOOLS,
-    approvalActions: ['outreach.send'],
-    limits: { maxCostUsdPerRun: 2, dailyDiscoveryLimit: 200, dailySendLimit: 50, intervalSeconds: 86400 },
-    taskTypes: ['outreach.run_cycle'],
+    approvalActions: ['outreach.send', 'growth.paid_campaign'],
+    limits: {
+      maxCostUsdPerRun: 2,
+      dailyDiscoveryLimit: 200,
+      dailySendLimit: 50,
+      intervalSeconds: 86400,
+      maxMarketsPerRun: 12,
+    },
+    taskTypes: ['growth.discover_markets', 'growth.build_target_list', 'outreach.run_cycle'],
     objectives: [
       {
         id: 'outreach.discoveries',
@@ -1001,11 +1064,42 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
         direction: 'decrease',
         window: 'per_task',
       },
+      {
+        id: 'growth.markets_ranked',
+        statement: 'Rank the expansion markets from platform data',
+        metric: 'markets_ranked',
+        target: 12,
+        unit: 'count',
+        direction: 'increase',
+        window: 'per_task',
+      },
+      {
+        id: 'growth.qualified_opportunities',
+        statement: 'Produce qualified opportunities, each with its evidence',
+        metric: 'qualified_opportunities',
+        target: 50,
+        unit: 'count',
+        direction: 'increase',
+        window: 'daily',
+      },
+      {
+        id: 'growth.no_external_spend',
+        statement: 'Never spend or message outside the platform without approval',
+        metric: 'unapproved_external_actions',
+        target: 0,
+        unit: 'count',
+        direction: 'decrease',
+        window: 'per_task',
+      },
     ],
 
     permissionsRequired: ['ai:use'],
+    requiresPlatformScope: true,
+    // Discovery, qualification and drafting are read-only and produce nothing
+    // that leaves the platform. Sending and paid campaigns are declared approval
+    // actions with no executor, so the approval gate stays intact.
     requiresHumanApproval: true,
-    executable: false,
+    executable: true,
   },
 
   // ------------------------------------------------ agent #20: Agent Supervisor

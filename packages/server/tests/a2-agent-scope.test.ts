@@ -7,7 +7,7 @@ import { agentRegistry, agentTasks } from '../src/db/schema/agents.js';
 import { aiRequests } from '../src/db/schema/ai.js';
 import { products, categories } from '../src/db/schema/products.js';
 import { cleanupOwnedRows } from './support/ownership-cleanup.js';
-import { createAgentTask, getTask } from '../src/modules/ai/agents.js';
+import { createAgentTask, ensureAgentRegistrySeeded, getTask } from '../src/modules/ai/agents.js';
 import { setAiExecutionEnabled } from '../src/lib/ai/kill-switch.js';
 import {
   AGENT_SCOPE_CONTRACTS,
@@ -170,13 +170,16 @@ describe('A2 — A1 kill switch remains effective alongside scope enforcement', 
 });
 
 describe('A2 — registry seeding matches the scope contracts', () => {
-  it('the live registry exposes exactly the 11 scoped agents', async () => {
+  it('the live registry exposes every scoped agent', async () => {
+    // The registry is seeded lazily by `listAgents`; seed it explicitly so this
+    // assertion does not depend on another test file having run first.
+    await ensureAgentRegistrySeeded(db);
     const rows = await db.select().from(agentRegistry);
     const keys = rows.map((r) => r.key).sort();
     for (const key of Object.keys(AGENT_SCOPE_CONTRACTS)) {
       expect(keys).toContain(key);
     }
-    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(11);
+    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(13);
     expect(getAgentScopeContract('sales-agent')).toBeDefined();
   });
 });

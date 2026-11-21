@@ -270,11 +270,45 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
   },
   'development-agent': {
     agentKey: 'development-agent',
-    specialization: 'Technical planning',
+    specialization: 'Platform maintenance & repair diagnosis',
     allowedDomains: ['OPS', 'ANALYTICS', 'COMMERCE', 'ADS'],
-    allowedTables: ['users', 'products', 'orders', 'campaigns', 'daily_kpis'],
+    // The run/task tables are what a real diagnosis reads. Alert events and audit
+    // logs stay hard-denied to every agent, so the diagnosis is built from the
+    // agent layer's own state instead of the operator's audit trail.
+    allowedTables: [
+      'users',
+      'products',
+      'orders',
+      'campaigns',
+      'daily_kpis',
+      'agent_tasks',
+      'agent_runs',
+      'agent_run_steps',
+    ],
     readOnly: true,
     prohibitedDomains: prohibited(['OPS', 'ANALYTICS', 'COMMERCE', 'ADS']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'finance-agent': {
+    agentKey: 'finance-agent',
+    specialization: 'Finance & cost accounting (read-only aggregates)',
+    // Orders carry the recorded commission/fee, so accounting never needs the
+    // ledger or the commission policy table — both are hard-denied on purpose.
+    allowedDomains: ['COMMERCE', 'ADS', 'OPS'],
+    allowedTables: ['orders', 'campaigns', 'ad_events'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['COMMERCE', 'ADS', 'OPS']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'outreach-acquisition-agent': {
+    agentKey: 'outreach-acquisition-agent',
+    specialization: 'Global growth & acquisition (market discovery over platform data)',
+    allowedDomains: ['MARKETPLACE', 'B2B', 'COMMERCE', 'ANALYTICS'],
+    allowedTables: ['countries', 'categories', 'products', 'suppliers', 'merchants', 'companies', 'orders'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['MARKETPLACE', 'B2B', 'COMMERCE', 'ANALYTICS']),
     canDelegate: false,
     ownerScoped: true,
   },

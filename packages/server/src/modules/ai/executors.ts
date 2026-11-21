@@ -14,7 +14,10 @@ import { disputes, disputeMessages } from '../../db/schema/disputes';
 import { trustScores, reviews } from '../../db/schema/trust';
 import { messages, threads } from '../../db/schema/messaging';
 import { users } from '../../db/schema/auth';
-import { commissionPolicies } from '../../db/schema/engine';
+import { countries } from '../../db/schema/geo';
+import { aiRequests } from '../../db/schema/ai';
+import { agentTasks } from '../../db/schema/agents';
+import { agentRuns, agentRunSteps } from '../../db/schema/agent_runs';
 import { dailyKpis } from '../../db/schema/analytics';
 import { listRecentMarketingVideos } from '../media/service';
 
@@ -137,7 +140,9 @@ const EXECUTOR_ACTION: Record<string, string> = {
   'b2b-agent': 'match_b2b',
   'risk-agent': 'assess_risk',
   'dispute-assistant': 'summarize_dispute',
-  'development-agent': 'dev_plan',
+  'development-agent': 'diagnose_platform',
+  'finance-agent': 'report_pnl',
+  'outreach-acquisition-agent': 'discover_markets',
 };
 
 // ---------- executors: one specialised query/output per agent ----------
@@ -838,8 +843,27 @@ async function execDisputeAssistant(db: DB, agent: AgentDefinition, input: Recor
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
+/** Clamps an integer input to a safe range (window sizes, limits). */
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/**
+ * Platform Maintenance & Repair Agent.
+ *
+ * Diagnosis is deterministic and read-only: it reads the agent layer's own state
+ * (`agent_tasks`, `agent_runs`, `agent_run_steps`) plus platform counters, and
+ * turns it into findings with evidence and a proposed repair. It cannot apply a
+ * repair: there is no executor for `apply_patch` / `merge_change`, and both stay
+ * in the agent's `approvalActions` for the General Manager to authorise.
+ */
 async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
-  const [usersCount, productsCount, ordersCount, campaignsCount, auditCount, lastMonthlyKpi] = await Promise.all([
+  const windowDays = clampInt(Number(input.windowDays ?? 7), 1, 90);
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+  const stuckBefore = new Date(Date.now() - 30 * 60_000);
+
+  const [usersCount, productsCount, ordersCount, campaignsCount, kpiCount, lastDailyKpi] = await Promise.all([
     db.select({ v: sql<number>`count(*)::int` }).from(users),
     db.select({ v: sql<number>`count(*)::int` }).from(products),
     db.select({ v: sql<number>`count(*)::int` }).from(orders),
@@ -852,38 +876,537 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
       .limit(1),
   ]);
 
-  const facts = {
+  const [taskRows, failedTaskRows, stuckTaskRows, runRows, stepRows] = await Promise.all([
+    db
+      .select({ status: agentTasks.status, n: sql<number>`count(*)::int` })
+      .from(agentTasks)
+      .where(gte(agentTasks.createdAt, since))
+      .groupBy(agentTasks.status),
+    db
+      .select({
+        id: agentTasks.id,
+        agentKey: agentTasks.agentKey,
+        taskType: agentTasks.taskType,
+        error: agentTasks.error,
+        createdAt: agentTasks.createdAt,
+      })
+      .from(agentTasks)
+      .where(and(eq(agentTasks.status, 'failed'), gte(agentTasks.createdAt, since)))
+      .orderBy(desc(agentTasks.createdAt))
+      .limit(5),
+    db
+      .select({ id: agentTasks.id, agentKey: agentTasks.agentKey, startedAt: agentTasks.startedAt })
+      .from(agentTasks)
+      .where(and(eq(agentTasks.status, 'running'), lt(agentTasks.startedAt, stuckBefore)))
+      .limit(5),
+    db
+      .select({ status: agentRuns.status, n: sql<number>`count(*)::int` })
+      .from(agentRuns)
+      .where(gte(agentRuns.createdAt, since))
+      .groupBy(agentRuns.status),
+    db
+      .select({ status: agentRunSteps.status, n: sql<number>`count(*)::int` })
+      .from(agentRunSteps)
+      .where(gte(agentRunSteps.createdAt, since))
+      .groupBy(agentRunSteps.status),
+  ]);
+
+  const byStatus = (rows: { status: string; n: number }[], status: string): number =>
+    toNum(rows.find((r) => r.status === status)?.n);
+  const taskTotal = taskRows.reduce((acc, r) => acc + toNum(r.n), 0);
+  const failedTasks = byStatus(taskRows, 'failed');
+  const awaitingApproval = byStatus(taskRows, 'awaiting_approval');
+  const failureRate = taskTotal === 0 ? 0 : failedTasks / taskTotal;
+  const failedRuns = byStatus(runRows, 'FAILED');
+  const failedSteps = byStatus(stepRows, 'FAILED');
+  const retryingSteps = byStatus(stepRows, 'RETRYING');
+
+  const findings: Array<Record<string, unknown>> = [];
+  if (stuckTaskRows.length > 0) {
+    findings.push({
+      code: 'stuck_tasks',
+      severity: 'HIGH',
+      statement: `${stuckTaskRows.length} task(s) have been RUNNING for more than 30 minutes.`,
+      evidence: stuckTaskRows.map((t) => ({ taskId: t.id, agentKey: t.agentKey, startedAt: t.startedAt?.toISOString() ?? null })),
+      suggestedRepair: {
+        summary: 'Recover or contain the stuck tasks, then confirm the recovery path closes them.',
+        steps: [
+          'Inspect the task result/error and the provider latency for the affected agent.',
+          'Run the recovery cycle (AI-02.3.1) rather than creating a replacement task.',
+          'Add a regression test if the stuck state was reachable from a normal request.',
+        ],
+      },
+    });
+  }
+  if (failedTasks > 0) {
+    findings.push({
+      code: 'agent_task_failures',
+      severity: failureRate >= 0.25 && taskTotal >= 4 ? 'HIGH' : 'MEDIUM',
+      statement: `${failedTasks} of ${taskTotal} task(s) failed in the last ${windowDays} day(s) (${(failureRate * 100).toFixed(1)}%).`,
+      evidence: failedTaskRows.map((t) => ({
+        taskId: t.id,
+        agentKey: t.agentKey,
+        taskType: t.taskType,
+        error: t.error,
+        createdAt: t.createdAt.toISOString(),
+      })),
+      suggestedRepair: {
+        summary: 'Group the failures by agent and error code, then fix the dominant cause.',
+        steps: [
+          'Read the stored error for each failing task (no log scraping needed).',
+          'Reproduce the dominant failure in an isolated test.',
+          'Ship the fix as a patch with the test that fails before it and passes after.',
+        ],
+      },
+    });
+  }
+  if (failedRuns > 0 || failedSteps > 0) {
+    findings.push({
+      code: 'run_failures',
+      severity: failedRuns > 0 ? 'MEDIUM' : 'LOW',
+      statement: `${failedRuns} run(s) and ${failedSteps} step(s) failed in the last ${windowDays} day(s).`,
+      evidence: { failedRuns, failedSteps, retryingSteps },
+      suggestedRepair: {
+        summary: 'Check whether the failing steps share a dependency or an agent.',
+        steps: [
+          'Inspect the failed steps for the run and their dependency graph.',
+          'Verify the retry policy covered them; extend the tests if it did not.',
+        ],
+      },
+    });
+  }
+  if (awaitingApproval > 0) {
+    findings.push({
+      code: 'approvals_waiting',
+      severity: 'INFO',
+      statement: `${awaitingApproval} task(s) are waiting for a human approval.`,
+      evidence: { awaitingApproval },
+      suggestedRepair: {
+        summary: 'Notify the approver; no code change is required.',
+        steps: ['Open the approvals list and decide, or reject with a reason.'],
+      },
+    });
+  }
+  if (taskTotal === 0) {
+    findings.push({
+      code: 'no_agent_telemetry',
+      severity: 'INFO',
+      statement: `No agent tasks were created in the last ${windowDays} day(s); there is nothing to diagnose.`,
+      evidence: { taskTotal: 0 },
+      suggestedRepair: {
+        summary: 'Nothing to repair from telemetry. Re-run with a wider window if work is expected.',
+        steps: ['Re-run the diagnosis with a larger windowDays.'],
+      },
+    });
+  }
+
+  const snapshot = {
     users: toNum(usersCount[0]?.v),
     products: toNum(productsCount[0]?.v),
     orders: toNum(ordersCount[0]?.v),
     campaigns: toNum(campaignsCount[0]?.v),
-    kpiDays: toNum(auditCount[0]?.v),
-    lastDaily: lastMonthlyKpi[0] ? { date: lastMonthlyKpi[0].date.toISOString(), metric: lastMonthlyKpi[0].metricName, value: String(lastMonthlyKpi[0].metricValue) } : null,
+    kpiDays: toNum(kpiCount[0]?.v),
+    lastDaily: lastDailyKpi[0]
+      ? { date: lastDailyKpi[0].date.toISOString(), metric: lastDailyKpi[0].metricName, value: String(lastDailyKpi[0].metricValue) }
+      : null,
   };
 
   const data: Record<string, unknown> = {
     agentKey: agent.key,
-    action: input.action ?? 'dev_plan',
-    snapshot: facts,
-    recommendation: 'Prioritise hardening the order/ledger pipeline and onboarding flows as trading volume grows.',
-    nextSteps: ['Instrument dashboards', 'Add regression tests for order lifecycle', 'Improve admin reporting'],
+    action: 'diagnose_platform',
+    window: { days: windowDays, from: since.toISOString(), to: new Date().toISOString() },
+    snapshot,
+    health: {
+      taskTotal,
+      failedTasks,
+      awaitingApproval,
+      failureRate: Number(failureRate.toFixed(4)),
+      failedRuns,
+      failedSteps,
+      retryingSteps,
+      stuckTasks: stuckTaskRows.length,
+    },
+    findings,
+    // The repair protocol is a contract, not a suggestion: every item below is
+    // enforced outside the model (approval actions + the absence of an executor).
+    repairProtocol: {
+      requiresGmApproval: true,
+      selfApprovalForbidden: true,
+      deliverable: ['diff', 'tests', 'report'],
+      forbidden: [
+        'rbac_or_business_policy_change',
+        'migrations_or_seeds',
+        'database_change',
+        'financial_change',
+        'prod_deploy',
+        'merge_without_approval',
+      ],
+      appliesChanges: false,
+      note: 'apply_patch and merge_change are approval actions with no executor; the repair is delivered as a proposal.',
+    },
+    recommendation:
+      findings.length === 0
+        ? 'No failure signal in the window; keep the current instrumentation and re-run periodically.'
+        : 'Address the highest-severity finding first, with a test that reproduces it before the fix.',
+    nextSteps: findings
+      .slice(0, 3)
+      .map((f) => String((f.suggestedRepair as { summary?: string } | undefined)?.summary ?? '')),
     readOnly: true,
     generatedAt: new Date().toISOString(),
   };
 
   const text = adviceText(
-    'Development context: {{users}} users, {{products}} products, {{orders}} orders, {{campaigns}} campaigns.',
-    { users: facts.users, products: facts.products, orders: facts.orders, campaigns: facts.campaigns },
+    'Platform diagnosis for {{days}} day(s): {{tasks}} tasks, {{failed}} failed, {{runs}} failed runs, {{stuck}} stuck. Findings: {{findings}}.',
+    {
+      days: windowDays,
+      tasks: taskTotal,
+      failed: failedTasks,
+      runs: failedRuns,
+      stuck: stuckTaskRows.length,
+      findings: findings.length,
+    },
   );
 
   const out = await runAIFeature(db, {
     userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
     roles: ['SUPER_ADMIN'],
     requestType: `AGENT:${agent.key}`,
-    system: 'You are the WASIT Development Agent.',
+    system: 'You are the WASIT Platform Maintenance & Repair Agent.',
     user: text,
     maxTokens: 96,
-    metadata: { agentKey: agent.key, action: input.action },
+    metadata: { agentKey: agent.key, action: 'diagnose_platform' },
+  });
+
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+/**
+ * Finance & Cost Accounting Agent.
+ *
+ * Read-only accounting from order-level aggregates (which already carry the
+ * recorded commission and payment fee), campaign spend and AI usage. It never
+ * reads the ledger or the commission policy table (hard-denied to every agent)
+ * and never writes: the scoped `db` handle refuses anything but reads.
+ *
+ * Currencies are never mixed. A contribution figure is produced only when the
+ * revenue and the costs share a currency; otherwise it is reported as `null`
+ * with a reason instead of a fabricated total.
+ */
+async function execFinanceAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const windowDays = clampInt(Number(input.windowDays ?? 30), 1, 365);
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+
+  const [revenueRows, aiRows, adRows] = await Promise.all([
+    db
+      .select({
+        currencyCode: orders.currencyCode,
+        orders: sql<number>`count(*) filter (where ${orders.status}::text <> 'CANCELLED')::int`,
+        cancelled: sql<number>`count(*) filter (where ${orders.status}::text = 'CANCELLED')::int`,
+        gmv: sql<string>`coalesce(sum(${orders.itemsTotal}) filter (where ${orders.status}::text <> 'CANCELLED'), 0)::text`,
+        commission: sql<string>`coalesce(sum(${orders.commission}) filter (where ${orders.status}::text <> 'CANCELLED'), 0)::text`,
+        paymentFees: sql<string>`coalesce(sum(${orders.paymentFee}) filter (where ${orders.status}::text <> 'CANCELLED'), 0)::text`,
+        paidCommission: sql<string>`coalesce(sum(${orders.commission}) filter (where ${orders.status}::text <> 'CANCELLED' and ${orders.paymentStatus}::text = 'PAID'), 0)::text`,
+        settledCommission: sql<string>`coalesce(sum(${orders.commission}) filter (where ${orders.status}::text <> 'CANCELLED' and ${orders.settlementStatus}::text = 'SETTLED'), 0)::text`,
+      })
+      .from(orders)
+      .where(gte(orders.createdAt, since))
+      .groupBy(orders.currencyCode),
+    db
+      .select({
+        requestType: aiRequests.requestType,
+        currencyCode: aiRequests.currencyCode,
+        calls: sql<number>`count(*)::int`,
+        cost: sql<string>`coalesce(sum(${aiRequests.cost}), 0)::text`,
+      })
+      .from(aiRequests)
+      .where(gte(aiRequests.createdAt, since))
+      .groupBy(aiRequests.requestType, aiRequests.currencyCode),
+    db
+      .select({
+        currencyCode: campaigns.currencyCode,
+        campaigns: sql<number>`count(*)::int`,
+        active: sql<number>`count(*) filter (where ${campaigns.isActive})::int`,
+        spent: sql<string>`coalesce(sum(${campaigns.spent}), 0)::text`,
+      })
+      .from(campaigns)
+      .where(gte(campaigns.createdAt, since))
+      .groupBy(campaigns.currencyCode),
+  ]);
+
+  const revenue = revenueRows.map((r) => ({
+    currencyCode: r.currencyCode,
+    orders: toNum(r.orders),
+    cancelledOrders: toNum(r.cancelled),
+    gmv: String(r.gmv),
+    commission: String(r.commission),
+    paymentFees: String(r.paymentFees),
+    realisedCommission: String(r.paidCommission),
+    settledCommission: String(r.settledCommission),
+    accruedCommission: (Number(r.commission) - Number(r.paidCommission)).toFixed(4),
+    estimated: false,
+    source: 'orders (sum of the commission and payment fee recorded on each order)',
+  }));
+
+  const aiByCurrency = new Map<
+    string,
+    { total: number; calls: number; byType: Array<{ requestType: string; agentKey: string | null; cost: string; calls: number }> }
+  >();
+  for (const row of aiRows) {
+    const bucket = aiByCurrency.get(row.currencyCode) ?? { total: 0, calls: 0, byType: [] };
+    bucket.total += toNum(row.cost);
+    bucket.calls += toNum(row.calls);
+    bucket.byType.push({
+      requestType: row.requestType,
+      agentKey: row.requestType.startsWith('AGENT:') ? row.requestType.slice('AGENT:'.length) : null,
+      cost: String(row.cost),
+      calls: toNum(row.calls),
+    });
+    aiByCurrency.set(row.currencyCode, bucket);
+  }
+  const aiCost = [...aiByCurrency.entries()].map(([currencyCode, b]) => ({
+    currencyCode,
+    total: b.total.toFixed(10),
+    calls: b.calls,
+    byType: b.byType.sort((a, z) => Number(z.cost) - Number(a.cost)),
+    estimated: false,
+    source: 'ai_requests (sum of the exact recorded cost)',
+  }));
+
+  const advertising = adRows.map((r) => ({
+    currencyCode: r.currencyCode,
+    campaigns: toNum(r.campaigns),
+    activeCampaigns: toNum(r.active),
+    spent: String(r.spent),
+    // `campaigns.spent` is cumulative per campaign, so a window filter on
+    // `created_at` gives the spend of campaigns opened in the window, not the
+    // spend inside it. Reported as estimated rather than silently presented as
+    // a period figure.
+    estimated: true,
+    source: 'campaigns (cumulative spent for campaigns created in the window)',
+  }));
+
+  const contribution = revenue.map((r) => {
+    const ai = aiCost.find((c) => c.currencyCode === r.currencyCode);
+    const ads = advertising.find((c) => c.currencyCode === r.currencyCode);
+    const costsInCurrency = (ai ? Number(ai.total) : 0) + (ads ? Number(ads.spent) : 0);
+    const missing = [!ai ? 'ai_cost' : null, !ads ? 'advertising_cost' : null].filter(Boolean);
+    if (missing.length > 0) {
+      return {
+        currencyCode: r.currencyCode,
+        value: null,
+        reason: 'COST_DATA_MISSING',
+        missing,
+        note: 'Costs exist in another currency or were not recorded in the window; no total is invented.',
+      };
+    }
+    const net = Number(r.commission) + Number(r.paymentFees) - costsInCurrency;
+    return {
+      currencyCode: r.currencyCode,
+      value: net.toFixed(4),
+      estimated: ads?.estimated === true,
+      formula: 'commission + paymentFees - aiCost - advertisingSpend',
+    };
+  });
+
+  const data: Record<string, unknown> = {
+    agentKey: agent.key,
+    action: 'report_pnl',
+    window: { days: windowDays, from: since.toISOString(), to: new Date().toISOString() },
+    revenue,
+    costs: { ai: aiCost, advertising },
+    contribution,
+    dataQuality: {
+      crossCurrencyTotals: false,
+      ledgerAccess: 'denied-to-agents-by-design',
+      adsSpendBasis: 'cumulative campaign spend for campaigns created in the window',
+      aiCostBasis: 'exact recorded cost per AI request',
+      note: 'Every figure carries its source and period; missing data yields null, never a guessed number.',
+    },
+    sources: [
+      { metric: 'orders, gmv, commission, paymentFees', table: 'orders', aggregation: 'sum excluding CANCELLED orders' },
+      { metric: 'aiCost', table: 'ai_requests', aggregation: 'sum(cost) grouped by request type' },
+      { metric: 'advertisingSpend', table: 'campaigns', aggregation: 'sum(spent) for campaigns created in the window' },
+    ],
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const text = adviceText(
+    'Finance window {{days}} day(s): {{currencies}} currency bucket(s), {{orders}} orders, commission {{commission}}.',
+    {
+      days: windowDays,
+      currencies: revenue.length,
+      orders: revenue.reduce((acc, r) => acc + r.orders, 0),
+      commission: revenue.map((r) => `${r.commission} ${r.currencyCode}`).join(', ') || '0',
+    },
+  );
+
+  const out = await runAIFeature(db, {
+    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Finance & Cost Accounting Agent.',
+    user: text,
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, action: 'report_pnl' },
+  });
+
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+/**
+ * Global Growth & Acquisition Agent.
+ *
+ * Market discovery over platform data only: countries with their supply
+ * (suppliers/merchants/companies), catalogue depth (published products) and
+ * segment distribution. Outputs a ranked market list, qualified opportunities,
+ * market-specific outreach drafts and acquisition indicators — and nothing else.
+ * No external call, no send, no spend: those are approval actions with no
+ * executor.
+ */
+async function execGrowthAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const maxMarkets = clampInt(Number(input.maxMarkets ?? 12), 1, 12);
+  const segmentLimit = clampInt(Number(input.segmentLimit ?? 8), 1, 25);
+  const requestedLanguages = Array.isArray(input.languages)
+    ? (input.languages as unknown[]).filter((l): l is string => typeof l === 'string').slice(0, 8)
+    : null;
+
+  const [marketRows, segmentRows] = await Promise.all([
+    db
+      .select({
+        id: countries.id,
+        code: countries.code,
+        name: countries.name,
+        currencyCode: countries.currencyCode,
+        defaultLanguage: countries.defaultLanguage,
+        isActive: countries.isActive,
+        suppliers: sql<number>`count(distinct ${suppliers.id})::int`,
+        merchants: sql<number>`count(distinct ${merchants.id})::int`,
+        companies: sql<number>`count(distinct ${companies.id})::int`,
+        publishedProducts: sql<number>`count(distinct ${products.id}) filter (where ${products.isPublished})::int`,
+      })
+      .from(countries)
+      .leftJoin(suppliers, eq(suppliers.countryId, countries.id))
+      .leftJoin(merchants, eq(merchants.countryId, countries.id))
+      .leftJoin(companies, eq(companies.countryId, countries.id))
+      .leftJoin(products, eq(products.countryId, countries.id))
+      .groupBy(countries.id, countries.code, countries.name, countries.currencyCode, countries.defaultLanguage, countries.isActive)
+      .orderBy(desc(sql`count(distinct ${products.id}) filter (where ${products.isPublished})`))
+      .limit(60),
+    db
+      .select({
+        id: categories.id,
+        name: categories.name,
+        products: sql<number>`count(${products.id}) filter (where ${products.isPublished})::int`,
+      })
+      .from(categories)
+      .leftJoin(products, eq(products.categoryId, categories.id))
+      .where(eq(categories.isActive, true))
+      .groupBy(categories.id, categories.name)
+      .orderBy(desc(sql`count(${products.id}) filter (where ${products.isPublished})`))
+      .limit(segmentLimit),
+  ]);
+
+  const markets = marketRows
+    .map((m) => {
+      const sellers = toNum(m.suppliers) + toNum(m.merchants) + toNum(m.companies);
+      const published = toNum(m.publishedProducts);
+      const score = published * 2 + sellers * 3;
+      const priority = sellers >= 3 && published >= 5 ? 'EXPAND' : published > 0 ? 'SEED' : 'MONITOR';
+      return {
+        code: m.code,
+        name: m.name,
+        currencyCode: m.currencyCode,
+        language: m.defaultLanguage,
+        platformActive: m.isActive,
+        supply: { suppliers: toNum(m.suppliers), merchants: toNum(m.merchants), companies: toNum(m.companies), sellers },
+        catalogue: { publishedProducts: published },
+        score,
+        priority,
+        rationale:
+          priority === 'EXPAND'
+            ? 'Supply and catalogue are both present: the market can absorb acquisition spend.'
+            : priority === 'SEED'
+              ? 'Catalogue exists but supply is thin: recruit sellers before paying for demand.'
+              : 'No supply and no catalogue yet: a market to watch, not to enter.',
+      };
+    })
+    .filter((m) => m.score > 0 || m.platformActive)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxMarkets);
+
+  const opportunities = markets.map((m) => ({
+    market: m.code,
+    marketName: m.name,
+    priority: m.priority,
+    score: m.score,
+    evidence: m.supply,
+    qualification: {
+      hasSupply: m.supply.sellers > 0,
+      hasCatalogue: m.catalogue.publishedProducts > 0,
+      platformActive: m.platformActive,
+    },
+    recommendedMove:
+      m.priority === 'EXPAND'
+        ? 'Onboard buyers with a category-led campaign once the General Manager approves it.'
+        : m.priority === 'SEED'
+          ? 'Recruit suppliers/merchants in the categories that already sell elsewhere.'
+          : 'Collect market signals before committing any effort.',
+  }));
+
+  const drafts = markets.slice(0, 3).map((m) => ({
+    market: m.code,
+    language: requestedLanguages?.[0] ?? m.language,
+    channel: 'email',
+    status: 'DRAFT_ONLY',
+    subject: `WASIT BUSINESS GLOBAL — ${m.name}`,
+    bodyTemplate:
+      'Introduce WASIT as a global B2B/B2C marketplace, name the strongest local category, and invite a short call. Personalise per prospect before any send.',
+    placeholders: ['prospectName', 'category', 'proofPoint'],
+    delivery: 'none',
+  }));
+
+  const expandMarkets = markets.filter((m) => m.priority === 'EXPAND').length;
+  const publishedProductsInScope = markets.reduce((acc, m) => acc + m.catalogue.publishedProducts, 0);
+
+  const data: Record<string, unknown> = {
+    agentKey: agent.key,
+    action: 'discover_markets',
+    markets,
+    segments: segmentRows.map((s) => ({ id: s.id, name: s.name, publishedProducts: toNum(s.products) })),
+    opportunities,
+    drafts,
+    kpis: {
+      marketsRanked: markets.length,
+      expandMarkets,
+      seedMarkets: markets.filter((m) => m.priority === 'SEED').length,
+      sellersInScope: markets.reduce((acc, m) => acc + m.supply.sellers, 0),
+      publishedProductsInScope,
+      note: 'Conversion and cost-per-acquisition need channel data that the platform does not collect yet.',
+    },
+    externalActions: {
+      enabled: false,
+      blocked: ['outreach.send', 'growth.paid_campaign'],
+      note: 'No executor exists for sending or paid campaigns; both require General Manager approval.',
+    },
+    dataSources: ['countries', 'suppliers', 'merchants', 'companies', 'products', 'categories'],
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const text = adviceText(
+    'Growth scan: {{markets}} markets ranked, {{expand}} ready to expand, {{products}} published products in scope.',
+    { markets: markets.length, expand: expandMarkets, products: publishedProductsInScope },
+  );
+
+  const out = await runAIFeature(db, {
+    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Global Growth & Acquisition Agent.',
+    user: text,
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, action: 'discover_markets' },
   });
 
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
@@ -912,6 +1435,8 @@ const EXECUTORS: Record<string, AgentExecutor> = {
   'risk-agent': execRiskAgent,
   'dispute-assistant': execDisputeAssistant,
   'development-agent': execDevelopmentAgent,
+  'finance-agent': execFinanceAgent,
+  'outreach-acquisition-agent': execGrowthAgent,
 };
 
 /** Agent keys with a real executor (the only ones the catalogue may mark executable). */

@@ -85,7 +85,7 @@ async function runTask(agentKey: string, input: Record<string, unknown>, request
 }
 
 describe('Phase 14 — specialised agent executors (real DB-backed capabilities)', () => {
-  it('registers the agent layer with exactly 11 executable agents', async () => {
+  it('registers the agent layer with exactly 13 executable agents', async () => {
     const agents = await listAgents(db);
     const executableKeys = agents.filter((a) => a.executable === true).map((a) => a.key).sort();
     expect(executableKeys).toEqual(
@@ -95,8 +95,10 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
         'b2b-agent',
         'development-agent',
         'dispute-assistant',
+        'finance-agent',
         'marketing-agent',
         'market-research-agent',
+        'outreach-acquisition-agent',
         'product-agent',
         'risk-agent',
         'sales-agent',
@@ -107,7 +109,7 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
     // one of them is registered — registration is identity, not runnability.
     expect(agents).toHaveLength(21);
     expect(new Set(agents.map((a) => a.key)).size).toBe(21);
-    expect(AGENT_CATALOGUE).toHaveLength(11);
+    expect(AGENT_CATALOGUE).toHaveLength(13);
     // Every executable entry must carry a capability + permissions.
     for (const def of agents.filter((a) => a.executable === true)) {
       expect(def.capabilities.length).toBeGreaterThan(0);
@@ -242,7 +244,7 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
     // We assert the gating is applied by the catalogue metadata.
     const gated = AGENT_CATALOGUE.filter((a) => a.requiresHumanApproval).map((a) => a.key);
     expect(gated).toEqual(
-      expect.arrayContaining(['sales-agent', 'ads-agent', 'b2b-agent', 'risk-agent', 'dispute-assistant', 'development-agent']),
+      expect.arrayContaining(['sales-agent', 'ads-agent', 'b2b-agent', 'risk-agent', 'dispute-assistant']),
     );
   });
 

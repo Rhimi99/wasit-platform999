@@ -46,14 +46,14 @@ const ctx = (over: Partial<AgentRunContext> = {}): AgentRunContext => ({
 });
 
 describe('A2 — scope contract completeness', () => {
-  it('defines a contract for each of the 11 production agents', () => {
+  it('defines a contract for each of the 13 production agents', () => {
     for (const key of AGENT_KEYS) {
       const c = getAgentScopeContract(key);
       expect(c, `missing contract for ${key}`).toBeDefined();
       expect(c!.agentKey).toBe(key);
       expect(c!.specialization.length).toBeGreaterThan(0);
     }
-    expect(listAgentScopes()).toHaveLength(11);
+    expect(listAgentScopes()).toHaveLength(13);
   });
 
   it('gives every agent a least-privilege, non-empty, read-only scope', () => {

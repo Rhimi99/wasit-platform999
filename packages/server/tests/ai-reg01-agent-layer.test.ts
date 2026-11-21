@@ -109,16 +109,16 @@ describe('AI-REG-01 — agent layer API and execution gate', () => {
     const agents = r.data.data.agents as Array<{ key: string; executable?: boolean; isSupervisor?: boolean }>;
     expect(agents).toHaveLength(21);
     expect(new Set(agents.map((a) => a.key)).size).toBe(21);
-    expect(agents.filter((a) => a.executable === true)).toHaveLength(11);
-    expect(agents.filter((a) => a.executable !== true)).toHaveLength(10);
+    expect(agents.filter((a) => a.executable === true)).toHaveLength(13);
+    expect(agents.filter((a) => a.executable !== true)).toHaveLength(8);
     expect(agents.filter((a) => a.isSupervisor === true).map((a) => a.key)).toEqual(['agent-supervisor']);
 
     expect(r.data.data.counts).toEqual({
       total: 21,
       specialised: 20,
       supervisor: 1,
-      executable: 11,
-      declared: 9,
+      executable: 13,
+      declared: 7,
       copilot: 1,
     });
     expect(r.data.data.copilot.key).toBe('wasit-copilot');
@@ -204,7 +204,7 @@ describe('AI-REG-01 — agent layer API and execution gate', () => {
     const items = r.data.data.items as Array<{ key: string; executable?: boolean }>;
     expect(items).toHaveLength(21);
     expect(items.filter((i) => i.executable === true)).toHaveLength(AGENT_CATALOGUE.length);
-    expect(r.data.data.counts.declared).toBe(9);
+    expect(r.data.data.counts.declared).toBe(7);
     expect(r.data.data.copilot.key).toBe('wasit-copilot');
   });
 
