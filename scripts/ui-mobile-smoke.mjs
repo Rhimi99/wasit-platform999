@@ -58,7 +58,10 @@ async function phone() {
   const { ctx, page, apiErrors } = await phone();
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 60000 });
   await page.fill('input[type="email"]', 'customer1@wasit.tn');
-  await page.fill('input[type="password"]', 'Passw0rd!2026');
+  await page.fill(
+    'input[type="password"]',
+    process.env.DEMO_ACCOUNT_PASSWORD?.trim() || 'Passw0rd!2026',
+  );
   await page.click('button[type="submit"]');
   await page.waitForURL(/dashboard/, { timeout: 30000 });
   check('mobile: customer logs in from the phone form', /dashboard/.test(page.url()));

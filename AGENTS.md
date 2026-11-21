@@ -286,7 +286,7 @@ npx playwright install --with-deps chromium
 - التشغيل: `sudo pg_ctlcluster 17 main start` (الأوامر الكاملة في `docs/DEPLOYMENT.md`).
 - المستخدم `wasit` يحتاج `CREATEDB` وإلا يفشل globalSetup بـ `42501`.
 - عند إعادة إنشاء القاعدة من صفر: `npm run db:migrate` ← `npx tsx src/scripts/seed.ts` ← `seed-demo.ts` (اختياري).
-- **حساب اختبار Demo الرسمي** `rhimiimed18@gmail.com`: يُنشَأ من `seed-demo.ts` (CUSTOMER عادي، verified في Demo). كلمة مروره من `DEMO_TEST_ACCOUNT_PASSWORD` في `.env.demo` (git-ignored)، لا plaintext في الكود. عند rebuild لقاعدة الـDemo يعود تلقائيًا بعد الـbootstrap.
+- **حساب اختبار Demo الرسمي** `demo@wasit.tn`: عنوان محايد (لا بريد شخصي)، يُنشَأ من `seed-demo.ts` (CUSTOMER عادي، verified في Demo). كلمة مروره من `DEMO_ACCOUNT_PASSWORD` في `.env.demo` (git-ignored) — نفس بيانات اعتماد حسابات العرض الأربعة، لا plaintext في الكود. عند rebuild لقاعدة الـDemo يعود تلقائيًا بعد الـbootstrap.
 - **مركز تدقيق المالك** `/demo/owner` (`DemoOwnerAuditPage` + `lib/demo-owner-catalog.ts`): يفتح جلسات Demo حقيقية لكل دور عبر `POST /api/auth/demo-audit-session` بمعرّف دور فقط (`{persona}`) ضد قائمة مُصرَّحة في `lib/demo-account.ts`. الخادم يتحقق أن الحساب يحمل الدور المُعلن (وإلا 409)، والجلسة تحمل صلاحيات الحساب المخزَّنة فقط — لا توسيع من الواجهة. اختباره `e2e/demo-owner.spec.ts`.
 - **فخ تشغيل الـDemo** (مُعالَج في الكود): `.env.demo` يضبط `API_URL` على الرابط العام للـAPI، فإذا خُدِمت الواجهة على نفس الأصل صار proxy الويب يشير إلى نفسه ⇒ حلقة proxy و`431 Request Header Fields Too Large` على كل `/api/*` بينما تظهر الواجهة سليمة. `packages/web/vite.config.ts` يكتشف الآن الأصل الذاتي (`API_URL` == `APP_URL`، أو منفذ `WEB_PORT` نفسه) ويسقط إلى `http://localhost:3000`؛ وللتجاوز الصريح استخدم `WEB_PROXY_TARGET`. لا حاجة بعد الآن لتصدير `API_URL=http://localhost:3000` يدويًا. ولبناء الـDemo استخدم `VITE_DEMO_MODE=true npm run build -w @wasit/web` كي يظهر البانر.
 - **فخ اختبارات الخادم** (مُعالَج في الكود): `packages/server/.env` غير المتعقّب (يُستخدم لتشغيل الـDemo محليًا) كان يتسرّب إلى `vitest` عبر `dotenv`، فتُفشل مواصفات تؤكد أن `DEMO_SKIP_EMAIL_VERIFICATION`/`DEMO_AUTO_LOGIN` **مطفأتان** افتراضيًا. `vitest.config.ts` يضبط الآن `DOTENV_CONFIG_PATH` على مسار غير موجود، فبيئة الاختبار معزولة عن `.env` المحلي.
@@ -397,6 +397,14 @@ npx playwright install --with-deps chromium
 - Run: `node scripts/ui-redesign-check.mjs https://work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev`.
 - Preview servers: `vite preview` on port 12000 proxies `/api`, `/sitemap.xml`, `/robots.txt` to the backend (same-origin session semantics as production nginx). Build first with `VITE_DEMO_MODE=true npm run build -w @wasit/web` (the flag turns on the demo banner), then `cd packages/web && npx vite preview --port 12000 --host 0.0.0.0`.
 - **Server integration tests need a disposable DB**: `TEST_DATABASE_URL` must name a database ending in `_test` (hard guard in `packages/server/tests/setup.ts`). `npm test` alone fails with `password authentication failed for user "wasit"`. Use: `PW=$(grep '^DATABASE_URL' .env.demo | sed 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/'); TEST_DATABASE_URL="postgresql://wasit_demo:${PW}@localhost:5432/wasit_test" npm test`.
+
+## DEMO-SEC-01 — تأمين العرض العام (2026-11-21)
+
+- **مركز تدقيق المالك أداة تشغيلية**: `POST /api/auth/demo-audit-session` يبقى محصورًا بـ`DEMO_AUTO_LOGIN` (404 خارج العرض/الإنتاج، يُفحص **قبل** المصادقة)، ثم `requireAuth` + `canOpenDemoPersona` في `lib/demo-account.ts`: زائر `401`، غير موظف `403`، والشخصية لا تتجاوز دور المستدعي (ADMIN لا يفتح SUPER_ADMIN). `/demo/owner` لم يعد يفتح جلسة تلقائيًا؛ يعرض `owner-staff-only` + رابط دخول.
+- **`/api/auth/demo-session`** بقي كما هو: يفتح حساب العميل الرسمي فقط، بلا صلاحيات موظفين.
+- **تدوير بيانات الاعتماد**: `DEMO_ACCOUNT_PASSWORD` (اختياري) يحل محل `Passw0rd!2026` لحسابات العرض الأربعة + `demo@wasit.tn`؛ وجوده يجعل `seed-demo` يعيد هاش كل حساب (تدوير فعلي). غيابه = احتياطي التطوير/E2E فقط.
+- **لا كلمات مرور في السجلات**: `seed-demo` لم يعد يطبع كلمة المرور المنشورة ولا كلمة مرور الموظفين المولَّدة.
+- **الاختبارات**: `tests/unit/demo-audit-authorization.test.ts` (قاعدة السقف)، `tests/demo-auto-login.test.ts` (401/403/404 + منع التصعيد + جلسة العميل)، `e2e/demo-owner.spec.ts` (زائر/SUPER_ADMIN/ADMIN).
 
 ## Landing page (public marketing surface)
 

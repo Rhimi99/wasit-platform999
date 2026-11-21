@@ -60,11 +60,12 @@ export const DEMO_USERS = {
 
 /**
  * Official PUBLIC-DEMO test account, provisioned by `seed-demo.ts` (not by any
- * login special-case) as an ordinary CUSTOMER. It shares the published demo
- * password unless the demo env overrides it via `DEMO_TEST_ACCOUNT_PASSWORD`.
+ * login special-case) as an ordinary CUSTOMER. It is a neutral platform address,
+ * never a real person's mailbox. It shares the demo account credential, which a
+ * public deployment rotates through `DEMO_ACCOUNT_PASSWORD`.
  */
-export const DEMO_TEST_ACCOUNT = 'rhimiimed18@gmail.com';
-export const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_TEST_ACCOUNT_PASSWORD ?? DEMO_PASSWORD;
+export const DEMO_TEST_ACCOUNT = 'demo@wasit.tn';
+export const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_ACCOUNT_PASSWORD ?? DEMO_PASSWORD;
 
 export type DemoRole = keyof typeof DEMO_USERS;
 

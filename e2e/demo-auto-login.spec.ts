@@ -16,7 +16,7 @@ import { test, expect } from './helpers';
  */
 
 /** The one account the demo seeder provisions; auto-login never mints staff. */
-const DEMO_TEST_ACCOUNT = 'rhimiimed18@gmail.com';
+const DEMO_TEST_ACCOUNT = 'demo@wasit.tn';
 
 async function autoLoginEnabled(
   request: import('@playwright/test').APIRequestContext,

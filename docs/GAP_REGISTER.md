@@ -1140,3 +1140,47 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 **لا فشل متبقٍ:** صفر فشل في كل التشغيلات أعلاه.
 
 **الملفات المعدَّلة:** `packages/server/tests/sec04b-entity-read-access.test.ts` (فقط) + التوثيق (`docs/GAP_REGISTER.md`, `docs/WASIT_EXECUTION_REGISTER.md`, `AGENTS.md`). **كود الإنتاج لم يُمَسّ.**
+
+---
+
+## §25 — DEMO-SEC-01: تأمين العرض العام (CLOSED / VERIFIED — 2026-11-21)
+
+**المشكلة (ثغرة حقيقية، لا فجوة توثيقية):** على الرابط العام للعرض كان `POST /api/auth/demo-audit-session`
+يقبل `{"persona":"super-admin"}` من **أي زائر** بلا بيانات اعتماد، وصفحة `/demo/owner` تفتح تلك الجلسة
+تلقائيًا عند أول زيارة. النتيجة: تجاوز كامل لـRBAC — أي شخص يملك الرابط يحصل على SUPER_ADMIN. وكانت
+كلمة مرور العرض `Passw0rd!2026` منشورة في الكود والوثائق، وحساب العرض الرسمي بريدًا شخصيًا.
+
+**الإصلاح (كود إنتاج):**
+
+| الطبقة | قبل | بعد |
+| --- | --- | --- |
+| `POST /api/auth/demo-audit-session` | مفتوح لأي زائر عند `DEMO_AUTO_LOGIN=true` | بوابة العرض أولًا (404)، ثم `requireAuth` (401)، ثم `canOpenDemoPersona` (403)، وسقف: لا شخصية أعلى من المستدعي |
+| `/demo/owner` | يفتح SUPER_ADMIN تلقائيًا | إشعار «للموظفين فقط» + رابط دخول؛ لا استدعاء تلقائي؛ إخفاء شخصية SUPER_ADMIN عن غير SUPER_ADMIN |
+| بيانات اعتماد العرض | `Passw0rd!2026` منشورة | `DEMO_ACCOUNT_PASSWORD` (عشوائي، git-ignored)؛ إعادة تشغيل `seed-demo` تدوّر الهاشات |
+| حساب العرض الرسمي | `rhimiimed18@gmail.com` (بريد شخصي) | `demo@wasit.tn` (محايد) + تعطيل/إخفاء هوية الصف القديم في قاعدة العرض |
+| سجل الـseeder | يطبع كلمة المرور المنشورة وكلمة مرور الموظفين | لا يطبع أي كلمة مرور |
+
+**الدليل (تشغيل حيّ على الرابط العام، 2026-11-21):**
+
+| الفحص | النتيجة |
+| --- | --- |
+| زائر → `POST /api/auth/demo-audit-session` | **401** `UNAUTHORIZED`، ولا جلسة |
+| زائر → `/demo/owner` (متصفح، 390×844) | `owner-staff-only` ظاهر، `owner-roles` = 0، `/api/auth/me` = 401 |
+| كلمة المرور القديمة `Passw0rd!2026` | **401** لكل حسابات العرض |
+| `DEMO_ACCOUNT_PASSWORD` الجديدة | **200** لـcustomer/merchant/supplier/company/`demo@wasit.tn` |
+| البريد الشخصي القديم | **401** (الصف معطّل و`removed-…@invalid.local`) |
+| SUPER_ADMIN يفتح شخصية super-admin | **200** (roles: ADMIN, CUSTOMER, SUPER_ADMIN) |
+| ADMIN يفتح شخصية super-admin | **403** «staff account that outranks the persona» |
+| ADMIN يفتح شخصية merchant | **200** |
+| CUSTOMER على `/api/admin/stats` | **403** · زائر **401** |
+| POST بجلسة بلا `Origin` (staging) | **403** CSRF |
+| `POST /api/auth/demo-session` | **200** — `demo@wasit.tn`, roles `['CUSTOMER']` |
+| متصفح: SUPER_ADMIN يرى مبدّل super-admin · ADMIN لا يراه | ✅ |
+
+**الاختبارات:** `tests/unit/demo-audit-authorization.test.ts` **5/5** · `tests/demo-auto-login.test.ts`
+**23/23** · الحزمة الكاملة **147 ملفًا / 1905 اختبارًا — كلها ناجحة** (تشغيل ببيئة نظيفة) ·
+`tsc --noEmit` server وweb **0 أخطاء** · `ui-mobile-smoke` **16/16** · `ui-functional-audit` **45/45**.
+
+**ملاحظة بيئية (ليست انحدارًا):** تشغيل الحزمة في shell ورث `APP_URL` من `.env.demo` يُفشل
+`tests/seo.test.ts` (3 حالات) لأن sitemap/robots يعكسان الأصل العام؛ مع `APP_URL=http://localhost:5173`
+تمرّ **10/10**. نفس فخ تهريب `.env.demo` الموثّق في `AGENTS.md`.

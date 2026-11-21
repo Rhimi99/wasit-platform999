@@ -41,10 +41,15 @@ const RESET_STOCK = process.env.SEED_RESET_STOCK === '1';
  * the demo only, with no staff role and no password bypass. The address lives in
  * `lib/demo-account.ts` so the `/api/auth/demo-session` route opens a session for
  * exactly this account; the password never is committed: it comes from
- * `DEMO_TEST_ACCOUNT_PASSWORD` in the environment, so the credential stays in
- * the git-ignored demo env (`.env.demo`) exactly like every other demo secret.
+ * `DEMO_ACCOUNT_PASSWORD` in the environment, so the credential stays in the
+ * git-ignored demo env (`.env.demo`) exactly like every other demo secret.
+ *
+ * DEMO-SEC-01 — the same variable rotates the four trade fixtures. When it is
+ * set the seeder re-hashes every demo account, so a published credential from an
+ * older run stops working; when it is absent (dev/test/E2E) the published
+ * fallback is kept, which is what the local suites expect.
  */
-const DEMO_TEST_ACCOUNT_PASSWORD = process.env.DEMO_TEST_ACCOUNT_PASSWORD?.trim();
+const CONFIGURED_DEMO_PASSWORD = process.env.DEMO_ACCOUNT_PASSWORD?.trim();
 
 /**
  * Password for the two staff fixtures below. Delegates the policy to
@@ -58,10 +63,11 @@ function staffPassword(): string {
     generate: () => randomBytes(32).toString('base64url'),
   });
   if (!process.env.DEMO_STAFF_PASSWORD?.trim() && env.NODE_ENV === 'staging') {
+    // Never print the value: it is a live credential, and stdout ends up in
+    // logs that outlive the process.
     console.warn(
       '[seed-demo] DEMO_STAFF_PASSWORD not set; generated a random staff password ' +
-        'for this run (not committed):',
-      pw,
+        'for this run (not logged). Set DEMO_STAFF_PASSWORD to make it reproducible.',
     );
   }
   return pw;
@@ -250,14 +256,26 @@ async function main(): Promise<void> {
   console.log('Demo Seeder — seeding dev/test environment...');
   await loadRefs();
 
-  const pw = DEMO_PUBLISHED_PASSWORD;
+  const pw = CONFIGURED_DEMO_PASSWORD ?? DEMO_PUBLISHED_PASSWORD;
+  // Rotation is opt-in: only an explicit deployment credential rewrites the
+  // stored hashes. Dev/E2E keep the published fallback so their fixtures stay
+  // predictable.
+  const rotateDemoPassword = Boolean(CONFIGURED_DEMO_PASSWORD);
   const staffPw = staffPassword();
 
   // المستخدمون التجريبيون
-  const customer = await ensureDevUser('customer1@wasit.tn', pw, 'CUSTOMER');
-  const supplierUser = await ensureDevUser('supplierA@wasit.tn', pw, 'SUPPLIER');
-  const merchantUser = await ensureDevUser('merchantA@wasit.tn', pw, 'MERCHANT');
-  const companyUser = await ensureDevUser('companyA@wasit.tn', pw, 'COMPANY');
+  const customer = await ensureDevUser('customer1@wasit.tn', pw, 'CUSTOMER', {
+    enforcePassword: rotateDemoPassword,
+  });
+  const supplierUser = await ensureDevUser('supplierA@wasit.tn', pw, 'SUPPLIER', {
+    enforcePassword: rotateDemoPassword,
+  });
+  const merchantUser = await ensureDevUser('merchantA@wasit.tn', pw, 'MERCHANT', {
+    enforcePassword: rotateDemoPassword,
+  });
+  const companyUser = await ensureDevUser('companyA@wasit.tn', pw, 'COMPANY', {
+    enforcePassword: rotateDemoPassword,
+  });
   const adminUser = await ensureDevUser('admin@wasit.tn', staffPw, 'SUPER_ADMIN', {
     enforcePassword: true,
   });
@@ -274,27 +292,26 @@ async function main(): Promise<void> {
   await assignRoleDirect(reviewerUser.userId, 'ADMIN');
 
   // Official PUBLIC-DEMO test account (ordinary CUSTOMER). Idempotent: an
-  // existing row is kept as-is and only (re-)marked verified in the demo, so
-  // re-running the seeder never duplicates or resets the account. Re-provisioned
-  // automatically whenever the demo database is rebuilt from scratch.
+  // existing row is kept and only (re-)marked verified in the demo, so re-running
+  // the seeder never duplicates it. Re-provisioned automatically whenever the
+  // demo database is rebuilt from scratch.
   //
   // `enforcePassword` repairs a row whose stored hash no longer matches the
-  // published demo credential — the failure mode a stray registration (or an
-  // integration run that minted the account with its own literal) leaves behind,
-  // where the account exists but the documented password is refused.
+  // demo credential — the failure mode a stray registration (or an integration
+  // run that minted the account with its own literal) leaves behind, where the
+  // account exists but the configured password is refused. It is also what
+  // rotates the account when `DEMO_ACCOUNT_PASSWORD` changes.
   const demoTestUser = await ensureDevUser(
     DEMO_TEST_ACCOUNT_EMAIL,
-    DEMO_TEST_ACCOUNT_PASSWORD ?? pw,
+    pw,
     'CUSTOMER',
     { enforcePassword: true },
   );
-  if (!DEMO_TEST_ACCOUNT_PASSWORD) {
-    console.warn(
-      `[seed-demo] DEMO_TEST_ACCOUNT_PASSWORD not set; ${DEMO_TEST_ACCOUNT_EMAIL} uses the published demo password.`,
-    );
-  }
 
-  console.log('Users ready:', [customer, supplierUser, merchantUser, companyUser, demoTestUser].map((u) => u.email).join(', '));
+  console.log(
+    'Users ready:',
+    [customer, supplierUser, merchantUser, companyUser, demoTestUser].map((u) => u.email).join(', '),
+  );
 
   // إنشاء الكيانات التجارية إن لم تكن موجودة
   const supExisting = await db.select().from(suppliers).where(eq(suppliers.userId, supplierUser.userId)).limit(1);
@@ -557,14 +574,18 @@ async function main(): Promise<void> {
   });
 
   console.log('Demo Seed complete.');
-  console.log('Test users (password: ' + pw + '):');
+  // Never print a credential: these logs are captured by the runtime. The
+  // passwords come from DEMO_ACCOUNT_PASSWORD / DEMO_STAFF_PASSWORD in the
+  // git-ignored demo env.
+  console.log('Test users (credential: DEMO_ACCOUNT_PASSWORD):');
   console.log('  customer1@wasit.tn (CUSTOMER)');
   console.log('  supplierA@wasit.tn (SUPPLIER)');
   console.log('  merchantA@wasit.tn (MERCHANT)');
   console.log('  companyA@wasit.tn  (COMPANY)');
+  console.log(`  ${DEMO_TEST_ACCOUNT_EMAIL} (CUSTOMER, official demo account)`);
   console.log(
     'Staff fixtures (admin@wasit.tn SUPER_ADMIN, admin2@wasit.tn ADMIN) use a separate ' +
-      'credential: DEMO_STAFF_PASSWORD (never the published demo password).',
+      'credential: DEMO_STAFF_PASSWORD (never the demo account credential).',
   );
 }
 

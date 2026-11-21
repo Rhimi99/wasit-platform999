@@ -7,16 +7,21 @@
  * another account, and the seeder cannot provision an account the route will not
  * recognise.
  *
- * The address is public and safe to commit. The credential never is: it lives in
- * the git-ignored demo env and is hashed through the normal auth path.
+ * The address is a neutral platform address, never a real person's mailbox: a
+ * demo fixture must not be someone's personal account, and the platform does not
+ * send mail to it (`MAIL_TRANSPORT=log` on the demo). The credential is never in
+ * the repository: it comes from the git-ignored demo env and is hashed through
+ * the normal auth path.
  */
-export const DEMO_TEST_ACCOUNT_EMAIL = 'rhimiimed18@gmail.com';
+export const DEMO_TEST_ACCOUNT_EMAIL = 'demo@wasit.tn';
 
 /**
- * The password the four public demo accounts share. It is published (the demo is
- * open to anyone), so it must never open a staff account: the seeder hands the
- * two admin fixtures a separate credential, resolved by
- * {@link resolveStaffPassword}.
+ * The password the four public demo accounts share **when no explicit demo
+ * credential is configured**. It used to be published; a public deployment now
+ * rotates it through `DEMO_ACCOUNT_PASSWORD`, so this constant is only the
+ * development/test fallback (E2E and local seeds depend on it). It must never
+ * open a staff account: the seeder hands the staff fixtures a separate
+ * credential, resolved by {@link resolveStaffPassword}.
  */
 export const DEMO_PUBLISHED_PASSWORD = 'Passw0rd!2026';
 
@@ -77,6 +82,27 @@ export type DemoAuditPersonaId = keyof typeof DEMO_AUDIT_PERSONAS;
 
 /** Stable ordering for the audit UI: staff first, then the trade roles. */
 export const DEMO_AUDIT_PERSONA_IDS = Object.keys(DEMO_AUDIT_PERSONAS) as DemoAuditPersonaId[];
+
+const STAFF_ROLES = ['ADMIN', 'SUPER_ADMIN'] as const;
+
+/**
+ * Whether `callerRoles` may open `personaRole` through the Owner Audit Center.
+ *
+ * The center used to be a public entry point, which meant an anonymous visitor
+ * could mint a SUPER_ADMIN session. It is now an operator tool: the caller must
+ * already hold a staff session, and a persona may never outrank the caller —
+ * an ADMIN cannot open the SUPER_ADMIN desk (that would be privilege escalation
+ * through a UI convenience), while a SUPER_ADMIN may open every desk.
+ */
+export function canOpenDemoPersona(
+  callerRoles: readonly string[],
+  personaRole: string,
+): boolean {
+  const isStaff = callerRoles.some((role) => (STAFF_ROLES as readonly string[]).includes(role));
+  if (!isStaff) return false;
+  if (personaRole === 'SUPER_ADMIN') return callerRoles.includes('SUPER_ADMIN');
+  return true;
+}
 
 /**
  * Resolves a requested persona id to its fixture, or `null` for anything not on

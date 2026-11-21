@@ -25,19 +25,33 @@
 
 ## 2. الحسابات التجريبية
 
-كلمة المرور المنشورة (لحسابات العرض الأربعة فقط): `Passw0rd!2026`.
+**لا كلمة مرور منشورة بعد DEMO-SEC-01.** حسابات العرض الأربعة + حساب العرض الرسمي تشترك في
+بيانات اعتماد واحدة تُولَّد عشوائيًا لكل نشر وتُقرأ من `DEMO_ACCOUNT_PASSWORD` في `.env.demo`
+(git-ignored، mode 0600). إعادة تشغيل `seed-demo` مع قيمة جديدة **تدوّر** كلمات المرور (يُعاد
+هاش كل حساب)، فلا تبقى أي بيانات اعتماد قديمة صالحة.
 
-| الحساب | الدور | كلمة المرور |
+| الحساب | الدور | مصدر كلمة المرور |
 | --- | --- | --- |
-| `customer1@wasit.tn` | CUSTOMER | `Passw0rd!2026` |
-| `merchantA@wasit.tn` | MERCHANT | `Passw0rd!2026` |
-| `supplierA@wasit.tn` | SUPPLIER | `Passw0rd!2026` |
-| `companyA@wasit.tn` | COMPANY | `Passw0rd!2026` |
-| `rhimiimed18@gmail.com` | CUSTOMER (حساب العرض الرسمي) | `Passw0rd!2026` |
+| `customer1@wasit.tn` | CUSTOMER | `DEMO_ACCOUNT_PASSWORD` |
+| `merchantA@wasit.tn` | MERCHANT | `DEMO_ACCOUNT_PASSWORD` |
+| `supplierA@wasit.tn` | SUPPLIER | `DEMO_ACCOUNT_PASSWORD` |
+| `companyA@wasit.tn` | COMPANY | `DEMO_ACCOUNT_PASSWORD` |
+| `demo@wasit.tn` | CUSTOMER (حساب العرض الرسمي) | `DEMO_ACCOUNT_PASSWORD` |
 
-**حسابات الإدارة** (`admin@wasit.tn` SUPER_ADMIN، `admin2@wasit.tn` ADMIN): كلمة مرور **منفصلة وعشوائية**، غير منشورة، ولا تفتحها كلمة المرور المنشورة (`401`). تُقرأ من `/tmp/demo_staff_pw.txt` (mode 0600) أو `DEMO_STAFF_PASSWORD` في `.env.demo`، وتُسلَّم عبر قناة آمنة فقط.
+حساب العرض الرسمي صار عنوانًا محايدًا (`demo@wasit.tn`) بدل أي بريد شخصي: لا يُستخدم حساب
+شخص حقيقي كـDemo، ولا يُرسل إليه بريد (`MAIL_TRANSPORT=log`).
 
-**مسارات دخول تجريبي:** `POST /api/auth/demo-session` (يفتح حساب العرض الرسمي)، و`POST /api/auth/demo-audit-session` بـ`{"persona":"merchant|supplier|company|customer"}`. كلاهما محصور بـ`DEMO_AUTO_LOGIN=true` (404 في الإنتاج).
+**حسابات الإدارة** (`admin@wasit.tn` SUPER_ADMIN، `admin2@wasit.tn` ADMIN): كلمة مرور
+**منفصلة وعشوائية** (`DEMO_STAFF_PASSWORD`)، غير منشورة، ولا تفتحها بيانات اعتماد العرض
+(`401`). لا تُطبع في السجلات.
+
+**مسارات دخول تجريبي:**
+- `POST /api/auth/demo-session` — يفتح حساب العرض الرسمي (`demo@wasit.tn`، CUSTOMER فقط). محصور
+  بـ`DEMO_AUTO_LOGIN=true` (404 في الإنتاج).
+- `POST /api/auth/demo-audit-session` — **أداة تشغيلية، ليست مدخلًا عامًا (DEMO-SEC-01)**:
+  تتطلب جلسة موظف حقيقية (`401` للزائر، `403` لغير الموظف)، والشخصية لا تتجاوز صلاحية
+  المستدعي (ADMIN لا يفتح SUPER_ADMIN). صفحة `/demo/owner` تعرض إشعار «للموظفين فقط» بدل
+  فتح جلسة تلقائيًا.
 
 ---
 

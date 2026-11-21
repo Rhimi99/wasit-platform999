@@ -432,3 +432,47 @@
 
 ### 16.8 بوابة السلامة (بعد الجلسة)
 `master` @ `98c3a958…` (**لم يتغيّر**) · **Staged 0 · Stash 0 · Deleted 0**. **لا عملية Git غيّرت الحالة.** التغيير: ملفات A1/A2/A3 (كود + اختبارات) + `docs/AI_KILL_SWITCH.md` + `docs/A2_AGENT_SCOPE_ENFORCEMENT.md` + `docs/A3_AGENT_METRICS_OUTCOME_TRACKING.md` + `AGENTS.md` + `docs/WASIT_EXECUTION_REGISTER.md`.
+
+## 17. DEMO-SEC-01 — تأمين العرض العام (2026-11-21)
+
+### 17.1 ما كان مكسورًا
+`POST /api/auth/demo-audit-session` كان يمنح **أي زائر** جلسة SUPER_ADMIN على الرابط العام
+(`DEMO_AUTO_LOGIN=true`)، وصفحة `/demo/owner` تفتحها تلقائيًا. إضافةً إلى كلمة مرور عرض منشورة
+(`Passw0rd!2026`) وحساب عرض رسمي ببريد شخصي. الثغرة في **كود الإنتاج**، لا في الوثائق.
+
+### 17.2 ما نُفِّذ
+- `lib/demo-account.ts`: `canOpenDemoPersona(roles, personaRole)` (موظف فقط + سقف الصلاحية)،
+  `DEMO_TEST_ACCOUNT_EMAIL = 'demo@wasit.tn'`، `DEMO_ACCOUNT_PASSWORD` عبر `demoAccountPassword()`.
+- `modules/auth/routes.ts`: بوابة `demoAutoLoginEnabled()` قبل `requireAuth` (404)، ثم `requireAuth`
+  (401)، ثم التحقق من الشخصية (400/403).
+- `modules/auth/service.ts`: `openDemoAuditSession` يفرض `canOpenDemoPersona`، ويحمي `demo-session`
+  بنفس الحساب الرسمي.
+- `scripts/seed-demo.ts`: تدوير كلمات المرور عند وجود `DEMO_ACCOUNT_PASSWORD`، ولا طباعة لأسرار.
+- `pages/DemoOwnerAuditPage.tsx`: لا فتح تلقائي؛ `owner-staff-only` + رابط دخول؛ إخفاء
+  SUPER_ADMIN عن غير SUPER_ADMIN؛ تنظيف الجلسة عند الخروج.
+- i18n (ar/en/fr/zh): `demo.owner.staffRequired` / `.forbidden` / `.signIn`.
+
+### 17.3 الاختبارات
+- جديد: `tests/unit/demo-audit-authorization.test.ts` (5) — القاعدة الصِّرفة.
+- مُعاد كتابة: `tests/demo-auto-login.test.ts` (23) — 401/403/404 + سقف الصلاحية + CSRF + جلسة عميل.
+- مُعاد كتابة: `e2e/demo-owner.spec.ts` (زائر / SUPER_ADMIN / ADMIN / وضع معطّل)؛ `e2e/helpers.ts`
+  و`e2e/demo-auto-login.spec.ts` على `demo@wasit.tn`.
+- سكربتات التحقق (`ui-mobile-smoke`, `ui-flows-check`, `ui-functional-audit`) تقرأ
+  `DEMO_ACCOUNT_PASSWORD` بدل الاعتماد على القيمة المنشورة.
+
+### 17.4 النتائج
+| الفحص | النتيجة |
+| --- | --- |
+| `tsc --noEmit` (server) | 0 أخطاء |
+| `tsc --noEmit` (web) | 0 أخطاء |
+| `vitest run` (كامل، بيئة نظيفة) | **147 ملفًا / 1905 اختبارًا — كلها ناجحة** |
+| `ui-mobile-smoke` (الرابط العام) | 16/16 |
+| `ui-functional-audit` (الرابط العام) | 45/45 |
+| تحقق حيّ للأمان | 401/403/404 كما في §25 من `GAP_REGISTER.md` |
+
+### 17.5 حدود الإثبات
+- `e2e/demo-owner.spec.ts` لم يُشغَّل في هذه الجلسة (يتطلب متصفحًا + `wasit_dev` + خادمًا محليًا
+  بمنافذ معزولة). بديله: تحقق حيّ بالمتصفح على الرابط العام (الزائر/SUPER_ADMIN/ADMIN) + اختبارات
+  التكامل التي تغطي نفس القواعد عبر `createApp()` الحقيقي.
+- كلمة المرور الجديدة محفوظة في `/tmp/demo_accounts_pw.txt` (0600) و`.env.demo` (0600، git-ignored)،
+  ولم تُطبع في أي سجل.

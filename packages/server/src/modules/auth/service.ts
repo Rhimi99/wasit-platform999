@@ -23,7 +23,7 @@ import {
 import { verifyMfaChallenge, enrollMfa, confirmMfa } from '../../lib/mfa';
 import { env, demoEmailVerificationSkipped, demoAutoLoginEnabled, staffMfaEnforced } from '../../lib/env';
 import { isLoginBlocked, lockoutPolicy } from '../../lib/lockout';
-import { DEMO_TEST_ACCOUNT_EMAIL, resolveDemoAuditPersona } from '../../lib/demo-account';
+import { DEMO_TEST_ACCOUNT_EMAIL, canOpenDemoPersona, resolveDemoAuditPersona } from '../../lib/demo-account';
 import { writeAudit } from '../../lib/audit';
 import { sendMail } from '../../lib/mail/send';
 import { buildPasswordResetEmail, buildVerificationEmail } from '../../lib/mail/templates';
@@ -634,9 +634,14 @@ export async function demoAutoLogin(
 /**
  * Opens a session for one of the whitelisted demo fixtures, by persona id.
  *
- * This is the backend half of the Owner Audit Center (`/demo/owner`). It reuses
- * the exact rules of {@link demoAutoLogin} — demo-only, real session via
- * {@link issueSession}, no role granted — and adds a whitelist:
+ * This is the backend half of the Owner Audit Center (`/demo/owner`). It is an
+ * **operator** tool, not a public entry point: the caller must already hold a
+ * staff session, and {@link canOpenDemoPersona} refuses any persona that
+ * outranks the caller. Without that check an anonymous visitor — or an ADMIN —
+ * could mint a SUPER_ADMIN session through the UI.
+ *
+ * Within those bounds it reuses the rules of {@link demoAutoLogin} — demo-only,
+ * real session via {@link issueSession}, no role granted — and adds a whitelist:
  *
  *  * the requested id is resolved through `resolveDemoAuditPersona`, so a caller
  *    can only pick one of the six compiled-in fixtures, never an arbitrary
@@ -652,10 +657,14 @@ export async function demoAuditLogin(
   db: DB,
   input: { persona: unknown },
   ctx: { ipAddress?: string | null; userAgent?: string | null },
+  callerRoles: readonly string[],
 ): Promise<LoginResult & { persona: string }> {
   const persona = resolveDemoAuditPersona(input.persona);
   if (!persona) {
     throw new ApiError(400, 'VALIDATION_ERROR', 'Unknown demo persona');
+  }
+  if (!canOpenDemoPersona(callerRoles, persona.role)) {
+    throw ApiError.forbidden('Demo audit sessions require a staff account that outranks the persona');
   }
 
   const session = await openDemoSession(

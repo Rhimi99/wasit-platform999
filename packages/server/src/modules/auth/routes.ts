@@ -36,7 +36,7 @@ import {
   devPhoneCode,
 } from './service';
 import { ApiError, SELF_SELECTABLE_ROLES, SUPPORTED_LOCALES, DEFAULT_LOCALE } from '@wasit/shared';
-import { env, devToolingActive, cookieSecure } from '../../lib/env';
+import { env, devToolingActive, cookieSecure, demoAutoLoginEnabled } from '../../lib/env';
 import { hashToken } from '../../lib/security';
 
 const mfaEnrollSchema = z.object({});
@@ -193,14 +193,26 @@ authRoutes.post(
 // demo fixtures so the Owner Audit Center can hop between real, role-scoped
 // sessions. Body carries only a persona id (`{ persona: "merchant" }`), never an
 // email, id, or password: the id is resolved through the compiled-in roster or
-// the request is refused. Same demo-only gate as `/demo-session` — 404 in
-// production — and the issued session holds exactly the account's stored roles,
-// so a customer persona still cannot reach the staff API.
+// the request is refused.
+//
+// DEMO-SEC-01 — this is an operator tool, not a public entry point. The demo
+// gate runs first so the route keeps disappearing (404) where demo mode is off;
+// then `requireAuth` + `canOpenDemoPersona` demand a real staff session and
+// refuse any persona that outranks the caller. Anonymous callers can no longer
+// mint a SUPER_ADMIN session, and an ADMIN cannot climb to SUPER_ADMIN through
+// the UI.
 const demoAuditSessionSchema = z.object({ persona: z.string().min(1).max(40) });
 
 authRoutes.post(
   '/demo-audit-session',
   rateLimit({ windowSeconds: 60, max: 60, keyPrefix: 'auth-demo-audit-session' }),
+  async (c, next) => {
+    if (!demoAutoLoginEnabled()) {
+      throw ApiError.notFound('Demo auto-login is not available');
+    }
+    await next();
+  },
+  requireAuth,
   validateBody(demoAuditSessionSchema),
   async (c) => {
     const ctx = getContext(c);
@@ -209,6 +221,7 @@ authRoutes.post(
       ctx.db,
       { persona },
       { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+      ctx.user!.roles,
     );
 
     setCookie(c, SESSION_COOKIE, session.token, {

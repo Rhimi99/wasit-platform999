@@ -1,8 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import argon2 from 'argon2';
 import { eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
-import { users } from '../src/db/schema/auth.js';
+import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { env, demoAutoLoginEnabled } from '../src/lib/env.js';
 import {
@@ -75,8 +77,11 @@ const app = createApp();
 function makeClient() {
   let cookie = '';
   return {
-    async req(path: string, options: { method?: string; body?: unknown } = {}) {
-      const headers: Record<string, string> = {};
+    async req(
+      path: string,
+      options: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+    ) {
+      const headers: Record<string, string> = { ...(options.headers ?? {}) };
       if (options.body !== undefined) headers['Content-Type'] = 'application/json';
       if (cookie) headers.Cookie = cookie;
       const res = await app.request(path, {
@@ -127,7 +132,7 @@ async function ensureDemoAccount(): Promise<string> {
       // mint the account with a hash that no documented password opens, which is
       // exactly how the public demo account once stopped answering to its
       // published password.
-      password: process.env.DEMO_TEST_ACCOUNT_PASSWORD ?? DEMO_PUBLISHED_PASSWORD,
+      password: process.env.DEMO_ACCOUNT_PASSWORD ?? DEMO_PUBLISHED_PASSWORD,
       firstName: 'Demo',
       role: 'CUSTOMER',
     },
@@ -259,25 +264,63 @@ describe('resolveDemoAuditPersona', () => {
 /**
  * Owner Audit Center session opener (`POST /api/auth/demo-audit-session`).
  *
- * Proves the two properties the audit center relies on, against the real route:
- *   1. the same demo-only gate as the customer entry — 404 when off, and 404 in
- *      production even with the flag on;
- *   2. the opened session holds the fixture's *real* stored role, so a customer
- *      persona is refused by the staff API (no role is forged for the UI).
+ * DEMO-SEC-01 — the route is an operator tool, not a public entry point. These
+ * specs pin the four properties that make that true, against the real route:
+ *   1. the demo gate still wins: 404 when the flag is off, and 404 in production
+ *      even with the flag on, so the route does not exist where demo mode is off;
+ *   2. anonymous callers are refused (401) — the public URL can no longer mint a
+ *      SUPER_ADMIN session;
+ *   3. a non-staff session is refused (403), so a customer cannot escalate;
+ *   4. a persona never outranks the caller: ADMIN may open trade desks but not
+ *      the SUPER_ADMIN desk, while SUPER_ADMIN may open everything.
+ *
+ * The last spec keeps the original guarantee: the opened session holds the
+ * fixture's *real* stored role, so a customer persona is refused by the staff API.
  */
-describe('Demo audit session — route behavior', () => {
-  it('refuses an unknown persona even when auto-login is enabled', async () => {
+describe('Demo audit session — staff-only operator route', () => {
+  async function makeStaffClient(roleName: 'ADMIN' | 'SUPER_ADMIN', email?: string) {
+    const id = randomUUID();
+    const address = email ?? `audit-${roleName.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@wasit.tn`;
+    const existing = await db.select().from(users).where(eq(users.email, address)).limit(1);
+    const userId = existing[0]?.id ?? id;
+    if (existing.length === 0) {
+      await db.insert(users).values({
+        id,
+        email: address,
+        passwordHash: await argon2.hash('AuditStaffPass123!'),
+        firstName: 'Audit Staff',
+        emailVerified: true,
+        isActive: true,
+      });
+    } else {
+      await db.update(users).set({ passwordHash: await argon2.hash('AuditStaffPass123!') }).where(eq(users.id, userId));
+    }
+    const role = await db.select().from(roles).where(eq(roles.name, roleName)).limit(1);
+    const held = await db.select().from(userRoles).where(eq(userRoles.userId, userId));
+    if (!held.some((h) => h.roleId === role[0].id)) {
+      await db.insert(userRoles).values({ id: randomUUID(), userId, roleId: role[0].id });
+    }
+    const c = makeClient();
+    const login = await c.req('/api/auth/login', {
+      method: 'POST',
+      body: { email: address, password: 'AuditStaffPass123!', allowUnverifiedEmail: true },
+    });
+    if (login.status !== 200) throw new Error(`staff login (${roleName}) failed: ${login.status}`);
+    return c;
+  }
+
+  it('refuses an anonymous caller even when auto-login is enabled', async () => {
     const c = makeClient();
     const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
-      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'nope' } }),
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'super-admin' } }),
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
     const me = await c.req('/api/auth/me');
     expect(me.status).toBe(401);
   });
 
   it('is refused when the flag is off', async () => {
-    const c = makeClient();
+    const c = await makeStaffClient('SUPER_ADMIN');
     const res = await c.req('/api/auth/demo-audit-session', {
       method: 'POST',
       body: { persona: 'customer' },
@@ -286,18 +329,91 @@ describe('Demo audit session — route behavior', () => {
   });
 
   it('is refused in production even with the flag on', async () => {
-    const c = makeClient();
+    const c = await makeStaffClient('SUPER_ADMIN');
+    // Production enforces CSRF, so a cookie-authenticated write must carry a
+    // trusted Origin; without it the request dies at the CSRF layer (403) and
+    // never reaches the demo gate this spec is about.
+    const origin = new URL(env.APP_URL).origin;
     const res = await withEnv({ NODE_ENV: 'production', DEMO_AUTO_LOGIN: true }, () =>
-      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'super-admin' } }),
+      c.req('/api/auth/demo-audit-session', {
+        method: 'POST',
+        body: { persona: 'super-admin' },
+        headers: { Origin: origin },
+      }),
     );
     expect(res.status).toBe(404);
   });
 
-  it('opens a real customer session that cannot reach the staff API', async () => {
+  it('a production write without a trusted Origin is stopped by CSRF', async () => {
+    const c = await makeStaffClient('SUPER_ADMIN');
+    const res = await withEnv({ NODE_ENV: 'production', DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'super-admin' } }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.data.error.code).toBe('FORBIDDEN');
+  });
+
+  it('refuses a customer session', async () => {
     await ensureDemoAccount();
     const c = makeClient();
+    await c.req('/api/auth/login', {
+      method: 'POST',
+      body: {
+        email: DEMO_TEST_ACCOUNT_EMAIL,
+        password: process.env.DEMO_ACCOUNT_PASSWORD ?? DEMO_PUBLISHED_PASSWORD,
+        allowUnverifiedEmail: true,
+      },
+    });
     const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
       c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'customer' } }),
+    );
+    expect(res.status).toBe(403);
+    // The refused call did not swap the session for a different one.
+    const me = await c.req('/api/auth/me');
+    expect(me.status).toBe(200);
+    expect(me.data.data.roles).toEqual(['CUSTOMER']);
+  });
+
+  it('lets an ADMIN open a trade desk but never the SUPER_ADMIN desk', async () => {
+    const c = await makeStaffClient('ADMIN');
+    const denied = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'super-admin' } }),
+    );
+    expect(denied.status).toBe(403);
+
+    const opened = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'customer' } }),
+    );
+    expect(opened.status).toBe(200);
+    expect(opened.data.data.roles).toEqual(['CUSTOMER']);
+  });
+
+  it('lets a SUPER_ADMIN open the SUPER_ADMIN desk', async () => {
+    const c = await makeStaffClient('SUPER_ADMIN', 'admin@wasit.tn');
+    const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'super-admin' } }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.data.data.persona).toBe('super-admin');
+    expect(res.data.data.roles).toContain('SUPER_ADMIN');
+    const me = await c.req('/api/auth/me');
+    expect(me.status).toBe(200);
+    expect((await c.req('/api/admin/stats')).status).toBe(200);
+  });
+
+  it('refuses an unknown persona for a staff caller', async () => {
+    const c = await makeStaffClient('SUPER_ADMIN');
+    const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      c.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'nope' } }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('opens a real customer session that cannot reach the staff API', async () => {
+    await ensureDemoAccount();
+    const staff = await makeStaffClient('SUPER_ADMIN');
+    const res = await withEnv({ DEMO_AUTO_LOGIN: true }, () =>
+      staff.req('/api/auth/demo-audit-session', { method: 'POST', body: { persona: 'customer' } }),
     );
     expect(res.status).toBe(200);
     expect(res.data.data.email).toBe(DEMO_TEST_ACCOUNT_EMAIL);
@@ -305,9 +421,8 @@ describe('Demo audit session — route behavior', () => {
     expect(res.data.data.persona).toBe('customer');
 
     // The session is real and carries no staff authority.
-    const me = await c.req('/api/auth/me');
+    const me = await staff.req('/api/auth/me');
     expect(me.status).toBe(200);
-    const stats = await c.req('/api/admin/stats');
-    expect(stats.status).toBe(403);
+    expect((await staff.req('/api/admin/stats')).status).toBe(403);
   });
 });

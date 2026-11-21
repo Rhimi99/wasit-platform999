@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, ApiClientError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -11,12 +11,17 @@ import type { User } from '@/lib/types';
 /**
  * Public-demo Owner Audit Center: `/demo/owner`.
  *
- * Opening it signs the owner in with a real session and lands on this index, from
- * which every role desk and every module can be opened. It is a thin client for
- * the two demo endpoints:
+ * An **operator** page. It used to open a SUPER_ADMIN session on first visit for
+ * anyone who reached the URL; that is now refused at the API, so the page
+ * mirrors the rule instead of pretending otherwise: it requires a staff session
+ * and only offers personas the caller outranks (a SUPER_ADMIN sees every desk,
+ * an ADMIN sees every desk except SUPER_ADMIN, everyone else sees a notice).
  *
- *  * `POST /api/auth/demo-audit-session` opens a session for one whitelisted
- *    fixture (by persona id only — never an email, id, or password);
+ * The session endpoint (`POST /api/auth/demo-audit-session`) is authoritative —
+ * this page never widens what the server allows:
+ *
+ *  * it opens a session for one whitelisted fixture (by persona id only — never
+ *    an email, id, or password);
  *  * when demo auto-login is off (production, or a plain dev run) the endpoint is
  *    a 404 and the page renders "not available" instead of a login form.
  *
@@ -28,13 +33,21 @@ import type { User } from '@/lib/types';
  */
 
 const PERSONAS = [
-  { id: 'super-admin', roleKey: 'demo.owner.role.superAdmin' },
-  { id: 'admin', roleKey: 'demo.owner.role.admin' },
-  { id: 'customer', roleKey: 'demo.owner.role.customer' },
-  { id: 'merchant', roleKey: 'demo.owner.role.merchant' },
-  { id: 'supplier', roleKey: 'demo.owner.role.supplier' },
-  { id: 'company', roleKey: 'demo.owner.role.company' },
+  { id: 'super-admin', role: 'SUPER_ADMIN', roleKey: 'demo.owner.role.superAdmin' },
+  { id: 'admin', role: 'ADMIN', roleKey: 'demo.owner.role.admin' },
+  { id: 'customer', role: 'CUSTOMER', roleKey: 'demo.owner.role.customer' },
+  { id: 'merchant', role: 'MERCHANT', roleKey: 'demo.owner.role.merchant' },
+  { id: 'supplier', role: 'SUPPLIER', roleKey: 'demo.owner.role.supplier' },
+  { id: 'company', role: 'COMPANY', roleKey: 'demo.owner.role.company' },
 ] as const;
+
+/** Server rule (`canOpenDemoPersona`), mirrored so the UI never offers a 403. */
+function canOpenPersona(callerRoles: readonly string[], personaRole: string): boolean {
+  const isStaff = callerRoles.some((r) => r === 'ADMIN' || r === 'SUPER_ADMIN');
+  if (!isStaff) return false;
+  if (personaRole === 'SUPER_ADMIN') return callerRoles.includes('SUPER_ADMIN');
+  return true;
+}
 
 type ProbeResult = { status: number; ok: boolean };
 
@@ -46,7 +59,6 @@ export function DemoOwnerAuditPage() {
   const [bootError, setBootError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [probes, setProbes] = useState<Record<string, ProbeResult>>({});
-  const started = useRef(false);
 
   /** Opens the given persona's real session, replacing any current one. */
   const openPersona = useCallback(
@@ -64,21 +76,19 @@ export function DemoOwnerAuditPage() {
         after?.();
       } catch (err) {
         const status = err instanceof ApiClientError ? err.statusCode : undefined;
-        setBootError(status === 404 ? t('demo.notAvailable') : t('demo.failed'));
+        setBootError(
+          status === 404
+            ? t('demo.notAvailable')
+            : status === 401 || status === 403
+              ? t('demo.owner.staffRequired')
+              : t('demo.failed'),
+        );
       } finally {
         setBusy(null);
       }
     },
     [setUser, t],
   );
-
-  // First visit: open the staff persona so the owner lands on the broadest desk.
-  useEffect(() => {
-    if (started.current || loading) return;
-    started.current = true;
-    if (user) return; // an existing session already works; the owner can switch.
-    void openPersona('super-admin');
-  }, [loading, user, openPersona]);
 
   const probe = useCallback(async (id: string, method: 'GET' | 'POST', path: string) => {
     setBusy(`probe:${id}`);
@@ -105,6 +115,31 @@ export function DemoOwnerAuditPage() {
     setUser(null);
     setProbes({});
   }, [setUser]);
+
+  const isStaff = roles.some((r) => r === 'ADMIN' || r === 'SUPER_ADMIN');
+  const availablePersonas = PERSONAS.filter((p) => canOpenPersona(roles, p.role));
+
+  // The audit center is an operator tool: without a staff session there is
+  // nothing to switch to, and the API would refuse the call anyway.
+  if (!loading && !isStaff) {
+    return (
+      <PublicLayout>
+        <div className="mx-auto max-w-2xl px-4 py-10" dir="auto">
+          <SectionHeader title={t('demo.owner.title')} subtitle={t('demo.owner.subtitle')} />
+          <Card>
+            <p className="text-sm text-slate-700" data-testid="owner-staff-only">
+              {user ? t('demo.owner.forbidden') : t('demo.owner.staffRequired')}
+            </p>
+            <div className="mt-4">
+              <Link to="/login" className="btn-primary" data-testid="owner-login-link">
+                {t('demo.owner.signIn')}
+              </Link>
+            </div>
+          </Card>
+        </div>
+      </PublicLayout>
+    );
+  }
 
   return (
     <PublicLayout>
@@ -172,7 +207,7 @@ export function DemoOwnerAuditPage() {
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-semibold text-slate-700">{t('demo.owner.roles')}</h3>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="owner-roles">
-                {PERSONAS.map((p) => {
+                {availablePersonas.map((p) => {
                   const active = busy === p.id;
                   return (
                     <Card key={p.id}>
