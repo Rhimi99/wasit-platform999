@@ -129,7 +129,12 @@ async function countOpenSupportMessages(db: DB): Promise<number> {
  * has no trusted context, no grant, or a grant for a different agent's action is
  * refused before the executor performs any read or provider call.
  */
-const EXECUTOR_ACTION: Record<string, string> = {
+/**
+ * The action each executor performs, keyed by agent. Exported so the catalogue
+ * contract can be asserted: an executor may only perform an action its agent
+ * declares as a capability.
+ */
+export const EXECUTOR_ACTION: Record<string, string> = {
   'sales-agent': 'identify_leads',
   'marketing-agent': 'recommend_campaign',
   'ads-agent': 'recommend_ads',

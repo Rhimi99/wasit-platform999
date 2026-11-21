@@ -1358,3 +1358,32 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 
 **ملاحظة عقود:** `agentCount()` 20 ← 21، `allAgentSpecs()` 21 ← 22، `declaredOnlyAgents()` 8 ← 9.
 كل الاختبارات التي كانت تُثبّت الأرقام حُدِّثت، ولم يُحذف أي وكيل ولم تتغيّر أي صلاحية.
+
+## §30 — AI-AGENT-MERGE-01: دمج الاختصاصات وتطوير منظومة WASIT AI (CLOSED / VERIFIED — 2026-11-20)
+
+**الفجوة قبل المهمة:** ثلاث هويات في الكتالوج كانت تعلن اختصاصاً أوسع مما تنفّذه:
+`outreach-acquisition-agent` (استقطاب فقط، بلا ترتيب أسواق أو فرص مؤهلة، وبلا منفّذ)،
+`finance-agent` (تلخيص مالي بلا حساب تكلفة أو مساهمة، وبلا منفّذ، ويعلن أداة `finance.read_ledger`
+المحجوبة بنيوياً)، و`development-agent` (يولّد «خطة تقنية» نصية فقط بلا تشخيص حقيقي من حالة الطبقة).
+النتيجة: ثلاث وظائف مطلوبة من المدير العام (توسع عالمي، محاسبة تكاليف، صيانة/إصلاح) بلا قدرة قابلة للفحص.
+
+**ما بُني:**
+
+| الوكيل (مفتاح ثابت) | الاختصاص بعد الدمج | المنفّذ | البوابة |
+| --- | --- | --- | --- |
+| `outreach-acquisition-agent` | Global Growth & Acquisition: ترتيب أسواق من العرض/الكتالوج، فرص مؤهلة بدليل، شرائح، مسودات متعددة اللغات | `execGrowthAgent` (`discover_markets`) | `requiresHumanApproval: true`؛ الإرسال/الحملات `approvalActions` بلا منفّذ |
+| `finance-agent` | Finance & Cost Accounting: إيراد/تكلفة/مساهمة لكل عملة من `orders`+`campaigns`+`ai_requests` | `execFinanceAgent` (`report_pnl`) | تلقائي (قراءة فقط)؛ ledger/policies محجوبة |
+| `development-agent` | Platform Maintenance & Repair: تشخيص من `agent_tasks`/`agent_runs`/`agent_run_steps` مع دليل وخطورة | `execDevelopmentAgent` (`diagnose_platform`) | التشخيص تلقائي؛ `code.apply_patch`/`code.merge` بلا منفّذ |
+| `marketing-video-agent` | كما هو | — | `AGENT_NOT_EXECUTABLE` (AD-049) |
+
+**الضوابط:** لا صلاحية RBAC تغيّرت (مقارنة snapshot) · عقد A2 جديدان (مالية/نمو) + توسيع عقد الصيانة
+لجداول التشغيل · `code.apply_patch`, `code.merge`, `growth.paid_campaign` في `SENSITIVE_ACTIONS` ·
+لا خلط عملات في المالية (`null` + سبب عند غياب التكلفة) · لا إرسال/شراء/تعديل كود بأي مسار.
+
+**الأرقام:** 21 وكيلاً (بلا تغيير) · القابلون للتنفيذ 11 → **13** · عقود النطاق 11 → 13 · المعلنون فقط 9 → 7.
+
+**الإثبات:** `tests/unit/ai-agent-merge-01.test.ts` (14) · `tests/ai-agent-merge-01.test.ts` (5، PostgreSQL حقيقي)
+· تحديث عقود العدّ في 7 ملفات · `tsc --noEmit` = 0 · المجموعة الكاملة خضراء.
+
+**حدود مُعلنة:** لا إرسال خارجي، لا شراء حملات، لا تعديل ملفات/مخطط آلياً، لا قراءة ledger،
+ولا ربط لوكيل الفيديو. التفاصيل: `docs/AI-AGENT-MERGE-01.md`، القرار: AD-050.

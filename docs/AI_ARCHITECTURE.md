@@ -39,7 +39,9 @@
 `finance-agent` · `payment-settlement-agent` · `compliance-agent` · `supplier-agent` ·
 `merchant-agent` · `customer-intelligence-agent` · `operations-agent` · `outreach-acquisition-agent`
 
-هوية وعقد فقط (لا منفّذ)، ولا يجوز عرضها كوكلاء رسميين.
+هوية وعقد فقط، ولا يجوز عرضها كوكلاء رسميين. بعد **AI-AGENT-MERGE-01** صار
+`finance-agent` (المحاسبة وتحليل التكاليف) و`outreach-acquisition-agent` (النمو والتوسع العالمي)
+قابلين للتنفيذ بقراءة فقط؛ الباقي (6) هوية وعقد بلا منفّذ.
 
 ### 3.3 طبقة الحوكمة
 
@@ -57,6 +59,19 @@
 في التخطيط والإرسال وكل مسار إنشاء مهمة.
 
 **ضابط إلزامي**: كل Agent يرث دور المستخدم/المتصل — **لا يتجاوز صلاحياته**. أي Tool يتحقق عبر RBAC قبل التنفيذ. تتمة تفاصيل الأدوار في `docs/PERMISSIONS_MATRIX.md`.
+
+### 3.5 دمج الاختصاصات (AI-AGENT-MERGE-01)
+
+لا وكيل جديد ولا محذوف: ثلاث هويات قائمة أُعيد توجيهها إلى اختصاصها الكامل، بمفاتيحها الأصلية.
+
+| المفتاح | الاختصاص بعد الدمج | المنفّذ | البوابة |
+| --- | --- | --- | --- |
+| `outreach-acquisition-agent` | النمو والتوسع العالمي: ترتيب أسواق، فرص مؤهلة، مسودات متعددة اللغات | `discover_markets` | موافقة GM (الإرسال/الحملات بلا منفّذ) |
+| `finance-agent` | المحاسبة وتحليل التكاليف: إيراد/تكلفة/مساهمة لكل عملة | `report_pnl` | تلقائي (قراءة فقط) |
+| `development-agent` | صيانة المنصة وإصلاحها: تشخيص من `agent_tasks`/`agent_runs` | `diagnose_platform` | التشخيص تلقائي، الإصلاح بموافقة GM وبلا منفّذ |
+| `marketing-video-agent` | كما هو: عقد كامل بلا تنفيذ | — | `AGENT_NOT_EXECUTABLE` |
+
+القابلون للتنفيذ: **13** (12 سابقاً + مالية + نمو)؛ الإجمالي 21 بلا تغيير. التفاصيل: `docs/AI-AGENT-MERGE-01.md`.
 
 ## 4. AI COST CONTROL LAYER
 

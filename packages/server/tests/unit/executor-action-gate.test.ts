@@ -115,18 +115,24 @@ function fakeDb() {
       const b = {
         _table: '' as string,
         _cond: undefined as unknown,
+        _grouped: false,
         from(t: unknown) { b._table = name(t); return b; },
         innerJoin() { return b; },
         leftJoin() { return b; },
         where(cond: unknown) { b._cond = cond; return b; },
-        groupBy() { return b; },
+        groupBy() {
+          b._grouped = true;
+          return b;
+        },
         orderBy() { return b; },
         limit() { return b; },
         for() { return b; },
         then(resolve: (v: Row[]) => unknown) {
           stats.reads += 1;
           // `usageSum` reads a single aggregate row from `ai_requests`.
-          if (b._table === TN.aiRequests) {
+          // The aggregate select (`usageSum`) has no GROUP BY; a grouped select
+          // (`report_pnl`) must see the raw rows instead of the aggregate row.
+          if (b._table === TN.aiRequests && !b._grouped) {
             const all = rows(TN.aiRequests);
             const agg = {
               requests: all.filter((r) => r.requestType !== 'AGENT_TASK').length,
@@ -240,7 +246,7 @@ describe('T2 — executeAgentTask action gate (execution boundary)', () => {
 });
 
 describe('T2 — every executor is gated by its own catalogue action', () => {
-  it('each of the 11 executors runs only with a grant for its declared action', async () => {
+  it('each of the 13 executors runs only with a grant for its declared action', async () => {
     for (const d of AGENT_CATALOGUE) {
       const action = d.capabilities[0]!.action;
       const db = fakeDb();

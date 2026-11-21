@@ -614,3 +614,38 @@
 - لا وكيل حُذف ولم يُدمج: الإضافة الوحيدة `marketing-video-agent` (هوية بلا منفّذ).
 - لا تفكيك أهداف آلي ولا اختيار وكيل تلقائي: قرار المتصل، والكود يتحقق من الأهلية فقط.
 - `DECISION REQUIRED` (AD-049): مصدر ميزانية رندر الفيديو، ملكية الأصول، وسياسة النشر.
+
+## 22. AI-AGENT-MERGE-01 — دمج الاختصاصات وتطوير منظومة WASIT AI (2026-11-20)
+
+### 22.1 الفجوة
+ثلاث هويات تعلن اختصاصاً أوسع من تنفيذها: استقطاب بلا ترتيب أسواق/فرص وبلا منفّذ، مالية بلا حساب
+تكلفة/مساهمة وبأداة ledger محجوبة، وتطوير بلا تشخيص حقيقي. المطلوب من GM: دمج التداخل وتطوير
+الوكلاء **دون** استبدال أو حذف أي وكيل، ودون منح سلطة جديدة.
+
+### 22.2 ما بُني
+- **`src/modules/ai/catalogue.ts`**: إعادة توجيه ثلاث هويات بمفاتيحها (النمو/المالية/الصيانة) مع
+  `capabilities` و`taskTypes` جديدة **مع إبقاء القديمة** (`outreach.run_cycle`, `finance.reconcile`,
+  `dev.plan_change`)؛ `approvalActions` موسّعة؛ `code.apply_patch`/`code.merge`/`growth.paid_campaign`
+  في `SENSITIVE_ACTIONS`؛ إزالة `finance.read_ledger` غير القابلة للخدمة.
+- **`src/modules/ai/agent-scope.ts`**: عقدان جديدان (`finance-agent`, `outreach-acquisition-agent`)
+  وتوسيع عقد `development-agent` بـ`agent_tasks`/`agent_runs`/`agent_run_steps` — كلها `readOnly`.
+- **`src/modules/ai/executors.ts`**: `execGrowthAgent` (ترتيب أسواق من `countries`+البائعين+الكتالوج،
+  فرص، شرائح، مسودات `DRAFT_ONLY`)، `execFinanceAgent` (إيراد/تكلفة/مساهمة لكل عملة بلا خلط)،
+  و`execDevelopmentAgent` موسّع (findings بخطورة ودليل + `repairProtocol`)؛ `EXECUTOR_ACTION` مُصدَّر
+  ليُفحص أن المنفّذ لا ينفّذ إلا قدرة معلنة.
+
+### 22.3 الأدلة
+- `tests/unit/ai-agent-merge-01.test.ts` (**14**): بقاء الـ21 هوية والاثني عشر بالترتيب، تفرّد
+  `taskTypes`/الأسماء، عدم توسيع أي صلاحية، بوابات النمو/المالية/الصيانة، تطابق `EXECUTOR_ACTION`
+  مع القدرات، رفض الجداول المحجوبة على العقود الثلاثة.
+- `tests/ai-agent-merge-01.test.ts` (**5**، PostgreSQL): النمو يرتّب السوق المُهيّأ ويُنتج مسودات
+  `delivery: none`؛ المالية تطابق استعلاماً مستقلاً على `orders` وتُعلن مصادرها؛ الصيانة ترى مهمة
+  فاشلة مُزروعة وتُعيد `appliesChanges: false`؛ النمو يبقى `awaiting_approval`.
+- تحديث عقود العدّ: `r1`, `ai-reg01` (unit + HTTP), `phase14`, `a2`, `r2`, `unit/agent-scope-contract`,
+  `unit/ai-arch-align` — 11 → 13 قابلاً للتنفيذ، 9 → 7 معلناً فقط.
+- `tsc --noEmit`: **0**.
+
+### 22.4 القيود
+- لا migration، لا seed، لا تغيير مخطط، لا صلاحية RBAC جديدة، لا وكيل محذوف أو مستبدل.
+- لا إرسال خارجي، لا شراء حملات، لا تعديل ملفات/مخطط آلياً، لا قراءة ledger، ولا ربط لوكيل الفيديو.
+- `DECISION REQUIRED` (AD-050): قنوات الإرسال وسقفها، آلية تسليم patch للمراجعة، وسياسة نشر الفيديو.

@@ -64,17 +64,23 @@ function fakeDb() {
       const b = {
         _table: '' as string,
         _cond: undefined as unknown,
+        _grouped: false,
         from(t: unknown) { b._table = name(t); stats.fromCalls.push(b._table); return b; },
         innerJoin(t: unknown) { stats.fromCalls.push(name(t)); return b; },
         leftJoin(t: unknown) { stats.fromCalls.push(name(t)); return b; },
         where(cond: unknown) { b._cond = cond; return b; },
-        groupBy() { return b; },
+        groupBy() {
+          b._grouped = true;
+          return b;
+        },
         orderBy() { return b; },
         limit() { return b; },
         for() { return b; },
         then(resolve: (v: Row[]) => unknown) {
           stats.reads += 1;
-          if (b._table === TN.aiRequests) {
+          // The aggregate select (`usageSum`) has no GROUP BY; a grouped select
+          // (`report_pnl`) must see the raw rows instead of the aggregate row.
+          if (b._table === TN.aiRequests && !b._grouped) {
             const all = rows(TN.aiRequests);
             const agg = {
               requests: all.filter((r) => r.requestType !== 'AGENT_TASK').length,
@@ -212,7 +218,7 @@ describe('A2 — end-to-end: enforcement runs on the production path', () => {
     expect(db._stats.fromCalls).toContain(getTableName(categories));
   });
 
-  it('every one of the 11 executors reaches its data through the scoped handle', async () => {
+  it('every one of the 13 executors reaches its data through the scoped handle', async () => {
     for (const d of AGENT_CATALOGUE) {
       const db = fakeDb();
       const out = await withAgentRunContext(runCtx(d.key), () => executeAgentTask(db, d, {}));

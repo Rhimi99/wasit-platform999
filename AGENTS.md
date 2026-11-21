@@ -406,8 +406,9 @@ npx playwright install --with-deps chromium
 - **`CORE_SPECIALIST_KEYS`** هي القائمة الرسمية المرتّبة: sales, marketing, ads, product, support,
   analytics, market-research, b2b, risk, dispute-assistant, development, **marketing-video**.
   `catalogueIntegrity()` يفحص الاتجاهين — لا تعدّل أحدهما وحده.
-- **العدّ الجديد**: `agentCount()` = 21 (20 متخصصاً + المشرف)، `allAgentSpecs()` = 22 (مع Copilot)،
-  `declaredOnlyAgents()` = 9، `executableAgents()` = 11. أي اختبار يثبّت رقماً يجب تحديثه معاً.
+- **العدّ الحالي (بعد AI-AGENT-MERGE-01)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
+  `allAgentSpecs()` = 22 (مع Copilot)، `declaredOnlyAgents()` = **7**، `executableAgents()` = **13**.
+  أي اختبار يثبّت رقماً يجب تحديثه معاً (r1 · ai-reg01 unit+HTTP · phase14 · a2 · r2 · agent-scope-contract).
 - **`marketing-video-agent` هوية بلا منفّذ** (`executable: false`): قدرة الرندر موجودة في `lib/media/*`
   ويشغّلها المالك عبر API الوسائط، لكن إسناد مهمة للوكيل مرفوض `AGENT_NOT_EXECUTABLE`.
   `video.publish`/`video.render_paid` إجراءان حسّاسان (موافقة بشرية دائماً).
@@ -418,6 +419,27 @@ npx playwright install --with-deps chromium
 - **لا تفكيك أهداف آلي** ولا اختيار وكيل تلقائي — المتصل يزوّد الخطوات، والكود يتحقق من الأهلية.
 - **اختبارات**: `tests/unit/ai-arch-align.test.ts` (17) + `tests/ai-arch-align-copilot.test.ts` (12).
 - التفاصيل: `docs/AI-ARCH-ALIGN-01_STRUCTURE_ALIGNMENT.md` · `docs/AI_MARKETING_VIDEO_AGENT.md` · AD-049.
+
+## AI-AGENT-MERGE-01 — دمج الاختصاصات وتطوير الوكلاء (2026-11-20)
+
+- **لا وكيل جديد ولا محذوف**: ثلاث هويات قائمة أُعيد توجيهها بمفاتيحها الأصلية:
+  `outreach-acquisition-agent` (Global Growth & Acquisition) · `finance-agent` (Finance & Cost Accounting) ·
+  `development-agent` (Platform Maintenance & Repair). الهيكل الرسمي 12+8+حوكمة كما هو.
+- **ثلاثة منفّذين حتميين على بيانات حقيقية** (`src/modules/ai/executors.ts`):
+  `execGrowthAgent` (`discover_markets`) · `execFinanceAgent` (`report_pnl`) ·
+  `execDevelopmentAgent` (`diagnose_platform`، موسّع). `EXECUTOR_ACTION` مُصدَّر ليُفحص مقابل القدرات.
+- **قاعدة صارمة للمالية**: لا خلط عملات. كل رقم يحمل عملته ومصدره؛ المساهمة `null` + `reason`
+  عند غياب تكلفة بعملة الإيراد. **لا تقرأ `transaction_ledger` ولا `commission_policies`** (محجوبان).
+  أُزيلت `finance.read_ledger` من `allowedTools` لأنها غير قابلة للخدمة أصلاً.
+- **قاعدة صارمة للصيانة**: التشخيص تلقائي من `agent_tasks`/`agent_runs`/`agent_run_steps`؛
+  `code.apply_patch`/`code.merge` إعلان بلا منفّذ، و`repairProtocol.appliesChanges === false`.
+  **لا تضف منفّذاً لهما** بلا قرار GM صريح + مراجعة بشرية.
+- **النمو لا يخرج من المنصة**: `outreach.send`/`growth.paid_campaign` في `SENSITIVE_ACTIONS` وبلا منفّذ،
+  والمسودات `DRAFT_ONLY` / `delivery: 'none'`، والوكيل يبقى `requiresHumanApproval: true`.
+- **`taskTypes` القديمة محفوظة** (`outreach.run_cycle`, `finance.reconcile`, `dev.plan_change`) — لا تحذفها،
+  فهي جزء من تاريخ المهام.
+- **اختبارات**: `tests/unit/ai-agent-merge-01.test.ts` (14) + `tests/ai-agent-merge-01.test.ts` (5، PostgreSQL).
+- التفاصيل: `docs/AI-AGENT-MERGE-01.md` · AD-050 · `docs/AI_MARKETING_VIDEO_AGENT.md` (§7–§10).
 
 ## C3 — Privacy/Consent موسّع + سياسات البلد (مكتملة ومتحققة — لم تُعمَّد بعد)
 
