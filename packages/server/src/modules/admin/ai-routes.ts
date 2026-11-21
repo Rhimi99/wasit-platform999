@@ -6,6 +6,7 @@ import { getContext } from '../../lib/request-context.js';
 import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import { writeAudit } from '../../lib/audit.js';
+import { env } from '../../lib/env.js';
 import { newId } from '../../lib/ids.js';
 import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
 import { agentTasks } from '../../db/schema/agents.js';
@@ -35,6 +36,15 @@ import {
   backfillAgentMetrics,
   auditBackfill,
 } from '../ai/metrics.js';
+import {
+  acknowledgeEscalation,
+  deliverEscalationToGm,
+  getEscalation,
+  lastScanAt,
+  listEscalations,
+  resolveEscalation,
+  scanEscalations,
+} from '../ai/escalations.js';
 import {
   memorySummaryForAdmin,
   listMemoryMetadataForAdmin,
@@ -672,4 +682,131 @@ adminAiRoutes.post('/metrics/backfill', validateBody(
   });
   await auditBackfill(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, result);
   return c.json({ success: true, data: result });
+});
+
+// ----- Supervisor escalations to the General Manager (AI-SUP-02) ------------
+// The Supervisor acts (contain/retry); these routes make its findings visible to
+// a human who can decide. Detection is deterministic and reads only real rows.
+// Reading and deciding are both `AI_MANAGE` (ADMIN/SUPER_ADMIN) — the router-level
+// guard already enforces it, so no new permission is introduced. The notification
+// targets SUPER_ADMIN only; an ADMIN can triage but cannot silence the GM's inbox.
+
+const escalationsQuerySchema = z
+  .object({
+    status: z.enum(['OPEN', 'ACKNOWLEDGED', 'RESOLVED']).optional(),
+    severity: z.enum(['INFO', 'WARNING', 'HIGH', 'CRITICAL']).optional(),
+    agentKey: z.string().max(64).optional(),
+    limit: z.coerce.number().int().positive().max(200).optional(),
+    offset: z.coerce.number().int().min(0).optional(),
+  })
+  .strict();
+
+adminAiRoutes.get('/escalations', validateQuery(escalationsQuerySchema), async (c) => {
+  const ctx = getContext(c);
+  const query = getValidatedQuery<z.infer<typeof escalationsQuerySchema>>(c);
+  const result = await listEscalations(ctx.db, query);
+  return c.json({ success: true, data: { ...result, lastScanAt: await lastScanAt(ctx.db) } });
+});
+
+// Registered before `/:id` so a literal path is never read as an id.
+adminAiRoutes.post(
+  '/escalations/scan',
+  validateBody(
+    z
+      .object({
+        windowMinutes: z.number().int().positive().max(1440).optional(),
+        maxCases: z.number().int().positive().max(1000).optional(),
+      })
+      .strict(),
+  ),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<{ windowMinutes?: number; maxCases?: number }>(c);
+    const audit = { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent };
+    const result = await scanEscalations(ctx.db, audit, {
+      limits: body.windowMinutes
+        ? {
+            windowMinutes: body.windowMinutes,
+            failureRateThreshold: env.AI_ESCALATION_FAILURE_RATE,
+            minSamples: env.AI_ESCALATION_MIN_SAMPLES,
+            degradationDelta: env.AI_ESCALATION_DEGRADATION_DELTA,
+            stallMinutes: env.AI_ESCALATION_STALL_MINUTES,
+            pendingApprovalMinutes: env.AI_ESCALATION_PENDING_APPROVAL_MINUTES,
+            toolFailureCount: env.AI_ESCALATION_TOOL_FAILURES,
+            refusalCount: env.AI_ESCALATION_REFUSALS,
+            cycleFailureCount: env.AI_ESCALATION_CYCLE_FAILURES,
+          }
+        : undefined,
+      maxCases: body.maxCases,
+      supervisorEnabled: env.AI_AGENT_RUNS_SUPERVISOR_ENABLED,
+    });
+    return c.json({ success: true, data: result });
+  },
+);
+
+adminAiRoutes.get('/escalations/:id', async (c) => {
+  const ctx = getContext(c);
+  const escalation = await getEscalation(ctx.db, c.req.param('id')!);
+  return c.json({ success: true, data: escalation });
+});
+
+adminAiRoutes.post(
+  '/escalations/:id/acknowledge',
+  validateBody(z.object({ note: z.string().max(1000).optional() }).strict()),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<{ note?: string }>(c);
+    const escalation = await acknowledgeEscalation(
+      ctx.db,
+      c.req.param('id')!,
+      ctx.user!.id,
+      body.note ?? null,
+      { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    );
+    return c.json({ success: true, data: escalation });
+  },
+);
+
+adminAiRoutes.post(
+  '/escalations/:id/resolve',
+  validateBody(z.object({ note: z.string().trim().min(3).max(1000) }).strict()),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<{ note: string }>(c);
+    const escalation = await resolveEscalation(
+      ctx.db,
+      c.req.param('id')!,
+      ctx.user!.id,
+      body.note,
+      { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    );
+    return c.json({ success: true, data: escalation });
+  },
+);
+
+// Re-delivery after a failed inbox write. Idempotent per (case, recipient,
+// channel, generation): the ledger row is updated, never duplicated.
+adminAiRoutes.post('/escalations/:id/notify', async (c) => {
+  const ctx = getContext(c);
+  const id = c.req.param('id')!;
+  const escalation = await getEscalation(ctx.db, id);
+  const delivery = await deliverEscalationToGm(ctx.db, id);
+  await writeAudit(
+    ctx.db,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    {
+      action: delivery.sent > 0 ? 'AI.ESCALATION_NOTIFIED' : 'AI.ESCALATION_NOTIFY_FAILED',
+      entityType: 'AI_ESCALATION',
+      entityId: id,
+      metadata: {
+        code: escalation.code,
+        severity: escalation.severity,
+        manual: true,
+        recipients: delivery.recipients,
+        sent: delivery.sent,
+        failed: delivery.failed,
+      },
+    },
+  );
+  return c.json({ success: true, data: { ...delivery, escalation: await getEscalation(ctx.db, id) } });
 });

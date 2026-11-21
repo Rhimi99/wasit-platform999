@@ -58,7 +58,7 @@ import { dispatchStep } from './dispatcher.js';
  */
 
 /** Run statuses the Supervisor actively looks after. */
-const LIVE_RUN_STATES: AgentRunStatus[] = ['PLANNING', 'AWAITING_APPROVAL', 'DISPATCHING', 'RUNNING', 'PAUSED'];
+export const LIVE_RUN_STATES: AgentRunStatus[] = ['PLANNING', 'AWAITING_APPROVAL', 'DISPATCHING', 'RUNNING', 'PAUSED'];
 
 /** How many runs one cycle will examine. Bounds a single tick. */
 export const DEFAULT_CYCLE_LIMIT = 50;

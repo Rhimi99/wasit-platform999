@@ -358,6 +358,36 @@ npx playwright install --with-deps chromium
   بكتابة تدقيق + قياس عند الرفض، ويشترط **عدم** كتابة `agent_tasks`.
 - **اختبارات**: `tests/ai-met01-agent-metrics.test.ts` (18) + `tests/unit/agent-metrics-store.test.ts` (6).
 
+## AI-SUP-02 — التصعيد إلى المدير العام (2026-11-21)
+
+- **الكتالوج كان يعلن `escalate` وهدف `supervisor.escalation_delivery` بلا تنفيذ.** الآن:
+  `modules/ai/escalation-policy.ts` (صرف: 9 قواعد، بلا DB/ساعة) + `modules/ai/escalations.ts`
+  (جمع حقائق → فتح/ترقية/إشعار → دورة حياة). **بلا migration**: الحالة في `alert_events`
+  بـ`rule = 'supervisor.<code>'`، والمغلّف (fingerprint/توصية/أدلة/من أقرّ) في `details`.
+- **منع التكرار بلا فهرس فريد**: كل كتابة داخل معاملة تبدأ بـ
+  `select pg_advisory_xact_lock(hashtext('ai-escalation:<fingerprint>'))` ثم تقرأ الحالة المفتوحة.
+  البصمة = `sha256(JSON[code,agentKey,taskId,runId])` (JSON لا ضمّ). لا تحذف القفل: بدونه يمكن
+  فتح حالتين لنفس الشرط تحت التزامن.
+- **التصنيف**: `INFO/WARNING/HIGH/CRITICAL`؛ نفس البصمة بخطورة أعلى ⇒ ترقية + إعادة فتح + إشعار
+  ثانٍ (جيل جديد في `dedupe_key`)؛ نفس الخطورة ⇒ تحديث أدلة و`occurrences` **بلا إشعار**.
+  حالة `RESOLVED` لا تُفتح؛ `reopenCooldownMinutes` (60) يمنع إعادة الفتح الفوري.
+- **قناة GM**: `notifications` + `notification_deliveries` لمستخدمي `SUPER_ADMIN` النشطين فقط.
+  لا بريد/SMS/webhook. `dedupeKey = escalation:<id>:<user>:IN_APP:<generation>` يمنع التكرار ويسمح
+  بإعادة التسليم (تحديث الصف، لا صف جديد).
+- **فشل القناة لا يُفقد الحالة**: تُكتب الحالة أولًا، ويُسجَّل `notified_result=FAILED` + صف FAILED،
+  و`POST /api/admin/ai/escalations/:id/notify` يعيد المحاولة.
+- **المسارات** (`AI_MANAGE` فقط، بلا صلاحية جديدة): `GET /api/admin/ai/escalations` (+`/:id`)،
+  `POST /scan`، `POST /:id/acknowledge`، `POST /:id/resolve` (ملاحظة إلزامية)، `POST /:id/notify`.
+  سجّل `/escalations/scan` **قبل** `/:id` وإلا قُرئ المسار الحرفي كمعرّف.
+- **Kill Switch**: المسح يتوقف كليًا ويُدقَّق `AI.KILL_SWITCH_ESCALATION_REFUSED`؛ الإقرار/الإغلاق
+  البشري يبقى متاحًا (الإيقاف يوقف الآلة لا الإنسان).
+- **⚠️ انحراف ساعة**: حدود النافذة تُقارَن بـ`created_at` المكتوب من PostgreSQL، لذا `curTo` مضاف
+  إليه `CLOCK_SKEW_MS = 5000`. إزالة هذا الهامش تُسقط صفوفًا كُتبت للتو (اختبار متقطع أثبته).
+- **لا تشخيص مزدوج للمهمة**: `awaiting_approval` ⇒ `approvals_pending` فقط (ليست متوقفة)،
+  و`queued` عند سقف المحاولات ⇒ `task_attempts_exhausted` فقط.
+- **اختبارات**: `tests/ai-sup02-escalations.test.ts` (21) + `tests/unit/escalation-policy.test.ts` (22).
+  بيانات الاختبار مفهرسة بـ`sup02-*` agent keys لأن الاكتشاف يقرأ كل الصفوف في النافذة.
+
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
 
 - ✅ **MFA (TOTP RFC 6238)** `modules/auth` + `lib/mfa.ts`: enroll/confirm/disable/status/verify/recovery-codes/dev-totp. كل endpoint: `requireAuth` + `rateLimit` + Audit (`AUTH.MFA_*`). `dev-totp` محجوب في `NODE_ENV=production` (403).

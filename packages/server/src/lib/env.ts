@@ -280,6 +280,38 @@ const envSchema = z.object({
   /** Cap on metric rows read by one report; exceeding it sets `truncated`. */
   AI_METRICS_MAX_ROWS: z.coerce.number().int().positive().default(50_000),
   /**
+   * AI-SUP-02 — supervisor escalation to the General Manager. Detection runs on
+   * the scheduler cadence below; every threshold is here so an operator can tune
+   * sensitivity without touching code. The central kill switch stops detection
+   * and automatic notification regardless of these values.
+   */
+  AI_ESCALATIONS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** How often the escalation sweep runs. */
+  AI_ESCALATION_INTERVAL_MINUTES: z.coerce.number().int().positive().default(15),
+  /** Detection window; the comparison window is the one before it. */
+  AI_ESCALATION_WINDOW_MINUTES: z.coerce.number().int().positive().default(60),
+  /** Share of settled runs that must fail before an agent is escalated. */
+  AI_ESCALATION_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0.5),
+  /** Settled runs needed before a failure rate is treated as signal. */
+  AI_ESCALATION_MIN_SAMPLES: z.coerce.number().int().positive().default(3),
+  /** Success-rate drop between windows that counts as degradation. */
+  AI_ESCALATION_DEGRADATION_DELTA: z.coerce.number().min(0).max(1).default(0.25),
+  /** An open task older than this is escalated as stalled. */
+  AI_ESCALATION_STALL_MINUTES: z.coerce.number().int().positive().default(120),
+  /** An approval waiting longer than this is escalated as pending. */
+  AI_ESCALATION_PENDING_APPROVAL_MINUTES: z.coerce.number().int().positive().default(240),
+  /** Tool failures per agent in the window that warrant a look. */
+  AI_ESCALATION_TOOL_FAILURES: z.coerce.number().int().positive().default(3),
+  /** Refusals per agent in the window that suggest a boundary being pushed. */
+  AI_ESCALATION_REFUSALS: z.coerce.number().int().positive().default(3),
+  /** Supervisor cycle failures in the window that warrant a look. */
+  AI_ESCALATION_CYCLE_FAILURES: z.coerce.number().int().positive().default(1),
+  /** Per-scan cap on cases written; the most severe findings win. */
+  AI_ESCALATION_MAX_CASES: z.coerce.number().int().positive().default(200),
+  /**
    * Record one deterministic `task_result` memory per terminal agent task. It
    * carries status/latency/code only — never a model guess, never task output.
    */

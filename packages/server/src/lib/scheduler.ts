@@ -5,6 +5,7 @@ import { advanceDueDeletionRetentions } from '../modules/privacy/service';
 import { runDueAgentSchedules, reclaimExpiredLeases } from '../modules/ai/scheduling';
 import { recoverStuckSteps } from '../modules/ai/dispatcher';
 import { runSupervisorCycle, createSupervisorCycleGuard } from '../modules/ai/supervisor';
+import { scanEscalations } from '../modules/ai/escalations';
 import { escalateOverdueDisputes } from '../modules/disputes/service';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
@@ -61,6 +62,8 @@ export function startScheduler(options: {
   agentRunStepStuckSeconds?: number;
   agentRunsSupervisorEnabled?: boolean;
   agentRunsSupervisorIntervalMinutes?: number;
+  escalationsEnabled?: boolean;
+  escalationsIntervalMinutes?: number;
   disputeEscalationEnabled?: boolean;
   disputeEscalationIntervalMinutes?: number;
 }): SchedulerHandle {
@@ -72,6 +75,7 @@ export function startScheduler(options: {
   const recoveryIntervalMs = (options.agentRunsRecoveryIntervalMinutes ?? 5) * 60 * 1000;
   const recoveryStuckSeconds = options.agentRunStepStuckSeconds ?? 300;
   const supervisorIntervalMs = (options.agentRunsSupervisorIntervalMinutes ?? 5) * 60 * 1000;
+  const escalationsIntervalMs = (options.escalationsIntervalMinutes ?? 15) * 60 * 1000;
   const disputeEscalationIntervalMs = (options.disputeEscalationIntervalMinutes ?? 30) * 60 * 1000;
   // Stable per-process worker id; the DB lease (not this string) is what keeps
   // two instances from running the same schedule.
@@ -82,6 +86,8 @@ export function startScheduler(options: {
   const recoveryGuard = createInFlightGuard();
   // In-process guard for the supervisor cycle; see runSupervisor below.
   const supervisorGuard = createSupervisorCycleGuard();
+  // In-process guard for the escalation sweep; see runEscalations below.
+  const escalationsGuard = createInFlightGuard();
 
   const runRollover = async (): Promise<void> => {
     try {
@@ -246,6 +252,31 @@ export function startScheduler(options: {
     });
   };
 
+  const runEscalations = async (): Promise<void> => {
+    // Overlap protection only; duplicate cases are prevented by the store's
+    // per-fingerprint advisory lock, not by this flag.
+    await escalationsGuard(async () => {
+      const startedAt = Date.now();
+      try {
+        const result = await scanEscalations(db, { actorId: null, actorType: 'SYSTEM' });
+        logger.info('agent escalation sweep', {
+          skipped: result.skipped,
+          findings: result.findings,
+          opened: result.opened,
+          escalated: result.escalated,
+          notificationsSent: result.notifications.sent,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch (err) {
+        // A failed sweep must not take the scheduler down; the next tick retries.
+        logger.error('agent escalation sweep failed', {
+          durationMs: Date.now() - startedAt,
+          error: (err as Error).message,
+        });
+      }
+    });
+  };
+
   const tick = async (): Promise<void> => {
     await runRollover();
     await runExpiry();
@@ -278,6 +309,10 @@ export function startScheduler(options: {
   const supervisorTimer = options.agentRunsSupervisorEnabled ? setInterval(runSupervisor, supervisorIntervalMs) : null;
   supervisorTimer?.unref();
 
+  // Supervisor escalation sweep to the GM on its own cadence. Off unless enabled.
+  const escalationsTimer = options.escalationsEnabled ? setInterval(runEscalations, escalationsIntervalMs) : null;
+  escalationsTimer?.unref();
+
   // Dispute auto-escalation sweep on its own cadence. Off unless enabled.
   const disputeTimer = options.disputeEscalationEnabled ? setInterval(runDisputeEscalation, disputeEscalationIntervalMs) : null;
   disputeTimer?.unref();
@@ -289,6 +324,7 @@ export function startScheduler(options: {
       if (agentTimer) clearInterval(agentTimer);
       if (recoveryTimer) clearInterval(recoveryTimer);
       if (supervisorTimer) clearInterval(supervisorTimer);
+      if (escalationsTimer) clearInterval(escalationsTimer);
       if (disputeTimer) clearInterval(disputeTimer);
     },
   };

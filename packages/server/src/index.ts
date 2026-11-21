@@ -35,6 +35,8 @@ if (env.SCHEDULER_ENABLED) {
     agentRunStepStuckSeconds: env.AI_AGENT_RUN_STEP_STUCK_SECONDS,
     agentRunsSupervisorEnabled: env.AI_AGENT_RUNS_SUPERVISOR_ENABLED,
     agentRunsSupervisorIntervalMinutes: env.AI_AGENT_RUNS_SUPERVISOR_INTERVAL_MINUTES,
+    escalationsEnabled: env.AI_ESCALATIONS_ENABLED,
+    escalationsIntervalMinutes: env.AI_ESCALATION_INTERVAL_MINUTES,
     disputeEscalationEnabled: env.DISPUTE_ESCALATION_ENABLED,
     disputeEscalationIntervalMinutes: env.DISPUTE_ESCALATION_INTERVAL_MINUTES,
   });
