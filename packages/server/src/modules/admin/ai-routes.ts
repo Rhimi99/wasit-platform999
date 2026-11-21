@@ -12,6 +12,7 @@ import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
 import { agentTasks } from '../../db/schema/agents.js';
 import { adminUsageSummary } from '../ai/service.js';
 import { agentLayerSummary, copilotAgent, listAgents } from '../ai/agents.js';
+import { planAgentRun } from '../ai/planner.js';
 import {
   dispatchStep,
   approveRunStep,
@@ -367,6 +368,47 @@ adminAiRoutes.delete('/agent-schedules/:id', async (c) => {
 // step, record a human approval, cancel, and reconcile. Every action goes
 // through the same services the tests exercise; no executor or parallel task
 // path is introduced here.
+// Creating the plan is the entry point of the coordination pipeline. It writes a
+// run in PLANNING plus its steps and NOTHING else: no dispatch, no approval, no
+// executor. A step whose agent has no executor, or that targets the Copilot or
+// the Supervisor, is refused here (planner validates runnability), so the
+// Copilot can never route work to an agent that cannot run it.
+const planStepSchema = z
+  .object({
+    stepKey: z.string().min(1).max(64),
+    agentKey: z.string().min(1),
+    input: z.record(z.unknown()).default({}),
+    priority: z.number().int().min(0).max(1000).optional(),
+    dependsOn: z.array(z.string().min(1).max(64)).max(25).optional(),
+  })
+  .strict();
+
+const planRunSchema = z
+  .object({
+    runKey: z.string().min(1).max(120).optional(),
+    title: z.string().min(1).max(300),
+    description: z.string().max(2000).nullish(),
+    steps: z.array(planStepSchema).min(1).max(25),
+  })
+  .strict();
+
+adminAiRoutes.post('/agent-runs', validateBody(planRunSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof planRunSchema>>(c);
+  const plan = await planAgentRun(
+    ctx.db,
+    ctx.user!.id,
+    {
+      runKey: body.runKey,
+      title: body.title,
+      description: body.description ?? null,
+      steps: body.steps,
+    },
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: plan }, 201);
+});
+
 const runStepParam = (c: { req: { param: (k: string) => string | undefined } }): { runId: string; stepKey: string } => ({
   runId: c.req.param('runId')!,
   stepKey: c.req.param('stepKey')!,

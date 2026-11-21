@@ -399,6 +399,26 @@ npx playwright install --with-deps chromium
 - ✅ **Rate-limit store معزول للاختبار فقط**: `resetRateLimitStore()` من `middleware/rate-limit.ts` (إنتاجية unchanged). لا تغيير في deletion logic أو isActive.
 - 🛠 **إشارة**: أي اختبار جديد يلمس `rate-limit` في privacy يجب أن يستدعي `resetRateLimitStore()` في `beforeEach` ويستخدم IPs فريدة عبر `makeClient(ip)`.
 
+## AI-ARCH-ALIGN-01 — الهيكل الرسمي للمنظومة الذكية (2026-11-20)
+
+- **مصدر الحقيقة الواحد**: `packages/server/src/modules/ai/catalogue.ts`. كل وكيل يحمل `tier`:
+  `CORE_SPECIALIST` (12) · `SUPPORTING` (8) · `GOVERNANCE` (Copilot + Supervisor).
+- **`CORE_SPECIALIST_KEYS`** هي القائمة الرسمية المرتّبة: sales, marketing, ads, product, support,
+  analytics, market-research, b2b, risk, dispute-assistant, development, **marketing-video**.
+  `catalogueIntegrity()` يفحص الاتجاهين — لا تعدّل أحدهما وحده.
+- **العدّ الجديد**: `agentCount()` = 21 (20 متخصصاً + المشرف)، `allAgentSpecs()` = 22 (مع Copilot)،
+  `declaredOnlyAgents()` = 9، `executableAgents()` = 11. أي اختبار يثبّت رقماً يجب تحديثه معاً.
+- **`marketing-video-agent` هوية بلا منفّذ** (`executable: false`): قدرة الرندر موجودة في `lib/media/*`
+  ويشغّلها المالك عبر API الوسائط، لكن إسناد مهمة للوكيل مرفوض `AGENT_NOT_EXECUTABLE`.
+  `video.publish`/`video.render_paid` إجراءان حسّاسان (موافقة بشرية دائماً).
+- **`validatePlan` يرفض وقت التخطيط** أي خطوة تستهدف وكيلاً غير قابل للتنفيذ أو المشرف أو Copilot —
+  قبل كتابة صف تشغيل. لا تعد إلى قبولها «لأن الإرسال يرفضها»: الرفض المبكر هو العقد.
+- **`POST /api/admin/ai/agent-runs`** هو مدخل التنسيق الوحيد: ينشئ `PLANNING` فقط، بلا إرسال ولا
+  موافقة، ويحترم Kill Switch و`AI_MANAGE`.
+- **لا تفكيك أهداف آلي** ولا اختيار وكيل تلقائي — المتصل يزوّد الخطوات، والكود يتحقق من الأهلية.
+- **اختبارات**: `tests/unit/ai-arch-align.test.ts` (17) + `tests/ai-arch-align-copilot.test.ts` (12).
+- التفاصيل: `docs/AI-ARCH-ALIGN-01_STRUCTURE_ALIGNMENT.md` · `docs/AI_MARKETING_VIDEO_AGENT.md` · AD-049.
+
 ## C3 — Privacy/Consent موسّع + سياسات البلد (مكتملة ومتحققة — لم تُعمَّد بعد)
 
 - ✅ **قواعد الاحتفاظ من Policy Engine لا من الكود**: `modules/privacy/service.ts` تحلّ `PRIVACY/DATA_RETENTION` عبر `resolveMergedPolicy` (دولة المستخدم من `profiles.countryId` → العالمي). لا `90` ولا `preserves` ثابتة في منطق الحذف. `defaultRetentionDays: 90` قيمة seed فقط (`scripts/seed.ts`).

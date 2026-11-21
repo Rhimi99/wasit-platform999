@@ -56,7 +56,7 @@ describe('AI-02.9 (unit) — atomic agent-registry seeding error handling', () =
   });
 
   it('does not create duplicate rows: each layer key is inserted exactly once', async () => {
-    expect(AGENT_LAYER).toHaveLength(20);
+    expect(AGENT_LAYER).toHaveLength(21);
     const { db, calls } = makeMockDb(AGENT_LAYER.map(() => ({})));
     await ensureAgentRegistrySeeded(db);
 

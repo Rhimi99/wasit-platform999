@@ -15,6 +15,7 @@ import {
   cancelRun,
   recoverStuckSteps,
   recoverRun,
+  reconcileRun,
   syncStepFromTask,
 } from '../src/modules/ai/dispatcher.js';
 
@@ -335,23 +336,17 @@ describe('AI-02.3.1 — concurrency and idempotency', () => {
 describe('AI-02.3.1 — run closure integrity', () => {
   it('14. a failed step skips its dependents', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    const key = `it-ai0231-ghost-${Date.now()}`;
-    await db.insert(agentRegistry).values({
-      id: randomUUID(),
-      key,
-      name: 'Ghost executor agent',
-      capabilities: [] as never,
-      permissionsRequired: [] as never,
-      requiresHumanApproval: false,
-      isActive: true,
-    });
-    createdRegistryKeys.push(key);
     const p = await plan(admin, [
-      step({ stepKey: 'bad', agentKey: key }),
+      step({ stepKey: 'bad', agentKey: 'product-agent' }),
       step({ stepKey: 'after', agentKey: 'product-agent', dependsOn: ['bad'] }),
     ]);
-    const out = await dispatchStep(db, p.runId, 'bad', auditCtx);
-    expect(out.status).toBe('FAILED');
+    // Record the failure the dispatcher would record when execution faults, then
+    // reconcile: the dependent must be skipped, never executed.
+    await db
+      .update(agentRunSteps)
+      .set({ status: 'FAILED' })
+      .where(and(eq(agentRunSteps.runId, p.runId), eq(agentRunSteps.stepKey, 'bad')));
+    expect(await reconcileRun(db, p.runId, auditCtx)).toBe('FAILED');
     expect((await stepRow(p.runId, 'after')).status).toBe('SKIPPED');
     expect((await runRow(p.runId)).status).toBe('FAILED');
   });

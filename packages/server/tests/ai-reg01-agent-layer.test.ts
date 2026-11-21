@@ -101,24 +101,24 @@ async function refusalAudits(agentKey: string) {
 }
 
 describe('AI-REG-01 — agent layer API and execution gate', () => {
-  it('lists the 20 agents with their real executability and the Copilot apart', async () => {
+  it('lists the agents with their real executability and the Copilot apart', async () => {
     const { client } = await registerCustomer();
     const r = await client.req('/api/ai/agents');
     expect(r.status).toBe(200);
 
     const agents = r.data.data.agents as Array<{ key: string; executable?: boolean; isSupervisor?: boolean }>;
-    expect(agents).toHaveLength(20);
-    expect(new Set(agents.map((a) => a.key)).size).toBe(20);
+    expect(agents).toHaveLength(21);
+    expect(new Set(agents.map((a) => a.key)).size).toBe(21);
     expect(agents.filter((a) => a.executable === true)).toHaveLength(11);
-    expect(agents.filter((a) => a.executable !== true)).toHaveLength(9);
+    expect(agents.filter((a) => a.executable !== true)).toHaveLength(10);
     expect(agents.filter((a) => a.isSupervisor === true).map((a) => a.key)).toEqual(['agent-supervisor']);
 
     expect(r.data.data.counts).toEqual({
-      total: 20,
-      specialised: 19,
+      total: 21,
+      specialised: 20,
       supervisor: 1,
       executable: 11,
-      declared: 8,
+      declared: 9,
       copilot: 1,
     });
     expect(r.data.data.copilot.key).toBe('wasit-copilot');
@@ -202,15 +202,15 @@ describe('AI-REG-01 — agent layer API and execution gate', () => {
     const r = await admin.client.req('/api/admin/ai/agents');
     expect(r.status).toBe(200);
     const items = r.data.data.items as Array<{ key: string; executable?: boolean }>;
-    expect(items).toHaveLength(20);
+    expect(items).toHaveLength(21);
     expect(items.filter((i) => i.executable === true)).toHaveLength(AGENT_CATALOGUE.length);
-    expect(r.data.data.counts.declared).toBe(8);
+    expect(r.data.data.counts.declared).toBe(9);
     expect(r.data.data.copilot.key).toBe('wasit-copilot');
   });
 
   it('keeps listAgents in step with the executable catalogue', async () => {
     const agents = await listAgents(db);
-    expect(agents).toHaveLength(20);
+    expect(agents).toHaveLength(21);
     expect(agents.filter((a) => a.executable === true).map((a) => a.key).sort()).toEqual(
       AGENT_CATALOGUE.map((a) => a.key).sort(),
     );

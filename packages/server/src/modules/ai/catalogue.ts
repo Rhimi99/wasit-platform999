@@ -1,12 +1,18 @@
 import type { AgentDefinition } from '../../lib/ai/types.js';
 
 /**
- * WASIT specialised agent catalogue — 20 agents plus the Copilot coordinator.
+ * WASIT specialised agent catalogue — 21 agents plus the Copilot coordinator.
  *
- * This file is the ORGANISATIONAL source of truth: identity, department,
+ * This file is the ORGANISATIONAL source of truth: identity, department, tier,
  * mission, declared capabilities, intended data sources, approval actions,
  * limits, task types and objectives. It is restored from the historical
  * reference (commit `0c3d239`) so no planned agent is lost.
+ *
+ * Structure (AI-ARCH-ALIGN-01): every entry carries a `tier`.
+ *  - 12 `CORE_SPECIALIST` — the official agents, listed in `CORE_SPECIALIST_KEYS`.
+ *  -  8 `SUPPORTING`     — internal function agents, never presented as official.
+ *  -  1 `GOVERNANCE`     — the Agent Supervisor. The Copilot is the same tier but
+ *                          lives outside `AGENT_CATALOGUE` (it is never a task agent).
  *
  * R1 boundary — this file is DATA, not behaviour:
  *  - It declares nothing executable. An entry with `executable: false` has no
@@ -44,6 +50,31 @@ export const COPILOT_KEY = 'wasit-copilot';
 export const SUPERVISOR_KEY = 'agent-supervisor';
 
 /**
+ * The official twelve Core Specialist Agents, in the approved order.
+ *
+ * This list is the identity contract of the WASIT AI structure: every key must
+ * resolve to a catalogue entry with `tier: 'CORE_SPECIALIST'`, and no other
+ * entry may carry that tier. Tests enforce both directions, so the official
+ * structure cannot drift from the code by editing one side only.
+ */
+export const CORE_SPECIALIST_KEYS = [
+  'sales-agent',
+  'marketing-agent',
+  'ads-agent',
+  'product-agent',
+  'support-agent',
+  'analytics-agent',
+  'market-research-agent',
+  'b2b-agent',
+  'risk-agent',
+  'dispute-assistant',
+  'development-agent',
+  'marketing-video-agent',
+] as const;
+
+export type CoreSpecialistKey = (typeof CORE_SPECIALIST_KEYS)[number];
+
+/**
  * Actions that always require an explicit human approval, regardless of which
  * agent performs them. Declarative in R1: the live approval gate is still
  * `requiresHumanApproval` on the executable catalogue plus the A1/A2 boundary.
@@ -60,6 +91,8 @@ export const SENSITIVE_ACTIONS: ReadonlySet<string> = new Set([
   'dispute.final_decision',
   'compliance.final_ruling',
   'ads.spend_increase',
+  'video.publish',
+  'video.render_paid',
 ]);
 
 /**
@@ -68,6 +101,7 @@ export const SENSITIVE_ACTIONS: ReadonlySet<string> = new Set([
  */
 export const COPILOT_CATALOGUE: AgentDefinition = {
   key: COPILOT_KEY,
+  tier: 'GOVERNANCE',
   name: 'WASIT AI Copilot',
   nameAr: 'مساعد الوسيط الذكي',
   mission:
@@ -123,6 +157,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   // --------------------------------------------------- 1–11: executable today
   {
     key: 'sales-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Sales Agent',
     nameAr: 'وكيل المبيعات',
     mission: 'Convert qualified prospects and leads into active merchants.',
@@ -170,9 +205,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'marketing-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Marketing Agent',
     nameAr: 'وكيل التسويق',
-    mission: 'Plan and produce marketplace marketing content and campaigns.',
+    mission:
+      'Plan marketplace campaigns and marketing content. Video production is owned by the Marketing Video Agent.',
     category: 'growth',
     description: 'Recommends marketing content angles and channel mix for campaigns.',
     capabilities: [
@@ -214,6 +251,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'ads-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Ads Agent',
     nameAr: 'وكيل الإعلانات',
     mission: 'Propose and monitor paid ad placements and budgets.',
@@ -252,6 +290,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'product-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Product Agent',
     nameAr: 'وكيل المنتجات',
     mission: 'Maintain catalogue quality and product taxonomy.',
@@ -294,6 +333,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'support-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Support Agent',
     nameAr: 'وكيل الدعم',
     mission: 'Triage customer issues and route them to the right resolver.',
@@ -332,6 +372,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'analytics-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Analytics Agent',
     nameAr: 'وكيل التحليلات',
     mission: 'Produce analytics on orders, growth and costs.',
@@ -371,6 +412,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'market-research-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Market Research Agent',
     nameAr: 'وكيل أبحاث السوق',
     mission: 'Research markets, competitors and demand signals for WASIT.',
@@ -415,6 +457,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'b2b-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'B2B Agent',
     nameAr: 'وكيل الأعمال B2B',
     mission: 'Develop B2B partnerships with suppliers and large merchants.',
@@ -443,6 +486,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'risk-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Risk Agent',
     nameAr: 'وكيل المخاطر',
     mission: 'Detect fraud, anomalies and risky counterparties.',
@@ -481,6 +525,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'dispute-assistant',
+    tier: 'CORE_SPECIALIST',
     name: 'Dispute Assistant',
     nameAr: 'مساعد النزاعات',
     mission: 'Assist dispute resolution with evidence summaries.',
@@ -519,6 +564,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'development-agent',
+    tier: 'CORE_SPECIALIST',
     name: 'Development Agent',
     nameAr: 'وكيل التطوير',
     mission: 'Support engineering work: specs, checks and safe changes.',
@@ -556,9 +602,79 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     executable: true,
   },
 
+  {
+    key: 'marketing-video-agent',
+    tier: 'CORE_SPECIALIST',
+    name: 'Marketing Video Agent',
+    nameAr: 'وكيل الفيديو التسويقي',
+    mission:
+      'Plan marketing videos end to end — brief, script, storyboard, assets and delivery — without publishing them.',
+    category: 'growth',
+    description:
+      'Turns a marketing goal into a video plan: audience, script, storyboard, asset list and platform variants. Production and publishing are separate, human-gated steps.',
+    capabilities: [
+      { action: 'plan_video', description: 'Plan a marketing video from a goal and audience' },
+      { action: 'write_script', description: 'Write the script and on-screen copy' },
+      { action: 'build_storyboard', description: 'Lay out scenes, visuals and audio cues' },
+      { action: 'prepare_delivery', description: 'Prepare variants and metadata for hand-off' },
+      {
+        action: 'render_video',
+        description: 'Render the video with an approved production tool',
+        requiresApproval: true,
+      },
+      {
+        action: 'publish_video',
+        description: 'Publish the video on an external platform',
+        requiresApproval: true,
+      },
+    ],
+    // Declarative data sources only: no media or publishing tool is bound on
+    // this branch, so none of these grants access or performs an effect.
+    allowedTools: [
+      'marketing.read_catalogue_owned',
+      'marketing.read_brand_assets',
+      'video.read_assets_owned',
+      'video.plan_storyboard',
+      'video.render_approved',
+      'video.publish_approved',
+    ],
+    approvalActions: ['video.render_paid', 'video.publish'],
+    limits: { maxCostUsdPerRun: 2, maxScenesPerVideo: 12, maxDurationSeconds: 120 },
+    taskTypes: ['marketing.plan_video', 'marketing.produce_video'],
+    objectives: [
+      {
+        id: 'video.plans_delivered',
+        statement: 'Deliver a complete video plan (script + storyboard + assets)',
+        metric: 'video_plans',
+        target: 1,
+        unit: 'count',
+        direction: 'increase',
+        window: 'per_task',
+      },
+      {
+        id: 'video.ungated_publishes',
+        statement: 'Never publish a video without a human approval',
+        metric: 'ungated_publishes',
+        target: 0,
+        unit: 'count',
+        direction: 'decrease',
+        window: 'per_task',
+      },
+    ],
+    scope: 'own',
+    permissionsRequired: ['ai:use'],
+    // Production (render) and publication are distinct approvals; publishing is
+    // always external and therefore always human.
+    requiresHumanApproval: true,
+    // No executor on this branch: no approved production tool exists, so the
+    // agent is declared, described and REFUSED for execution (fail-closed).
+    executable: false,
+  },
+
   // ------------------------------- 12–20: restored organisational definitions
   {
     key: 'finance-agent',
+    tier: 'SUPPORTING',
     name: 'Finance Agent',
     nameAr: 'وكيل المالية',
     mission: 'Produce financial summaries and reconcile commissions from the ledger.',
@@ -600,6 +716,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'payment-settlement-agent',
+    tier: 'SUPPORTING',
     name: 'Payment & Settlement Agent',
     nameAr: 'وكيل المدفوعات والتسويات',
     mission: 'Monitor payments and settlement flows; never move funds autonomously.',
@@ -640,6 +757,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'compliance-agent',
+    tier: 'SUPPORTING',
     name: 'Compliance Agent',
     nameAr: 'وكيل الامتثال',
     mission: 'Check adherence to platform policy and regulations.',
@@ -679,6 +797,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'supplier-agent',
+    tier: 'SUPPORTING',
     name: 'Supplier Agent',
     nameAr: 'وكيل الموردين',
     mission: 'Onboard and manage suppliers.',
@@ -717,6 +836,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'merchant-agent',
+    tier: 'SUPPORTING',
     name: 'Merchant Agent',
     nameAr: 'وكيل التجار',
     mission: 'Onboard and manage merchants.',
@@ -755,6 +875,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'customer-intelligence-agent',
+    tier: 'SUPPORTING',
     name: 'Customer Intelligence Agent',
     nameAr: 'وكيل ذكاء العملاء',
     mission: 'Build customer insight and segmentation.',
@@ -793,6 +914,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'operations-agent',
+    tier: 'SUPPORTING',
     name: 'Operations Agent',
     nameAr: 'وكيل العمليات',
     mission: 'Keep day-to-day operations healthy and flag blockers.',
@@ -832,6 +954,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   },
   {
     key: 'outreach-acquisition-agent',
+    tier: 'SUPPORTING',
     name: 'Outreach & Acquisition Agent',
     nameAr: 'وكيل الاستقطاب والتوسع التجاري',
     mission:
@@ -888,6 +1011,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
   // ------------------------------------------------ agent #20: Agent Supervisor
   {
     key: SUPERVISOR_KEY,
+    tier: 'GOVERNANCE',
     name: 'Agent Supervisor',
     nameAr: 'وكيل الإشراف',
     mission:
@@ -952,9 +1076,61 @@ export function allAgentSpecs(): AgentDefinition[] {
   return [COPILOT_CATALOGUE, ...AGENT_CATALOGUE];
 }
 
-/** Number of specialised agents — excludes the Copilot. Always 20. */
+/** Number of specialised agents — excludes the Copilot. */
 export function agentCount(): number {
   return AGENT_CATALOGUE.length;
+}
+
+/** The twelve official Core Specialist Agents, in the approved order. */
+export function coreSpecialistAgents(): AgentDefinition[] {
+  const byKey = new Map(AGENT_CATALOGUE.map((a) => [a.key, a]));
+  return CORE_SPECIALIST_KEYS.map((key) => {
+    const spec = byKey.get(key);
+    if (!spec) throw new Error(`Core specialist "${key}" is missing from the agent catalogue`);
+    return spec;
+  });
+}
+
+/** Internal function agents — not part of the official twelve. */
+export function supportingAgents(): AgentDefinition[] {
+  return AGENT_CATALOGUE.filter((a) => a.tier === 'SUPPORTING');
+}
+
+/** Oversight/coordination layers (Supervisor + Copilot). Never specialists. */
+export function governanceAgents(): AgentDefinition[] {
+  return [COPILOT_CATALOGUE, ...AGENT_CATALOGUE.filter((a) => a.tier === 'GOVERNANCE')];
+}
+
+export interface CatalogueIntegrity {
+  ok: boolean;
+  problems: string[];
+}
+
+/**
+ * Structural check of the official structure. Pure and side-effect free: used by
+ * tests and by any future startup check. It never mutates the catalogue.
+ */
+export function catalogueIntegrity(): CatalogueIntegrity {
+  const problems: string[] = [];
+  const keys = AGENT_CATALOGUE.map((a) => a.key);
+  const duplicates = keys.filter((k, i) => keys.indexOf(k) !== i);
+  if (duplicates.length > 0) problems.push(`duplicate agent keys: ${[...new Set(duplicates)].join(', ')}`);
+
+  const core = AGENT_CATALOGUE.filter((a) => a.tier === 'CORE_SPECIALIST').map((a) => a.key);
+  const missing = CORE_SPECIALIST_KEYS.filter((k) => !core.includes(k));
+  const extra = core.filter((k) => !(CORE_SPECIALIST_KEYS as readonly string[]).includes(k));
+  if (missing.length > 0) problems.push(`core specialists missing from the catalogue: ${missing.join(', ')}`);
+  if (extra.length > 0) problems.push(`agents marked CORE_SPECIALIST outside the official list: ${extra.join(', ')}`);
+  if (core.length !== CORE_SPECIALIST_KEYS.length) {
+    problems.push(`expected ${CORE_SPECIALIST_KEYS.length} core specialists, found ${core.length}`);
+  }
+
+  for (const spec of AGENT_CATALOGUE) {
+    if (spec.tier === undefined) problems.push(`agent "${spec.key}" has no tier`);
+    if (spec.isCopilot === true) problems.push(`the Copilot must not appear in the agent catalogue ("${spec.key}")`);
+  }
+  if (COPILOT_CATALOGUE.tier !== 'GOVERNANCE') problems.push('the Copilot must be tier GOVERNANCE');
+  return { ok: problems.length === 0, problems };
 }
 
 /** Looks up a spec by key, including the Copilot. */
@@ -1022,7 +1198,7 @@ export function agentRunRefusal(agent: AgentDefinition | undefined): AgentRunRef
   return null;
 }
 
-/** Composition of the agent layer: 19 specialised + 1 supervisor, Copilot apart. */
+/** Composition of the agent layer: 20 specialised + 1 supervisor, Copilot apart. */
 export interface AgentLayerCounts {
   total: number;
   specialised: number;

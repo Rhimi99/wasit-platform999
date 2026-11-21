@@ -88,6 +88,19 @@ export type AgentDataScopeKind = 'own' | 'platform';
  * come from `capabilities` (via `requireAction`) and from the A2 scope contract,
  * never from a catalogue string.
  */
+/**
+ * Position of an agent in the official WASIT AI structure.
+ *
+ * - `CORE_SPECIALIST` — one of the twelve official specialist agents. Exactly
+ *   twelve entries may carry this tier; the ordered list lives in
+ *   `CORE_SPECIALIST_KEYS` (catalogue.ts).
+ * - `SUPPORTING` — an internal function agent that is not one of the twelve and
+ *   must not be presented as one.
+ * - `GOVERNANCE` — the oversight supervisor and the coordinating Copilot: layers
+ *   of supervision/coordination, never specialised agents.
+ */
+export type AgentTier = 'CORE_SPECIALIST' | 'SUPPORTING' | 'GOVERNANCE';
+
 export interface AgentDefinition {
   key: string;
   name: string;
@@ -110,6 +123,8 @@ export interface AgentDefinition {
   mission?: string;
   /** Department/team bucket: growth | operations | insight | trust | finance | network | platform | oversight | coordination. */
   category?: string;
+  /** Official position in the WASIT AI structure (see {@link AgentTier}). */
+  tier?: AgentTier;
   /**
    * Declared data-source allow-list. In R1 this is DECLARATIVE ONLY: no Tool
    * Gateway is bound on this branch, so listing a tool grants nothing and runs

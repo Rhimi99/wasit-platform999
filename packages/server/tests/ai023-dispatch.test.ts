@@ -298,10 +298,30 @@ describe('AI-02.3 — agent, permission and budget guards', () => {
 });
 
 describe('AI-02.3 — failure handling and dependency cascade', () => {
-  it('records a FAILED step and skips its dependents when execution fails', async () => {
+  it('skips the dependents of a FAILED step and closes the run FAILED', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    // A registry-only agent (not in AGENT_CATALOGUE) passes dispatch's registry
-    // check but makes createAgentTask fail — a realistic dispatch failure.
+    const p = await plan(admin, [
+      step({ stepKey: 'bad', agentKey: 'marketing-agent' }),
+      step({ stepKey: 'after', agentKey: 'marketing-agent', dependsOn: ['bad'] }),
+    ]);
+
+    // The step failed (the dispatcher records this state when execution faults).
+    await db
+      .update(agentRunSteps)
+      .set({ status: 'FAILED' })
+      .where(and(eq(agentRunSteps.runId, p.runId), eq(agentRunSteps.stepKey, 'bad')));
+
+    const status = await reconcileRun(db, p.runId, auditCtx);
+    expect(status).toBe('FAILED');
+    expect((await runRow(p.runId)).status).toBe('FAILED');
+    // The dependent step is skipped, not executed.
+    expect((await stepRow(p.runId, 'after')).status).toBe('SKIPPED');
+  });
+
+  it('refuses a registered agent that has no catalogue identity, before writing any run', async () => {
+    const admin = await createUser('SUPER_ADMIN');
+    // Registration is identity, not runnability: a registry row alone must not
+    // let a plan queue work for an agent the code cannot execute.
     const key = `it-ai023-ghost-${Date.now()}`;
     await db.insert(agentRegistry).values({
       id: randomUUID(),
@@ -314,19 +334,10 @@ describe('AI-02.3 — failure handling and dependency cascade', () => {
     });
     createdRegistryKeys.push(key);
 
-    const p = await plan(admin, [
-      step({ stepKey: 'bad', agentKey: key }),
-      step({ stepKey: 'after', agentKey: 'marketing-agent', dependsOn: ['bad'] }),
-    ]);
-
-    const out = await dispatchStep(db, p.runId, 'bad', auditCtx);
-    expect(out.status).toBe('FAILED');
-    expect(out.taskId).toBeNull();
-
-    // The dependent step is skipped, not executed.
-    expect((await stepRow(p.runId, 'after')).status).toBe('SKIPPED');
-    // No step succeeded → the run is FAILED.
-    expect((await runRow(p.runId)).status).toBe('FAILED');
+    const code = await rejectionCode(() => plan(admin, [step({ stepKey: 'bad', agentKey: key })]));
+    expect(code).toBe('UNKNOWN_AGENT');
+    const runs = await db.select().from(agentRuns).where(eq(agentRuns.requestedBy, admin));
+    expect(runs).toHaveLength(0);
   });
 
   it('closes a run PARTIALLY_COMPLETED when some steps fail but others succeed', async () => {

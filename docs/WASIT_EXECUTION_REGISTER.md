@@ -580,3 +580,37 @@
 - لا صلاحية RBAC جديدة (`AI_MANAGE` كافية)، ولا بريد/SMS/webhook خارجي.
 - المشرف لا يمنح نفسه صلاحية، ولا يغيّر الكتالوج، ولا ينفّذ قرارًا ماليًا/إداريًا.
 - `supervisor.ts` و`agent-metrics.ts` بلا تغيير في عقودهما.
+
+## 21. AI-ARCH-ALIGN-01 — توحيد الهيكل الرسمي للمنظومة الذكية (2026-11-20)
+
+### 21.1 الفجوة
+الهيكل المُعلن (12 وكيلاً رسمياً) لم يكن معرَّفاً في الكود: كتالوج مسطّح من 20 وكيلاً بلا `tier`،
+ولا وكيل فيديو تسويقي رغم وجود قدرة رندر حقيقية في `lib/media/*`، وطبقة تنسيق تقبل خطة لوكيل بلا
+منفّذ ولا ترفضها إلا وقت الإرسال، و`POST` لإنشاء خطة غير معروض عبر HTTP إطلاقاً.
+
+### 21.2 ما بُني
+- **`src/lib/ai/types.ts`**: `AgentTier = CORE_SPECIALIST | SUPPORTING | GOVERNANCE` + حقل `tier`.
+- **`src/modules/ai/catalogue.ts`**: `CORE_SPECIALIST_KEYS` (الاثنا عشر مرتّبة)، `coreSpecialistAgents()`،
+  `supportingAgents()`، `governanceAgents()`، `catalogueIntegrity()`، وكيل `marketing-video-agent`
+  (عقد كامل، `executable: false`، `scope: 'own'`، `ai:use` فقط)، و`video.publish`/`video.render_paid`
+  في `SENSITIVE_ACTIONS`.
+- **`src/modules/ai/planner.ts`**: `agentRunRefusal` داخل `validatePlan` — لا خطة لوكيل بلا منفّذ أو
+  للمشرف/Copilot، والرفض يسبق كتابة أي صف.
+- **`src/modules/admin/ai-routes.ts`**: `POST /api/admin/ai/agent-runs` (zod صارم، `AI_MANAGE`،
+  ينشئ `PLANNING` فقط، بلا إرسال ولا موافقة، ويحترم Kill Switch).
+
+### 21.3 الأدلة
+- `tests/unit/ai-arch-align.test.ts` (**17**): الاثنا عشر بالترتيب، اكتمال العقد، تفرّد المفاتيح
+  والأسماء و`taskTypes`، `catalogueIntegrity` نظيف، فصل الداعمين والحوكمة، عقد وكيل الفيديو
+  (إنتاج/موافقة/نشر، لا قدرات مالية، لا منفّذ، لا تكرار مع `marketing-agent`).
+- `tests/ai-arch-align-copilot.test.ts` (**12**): خطة عبر HTTP بحالة `PLANNING` وصفر مهام، خطوة
+  بموافقة تبقى `PENDING`، رفض وكيل الفيديو/المشرف/Copilot/المجهول `422` بأكواد دقيقة، عدم كتابة
+  صف تشغيل عند الرفض، 401/403، Kill Switch `503`، ثبات `agent_key` عند الإرسال، و`tier` في
+  استجابة `/api/admin/ai/agents`.
+- `tsc --noEmit`: **0**. الحزمة الكاملة: **155 ملفًا / 2023 اختبارًا** — كلها ناجحة بعد تحديث عقود العدّ.
+
+### 21.4 القيود
+- لا migration، لا seed، لا تغيير مخطط، لا صلاحية RBAC جديدة.
+- لا وكيل حُذف ولم يُدمج: الإضافة الوحيدة `marketing-video-agent` (هوية بلا منفّذ).
+- لا تفكيك أهداف آلي ولا اختيار وكيل تلقائي: قرار المتصل، والكود يتحقق من الأهلية فقط.
+- `DECISION REQUIRED` (AD-049): مصدر ميزانية رندر الفيديو، ملكية الأصول، وسياسة النشر.

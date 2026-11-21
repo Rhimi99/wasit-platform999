@@ -10,6 +10,7 @@ import { isBudgetExhausted } from '../../lib/ai/cost-control';
 import { assertAiExecutionEnabled } from '../../lib/ai/kill-switch';
 import { env } from '../../lib/env';
 import { assertValidDependencies, type StepDependency } from './run-state-machine.js';
+import { agentRunRefusal, findAgentSpec } from './catalogue.js';
 
 /**
  * AI-02.2 — Planning & Dependency Resolution.
@@ -205,7 +206,11 @@ export async function validatePlan(
   const graph: StepDependency[] = steps.map((s) => ({ stepKey: s.stepKey, dependsOn: s.dependsOn ?? [] }));
   assertValidDependencies(graph);
 
-  // 3. Agents must exist in the live registry and be active.
+  // 3. Agents must exist in the live registry, be active, AND be runnable.
+  //    Runnability is a code property (`executable`), so a plan can never queue a
+  //    step for the Copilot, the Supervisor, or a declared-only agent that has no
+  //    executor — the refusal happens here, before any run or step row is written,
+  //    instead of surfacing later at dispatch time.
   const agentKeys = [...new Set(steps.map((s) => s.agentKey))];
   const registryRows = await db
     .select()
@@ -219,6 +224,14 @@ export async function validatePlan(
     }
     if (!agent.isActive) {
       throw validationError('agentKey', `Agent "${step.agentKey}" is not active`, 'INACTIVE_AGENT');
+    }
+    const refusal = agentRunRefusal(findAgentSpec(step.agentKey));
+    if (refusal) {
+      throw validationError(
+        'agentKey',
+        `Step "${step.stepKey}" cannot target "${step.agentKey}": ${refusal.message}`,
+        refusal.code,
+      );
     }
   }
 

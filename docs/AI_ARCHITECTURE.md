@@ -21,9 +21,40 @@
 | Dispute Assistant | مساعد نزاعات | تصميم |
 | Advertising Assistant | مساعد إعلانات | تصميم |
 
-## 3. AI AGENTS
+## 3. AI AGENTS — الهيكل الرسمي (AI-ARCH-ALIGN-01)
 
-Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, Support, Analytics, Market Research, B2B, Risk, Dispute, Development).
+الكتالوج (`modules/ai/catalogue.ts`) هو مصدر الحقيقة الوحيد، وكل وكيل يحمل `tier` صريحاً.
+
+### 3.1 الوكلاء المتخصصون الرسميون (12)
+
+`sales-agent` · `marketing-agent` · `ads-agent` · `product-agent` · `support-agent` ·
+`analytics-agent` · `market-research-agent` · `b2b-agent` · `risk-agent` ·
+`dispute-assistant` · `development-agent` · `marketing-video-agent`
+
+القائمة المرتّبة في `CORE_SPECIALIST_KEYS`؛ أي إضافة أو حذف يمرّ بتعديل هذه القائمة **و** الكتالوج،
+وإلا يفشل `catalogueIntegrity()` والاختبارات.
+
+### 3.2 الوكلاء الداعمون (8) — ليسوا من الاثني عشر
+
+`finance-agent` · `payment-settlement-agent` · `compliance-agent` · `supplier-agent` ·
+`merchant-agent` · `customer-intelligence-agent` · `operations-agent` · `outreach-acquisition-agent`
+
+هوية وعقد فقط (لا منفّذ)، ولا يجوز عرضها كوكلاء رسميين.
+
+### 3.3 طبقة الحوكمة
+
+| الوكيل | الدور | التنفيذ |
+| --- | --- | --- |
+| `wasit-copilot` | تنسيق: خطة → فحص صلاحيات → ترتيب تبعيات → إرسال → متابعة → تجميع | طبقة `planner`/`dispatcher`/`supervisor` |
+| `agent-supervisor` | رقابة: كشف التعثّر/الفشل/الميزانية والتصعيد للمدير العام | `supervisor.ts` + `escalations.ts` |
+
+لا أحدهما وكيلاً متخصصاً، ولا يقبلان إسناد مهمة (`COPILOT_NOT_RUNNABLE` / `SUPERVISOR_NOT_RUNNABLE`).
+
+### 3.4 القاعدة الحاكمة
+
+**مُعلن ≠ قابل للتنفيذ ≠ مسجَّل ≠ قابل للتوجيه.** `executable` خاصية في الكود (وجود فرع في
+`executeAgentTask`)، والتسجيل في `agent_registry` هوية لا سلطة. `agentRunRefusal` هو الحارس الموحّد
+في التخطيط والإرسال وكل مسار إنشاء مهمة.
 
 **ضابط إلزامي**: كل Agent يرث دور المستخدم/المتصل — **لا يتجاوز صلاحياته**. أي Tool يتحقق عبر RBAC قبل التنفيذ. تتمة تفاصيل الأدوار في `docs/PERMISSIONS_MATRIX.md`.
 
@@ -51,9 +82,12 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 - Audit لكافة طلبات AI (من/ماذا/تكلفة). هوية المنفّذ الآلي `SYSTEM` (`audit_logs.actor_type`) مع إبقاء المهمة منسوبة لمنشئها.
 - أنماط الإساءة (طلب كثير) → AI Budgets + Rate Limit.
 
-## 6.5 WASIT AI COPILOT (مواصفة — غير منفَّذة)
+## 6.5 WASIT AI COPILOT (مُنفَّذ جزئياً — طبقة التنسيق فقط)
 
-> الحالة: **مواصفة تصميمية فقط. لا كود، لا routes، لا UI.** أُضيفت لتوضيح الحدود المعمارية قبل أي تنفيذ مستقبلي.
+> الحالة (2026-11-20): **طبقة التنسيق موجودة وتعمل**: `planner.ts` (تحقق + ترتيب تبعيات + حفظ خطة)،
+> `dispatcher.ts` (إرسال خطوة عبر نظام المهام الحقيقي)، `supervisor.ts` (رقابة/حجب/إعادة محاولة)،
+> و`POST /api/admin/ai/agent-runs` لإنشاء خطة. **غير موجود**: تفكيك الهدف آلياً (لا LLM Planner)،
+> واختيار الوكيل تلقائياً، وواجهة ويب. الاختيار والتفكيك قرار المتصل، والكود يتحقق من الأهلية فقط.
 
 ميزة **مستقلة واختيارية للتاجر**، فوق طبقة الـAgents الحالية. Copilot هو **Orchestration/Conversational Layer**، وليس Agent جديدًا ولا بديلًا عن أي Agent.
 
@@ -71,6 +105,18 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
 **مثال تنسيقي:** «أريد بيع هذا المنتج في فرنسا» → يمكن أن يُنسّق Copilot بين: Product Agent + Market Research Agent + Sales Agent + Marketing Agent + Ads Agent + Analytics Agent — وكلها تبقى مستخدمة بشكل مستقل.
 
 **فرق جوهري عن الـAgents:** الوكيل ينفّذ مهمة واحدة محدّدة؛ Copilot يخطّط ويوزّع ويربط السياق ويعرض نتيجة موحّدة. طبقة Copilot لا تملك صلاحيات خاصة ولا تتجاوز صلاحيات المستخدم.
+
+## 6.6 حدود Copilot الملزمة (مُثبتة باختبارات)
+
+| الحد | الآلية | الاختبار |
+| --- | --- | --- |
+| لا يوجّه عملاً لوكيل بلا منفّذ | `agentRunRefusal` داخل `validatePlan` | `tests/ai-arch-align-copilot.test.ts` |
+| لا يوجّه لنفسه ولا للمشرف | `COPILOT_NOT_RUNNABLE` / `SUPERVISOR_NOT_RUNNABLE` | نفسه |
+| لا يوسّع صلاحية الطالب | `validatePlan` يطلب كل صلاحيات الوكلاء من الطالب | `tests/ai023-dispatch.test.ts` |
+| التخطيط ليس تنفيذاً | الخطة تُكتب `PLANNING`، صفر مهام | `tests/ai-arch-align-copilot.test.ts` |
+| الخطوة لا تُعاد توجيهها | `agent_run_steps.agent_key` هو المرجع عند الإرسال | نفسه |
+| الموافقة لا تُجسر آلياً | خطوة `requiresApproval` تبقى `PENDING` حتى موافقة بشرية مختلفة | `tests/ai023-dispatch.test.ts` |
+| Kill Switch يوقف الكل | `assertAiExecutionEnabled` في التخطيط والإرسال | `tests/a1-kill-switch.test.ts` |
 
 ## 7. توليد الفيديو التسويقي (Marketing Video Generation)
 
@@ -101,6 +147,19 @@ Agents قابلة للإضافة أفقيًا (Sales, Marketing, Ads, Product, S
   المنتج يجب أن يكون ACTIVE. Marketing Agent **قراءة/توصية فقط** ولا ينشئ وسائط بنفسه —
   يعرض فقط الفيديوهات التي ولّدها صاحب الحساب (بروابط موقّعة).
 - **خصوصية**: الأصول تُخزَّن خاصة وتُقدَّم فقط عبر روابط موقّعة قصيرة العمر — لا كشف ثابت.
+
+### 7.1 هوية الوكيل مقابل القدرة (AI-ARCH-ALIGN-01)
+
+القدرة موجودة، والهوية أُضيفت الآن، والتنفيذ **مرفوض عن قصد**:
+
+| السؤال | الجواب |
+| --- | --- |
+| هل التوليد يعمل فعلاً؟ | نعم — `StructuralVideoProvider` (ffmpeg/libass) + تخزين خاص + روابط موقّعة |
+| من يشغّله اليوم؟ | صاحب الحساب عبر `modules/media/routes.ts` (يتطلب `media:upload` وملكية المنتج) |
+| هل `marketing-video-agent` ينفّذه؟ | **لا** — `executable: false`، وأي محاولة إسناد تُرفض `AGENT_NOT_EXECUTABLE` |
+| لماذا؟ | ربط المنفّذ يحتاج قراراً تجارياً: سقف التكلفة، ملكية الأصول، سياسة النشر، ومن يوافق |
+
+العقد الكامل للوكيل: `docs/AI_MARKETING_VIDEO_AGENT.md`. القرار: AD-049.
 
 ## جدولة تنفيذ الوكلاء (AI-01)
 

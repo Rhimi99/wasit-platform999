@@ -28,6 +28,7 @@ import type { DB } from '../../src/db/client.js';
  */
 
 const DECLARED_ONLY = [
+  'marketing-video-agent',
   'finance-agent',
   'payment-settlement-agent',
   'compliance-agent',
@@ -66,28 +67,28 @@ function stubDb(): { db: DB; inserts: unknown[] } {
   return { db, inserts };
 }
 
-describe('AI-REG-01 — the agent layer is one 20-agent source of truth', () => {
-  it('is exactly 19 specialised agents plus the supervisor as #20', () => {
-    expect(AGENT_CATALOGUE).toHaveLength(20);
-    expect(agentCount()).toBe(20);
-    expect(new Set(AGENT_CATALOGUE.map((a) => a.key)).size).toBe(20);
+describe('AI-REG-01 — the agent layer is one source of truth', () => {
+  it('is exactly 20 specialised agents plus the supervisor as #21', () => {
+    expect(AGENT_CATALOGUE).toHaveLength(21);
+    expect(agentCount()).toBe(21);
+    expect(new Set(AGENT_CATALOGUE.map((a) => a.key)).size).toBe(21);
     expect(AGENT_CATALOGUE.filter((a) => a.isSupervisor === true)).toHaveLength(1);
     expect(AGENT_CATALOGUE[AGENT_CATALOGUE.length - 1]?.key).toBe(SUPERVISOR_KEY);
     expect(agentLayerCounts()).toEqual({
-      total: 20,
-      specialised: 19,
+      total: 21,
+      specialised: 20,
       supervisor: 1,
       executable: 11,
-      declared: 8,
+      declared: 9,
       copilot: 1,
     });
   });
 
-  it('keeps the Copilot separate and never counted among the 20', () => {
+  it('keeps the Copilot separate and never counted among the agents', () => {
     expect(COPILOT_KEY).toBe('wasit-copilot');
     expect(AGENT_CATALOGUE.some((a) => a.key === COPILOT_KEY)).toBe(false);
-    expect(agentCount()).toBe(20);
-    expect(allAgentSpecs()).toHaveLength(21);
+    expect(agentCount()).toBe(21);
+    expect(allAgentSpecs()).toHaveLength(22);
     expect(findAgentSpec(COPILOT_KEY)).toBe(COPILOT_CATALOGUE);
     expect(agentRunRefusal(COPILOT_CATALOGUE)?.code).toBe('COPILOT_NOT_RUNNABLE');
   });
@@ -112,12 +113,12 @@ describe('AI-REG-01 — the agent layer is one 20-agent source of truth', () => 
     }
   });
 
-  it('declares the eight declared-only agents explicitly', () => {
+  it('declares the nine declared-only agents explicitly', () => {
     expect(declaredOnlyAgents().map((a) => a.key).sort()).toEqual(DECLARED_ONLY);
   });
 
   it('refuses every agent without an executor, and the supervisor by name', () => {
-    expect(declaredOnlyAgents()).toHaveLength(8);
+    expect(declaredOnlyAgents()).toHaveLength(9);
     for (const agent of declaredOnlyAgents()) {
       const refusal = agentRunRefusal(agent);
       expect(refusal?.code).toBe('AGENT_NOT_EXECUTABLE');

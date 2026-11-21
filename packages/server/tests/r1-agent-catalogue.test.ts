@@ -14,13 +14,13 @@ import {
 import { AGENT_CATALOGUE as EXECUTABLE_CATALOGUE } from '../src/modules/ai/agents.js';
 import { AGENT_SCOPE_CONTRACTS } from '../src/modules/ai/agent-scope.js';
 
-describe('R1 — catalogue identity: 20 agents + a separate Copilot', () => {
-  it('declares exactly 20 specialised agents', () => {
-    expect(AGENT_CATALOGUE).toHaveLength(20);
-    expect(agentCount()).toBe(20);
+describe('R1 — catalogue identity: specialised agents + a separate Copilot', () => {
+  it('declares exactly 21 specialised agents', () => {
+    expect(AGENT_CATALOGUE).toHaveLength(21);
+    expect(agentCount()).toBe(21);
   });
 
-  it('keeps the Copilot outside the 20', () => {
+  it('keeps the Copilot outside the specialised agents', () => {
     expect(AGENT_CATALOGUE.some((a) => a.key === COPILOT_KEY)).toBe(false);
     expect(AGENT_CATALOGUE.some((a) => a.isCopilot)).toBe(false);
     expect(COPILOT_CATALOGUE.isCopilot).toBe(true);
@@ -28,16 +28,17 @@ describe('R1 — catalogue identity: 20 agents + a separate Copilot', () => {
   });
 
   it('counts the Copilot in the full spec list but not in agentCount', () => {
-    expect(allAgentSpecs()).toHaveLength(21);
+    expect(allAgentSpecs()).toHaveLength(22);
     expect(allAgentSpecs()[0]!.key).toBe(COPILOT_KEY);
   });
 
-  it('makes agent #20 the Agent Supervisor', () => {
-    expect(AGENT_CATALOGUE).toHaveLength(20);
-    expect(AGENT_CATALOGUE[19]!.key).toBe(SUPERVISOR_KEY);
-    expect(AGENT_CATALOGUE[19]!.name).toBe('Agent Supervisor');
-    expect(AGENT_CATALOGUE[19]!.isSupervisor).toBe(true);
-    expect(AGENT_CATALOGUE[19]!.category).toBe('oversight');
+  it('makes the last agent the Agent Supervisor', () => {
+    expect(AGENT_CATALOGUE).toHaveLength(21);
+    const last = AGENT_CATALOGUE[AGENT_CATALOGUE.length - 1]!;
+    expect(last.key).toBe(SUPERVISOR_KEY);
+    expect(last.name).toBe('Agent Supervisor');
+    expect(last.isSupervisor).toBe(true);
+    expect(last.category).toBe('oversight');
   });
 
   it('has exactly one supervisor', () => {
@@ -46,9 +47,9 @@ describe('R1 — catalogue identity: 20 agents + a separate Copilot', () => {
 });
 
 describe('R1 — catalogue integrity: unique keys, no duplicates', () => {
-  it('uses 20 unique keys', () => {
+  it('uses unique keys', () => {
     const keys = AGENT_CATALOGUE.map((a) => a.key);
-    expect(new Set(keys).size).toBe(20);
+    expect(new Set(keys).size).toBe(21);
   });
 
   it('keeps the Copilot key distinct from every agent key', () => {
@@ -106,11 +107,12 @@ describe('R1 — no new execution authority is granted', () => {
     }
   });
 
-  it('marks the restored 9 agents non-executable', () => {
+  it('marks every agent without an executor non-executable', () => {
     const restored = AGENT_CATALOGUE.filter((a) => a.executable !== true).map((a) => a.key);
     expect(restored.sort()).toEqual(
       [
         'agent-supervisor',
+        'marketing-video-agent',
         'compliance-agent',
         'customer-intelligence-agent',
         'finance-agent',
