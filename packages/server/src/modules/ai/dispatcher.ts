@@ -9,6 +9,7 @@ import { isBudgetExhausted } from '../../lib/ai/cost-control';
 import { isAiExecutionBlocked, assertAiExecutionEnabled } from '../../lib/ai/kill-switch';
 import { env } from '../../lib/env';
 import { createAgentTask, decideAgentTask } from './agents.js';
+import { agentRunRefusal, findAgentSpec } from './catalogue.js';
 import {
   assertRunTransition,
   assertRunCompletion,
@@ -318,6 +319,12 @@ export async function dispatchStep(
   let taskId: string | null = null;
   let finalStatus: AgentRunStepStatus;
   try {
+    // AI-REG-01: registration is identity, not runnability. Checked inside the
+    // try so a declared-only agent (or the supervisor) is recorded as a FAILED
+    // step with its dependents skipped, instead of aborting the dispatch call.
+    const specRefusal = agentRunRefusal(findAgentSpec(step.agentKey));
+    if (specRefusal) throw validationError('agentKey', specRefusal.message, specRefusal.code);
+
     // The task is attributed to the run's requester (accountability); the agent's
     // own capabilities gate execution inside createAgentTask. Fencing ties the
     // task to this exact claim so a superseded dispatch cannot attach one.

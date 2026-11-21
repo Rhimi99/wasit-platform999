@@ -85,10 +85,10 @@ async function runTask(agentKey: string, input: Record<string, unknown>, request
 }
 
 describe('Phase 14 — specialised agent executors (real DB-backed capabilities)', () => {
-  it('registers exactly the 11 specialised agents with their capabilities', async () => {
+  it('registers the 20-agent layer with exactly 11 executable agents', async () => {
     const agents = await listAgents(db);
-    const keys = agents.map((a) => a.key).sort();
-    expect(keys).toEqual(
+    const executableKeys = agents.filter((a) => a.executable === true).map((a) => a.key).sort();
+    expect(executableKeys).toEqual(
       [
         'ads-agent',
         'analytics-agent',
@@ -103,8 +103,13 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
         'support-agent',
       ].sort(),
     );
-    // Every catalogue entry must carry a capability + permissions.
-    for (const def of agents) {
+    // AI-REG-01: the layer is 19 specialised agents + the supervisor, and every
+    // one of them is registered — registration is identity, not runnability.
+    expect(agents).toHaveLength(20);
+    expect(new Set(agents.map((a) => a.key)).size).toBe(20);
+    expect(AGENT_CATALOGUE).toHaveLength(11);
+    // Every executable entry must carry a capability + permissions.
+    for (const def of agents.filter((a) => a.executable === true)) {
       expect(def.capabilities.length).toBeGreaterThan(0);
       expect(def.permissionsRequired.length).toBeGreaterThan(0);
     }

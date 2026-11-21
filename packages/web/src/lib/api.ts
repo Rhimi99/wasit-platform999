@@ -16,7 +16,7 @@ import type {
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
-  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
+  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -941,7 +941,19 @@ export const api = {
     });
   },
   async aiAgents() {
-    return request<{ agents: Array<{ key: string; name: string; description: string; requiresHumanApproval: boolean }> }>('/api/ai/agents');
+    return request<{
+      agents: Array<{
+        key: string;
+        name: string;
+        description: string;
+        requiresHumanApproval: boolean;
+        executable?: boolean;
+        category?: string;
+        isSupervisor?: boolean;
+      }>;
+      counts: AgentLayerCounts;
+      copilot: { key: string; name: string; description: string };
+    }>('/api/ai/agents');
   },
   async aiCreateAgentTask(agentKey: string, input: Record<string, unknown>, requestedModel?: string) {
     return request<{
@@ -1159,7 +1171,9 @@ export const api = {
     });
   },
   async adminAiAgents() {
-    return request<{ items: AgentRegistryRow[] }>('/api/admin/ai/agents');
+    return request<{ items: AgentRegistryRow[]; counts: AgentLayerCounts; copilot: AgentRegistryRow }>(
+      '/api/admin/ai/agents',
+    );
   },
   async adminAiTasks(params: { status?: string; agentKey?: string; limit?: number } = {}) {
     const qs = new URLSearchParams();

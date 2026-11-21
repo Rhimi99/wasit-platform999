@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { AGENT_CATALOGUE, ensureAgentRegistrySeeded } from '../src/modules/ai/agents.js';
+import { ensureAgentRegistrySeeded } from '../src/modules/ai/agents.js';
+import { AGENT_CATALOGUE as AGENT_LAYER } from '../src/modules/ai/catalogue.js';
 import { agentRegistry } from '../src/db/schema/agents.js';
 import type { DB } from '../src/db/client.js';
 
@@ -44,22 +45,24 @@ function pgError(code: string, constraint: string): Error {
 
 describe('AI-02.9 (unit) — atomic agent-registry seeding error handling', () => {
   it('resolves when the target key conflicts (ON CONFLICT handles it, no throw)', async () => {
-    const { db, calls } = makeMockDb(AGENT_CATALOGUE.map(() => ({})));
+    const { db, calls } = makeMockDb(AGENT_LAYER.map(() => ({})));
     await expect(ensureAgentRegistrySeeded(db)).resolves.toBeUndefined();
 
-    // One insert attempt per catalogue agent, conflict target = the key column.
-    expect(calls.length).toBe(AGENT_CATALOGUE.length);
+    // One insert attempt per agent in the layer (declared-only agents included:
+    // registration is identity, not runnability), conflict target = the key column.
+    expect(calls.length).toBe(AGENT_LAYER.length);
     expect(calls[0].target).toBe(agentRegistry.key);
     for (const call of calls) expect(call.target).toBe(agentRegistry.key);
   });
 
-  it('does not create duplicate rows: each catalogue key is inserted exactly once', async () => {
-    const { db, calls } = makeMockDb(AGENT_CATALOGUE.map(() => ({})));
+  it('does not create duplicate rows: each layer key is inserted exactly once', async () => {
+    expect(AGENT_LAYER).toHaveLength(20);
+    const { db, calls } = makeMockDb(AGENT_LAYER.map(() => ({})));
     await ensureAgentRegistrySeeded(db);
 
     const insertedKeys = calls.map((c) => c.key).sort();
-    const catalogueKeys = AGENT_CATALOGUE.map((a) => a.key).sort();
-    expect(insertedKeys).toEqual(catalogueKeys);
+    const layerKeys = AGENT_LAYER.map((a) => a.key).sort();
+    expect(insertedKeys).toEqual(layerKeys);
     expect(new Set(insertedKeys).size).toBe(insertedKeys.length);
   });
 

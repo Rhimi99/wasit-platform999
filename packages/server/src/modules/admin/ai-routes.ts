@@ -10,7 +10,7 @@ import { newId } from '../../lib/ids.js';
 import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
 import { agentTasks } from '../../db/schema/agents.js';
 import { adminUsageSummary } from '../ai/service.js';
-import { listRegistryAgents } from '../ai/agents.js';
+import { agentLayerSummary, copilotAgent, listAgents } from '../ai/agents.js';
 import {
   dispatchStep,
   approveRunStep,
@@ -259,8 +259,14 @@ adminAiRoutes.post('/models', validateBody(modelSchema), async (c) => {
 // ----- Agents & tasks (admin oversight) ------------------------------------
 adminAiRoutes.get('/agents', async (c) => {
   const ctx = getContext(c);
-  const rows = await listRegistryAgents(ctx.db);
-  return c.json({ success: true, data: { items: rows } });
+  // AI-REG-01: the oversight desk sees the whole layer — identity from the
+  // reference catalogue, lifecycle from the registry — so an operator can tell
+  // an executable agent from one that is declared only.
+  const items = await listAgents(ctx.db);
+  return c.json({
+    success: true,
+    data: { items, counts: agentLayerSummary(), copilot: copilotAgent() },
+  });
 });
 
 adminAiRoutes.get('/tasks', async (c) => {

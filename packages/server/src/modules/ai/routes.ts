@@ -10,6 +10,8 @@ import {
   listMyAiActivity,
 } from './service.js';
 import {
+  agentLayerSummary,
+  copilotAgent,
   createAgentTask,
   decideAgentTask,
   getTask,
@@ -217,8 +219,14 @@ aiRoutes.post('/analyze/product', requirePermission(PERMISSIONS.AI_USE), validat
 // ----- Agents --------------------------------------------------------------
 aiRoutes.get('/agents', requirePermission(PERMISSIONS.AI_USE), async (c) => {
   const ctx = getContext(c);
+  // AI-REG-01: the full layer is returned (20 agents, each with its real
+  // `executable` state) plus the Copilot apart — it is a coordinator, not agent
+  // #21, and is never counted in `counts.total`.
   const result = await listAgents(ctx.db);
-  return c.json({ success: true, data: { agents: result } });
+  return c.json({
+    success: true,
+    data: { agents: result, counts: agentLayerSummary(), copilot: copilotAgent() },
+  });
 });
 
 aiRoutes.post('/agents/:agentKey/tasks', requirePermission(PERMISSIONS.AI_USE), validateBody(createTaskSchema), async (c) => {

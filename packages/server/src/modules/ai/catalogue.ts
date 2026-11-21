@@ -159,7 +159,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
       },
     ],
 
-    permissionsRequired: ['ai:use', 'order:read:own'],
+    // AI-REG-01: executable entries mirror the ENFORCED runtime contract (see
+    // `agents.ts`). The catalogue must never widen or narrow what the live agent
+    // requires, otherwise making it the single source would change RBAC for real
+    // callers.
+    permissionsRequired: ['ai:use'],
     scope: 'own',
     requiresHumanApproval: true,
     executable: true,
@@ -321,7 +325,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
       },
     ],
 
-    permissionsRequired: ['ai:use', 'message:read:own'],
+    permissionsRequired: ['ai:use'],
     scope: 'own',
     requiresHumanApproval: false,
     executable: true,
@@ -359,7 +363,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
       },
     ],
 
-    permissionsRequired: ['ai:use', 'analytics:read:all'],
+    permissionsRequired: ['ai:use', 'analytics:read:own'],
     scope: 'platform',
     requiresPlatformScope: true,
     requiresHumanApproval: false,
@@ -971,4 +975,72 @@ export function authorizedActionsForAgent(agent: AgentDefinition): string[] {
 /** True when an action always requires a human approval, regardless of agent. */
 export function isSensitiveAction(action: string): boolean {
   return SENSITIVE_ACTIONS.has(action);
+}
+
+/** The agents that have a real executor wired into `executeAgentTask`. */
+export function executableAgents(): AgentDefinition[] {
+  return AGENT_CATALOGUE.filter((a) => a.executable === true);
+}
+
+/** Specialised agents that exist as identity/metadata only — no executor. */
+export function declaredOnlyAgents(): AgentDefinition[] {
+  return AGENT_CATALOGUE.filter((a) => a.executable !== true && a.isSupervisor !== true);
+}
+
+export interface AgentRunRefusal {
+  code: 'UNKNOWN_AGENT' | 'COPILOT_NOT_RUNNABLE' | 'SUPERVISOR_NOT_RUNNABLE' | 'AGENT_NOT_EXECUTABLE';
+  message: string;
+}
+
+/**
+ * Why an agent may not be run as a task, or `null` when it may.
+ *
+ * Pure, and shared by every run path (user task creation, scheduling, dispatch)
+ * so a declared-but-unimplemented agent, the Copilot and the oversight supervisor
+ * fail the same way everywhere — before any task row is written.
+ */
+export function agentRunRefusal(agent: AgentDefinition | undefined): AgentRunRefusal | null {
+  if (!agent) return { code: 'UNKNOWN_AGENT', message: 'Unknown agent' };
+  if (agent.isCopilot === true) {
+    return {
+      code: 'COPILOT_NOT_RUNNABLE',
+      message: `"${agent.key}" is the coordinating Copilot, not a specialised agent: it cannot be dispatched as a task`,
+    };
+  }
+  if (agent.isSupervisor === true) {
+    return {
+      code: 'SUPERVISOR_NOT_RUNNABLE',
+      message: `"${agent.key}" is the oversight supervisor: it runs its own cycle and cannot be dispatched as a task`,
+    };
+  }
+  if (agent.executable !== true) {
+    return {
+      code: 'AGENT_NOT_EXECUTABLE',
+      message: `"${agent.key}" is declared in the agent catalogue but has no executor, so it cannot run tasks`,
+    };
+  }
+  return null;
+}
+
+/** Composition of the agent layer: 19 specialised + 1 supervisor, Copilot apart. */
+export interface AgentLayerCounts {
+  total: number;
+  specialised: number;
+  supervisor: number;
+  executable: number;
+  declared: number;
+  copilot: number;
+}
+
+export function agentLayerCounts(): AgentLayerCounts {
+  const supervisor = AGENT_CATALOGUE.filter((a) => a.isSupervisor === true).length;
+  const executable = AGENT_CATALOGUE.filter((a) => a.executable === true).length;
+  return {
+    total: AGENT_CATALOGUE.length,
+    specialised: AGENT_CATALOGUE.length - supervisor,
+    supervisor,
+    executable,
+    declared: AGENT_CATALOGUE.length - executable - supervisor,
+    copilot: 1,
+  };
 }

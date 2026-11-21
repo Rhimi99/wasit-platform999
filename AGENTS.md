@@ -298,6 +298,18 @@ npx playwright install --with-deps chromium
 - **فخ خادم يدوي على `:3000` أثناء E2E**: `playwright.config.ts` يضبط `reuseExistingServer: !CI`، فإن كان خادم `npm run dev -w @wasit/server` يعمل فسيُعاد استخدامه **بلا** تجاوزات الـrate-limit الخاصة بالـE2E (`RATE_LIMIT_LOGIN_MAX=500` ...). النتيجة 13 إخفاقة كاذبة سريعة في مكاتب admin (`admin-user-status`/`admin-privacy`/`admin-subscriptions`: `Cannot read properties of undefined (reading 'userId')` من تسجيل 429). أوقف الخادم اليدوي قبل تشغيل `npm run test:e2e` (المنفذ يجب أن يكون حرًّا).
 - **منطق كشف التهريب مشترك**: أي مسار يكتب رسالة (لا الردود فقط) يجب أن يستدعي `scanMessageForFeeEvasion` في `modules/messaging/service.ts`. `openDirectThread` كان يتجاوز الكشف على الرسالة الأولى في الخيط الجديد (ثغرة C5 حقيقية أُصلحت 2026-09-24)؛ اختبار الانحدار في `tests/fee-evasion.test.ts`.
 
+## AI-REG-01 — طبقة الوكلاء مصدر واحد (2026-11-20)
+
+- **`modules/ai/catalogue.ts` هو المصدر الوحيد**: 20 وكيلًا (19 متخصصًا + المشرف #20) + Copilot خارج العدّ. كل مدخل يحمل `executable: boolean`؛ 11 قابل للتنفيذ و8 «معلنة» بلا executor.
+- **`AGENT_CATALOGUE` في `agents.ts` مشتق** من `executableAgents()` — لا قائمة يدوية ثانية. `executors.ts` يملك جدول `EXECUTORS` ويصدّر `EXECUTABLE_AGENT_KEYS`؛ اختبارات `ai-reg01` تثبت تطابق (الكتالوج ⟷ جدول المنفّذين ⟷ `AGENT_SCOPE_CONTRACTS`).
+- **الرفض قبل الكتابة**: `resolveAgentSpec()` + `agentRunRefusal()` → `UNKNOWN_AGENT` / `AGENT_NOT_EXECUTABLE` / `SUPERVISOR_NOT_RUNNABLE` / `COPILOT_NOT_RUNNABLE`، مع Audit `AI.AGENT_RUN_REFUSED`، قبل فحص الصلاحية وقبل أي صف `agent_tasks`.
+- **التسجيل ≠ التشغيل**: `ensureAgentRegistrySeeded` يسجّل الـ20 كلها؛ `executable` وحدها تحدد ما يُشغَّل. نتيجة جدولة جديدة: `skipped_not_executable`.
+- **المُوزِّع**: فحص القابلية داخل مسار الخطوة ⇒ الخطوة `FAILED` والتابع `SKIPPED` (لا إسقاط لنداء التوزيع).
+- **API**: `GET /api/ai/agents` و`GET /api/admin/ai/agents` يعيدان الشريحة كاملة + `counts` (total/specialised/supervisor/executable/declared/copilot) + `copilot`. لوحة الإدارة تعرض شارات (auto/gated/declared/supervisor) وعدّادات؛ لوحة المستخدم تعرض القابل للتنفيذ فقط.
+- **العقود الحيّة لم تتغيّر**: actions/permissions/approval/inputSchema للـ11 نُسخت حرفيًا من القائمة القديمة (تحقق آلي) — أي تضييق/توسيع كان سيغيّر RBAC الفعلي.
+- **اختبارات**: `tests/unit/ai-reg01-agent-layer.test.ts` (9) + `tests/ai-reg01-agent-layer.test.ts` (7). التشغيل يتطلب `TEST_DATABASE_URL` صريحًا على 127.0.0.1:5434/wasit_test (بوابة `vitest.config.ts`).
+- **الحالة**: **146 ملف · 1895 اختبار · 0 فشل** — server tsc 0 — web tsc 0 — web build نظيف.
+
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
 
 - ✅ **MFA (TOTP RFC 6238)** `modules/auth` + `lib/mfa.ts`: enroll/confirm/disable/status/verify/recovery-codes/dev-totp. كل endpoint: `requireAuth` + `rateLimit` + Audit (`AUTH.MFA_*`). `dev-totp` محجوب في `NODE_ENV=production` (403).

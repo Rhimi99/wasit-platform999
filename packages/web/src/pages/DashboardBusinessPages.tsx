@@ -430,7 +430,7 @@ export function DashboardAIPage() {
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.aiStatus>> | null>(null);
   const [budget, setBudget] = useState<Awaited<ReturnType<typeof api.aiMyBudget>> | null>(null);
   const [models, setModels] = useState<Array<{ key: string; displayName: string; provider: string; isActive: boolean }>>([]);
-  const [agents, setAgents] = useState<Array<{ key: string; name: string; description: string; requiresHumanApproval: boolean }>>([]);
+  const [agents, setAgents] = useState<Array<{ key: string; name: string; description: string; requiresHumanApproval: boolean; executable?: boolean }>>([]);
   const [activity, setActivity] = useState<Array<{ id: string; requestType: string; model: string; tokensInput: number; tokensOutput: number; cost: string; createdAt: string }>>([]);
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
   const [agentTasks, setAgentTasks] = useState<Array<{ id: string; agentKey: string; status: string; result?: unknown; error?: { message?: string } | null; createdAt: string }>>([]);
@@ -465,7 +465,9 @@ export function DashboardAIPage() {
     if (st.data) setStatus(st.data);
     if (bd.data) setBudget(bd.data);
     if (md.data) setModels(md.data.items);
-    if (ag.data) setAgents(ag.data.agents);
+    // AI-REG-01: the API lists the whole layer (20 agents). Only executable ones
+    // can be run, so the user-facing panel shows just those.
+    if (ag.data) setAgents(ag.data.agents.filter((a) => a.executable !== false));
     if (ac.data) setActivity(ac.data.items);
     if (tk.data) setAgentTasks(tk.data.items);
     setLoading(false);

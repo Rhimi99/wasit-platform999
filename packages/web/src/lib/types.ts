@@ -825,13 +825,31 @@ export interface AiAdminRequestRow {
 }
 
 export interface AgentRegistryRow {
-  id: string;
+  id?: string;
   key: string;
   name: string;
   description: string | null;
   requiresHumanApproval: boolean;
   isActive: boolean;
-  createdAt: string;
+  createdAt?: string;
+  /** AI-REG-01 — code capability: false = declared in the catalogue, no executor. */
+  executable?: boolean;
+  category?: string;
+  mission?: string | null;
+  status?: string;
+  isSupervisor?: boolean;
+  isCopilot?: boolean;
+  permissionsRequired?: string[];
+}
+
+/** Composition of the agent layer. The Copilot is counted apart. */
+export interface AgentLayerCounts {
+  total: number;
+  specialised: number;
+  supervisor: number;
+  executable: number;
+  declared: number;
+  copilot: number;
 }
 
 export interface AgentTaskRow {

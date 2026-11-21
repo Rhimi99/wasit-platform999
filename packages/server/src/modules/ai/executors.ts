@@ -889,6 +889,34 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
+type AgentExecutor = (
+  db: DB,
+  agent: AgentDefinition,
+  input: Record<string, unknown>,
+) => Promise<AgentExecutorResult>;
+
+/**
+ * The executor table. Its keys are the authoritative "this agent can run" set;
+ * the catalogue's `executable` flag must agree with it, and `ai-reg01` tests
+ * assert the two never drift.
+ */
+const EXECUTORS: Record<string, AgentExecutor> = {
+  'sales-agent': execSalesAgent,
+  'marketing-agent': execMarketingAgent,
+  'ads-agent': execAdsAgent,
+  'product-agent': execProductAgent,
+  'support-agent': execSupportAgent,
+  'analytics-agent': execAnalyticsAgent,
+  'market-research-agent': execMarketResearchAgent,
+  'b2b-agent': execB2BAgent,
+  'risk-agent': execRiskAgent,
+  'dispute-assistant': execDisputeAssistant,
+  'development-agent': execDevelopmentAgent,
+};
+
+/** Agent keys with a real executor (the only ones the catalogue may mark executable). */
+export const EXECUTABLE_AGENT_KEYS: readonly string[] = Object.freeze(Object.keys(EXECUTORS));
+
 /** Routes an agent task to its specialised executor. Never uses mock data. */
 export async function executeAgentTask(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   // Trusted action gate (AI-INTEG-P3-T2). This is the single execution boundary
@@ -906,30 +934,7 @@ export async function executeAgentTask(db: DB, agent: AgentDefinition, input: Re
   // run raw SQL or open a transaction — regardless of which executor, task,
   // agent key or parameter is used. Fail-closed on a missing scope.
   const scoped = withAgentDataScope(db);
-  switch (agent.key) {
-    case 'sales-agent':
-      return execSalesAgent(scoped, agent, input);
-    case 'marketing-agent':
-      return execMarketingAgent(scoped, agent, input);
-    case 'ads-agent':
-      return execAdsAgent(scoped, agent, input);
-    case 'product-agent':
-      return execProductAgent(scoped, agent, input);
-    case 'support-agent':
-      return execSupportAgent(scoped, agent, input);
-    case 'analytics-agent':
-      return execAnalyticsAgent(scoped, agent, input);
-    case 'market-research-agent':
-      return execMarketResearchAgent(scoped, agent, input);
-    case 'b2b-agent':
-      return execB2BAgent(scoped, agent, input);
-    case 'risk-agent':
-      return execRiskAgent(scoped, agent, input);
-    case 'dispute-assistant':
-      return execDisputeAssistant(scoped, agent, input);
-    case 'development-agent':
-      return execDevelopmentAgent(scoped, agent, input);
-    default:
-      throw new Error(`Unknown agent key: ${agent.key}`);
-  }
+  const executor = EXECUTORS[agent.key];
+  if (!executor) throw new Error(`Unknown agent key: ${agent.key}`);
+  return executor(scoped, agent, input);
 }

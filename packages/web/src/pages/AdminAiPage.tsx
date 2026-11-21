@@ -5,6 +5,7 @@ import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import type {
   AgentRegistryRow,
+  AgentLayerCounts,
   AgentTaskRow,
   AiAdminBudget,
   AiAdminModel,
@@ -61,6 +62,8 @@ export function AdminAiPage() {
   const [models, setModels] = useState<AiAdminModel[]>([]);
   const [budgets, setBudgets] = useState<AiAdminBudget[]>([]);
   const [agents, setAgents] = useState<AgentRegistryRow[]>([]);
+  const [agentCounts, setAgentCounts] = useState<AgentLayerCounts | null>(null);
+  const [copilot, setCopilot] = useState<AgentRegistryRow | null>(null);
   const [tasks, setTasks] = useState<AgentTaskRow[]>([]);
   // A3 — AI Company metrics (read-only, from the trusted backend).
   const [companyMetrics, setCompanyMetrics] = useState<CompanyMetrics | null>(null);
@@ -101,6 +104,8 @@ export function AdminAiPage() {
     setModels(modelRes.data?.items ?? []);
     setBudgets(budgetRes.data?.items ?? []);
     setAgents(agentRes.data?.items ?? []);
+    setAgentCounts(agentRes.data?.counts ?? null);
+    setCopilot(agentRes.data?.copilot ?? null);
     setTasks(taskRes.data?.items ?? []);
     setKillSwitch(killRes.data ?? null);
     setCompanyMetrics(metricsRes.data ?? null);
@@ -841,21 +846,50 @@ export function AdminAiPage() {
 
           {tab === 'agents' && (
             agents.length === 0 ? <EmptyState title={t('common.noData')} hint={t('adminAi.tab.agents')} /> : (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {agents.map((a) => (
-                  <Card key={a.id} testId={`admin-ai-agent-${a.key}`}>
+              <div className="space-y-4">
+                {agentCounts && (
+                  <p className="text-xs text-slate-500" data-testid="admin-ai-agent-counts">
+                    {t('adminAi.agent.layerSummary')}: {agentCounts.total}
+                    {' · '}{t('adminAi.agent.executableCount')}: {agentCounts.executable}
+                    {' · '}{t('adminAi.agent.declaredCount')}: {agentCounts.declared}
+                    {' · '}{t('adminAi.agent.supervisor')}: {agentCounts.supervisor}
+                  </p>
+                )}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {agents.map((a) => {
+                    const badge = a.isSupervisor
+                      ? { color: 'indigo' as const, label: t('adminAi.agent.supervisor') }
+                      : a.executable === false
+                        ? { color: 'slate' as const, label: t('adminAi.agent.declared') }
+                        : a.requiresHumanApproval
+                          ? { color: 'amber' as const, label: t('adminAi.agent.gated') }
+                          : { color: 'teal' as const, label: t('adminAi.agent.auto') };
+                    return (
+                      <Card key={a.id ?? a.key} testId={`admin-ai-agent-${a.key}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="font-bold text-slate-800">{a.name}</h3>
+                            <p className="text-xs text-slate-400" dir="ltr">{a.key}</p>
+                          </div>
+                          <Badge color={badge.color} testId={`admin-ai-agent-status-${a.key}`}>{badge.label}</Badge>
+                        </div>
+                        {a.description && <p className="mt-2 text-xs text-slate-500">{a.description}</p>}
+                      </Card>
+                    );
+                  })}
+                </div>
+                {copilot && (
+                  <Card testId={`admin-ai-copilot-${copilot.key}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <h3 className="font-bold text-slate-800">{a.name}</h3>
-                        <p className="text-xs text-slate-400" dir="ltr">{a.key}</p>
+                        <h3 className="font-bold text-slate-800">{copilot.name}</h3>
+                        <p className="text-xs text-slate-400" dir="ltr">{copilot.key}</p>
                       </div>
-                      <Badge color={a.requiresHumanApproval ? 'amber' : 'teal'}>
-                        {a.requiresHumanApproval ? t('adminAi.agent.gated') : t('adminAi.agent.auto')}
-                      </Badge>
+                      <Badge color="slate">{t('adminAi.agent.copilot')}</Badge>
                     </div>
-                    {a.description && <p className="mt-2 text-xs text-slate-500">{a.description}</p>}
+                    {copilot.description && <p className="mt-2 text-xs text-slate-500">{copilot.description}</p>}
                   </Card>
-                ))}
+                )}
               </div>
             )
           )}

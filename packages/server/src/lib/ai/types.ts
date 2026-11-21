@@ -94,6 +94,12 @@ export interface AgentDefinition {
   description: string;
   capabilities: AgentCapability[];
   permissionsRequired: string[];
+  /** Registry row id when the agent is registered (read paths only). */
+  id?: string;
+  /** Registry lifecycle (ACTIVE | PAUSED | DISABLED), when registered. */
+  status?: string;
+  /** Whether the registered agent is active (false = paused/disabled). */
+  isActive?: boolean;
   /** Sensitive tasks (financial/admin mutations) need an explicit human approval. */
   requiresHumanApproval: boolean;
   inputSchema?: Record<string, unknown>;

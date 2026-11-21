@@ -12,6 +12,7 @@ import { logger } from '../../lib/observability/logger';
 import { isBudgetExhausted } from '../../lib/ai/cost-control';
 import { isAiExecutionBlocked } from '../../lib/ai/kill-switch';
 import { createAgentTask, ensureAgentRegistrySeeded } from './agents.js';
+import { agentRunRefusal, findAgentSpec } from './catalogue.js';
 
 /**
  * Safe floor for a schedule cadence. A shorter interval would let an operator
@@ -113,6 +114,12 @@ export async function createAgentSchedule(
     .limit(1);
   if (reg.length === 0) throw ApiError.notFound('Agent');
 
+  // AI-REG-01: a registered agent is not necessarily runnable. Declared-only
+  // agents and the supervisor are refused at schedule creation instead of
+  // failing on every tick.
+  const refusal = agentRunRefusal(findAgentSpec(input.agentKey));
+  if (refusal) throw ApiError.conflict(refusal.message);
+
   const agent = reg[0];
   if (agent.requiresHumanApproval) {
     throw ApiError.conflict(
@@ -193,6 +200,8 @@ export async function updateAgentSchedule(
       .where(and(eq(agentRegistry.key, existing.agentKey), eq(agentRegistry.isActive, true)))
       .limit(1);
     if (reg.length === 0) throw ApiError.notFound('Agent');
+    const reactivateRefusal = agentRunRefusal(findAgentSpec(existing.agentKey));
+    if (reactivateRefusal) throw ApiError.conflict(reactivateRefusal.message);
     if (reg[0].requiresHumanApproval) {
       throw ApiError.conflict('This agent requires human approval and cannot be scheduled for automatic execution');
     }
@@ -311,7 +320,14 @@ async function releaseLease(db: DB, scheduleId: string, taskId: string | null): 
  */
 async function runClaimedSchedule(db: DB, schedule: AgentScheduleRow): Promise<{
   taskId: string | null;
-  outcome: 'created' | 'skipped_approval' | 'skipped_unknown' | 'forbidden' | 'budget_blocked' | 'failed';
+  outcome:
+    | 'created'
+    | 'skipped_approval'
+    | 'skipped_unknown'
+    | 'skipped_not_executable'
+    | 'forbidden'
+    | 'budget_blocked'
+    | 'failed';
 }> {
   const systemAudit = { actorId: null, actorType: 'SYSTEM' as const };
   await ensureAgentRegistrySeeded(db);
@@ -332,6 +348,16 @@ async function runClaimedSchedule(db: DB, schedule: AgentScheduleRow): Promise<{
   }
 
   const agent = reg[0];
+  const runRefusal = agentRunRefusal(findAgentSpec(schedule.agentKey));
+  if (runRefusal) {
+    await writeAudit(db, systemAudit, {
+      action: 'AI.AGENT_TASK_SKIPPED_NOT_EXECUTABLE',
+      entityType: 'AGENT_SCHEDULE',
+      entityId: schedule.id,
+      metadata: { agentKey: schedule.agentKey, scheduleId: schedule.id, code: runRefusal.code },
+    });
+    return { taskId: null, outcome: 'skipped_not_executable' };
+  }
   if (agent.requiresHumanApproval) {
     await writeAudit(db, systemAudit, {
       action: 'AI.AGENT_TASK_SKIPPED_APPROVAL_REQUIRED',

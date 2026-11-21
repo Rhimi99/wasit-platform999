@@ -9,7 +9,6 @@ import { roles, userRoles } from '../../db/schema/auth';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { newId } from '../../lib/ids';
 import { createNotification } from '../../lib/notifications-service';
-import type { AgentCapability } from '../../lib/ai/types';
 import type { AgentDefinition, AgentTaskStatus, CreateAgentTaskInput, ResolvedAgentTask } from '../../lib/ai/types';
 import {
   AgentRunBudget,
@@ -21,6 +20,15 @@ import {
   type AgentRunContext,
 } from '../../lib/ai/agent-run-context.js';
 import { executeAgentTask } from './executors.js';
+import {
+  AGENT_CATALOGUE as AGENT_LAYER,
+  COPILOT_CATALOGUE,
+  agentLayerCounts,
+  agentRunRefusal,
+  executableAgents,
+  findAgentSpec,
+  type AgentLayerCounts,
+} from './catalogue.js';
 import { assertAgentScopeContract, assertRunOwnerScope } from './agent-scope.js';
 import { assertAiExecutionEnabled } from '../../lib/ai/kill-switch.js';
 import { env } from '../../lib/env.js';
@@ -40,105 +48,20 @@ export interface AgentTaskFencing {
 }
 
 /**
- * WASIT Agent Catalogue — the eleven specialised agents from the spec.
+ * The executable slice of the agent layer (AI-REG-01).
  *
- * Read-only advisory agents run immediately. Agents whose capabilities could
+ * Derived from the single reference source (`catalogue.ts`) instead of being a
+ * second hand-maintained list: an agent is runnable only if the catalogue marks
+ * it `executable: true`, which in turn means `executeAgentTask` has a branch for
+ * it. Read-only advisory agents run immediately; agents whose capabilities could
  * touch financial/admin actions are gated behind an explicit human approval
  * (see `requiresHumanApproval`).
  */
-export const AGENT_CATALOGUE: AgentDefinition[] = [
-  {
-    key: 'sales-agent',
-    name: 'Sales Agent',
-    description: 'Identifies prospective buyers/leads and recommends sales priorities.',
-    capabilities: [{ action: 'identify_leads', description: 'Find prospective buyers for a seller' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: true,
-  },
-  {
-    key: 'marketing-agent',
-    name: 'Marketing Agent',
-    description: 'Recommends marketing content angles and channel mix for campaigns.',
-    capabilities: [{ action: 'recommend_campaign', description: 'Draft a marketing campaign proposal' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: false,
-  },
-  {
-    key: 'ads-agent',
-    name: 'Ads Agent',
-    description: 'Suggests ad budget allocation and placement strategies.',
-    capabilities: [{ action: 'recommend_ads', description: 'Draft an advertising plan' }],
-    permissionsRequired: ['ai:use', 'ad:create'],
-    requiresHumanApproval: true,
-  },
-  {
-    key: 'product-agent',
-    name: 'Product Agent',
-    description: 'Analyzes a product listing, pricing, category fit and completeness.',
-    capabilities: [{ action: 'analyze_product', description: 'Analyze a product listing' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: false,
-  },
-  {
-    key: 'support-agent',
-    name: 'Support Agent',
-    description: 'Drafts a support reply given customer conversation context.',
-    capabilities: [{ action: 'draft_reply', description: 'Draft a support response' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: false,
-  },
-  {
-    key: 'analytics-agent',
-    name: 'Analytics Agent',
-    description: 'Computes business KPIs from live platform data.',
-    capabilities: [{ action: 'generate_report', description: 'Generate a KPI report' }],
-    permissionsRequired: ['ai:use', 'analytics:read:own'],
-    requiresHumanApproval: false,
-  },
-  {
-    key: 'market-research-agent',
-    name: 'Market Research Agent',
-    description: 'Provides market overview, category trends and competitive notes.',
-    capabilities: [{ action: 'market_overview', description: 'Summarize a market/category' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: false,
-  },
-  {
-    key: 'b2b-agent',
-    name: 'B2B Agent',
-    description: 'Matches buyers to suppliers and merchants to fulfil B2B needs.',
-    capabilities: [{ action: 'match_b2b', description: 'Find B2B partners' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: true,
-  },
-  {
-    key: 'risk-agent',
-    name: 'Risk Agent',
-    description: 'Assesses risk indicators for an entity or transaction.',
-    capabilities: [{ action: 'assess_risk', description: 'Evaluate risk indicators' }],
-    permissionsRequired: ['risk:read'],
-    requiresHumanApproval: true,
-  },
-  {
-    key: 'dispute-assistant',
-    name: 'Dispute Assistant',
-    description: 'Summarizes dispute context and recommends possible resolution paths.',
-    capabilities: [{ action: 'summarize_dispute', description: 'Summarize dispute context' }],
-    permissionsRequired: ['dispute:read'],
-    requiresHumanApproval: true,
-  },
-  {
-    key: 'development-agent',
-    name: 'Development Agent',
-    description: 'Summarizes technical context and recommends implementation steps.',
-    capabilities: [{ action: 'dev_plan', description: 'Produce a technical plan' }],
-    permissionsRequired: ['ai:use'],
-    requiresHumanApproval: true,
-  },
-];
+export const AGENT_CATALOGUE: AgentDefinition[] = executableAgents();
 
 /**
- * Seed the eleven catalogue agents idempotently.
+ * Seed the whole agent layer (20 rows: 19 specialised + the supervisor)
+ * idempotently.
  *
  * The insert is a single `INSERT … ON CONFLICT (key) DO NOTHING`, so concurrent
  * callers — several workers, several connections, or a burst of first-time
@@ -148,6 +71,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
  * `agent_registry_key_idx` (see migration 0029); without it Postgres rejects the
  * statement with 42P10 instead of silently ignoring the conflict.
  *
+ * Registration is identity, not authority: a row here does not make an agent
+ * runnable. Execution is gated by `agentRunRefusal` (catalogue `executable`).
+ *
  * There is deliberately no `catch` around the insert. `ON CONFLICT (key)`
  * already resolves the only conflict this loop can legitimately hit, so any
  * error that does surface is a real failure and must propagate — including a
@@ -155,15 +81,22 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
  * key), which a blanket `23505` guard would have silently swallowed.
  */
 export async function ensureAgentRegistrySeeded(db: DB): Promise<void> {
-  for (const def of AGENT_CATALOGUE) {
+  for (const def of AGENT_LAYER) {
     await db
       .insert(agentRegistry)
       .values({
         id: newId(),
         key: def.key,
         name: def.name,
+        nameAr: def.nameAr ?? null,
+        mission: def.mission ?? null,
+        category: def.category ?? 'general',
         description: def.description,
         capabilities: def.capabilities as never,
+        allowedTools: (def.allowedTools ?? []) as never,
+        approvalActions: (def.approvalActions ?? []) as never,
+        limits: (def.limits ?? {}) as never,
+        taskTypes: (def.taskTypes ?? []) as never,
         permissionsRequired: def.permissionsRequired as never,
         requiresHumanApproval: def.requiresHumanApproval,
         inputSchema: (def.inputSchema ?? null) as never,
@@ -173,34 +106,51 @@ export async function ensureAgentRegistrySeeded(db: DB): Promise<void> {
   }
 }
 
+/**
+ * The full agent layer for read surfaces (AI-REG-01).
+ *
+ * Code is the source of truth for identity, capability and `executable`; the
+ * registry row contributes the live lifecycle (`status`, `isActive`, `id`). An
+ * agent that is registered but has no executor is returned with
+ * `executable: false` rather than hidden, so operators see the real layer.
+ */
 export async function listAgents(db: DB): Promise<AgentDefinition[]> {
   await ensureAgentRegistrySeeded(db);
   const rows = await db.select().from(agentRegistry);
-  return rows.map((r) => ({
-    key: r.key,
-    name: r.name,
-    description: r.description ?? '',
-    capabilities: (r.capabilities ?? []) as AgentCapability[],
-    permissionsRequired: (r.permissionsRequired ?? []) as string[],
-    requiresHumanApproval: r.requiresHumanApproval,
-    isActive: r.isActive,
-  }));
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  return AGENT_LAYER.map((spec) => {
+    const row = byKey.get(spec.key);
+    return {
+      ...spec,
+      id: row?.id,
+      status: row?.status ?? 'ACTIVE',
+      isActive: row?.isActive ?? true,
+      executable: spec.executable === true,
+    };
+  });
 }
+
+/** Composition of the layer, for API/UI headers. Copilot is counted apart. */
+export function agentLayerSummary(): AgentLayerCounts {
+  return agentLayerCounts();
+}
+
+/** The Copilot spec — a coordinator, never counted among the 20 agents. */
+export function copilotAgent(): AgentDefinition {
+  return COPILOT_CATALOGUE;
+}
+
+
 
 /**
- * Raw registry rows for admin oversight. Seeds the catalogue first so the
- * admin desk is never empty on a database where no user has invoked an agent.
+ * Resolves an agent from the reference catalogue (20 agents + Copilot) without
+ * touching the database. Runnability is a code property (`executable`), so it
+ * must not depend on a registry row existing or on a seeding side effect.
  */
-export async function listRegistryAgents(db: DB) {
-  await ensureAgentRegistrySeeded(db);
-  return db.select().from(agentRegistry).orderBy(desc(agentRegistry.createdAt));
-}
-
-async function getAgentDef(db: DB, agentKey: string): Promise<AgentDefinition> {
-  await ensureAgentRegistrySeeded(db);
-  const found = AGENT_CATALOGUE.find((a) => a.key === agentKey);
-  if (!found) throw ApiError.notFound('Agent');
-  return found;
+function resolveAgentSpec(agentKey: string): AgentDefinition {
+  const spec = findAgentSpec(agentKey);
+  if (!spec) throw ApiError.notFound('Agent');
+  return spec;
 }
 
 /**
@@ -340,7 +290,28 @@ export async function createAgentTask(
   // user requests, scheduler dispatches and approval-triggered runs all pass
   // through here. Fail-closed and uniform across every surface.
   assertAiExecutionEnabled();
-  const agent = await getAgentDef(db, input.agentKey);
+
+  // AI-REG-01: the agent must exist AND have a real executor. Declared-only
+  // agents, the Copilot and the oversight supervisor are refused here — before
+  // the permission check, before the per-user cap and before any task row is
+  // written — and every refusal is audited.
+  const agent = resolveAgentSpec(input.agentKey);
+  const refusal = agentRunRefusal(agent);
+  if (refusal) {
+    await writeAudit(db, audit, {
+      action: 'AI.AGENT_RUN_REFUSED',
+      entityType: 'AGENT',
+      entityId: agent.key,
+      metadata: {
+        agentKey: agent.key,
+        code: refusal.code,
+        reason: refusal.message,
+        requestedBy,
+      },
+    });
+    throw ApiError.conflict(refusal.message);
+  }
+
   if (!role.includes('ADMIN') && !role.includes('SUPER_ADMIN')) {
     // Secondary guard: every required permission must be present.
     const { ROLE_PERMISSIONS } = await import('@wasit/shared');
@@ -727,7 +698,9 @@ export async function decideAgentTask(
     metadata: { reason },
   });
 
-  const agent = await getAgentDef(db, task.agentKey);
+  const agent = resolveAgentSpec(task.agentKey);
+  const approvalRefusal = agentRunRefusal(agent);
+  if (approvalRefusal) throw ApiError.conflict(approvalRefusal.message);
   const started = Date.now();
   try {
     // Same trusted execution context as the direct path (AI-INTEG-P3-T1): the
