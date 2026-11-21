@@ -8,6 +8,7 @@ import { aiRequests } from '../../db/schema/ai';
 import { roles, userRoles } from '../../db/schema/auth';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { buildPriorContext, recordTaskOutcomeMemory } from './memory.js';
+import { recordMetricSafely } from './metrics.js';
 import { newId } from '../../lib/ids';
 import { createNotification } from '../../lib/notifications-service';
 import type { AgentDefinition, AgentTaskStatus, CreateAgentTaskInput, ResolvedAgentTask } from '../../lib/ai/types';
@@ -345,6 +346,13 @@ export async function createAgentTask(
         requestedBy,
       },
     });
+    await recordMetricSafely(db, {
+      agentKey: agent.key,
+      taskId: null,
+      scopeOwner: requestedBy,
+      outcome: 'blocked',
+      errorCode: refusal.code,
+    });
     throw ApiError.conflict(refusal.message);
   }
 
@@ -518,6 +526,15 @@ export async function createAgentTask(
         latencyMs,
         taskType: input.input && typeof input.input === 'object' ? ((input.input as Record<string, unknown>).taskType as string | undefined) ?? null : null,
       });
+      await recordMetricSafely(db, {
+        agentKey: agent.key,
+        taskId: id,
+        taskType: input.input && typeof input.input === 'object' ? ((input.input as Record<string, unknown>).taskType as string | undefined) ?? null : null,
+        scopeOwner: requestedBy,
+        outcome: 'succeeded',
+        attempt: 1,
+        latencyMs,
+      });
     } catch (err) {
       status = 'failed';
       error = { message: err instanceof Error ? err.message : 'Unknown error' };
@@ -542,6 +559,16 @@ export async function createAgentTask(
         ownerId: requestedBy,
         taskId: id,
         status: 'failed',
+        latencyMs: Date.now() - started,
+        errorCode: failureCodeOf(err),
+      });
+      await recordMetricSafely(db, {
+        agentKey: agent.key,
+        taskId: id,
+        taskType: input.input && typeof input.input === 'object' ? ((input.input as Record<string, unknown>).taskType as string | undefined) ?? null : null,
+        scopeOwner: requestedBy,
+        outcome: 'failed',
+        attempt: 1,
         latencyMs: Date.now() - started,
         errorCode: failureCodeOf(err),
       });
@@ -689,6 +716,16 @@ export async function decideAgentTask(
   if (task.status !== 'awaiting_approval') {
     throw ApiError.conflict('Task is not awaiting approval');
   }
+  // Metrics context for this decision. Read once here so the three terminal
+  // branches below record the same task type and attempt number; both come from
+  // the stored row, never from the caller.
+  const [taskMeta] = await db
+    .select({ taskType: agentTasks.taskType, attempts: agentTasks.attempts })
+    .from(agentTasks)
+    .where(eq(agentTasks.id, taskId))
+    .limit(1);
+  const metricTaskType = taskMeta?.taskType ?? null;
+  const metricAttempt = Math.max(1, (taskMeta?.attempts ?? 0) + 1);
 
   // Central AI Kill Switch (A1): approving a task triggers an execution, so a
   // global disable must refuse it here — BEFORE the atomic claim — rather than
@@ -725,6 +762,14 @@ export async function decideAgentTask(
       entityType: 'AGENT_TASK',
       entityId: taskId,
       metadata: { reason },
+    });
+    await recordMetricSafely(db, {
+      agentKey: task.agentKey,
+      taskId,
+      taskType: metricTaskType,
+      scopeOwner: task.requestedBy,
+      outcome: 'rejected',
+      attempt: metricAttempt,
     });
     return getTask(db, taskId);
   }
@@ -810,6 +855,15 @@ export async function decideAgentTask(
       status: 'approved',
       latencyMs: Date.now() - started,
     });
+    await recordMetricSafely(db, {
+      agentKey: agent.key,
+      taskId,
+      taskType: metricTaskType,
+      scopeOwner: task.requestedBy,
+      outcome: 'succeeded',
+      attempt: metricAttempt,
+      latencyMs: Date.now() - started,
+    });
 
     // Notify the requester that their task is complete.
     await createNotification(db, {
@@ -849,6 +903,16 @@ export async function decideAgentTask(
       ownerId: task.requestedBy,
       taskId,
       status: 'failed',
+      latencyMs: Date.now() - started,
+      errorCode: failureCodeOf(err),
+    });
+    await recordMetricSafely(db, {
+      agentKey: agent.key,
+      taskId,
+      taskType: metricTaskType,
+      scopeOwner: task.requestedBy,
+      outcome: 'failed',
+      attempt: metricAttempt,
       latencyMs: Date.now() - started,
       errorCode: failureCodeOf(err),
     });

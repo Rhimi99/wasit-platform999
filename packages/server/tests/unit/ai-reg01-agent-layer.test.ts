@@ -16,6 +16,7 @@ import { AGENT_CATALOGUE as RUNTIME_CATALOGUE, createAgentTask } from '../../src
 import { AGENT_SCOPE_CONTRACTS } from '../../src/modules/ai/agent-scope.js';
 import { EXECUTABLE_AGENT_KEYS } from '../../src/modules/ai/executors.js';
 import { auditLogs } from '../../src/db/schema/audit.js';
+import { agentTasks } from '../../src/db/schema/agents.js';
 import type { DB } from '../../src/db/client.js';
 
 /**
@@ -141,9 +142,10 @@ describe('AI-REG-01 — the agent layer is one 20-agent source of truth', () => 
           { actorId: 'user-1' },
         ),
       ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
-      // Only the refusal audit was written; no agent_tasks insert, no read.
-      expect(inserts).toHaveLength(1);
-      expect(inserts[0]).toBe(auditLogs);
+      // The refusal is audited and measured; a task row is NEVER written.
+      // (AI-MET-01 records a `blocked` measurement — a count, not a task.)
+      expect(inserts.filter((t) => t === auditLogs)).toHaveLength(1);
+      expect(inserts).not.toContain(agentTasks);
     }
   });
 
@@ -158,6 +160,7 @@ describe('AI-REG-01 — the agent layer is one 20-agent source of truth', () => 
         { actorId: 'user-1' },
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
-    expect(inserts).toEqual([auditLogs]);
+    expect(inserts).toContain(auditLogs);
+    expect(inserts).not.toContain(agentTasks);
   });
 });

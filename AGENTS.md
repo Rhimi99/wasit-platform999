@@ -332,6 +332,32 @@ npx playwright install --with-deps chromium
 - **اختبارات**: `tests/ai-mem01-agent-memory.test.ts` (15) + `tests/unit/agent-memory-policy.test.ts` (6).
   عند اختبار الحدود عدّل `env.AI_MEMORY_MAX_*` مؤقتًا وأعِدها في `finally` (بيئة الاختبار مشتركة).
 
+## AI-MET-01 — قياس أداء الوكلاء الدائم (2026-11-21)
+
+- **`agent_metrics` كان جدولًا فارغًا** منذ migration `0033` (لا كاتب ولا قارئ)، وA3
+  (`agent-metrics.ts`) كان يحسب كل رقم وقت الطلب. الآن السجل الدائم في
+  `packages/server/src/modules/ai/metrics.ts` — **بلا migration**.
+- **منع التكرار في قاعدة البيانات**: المفتاح الأساسي = `sha256(JSON[agentKey,taskId,attempt,outcome])`
+  بصيغة UUID. نفس الحدث مرتين ⇒ تصادم PK + `ON CONFLICT DO NOTHING`. **لا تضمّ الحقول بـ`|`** —
+  استخدم `JSON.stringify` وإلا تصادمت مفاتيح تحتوي الفاصل (اختبار وحدة يفرض ذلك).
+- **ربط دورة الحياة** في `agents.ts` عبر `recordMetricSafely` (يبتلع الفشل، لا يُفشل المهمة):
+  نجاح/فشل مباشر، نجاح/فشل بعد الموافقة، `rejected` عند الرفض البشري، و`blocked` عند الرفض قبل
+  التنفيذ (`task_id = null`). محاولة ثانية = صف جديد (attempt من `agent_tasks.attempts + 1`).
+- **المسارات** (كلها `AI_MANAGE` تحت `/api/admin/ai`): `GET /metrics/report|series|coverage`،
+  `POST /metrics/backfill`. النافذة ≤ 366 يومًا، `from < to`، ومخطط `.strict()` يرفض `ownerId`.
+  القراءة `AI.METRICS_REPORT_READ` والملء `AI.METRICS_BACKFILLED` في `audit_logs`.
+- **لا أرقام مُخترعة**: التكلفة `unavailable`/`null` عند غياب صف `ai_requests` (لا صفر)،
+  `businessOutcomes` دائمًا `unavailable` مع سبب، و`stalled` = «مفتوحة أطول من العتبة» وليست timeout.
+  التقرير يعرض `coverage` (مهام النافذة مقابل مهام لها صف) و`truncated` عند بلوغ سقف الصفوف.
+- **مصادر الأرقام**: التنفيذ/الإعادة/الزمن من `agent_metrics`؛ الموافقات والتعليق من `agent_tasks`؛
+  الأدوات من `audit_logs` (`AI.TOOL_*`, `TOOL_TIMEOUT`)؛ الذاكرة عدًّا فقط (`AI.MEMORY_*` +
+  أنواع `agent_memory`)؛ التكلفة من `ai_requests`.
+- **عزل**: كل صف يحمل `scope_owner` من الصف المخزَّن؛ التقرير لا يعرض معرّفات مالكين ولا نصوصًا —
+  عدد المالكين المختلفين فقط.
+- **`agent-metrics.ts` (A3) لم يتغيّر عقده**؛ السطح الدائم إضافة. اختبار `ai-reg01` يسمح الآن
+  بكتابة تدقيق + قياس عند الرفض، ويشترط **عدم** كتابة `agent_tasks`.
+- **اختبارات**: `tests/ai-met01-agent-metrics.test.ts` (18) + `tests/unit/agent-metrics-store.test.ts` (6).
+
 ## PHASE 17 — Security + Privacy + Audit (مكتملة — 123/123)
 
 - ✅ **MFA (TOTP RFC 6238)** `modules/auth` + `lib/mfa.ts`: enroll/confirm/disable/status/verify/recovery-codes/dev-totp. كل endpoint: `requireAuth` + `rateLimit` + Audit (`AUTH.MFA_*`). `dev-totp` محجوب في `NODE_ENV=production` (403).

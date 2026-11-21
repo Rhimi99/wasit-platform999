@@ -264,6 +264,22 @@ const envSchema = z.object({
   /** Character budget of the per-run recall injected into an agent run context. */
   AI_MEMORY_RUN_CONTEXT_CHARS: z.coerce.number().int().positive().default(600),
   /**
+   * AI-MET-01 — persistent agent metrics. The log is append-only in the existing
+   * `agent_metrics` table; these bounds decide when an open task is considered
+   * stalled, how much a backfill may do in one call, and how many log rows a
+   * single report may scan for percentile maths.
+   */
+  AI_METRICS_AUTO_RECORD: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** An open task older than this is reported as stalled (not "timed out"). */
+  AI_METRICS_STALL_AFTER_MINUTES: z.coerce.number().int().positive().default(30),
+  /** Maximum tasks a single backfill call reconstructs. */
+  AI_METRICS_BACKFILL_BATCH: z.coerce.number().int().positive().default(500),
+  /** Cap on metric rows read by one report; exceeding it sets `truncated`. */
+  AI_METRICS_MAX_ROWS: z.coerce.number().int().positive().default(50_000),
+  /**
    * Record one deterministic `task_result` memory per terminal agent task. It
    * carries status/latency/code only — never a model guess, never task output.
    */

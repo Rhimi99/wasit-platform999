@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { PERMISSIONS, type UserRole } from '@wasit/shared';
+import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
@@ -28,6 +28,13 @@ import {
 } from '../ai/scheduling.js';
 import { buildSupervisorOverview, containRunManually } from '../ai/supervisor.js';
 import { buildCompanyMetricsForAdmin } from '../ai/agent-metrics.js';
+import {
+  buildMetricsReport,
+  buildSeries,
+  metricsCoverage,
+  backfillAgentMetrics,
+  auditBackfill,
+} from '../ai/metrics.js';
 import {
   memorySummaryForAdmin,
   listMemoryMetadataForAdmin,
@@ -554,4 +561,115 @@ adminAiRoutes.post('/memory/purge', validateBody(memoryPurgeSchema), async (c) =
     },
   );
   return c.json({ success: true, data: { deleted } });
+});
+
+// ----- Persistent agent metrics (AI-MET-01) --------------------------------
+// The durable counterpart of /company-metrics: aggregates read from the
+// append-only agent_metrics log plus the live sources that own each figure
+// (agent_tasks for approvals/stalls, audit_logs for tool and memory events,
+// ai_requests for actual spend). Admin-only through the route-level AI_MANAGE
+// guard; per-owner data is never broken out — only a distinct-owner count.
+
+const metricsWindowSchema = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+    agentKey: z.string().max(64).optional(),
+    taskType: z.string().max(64).optional(),
+    granularity: z.enum(['day', 'week', 'month']).optional(),
+  })
+  .strict();
+
+const MAX_METRICS_RANGE_DAYS = 366;
+
+function parseMetricsWindow(raw: unknown): { from: Date; to: Date; granularity?: 'day' | 'week' | 'month'; agentKey?: string; taskType?: string } {
+  const parsed = metricsWindowSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw ApiError.validation(
+      parsed.error.issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message, code: issue.code })),
+    );
+  }
+  const to = parsed.data.to ? new Date(parsed.data.to) : new Date();
+  const from = parsed.data.from ? new Date(parsed.data.from) : new Date(to.getTime() - 30 * 86_400_000);
+  if (from.getTime() > to.getTime()) {
+    throw ApiError.validation([{ field: 'from', message: '`from` must be before `to`', code: 'RANGE' }]);
+  }
+  if (to.getTime() - from.getTime() > MAX_METRICS_RANGE_DAYS * 86_400_000) {
+    throw ApiError.validation([
+      { field: 'from', message: `Window cannot exceed ${MAX_METRICS_RANGE_DAYS} days`, code: 'RANGE' },
+    ]);
+  }
+  return {
+    from,
+    to,
+    granularity: parsed.data.granularity,
+    agentKey: parsed.data.agentKey,
+    taskType: parsed.data.taskType,
+  };
+}
+
+adminAiRoutes.get('/metrics/report', async (c) => {
+  const ctx = getContext(c);
+  const window = parseMetricsWindow(c.req.query());
+  const report = await buildMetricsReport(ctx.db, window);
+  await writeAudit(
+    ctx.db,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    {
+      action: 'AI.METRICS_REPORT_READ',
+      entityType: 'AGENT_METRICS',
+      entityId: window.agentKey ?? null,
+      metadata: {
+        from: window.from.toISOString(),
+        to: window.to.toISOString(),
+        agentKey: window.agentKey ?? null,
+        taskType: window.taskType ?? null,
+        granularity: window.granularity ?? 'day',
+      },
+    },
+  );
+  return c.json({ success: true, data: report });
+});
+
+adminAiRoutes.get('/metrics/series', async (c) => {
+  const ctx = getContext(c);
+  const window = parseMetricsWindow(c.req.query());
+  const points = await buildSeries(ctx.db, {
+    from: window.from,
+    to: window.to,
+    granularity: window.granularity ?? 'day',
+    agentKey: window.agentKey,
+    taskType: window.taskType,
+  });
+  return c.json({
+    success: true,
+    data: {
+      window: { from: window.from.toISOString(), to: window.to.toISOString(), granularity: window.granularity ?? 'day' },
+      points,
+    },
+  });
+});
+
+adminAiRoutes.get('/metrics/coverage', async (c) => {
+  const ctx = getContext(c);
+  const window = parseMetricsWindow(c.req.query());
+  const coverage = await metricsCoverage(ctx.db, {
+    from: window.from,
+    to: window.to,
+    agentKey: window.agentKey,
+  });
+  return c.json({ success: true, data: coverage });
+});
+
+adminAiRoutes.post('/metrics/backfill', validateBody(
+  z.object({ from: z.string().datetime().optional(), limit: z.number().int().positive().max(5000).optional() }).strict(),
+), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<{ from?: string; limit?: number }>(c);
+  const result = await backfillAgentMetrics(ctx.db, {
+    since: body.from ? new Date(body.from) : undefined,
+    limit: body.limit,
+  });
+  await auditBackfill(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, result);
+  return c.json({ success: true, data: result });
 });
