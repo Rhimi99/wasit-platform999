@@ -369,6 +369,47 @@ export async function getDisputePolicy(db: DB): Promise<Record<string, unknown>>
   return resolved.rules;
 }
 
+/**
+ * Read-only snapshot of the policy that governs one dispute.
+ *
+ * `getDisputePolicyForOrder` records a country-policy gap when no override
+ * exists. That write is correct for a human-facing read, but an agent run must
+ * never write a platform row, so the snapshot path resolves the merged policy
+ * without registering the gap. The task stores the snapshot as immutable input,
+ * which also makes the advice auditable against the rules in force when it was
+ * requested.
+ */
+export async function disputePolicySnapshot(
+  db: DB,
+  disputeId: string | null,
+): Promise<{
+  rules: Record<string, unknown>;
+  source: 'COUNTRY' | 'GLOBAL';
+  countryCode: string | null;
+  policyId: string | null;
+  version: number | null;
+  capturedAt: string;
+} | null> {
+  // A null id means "the platform default", used for queue triage where no
+  // single dispute (and therefore no country) is in scope yet.
+  const dispute = disputeId ? await loadDisputeBase(db, disputeId) : null;
+  if (disputeId && !dispute) return null;
+  const country = dispute ? await resolveOrderCountry(db, dispute.orderId) : null;
+  const resolved = await resolveMergedPolicy(db, {
+    scope: 'DISPUTE',
+    code: 'DISPUTE_RESOLUTION',
+    countryId: country?.id ?? null,
+  });
+  return {
+    rules: resolved.rules,
+    source: resolved.source,
+    countryCode: country?.code ?? null,
+    policyId: resolved.policyId,
+    version: resolved.version,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
 /** Appeal limits are policy-driven, never hardcoded. Defaults mirror the seeded policy. */
 async function resolveAppealRules(db: DB, orderId: string): Promise<AppealRules> {
   const policy = await getDisputePolicyForOrder(db, orderId);

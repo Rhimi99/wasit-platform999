@@ -277,10 +277,20 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
   'dispute-assistant': {
     agentKey: 'dispute-assistant',
     specialization: 'Dispute context summarisation',
-    allowedDomains: ['DISPUTE'],
-    allowedTables: ['disputes', 'dispute_messages'],
+    allowedDomains: ['DISPUTE', 'COMMERCE'],
+    // A summary that cannot see the evidence, the timeline, the appeals or the
+    // disputed amount is not a summary. Every read is scoped to ONE dispute (its
+    // own rows, and the single order that dispute names) and stays read-only.
+    allowedTables: [
+      'disputes',
+      'dispute_messages',
+      'dispute_evidence',
+      'dispute_events',
+      'dispute_appeals',
+      'orders',
+    ],
     readOnly: true,
-    prohibitedDomains: prohibited(['DISPUTE']),
+    prohibitedDomains: prohibited(['DISPUTE', 'COMMERCE']),
     canDelegate: false,
     ownerScoped: true,
   },

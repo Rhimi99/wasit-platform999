@@ -567,6 +567,16 @@ npx playwright install --with-deps chromium
 - **الوضع الحالي**: `ar-TN` محجوب (`audio.voiceover`)، والبقية `DELIVERED` — `verify:videos` يحتاج `DATABASE_URL` من `.env.demo`.
 - **بديل التوسع**: Azure `ar-TN-ReemNeural`/`ar-TN-HediNeural` ($15/1M حرف، 0.5M مجانًا/شهر على F0) أو Custom Neural Voice ($4.032/ساعة استضافة) — يحتاج موافقة مالية واختبار سماع. التفاصيل في `docs/VOICE-TUNISIAN.md` وAD-053.
 
+## AFC-07 — مساعد النزاعات يلخّص نزاعًا واحدًا (2026-11-20)
+
+- **العيب الذي أُغلق:** `dispute-assistant` كان يتجاهل `input.disputeId`، ويجمع آخر 5 رسائل من كل النزاعات في مخرج واحد، ويعيد جملة ثابتة كتوصية. وجود executor + اختبار يفحص وجود الحقل لم يكونا دليل اكتمال.
+- **الوضعان:** `summary` (مع `disputeId`: وقائع + مبلغ الطلب + أدلة + أحداث + استئنافات + مهل + ثغرات + مسارات + توصية) و`triage` (بلا `disputeId`: أعداد وأعمار فقط، **بلا أي نص رسالة**).
+- **السياسة:** `policies` محجوب عن كل الوكلاء (`HARD_DENY_TABLES`). تُقرأ في طبقة الخدمة عبر `disputePolicySnapshot(db, disputeId|null)` (بلا كتابة `country_policy_gaps`) وتُحقن في `input.__disputePolicy` بعد إسقاط قيمة الطالب — نفس نمط `__partnerConsent`.
+- **عقد A2 للوكيل:** `disputes, dispute_messages, dispute_evidence, dispute_events, dispute_appeals, orders` + نطاق `COMMERCE`، قراءة فقط ومقيدة بـ`disputeId`. أي قراءة خارجها ترمي `AgentScopeError`.
+- **قاعدة:** أي أثر مالي في المخرج يأتي من `rules.decisionEffects` في اللقطة؛ غيابه = `DECISION_REQUIRED` (مثل `SPLIT`)، ولا يُخترع.
+- **الأدلة:** `tests/unit/dispute-summary.test.ts` (23) + `tests/ai-dispute-assistant.test.ts` (12، منها عزل نزاع A عن B ورفض CUSTOMER/SUPPORT قبل أي صف وعدم الكتابة).
+- **AI-03 يبقى مفتوحًا:** الإنشاء التلقائي لمهمة عند فتح النزاع يحتاج مالكًا من نطاق المنصة (`agent_tasks.requested_by` غير قابل للـNULL) — قرار في AD-054.
+
 ## Landing page (public marketing surface)
 
 - The homepage is the **dark navy premium** theme (`bg-ink-950`, i.e. `#050c24`). All other public routes keep the light/white header.

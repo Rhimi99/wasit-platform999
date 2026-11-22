@@ -7,6 +7,7 @@ import { agentRunSteps } from '../../db/schema/agent_runs';
 import { aiRequests } from '../../db/schema/ai';
 import { roles, userRoles } from '../../db/schema/auth';
 import { resolvePartnerConsent } from './partner-consent';
+import { disputePolicySnapshot } from '../disputes/service';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { buildPriorContext, recordTaskOutcomeMemory } from './memory.js';
 import { recordMetricSafely } from './metrics.js';
@@ -426,6 +427,17 @@ export async function createAgentTask(
     const { __partnerConsent: _ignored, ...rest } = effectiveInput as Record<string, unknown>;
     void _ignored;
     effectiveInput = { ...rest, __partnerConsent: await resolvePartnerConsent(db, requestedBy) };
+  }
+  if (agent.key === 'dispute-assistant') {
+    // The dispute policy lives in `policies`, which every agent is hard-denied
+    // from reading, so it is resolved here (service layer) and frozen into the
+    // task. Any caller-supplied snapshot is dropped first: a request cannot
+    // rewrite the rules its own advice will be judged against.
+    const { __disputePolicy: _ignored, ...rest } = effectiveInput as Record<string, unknown>;
+    void _ignored;
+    const disputeId = typeof rest.disputeId === 'string' ? rest.disputeId : null;
+    const snapshot = await disputePolicySnapshot(db, disputeId);
+    effectiveInput = { ...rest, __disputePolicy: snapshot };
   }
 
   if (fencing) {

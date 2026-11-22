@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import type { AgentDefinition } from '../../lib/ai/types';
 import { runAIFeature } from '../../lib/ai/runtime';
@@ -10,7 +10,7 @@ import { orders, orderItems, transactions } from '../../db/schema/commerce';
 import { inventoryItems, inventoryMovements } from '../../db/schema/commerce_extras';
 import { campaigns, adCreatives, adEvents } from '../../db/schema/ads';
 import { riskProfiles, riskEvents } from '../../db/schema/risk';
-import { disputes, disputeMessages } from '../../db/schema/disputes';
+import { disputes, disputeMessages, disputeEvidence, disputeEvents, disputeAppeals } from '../../db/schema/disputes';
 import { trustScores, reviews } from '../../db/schema/trust';
 import { messages, threads } from '../../db/schema/messaging';
 import { users } from '../../db/schema/auth';
@@ -21,7 +21,7 @@ import { agentTasks } from '../../db/schema/agents';
 import { agentRuns, agentRunSteps } from '../../db/schema/agent_runs';
 import { dailyKpis } from '../../db/schema/analytics';
 import { listRecentMarketingVideos } from '../media/service';
-import { MARKETING_VIDEO_DURATION } from '@wasit/shared';
+import { ApiError, MARKETING_VIDEO_DURATION } from '@wasit/shared';
 import { env } from '../../lib/env';
 import { planTimeline, produceMarketingVideo, type ProducedVideo } from '../../lib/media/marketing-video';
 import { evaluateMarketingVideo, type QualityReport } from '../../lib/media/video-quality';
@@ -38,6 +38,7 @@ import { measureMp4DurationSeconds } from '../../lib/media/mp4';
 import { decodeMp4File, probeMp4File } from '../../lib/media/verify';
 import { resolveMediaStorage } from '../../lib/media/resolve';
 import { analyseFailures, buildRepairPackage, buildReviewReport, proposePatch } from './diagnostics';
+import { buildDisputeSummary, buildDisputeTriage, policyNumber, type DisputePolicySnapshot } from './dispute-summary';
 
 /**
  * WASIT specialised agent executors (Phase 14).
@@ -1438,71 +1439,235 @@ async function execRiskAgent(db: DB, agent: AgentDefinition, input: Record<strin
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
+/**
+ * Dispute Assistant.
+ *
+ * Two modes, both read-only and both advisory:
+ * - `disputeId` given: a summary of THAT dispute (facts, evidence, timeline,
+ *   policy-derived deadlines, gaps, resolution paths, recommendation).
+ * - no `disputeId`: a triage snapshot of the open queue. It carries no message
+ *   bodies at all, so a platform operator cannot accidentally read one dispute's
+ *   conversation through a request about the queue.
+ *
+ * The agent never decides: `decisionAuthority` is always HUMAN and every money
+ * effect comes from the policy snapshot frozen into the task.
+ */
 async function execDisputeAssistant(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
-  const [openDisputes, allDisputes, recentMessages, openCount] = await Promise.all([
+  const now = new Date();
+  const disputeId = typeof input.disputeId === 'string' && input.disputeId.trim().length > 0 ? input.disputeId.trim() : null;
+  const policy = readPolicySnapshot(input.__disputePolicy);
+
+  if (!disputeId) {
+    const [countRows, openRows] = await Promise.all([
+      db
+        .select({ status: disputes.status, v: sql<number>`count(*)::int` })
+        .from(disputes)
+        .groupBy(disputes.status),
+      db
+        .select({
+          id: disputes.id,
+          disputeNumber: disputes.disputeNumber,
+          status: disputes.status,
+          reasonCode: disputes.reasonCode,
+          assignedToId: disputes.assignedToId,
+          createdAt: disputes.createdAt,
+        })
+        .from(disputes)
+        .where(sql`${disputes.status} not in ('DECIDED', 'CLOSED', 'ARCHIVED')`)
+        .orderBy(asc(disputes.createdAt))
+        .limit(20),
+    ]);
+
+    const counts: Record<string, number> = {};
+    for (const row of countRows) counts[row.status] = toNum(row.v);
+
+    const decisionDays = policyNumber(policy, 'decisionDeadlineDays');
+    const triage = buildDisputeTriage(
+      openRows.map((r) => ({
+        ...r,
+        decisionDueAt: decisionDays === null ? null : new Date(r.createdAt.getTime() + decisionDays * 86_400_000),
+      })),
+      counts,
+      now,
+    );
+    const data: Record<string, unknown> = {
+      agentKey: agent.key,
+      action: input.action ?? 'summarize_dispute',
+      ...triage,
+    };
+
+    const text = adviceText(
+      'Dispute queue: {{open}} open of {{total}} total, {{unassigned}} unassigned, {{overdue}} past the decision deadline. No conversation content is included in triage.',
+      {
+        open: triage.counts.open,
+        total: Object.values(counts).reduce((a, b) => a + b, 0),
+        unassigned: triage.counts.unassigned,
+        overdue: triage.counts.decisionOverdue,
+      },
+    );
+    const out = await runAIFeature(db, {
+      userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+      roles: ['SUPER_ADMIN'],
+      requestType: `AGENT:${agent.key}`,
+      system: 'You are the WASIT Dispute Assistant. Summarise the queue for a human reviewer. Never decide a dispute.',
+      user: text,
+      maxTokens: 96,
+      metadata: { agentKey: agent.key, action: input.action, mode: 'triage' },
+    });
+    return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  }
+
+  const [dispute] = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
+  if (!dispute) throw ApiError.notFound('Dispute not found');
+
+  const [orderRow] = await db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      buyerId: orders.buyerId,
+      sellerId: orders.sellerId,
+      status: orders.status,
+      paymentStatus: orders.paymentStatus,
+      refundStatus: orders.refundStatus,
+      grandTotal: orders.grandTotal,
+      currencyCode: orders.currencyCode,
+      createdAt: orders.createdAt,
+    })
+    .from(orders)
+    .where(eq(orders.id, dispute.orderId))
+    .limit(1);
+
+  const [messageRows, evidenceRows, eventRows, appealRows] = await Promise.all([
     db
       .select({
-        id: disputes.id,
-        disputeNumber: disputes.disputeNumber,
-        status: disputes.status,
-        reasonCode: disputes.reasonCode,
-        assignedToId: disputes.assignedToId,
-        createdAt: disputes.createdAt,
+        senderId: disputeMessages.senderId,
+        body: disputeMessages.body,
+        isEvidence: disputeMessages.isEvidence,
+        createdAt: disputeMessages.createdAt,
       })
-      .from(disputes)
-      .where(eq(disputes.status, 'OPEN')),
-    db.select({ v: sql<number>`count(*)::int` }).from(disputes),
-    db
-      .select({ id: disputeMessages.id, senderId: disputeMessages.senderId, body: disputeMessages.body })
       .from(disputeMessages)
-      .orderBy(desc(disputeMessages.createdAt))
-      .limit(Number(input.limit ?? 5)),
-    db.select({ v: sql<number>`count(*)::int` }).from(disputes).where(eq(disputes.status, 'OPEN')),
+      .where(eq(disputeMessages.disputeId, dispute.id))
+      .orderBy(asc(disputeMessages.createdAt))
+      .limit(200),
+    db
+      .select({
+        uploadedById: disputeEvidence.uploadedById,
+        description: disputeEvidence.description,
+        contentType: disputeEvidence.contentType,
+        createdAt: disputeEvidence.createdAt,
+      })
+      .from(disputeEvidence)
+      .where(eq(disputeEvidence.disputeId, dispute.id))
+      .orderBy(asc(disputeEvidence.createdAt))
+      .limit(50),
+    db
+      .select({
+        eventType: disputeEvents.eventType,
+        actorId: disputeEvents.actorId,
+        createdAt: disputeEvents.createdAt,
+      })
+      .from(disputeEvents)
+      .where(eq(disputeEvents.disputeId, dispute.id))
+      .orderBy(asc(disputeEvents.createdAt))
+      .limit(50),
+    db
+      .select({
+        status: disputeAppeals.status,
+        appealedById: disputeAppeals.appealedById,
+        createdAt: disputeAppeals.createdAt,
+      })
+      .from(disputeAppeals)
+      .where(eq(disputeAppeals.disputeId, dispute.id))
+      .orderBy(asc(disputeAppeals.createdAt))
+      .limit(20),
   ]);
 
-  const openN = toNum(openCount[0]?.v);
-  const facts = {
-    totalDisputes: toNum(allDisputes[0]?.v),
-    openDisputes: openDisputes.map((d) => ({
-      id: d.id,
-      disputeNumber: d.disputeNumber,
-      reasonCode: d.reasonCode,
-      status: d.status,
-      assignedToId: d.assignedToId,
-      createdAt: d.createdAt.toISOString(),
-    })),
-    openCount: openN,
-    recentMessages: recentMessages.map((m) => ({ senderId: m.senderId, body: m.body.slice(0, 140) })),
-  };
+  const summary = buildDisputeSummary({
+    dispute: {
+      id: dispute.id,
+      disputeNumber: dispute.disputeNumber,
+      status: dispute.status,
+      reasonCode: dispute.reasonCode,
+      description: dispute.description,
+      decision: dispute.decision,
+      assignedToId: dispute.assignedToId,
+      appealAllowed: dispute.appealAllowed,
+      openedById: dispute.openedById,
+      createdAt: dispute.createdAt,
+      decidedAt: dispute.decidedAt,
+    },
+    order: orderRow
+      ? {
+          id: orderRow.id,
+          orderNumber: orderRow.orderNumber,
+          status: orderRow.status,
+          paymentStatus: orderRow.paymentStatus,
+          refundStatus: orderRow.refundStatus,
+          grandTotal: toNum(orderRow.grandTotal),
+          currencyCode: orderRow.currencyCode,
+          createdAt: orderRow.createdAt,
+        }
+      : null,
+    messages: messageRows,
+    evidence: evidenceRows,
+    events: eventRows,
+    appeals: appealRows,
+    policy,
+    parties: { buyerId: orderRow?.buyerId ?? null, sellerId: orderRow?.sellerId ?? null },
+    now,
+  });
 
   const data: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'summarize_dispute',
-    snapshot: facts,
-    recommendation:
-      openN > 0
-        ? `There are ${openN} open dispute(s). Prioritise responses and keep evidence organised per dispute.`
-        : 'No open disputes — recommend ongoing mediation protocol.',
-    readOnly: true,
-    generatedAt: new Date().toISOString(),
+    ...summary,
   };
 
+  // The provider prompt carries counts and the recommendation only — message
+  // bodies stay in the stored result and are never sent to a model provider.
   const text = adviceText(
-    'Dispute centre: {{total}} disputes total, {{open}} open, with {{messages}} recent messages exchanged.',
-    { total: facts.totalDisputes, open: openN, messages: facts.recentMessages.length },
+    'Dispute {{number}} ({{status}}, reason {{reason}}) on order {{order}}: {{messages}} messages, {{evidence}} evidence files, {{gaps}} gaps. Recommendation: {{action}} with confidence {{confidence}}. A human decides.',
+    {
+      number: summary.dispute.disputeNumber,
+      status: summary.dispute.status,
+      reason: summary.dispute.reasonCode,
+      order: summary.order?.orderNumber ?? 'unknown',
+      messages: summary.conversation.messages,
+      evidence: summary.evidence.count,
+      gaps: summary.gaps.length,
+      action: summary.recommendation.action,
+      confidence: summary.recommendation.confidence,
+    },
   );
 
   const out = await runAIFeature(db, {
     userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
     roles: ['SUPER_ADMIN'],
     requestType: `AGENT:${agent.key}`,
-    system: 'You are the WASIT Dispute Assistant.',
+    system: 'You are the WASIT Dispute Assistant. Summarise the dispute and its options for a human reviewer. Never decide a dispute.',
     user: text,
-    maxTokens: 96,
-    metadata: { agentKey: agent.key, action: input.action },
+    maxTokens: 128,
+    metadata: { agentKey: agent.key, action: input.action, disputeId: dispute.id },
   });
 
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+/** Accepts only a server-injected policy snapshot; a caller-shaped value is ignored. */
+function readPolicySnapshot(value: unknown): DisputePolicySnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const rules = v.rules;
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return null;
+  const source = v.source === 'COUNTRY' || v.source === 'GLOBAL' ? v.source : 'GLOBAL';
+  return {
+    rules: rules as Record<string, unknown>,
+    source,
+    countryCode: typeof v.countryCode === 'string' ? v.countryCode : null,
+    policyId: typeof v.policyId === 'string' ? v.policyId : null,
+    version: typeof v.version === 'number' ? v.version : null,
+    capturedAt: typeof v.capturedAt === 'string' ? v.capturedAt : new Date().toISOString(),
+  };
 }
 
 /** Clamps an integer input to a safe range (window sizes, limits). */
