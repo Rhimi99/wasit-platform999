@@ -143,9 +143,13 @@ const COPY: Record<VideoLanguage, Copy> = {
   },
   'ar-TN': {
     dialect: 'TUNISIAN',
+    // Tunisian ships from recorded voice packs, so every spoken line is fixed
+    // copy: the product name, price and seller are shown on screen instead of
+    // being spoken. A recorded pack can never say an arbitrary product name,
+    // and a synthetic MSA voice may not stand in for a Tunisian one.
     hook: (f) => ({
       headline: f.name,
-      voiceover: `شنيّة هذا؟ هذا ${f.name}، وموجود توّا في وسيط.`,
+      voiceover: `شنيّة هذا؟ هذا منتج تلقاه توّا في وسيط.`,
     }),
     value: (f, audience) => ({
       headline: 'شنوّة يزيد',
@@ -155,26 +159,19 @@ const COPY: Record<VideoLanguage, Copy> = {
           ? `يصلح للتجّار والمحلّات إلّي يحبّو يشرو بالجملة: تنجّم تشوف السوم والتفاصيل الكل قبل ما تكمّن.`
           : `تنجّم تشوف التفاصيل الكل والسوم قبل ما تشري، بلا ما تتقلّق.`,
     }),
-    detail: (f) => {
-      const excerpt = descriptionExcerpt(f);
-      return {
-        headline: 'التفاصيل',
-        bullets: excerpt ? [excerpt] : [],
-        voiceover: excerpt
-          ? `البايع يقول: ${excerpt}`
-          : `في صفحة المنتج تلقى الوصف الكل، والسوم، ومعطيات البايع.`,
-      };
-    },
-    trust: (f) => ({
+    detail: (f) => ({
+      headline: 'التفاصيل',
+      bullets: descriptionExcerpt(f) ? [descriptionExcerpt(f) as string] : [],
+      voiceover: `في صفحة المنتج تلقى الوصف الكل من البايع، والسوم، ومعطياتو.`,
+    }),
+    trust: () => ({
       headline: 'علاش وسيط',
       bullets: ['السوم ومعطيات البايع قبل ما تكمّن', 'الطلبية وحالتها في حسابك'],
-      voiceover: f.sellerName
-        ? `البيع من ${f.sellerName} عبر وسيط، والسوم واضح قبل ما تكمّن.`
-        : `البيع عبر وسيط، والسوم واضح قبل ما تكمّن.`,
+      voiceover: `البيع عبر وسيط، والسوم ومعطيات البايع واضحة قبل ما تكمّن.`,
     }),
-    cta: (f) => ({
+    cta: () => ({
       headline: CTA_PHRASE['ar-TN'],
-      voiceover: `إلّي يعجبك، اطلب توّا من وسيط${f.sellerName ? ` من ${f.sellerName}` : ''}.`,
+      voiceover: `إلّي يعجبك، اطلب توّا من وسيط.`,
     }),
   },
   fr: {

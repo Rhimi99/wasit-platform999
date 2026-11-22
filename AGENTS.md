@@ -557,6 +557,16 @@ npx playwright install --with-deps chromium
 - أعد تشغيل `seed-demo` مع `.env.demo` الكامل (يحوي مفاتيح كل حساب) كي لا تعود كلمة المرور
   المنشورة. التفاصيل: `docs/DEMO-03_CREDENTIAL_ROTATION.md`.
 
+## AFC-06.1 — الصوت التونسي (حزمة تسجيل مرخَّصة) — 2026-11-22
+
+- **لا نموذج تونسي بترخيص تجاري**: Piper فيه صوتان عربيان فقط (`ar_JO-kareem`)، وكل نماذج الدارجة المنشورة `CC-BY-NC-4.0` (`Ghazouaniwala/silma-tts-derja`, `Nouira-Oussema/Tunisian-TTS`) أو بلا ترخيص (`amenIKh/Tunisian_TTS`). الأساسات نفسها NC: XTTS-v2 (CPML)، F5-TTS، MMS.
+- **المسار المعتمد**: `lib/media/voice-pack.ts` — `VOICE_PACK_DIR` أو `vendor/voices/<lang>/manifest.json` + WAV، مطابقة `sha256` على السطر بعد تطبيع المسافات. الحزمة تسبق أي صوت صناعي في `resolveVoice`.
+- **حرس الترخيص (لا يُتجاوَز)**: رفض عند `license.commercialUse !== true`، غياب `license.holder`/`terms`، غياب `consent.reference`، انتهاء `validUntil`، ملف مفقود، سطر مكرَّر، و`dialectNative !== true` لأي حزمة `ar-TN`.
+- **قيد تصميمي**: نص `ar-TN` صار ثابتًا (اسم المنتج/السوم/البائع على الشاشة فقط) لأن الحزمة المسجَّلة لا تنطق أسماء متغيّرة. `npm run voices:brief -w @wasit/server` يولّد `artifacts/voice-packs/ar-TN/{brief.md,lines.json}`: **6 أسطر / 60 كلمة** تغطي كل الفيديوهات.
+- **لا تسمية فصحى بتونسي**: الحزمة التجريبية `tests/fixtures/voice-pack/ar-TN` صوت Piper فصحى ومعلَّمة `dialectNative:false` ⇒ مرفوضة (اختبار صريح). أي إثبات بـ`dialectNative:true` هو سباكة فقط وليس ادعاء لهجة.
+- **الوضع الحالي**: `ar-TN` محجوب (`audio.voiceover`)، والبقية `DELIVERED` — `verify:videos` يحتاج `DATABASE_URL` من `.env.demo`.
+- **بديل التوسع**: Azure `ar-TN-ReemNeural`/`ar-TN-HediNeural` ($15/1M حرف، 0.5M مجانًا/شهر على F0) أو Custom Neural Voice ($4.032/ساعة استضافة) — يحتاج موافقة مالية واختبار سماع. التفاصيل في `docs/VOICE-TUNISIAN.md` وAD-053.
+
 ## Landing page (public marketing surface)
 
 - The homepage is the **dark navy premium** theme (`bg-ink-950`, i.e. `#050c24`). All other public routes keep the light/white header.

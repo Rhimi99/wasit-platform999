@@ -22,7 +22,8 @@
     "typecheck": "tsc --noEmit",
     "load:smoke": "tsx src/scripts/load-smoke.ts",
     "verify:videos": "tsx src/scripts/verify-marketing-videos.ts",
-    "install:tts": "bash ../../scripts/install-tts.sh"
+    "install:tts": "bash ../../scripts/install-tts.sh",
+    "voices:brief": "tsx src/scripts/voice-recording-brief.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

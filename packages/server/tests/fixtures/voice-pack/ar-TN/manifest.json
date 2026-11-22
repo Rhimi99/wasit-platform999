@@ -1,0 +1,44 @@
+{
+  "language": "ar-TN",
+  "speaker": "Piper MSA placeholder (NOT Tunisian)",
+  "dialectNative": false,
+  "recordedAt": "2026-11-22",
+  "sampleRate": 22050,
+  "license": {
+    "holder": "WASIT (synthetic fixture)",
+    "terms": "piper MIT model output, test fixture only",
+    "commercialUse": true,
+    "territory": "test",
+    "validUntil": null
+  },
+  "consent": {
+    "reference": "fixture-no-speaker-release",
+    "signedAt": "2026-11-22"
+  },
+  "clips": [
+    {
+      "text": "شنيّة هذا؟ هذا منتج تلقاه توّا في وسيط.",
+      "file": "001-44ad0ca8.wav"
+    },
+    {
+      "text": "تنجّم تشوف التفاصيل الكل والسوم قبل ما تشري، بلا ما تتقلّق.",
+      "file": "002-97dfeb76.wav"
+    },
+    {
+      "text": "في صفحة المنتج تلقى الوصف الكل من البايع، والسوم، ومعطياتو.",
+      "file": "003-7bd084aa.wav"
+    },
+    {
+      "text": "البيع عبر وسيط، والسوم ومعطيات البايع واضحة قبل ما تكمّن.",
+      "file": "004-dd1ed8ac.wav"
+    },
+    {
+      "text": "إلّي يعجبك، اطلب توّا من وسيط.",
+      "file": "005-ee418a15.wav"
+    },
+    {
+      "text": "يصلح للتجّار والمحلّات إلّي يحبّو يشرو بالجملة: تنجّم تشوف السوم والتفاصيل الكل قبل ما تكمّن.",
+      "file": "006-886d6e2c.wav"
+    }
+  ]
+}

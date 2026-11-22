@@ -474,6 +474,11 @@ const envSchema = z.object({
   TTS_PIPER_PATH: z.string().optional(),
   /** Directory holding the piper `.onnx` voices (never committed). */
   TTS_VOICES_DIR: z.string().optional(),
+  /**
+   * Root of the recorded voice packs (`<dir>/<language>/manifest.json`).
+   * A licensed human pack takes precedence over a synthetic voice.
+   */
+  VOICE_PACK_DIR: z.string().optional(),
   /** Music bed level relative to the voiceover, in dB (negative = quieter). */
   VIDEO_MUSIC_GAIN_DB: z.coerce.number().default(-21),
   /** Ceiling for the mixed programme loudness target (EBU R128, LUFS). */

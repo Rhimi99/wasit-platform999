@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '../env.js';
+import { loadVoicePack, lookupVoiceClip, missingVoiceLines } from './voice-pack.js';
 
 const run = promisify(execFile);
 
@@ -56,7 +57,7 @@ export interface VoiceDefinition {
   /** BCP-47 locale the voice was trained on — the basis of the language check. */
   locale: string;
   label: string;
-  engine: 'piper';
+  engine: 'piper' | 'voicepack';
   license: string;
   /** False for anything that may not be used in a commercial advert. */
   commercialUse: boolean;
@@ -164,13 +165,34 @@ export interface VoiceResolution {
 
 export function resolveVoice(language: VideoLanguage): VoiceResolution {
   const engineAvailable = env.TTS_ENGINE === 'piper' && piperPath() !== null;
-  const voice = VOICE_CATALOGUE.find((v) => v.language === language && v.commercialUse) ?? null;
-
-  if (!voice) {
-    return { voice: null, reason: VOICE_GAPS[language] ?? `No voice is configured for ${language}.`, engineAvailable };
-  }
   if (env.TTS_ENGINE === 'none') {
     return { voice: null, reason: 'Voiceover is disabled (TTS_ENGINE=none).', engineAvailable: false };
+  }
+
+  // A licensed human pack wins over any synthetic voice: it is the only lawful
+  // way to speak a dialect no TTS model covers commercially.
+  const pack = loadVoicePack(language);
+  if (pack.ok) {
+    return {
+      voice: {
+        id: `pack-${language}-${pack.pack.manifest.speaker.replace(/\s+/g, '-').toLowerCase()}`,
+        model: '.',
+        language,
+        locale: pack.pack.manifest.dialectNative ? language : 'und',
+        label: `Recorded pack — ${pack.pack.manifest.speaker}`,
+        engine: 'voicepack',
+        license: pack.pack.manifest.license.terms,
+        commercialUse: pack.pack.manifest.license.commercialUse === true,
+        dialectNative: pack.pack.manifest.dialectNative === true,
+      },
+      reason: null,
+      engineAvailable: true,
+    };
+  }
+
+  const voice = VOICE_CATALOGUE.find((v) => v.language === language && v.commercialUse) ?? null;
+  if (!voice) {
+    return { voice: null, reason: VOICE_GAPS[language] ?? `No voice is configured for ${language}.`, engineAvailable };
   }
   if (!engineAvailable) {
     return {
@@ -217,6 +239,25 @@ export interface SynthesizeOptions {
 export async function synthesizeSpeech(options: SynthesizeOptions): Promise<SynthesizedClip> {
   const { voice, reason } = resolveVoice(options.language);
   if (!voice) throw new Error(reason ?? `No voice for ${options.language}`);
+
+  if (voice.engine === 'voicepack') {
+    const pack = loadVoicePack(options.language);
+    if (!pack.ok) throw new Error(pack.reason);
+    const clip = lookupVoiceClip(pack.pack, options.text);
+    if (!clip) {
+      const missing = missingVoiceLines(pack.pack, [options.text]);
+      throw new Error(
+        `The ${options.language} voice pack has no recording for this line: "${missing[0]}". ` +
+          'Run `npm run voices:brief -w @wasit/server` to regenerate the recording script.',
+      );
+    }
+    // Match piper's output shape (22.05 kHz mono) so the mixer sees one format.
+    await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', clip.path,
+      '-ac', '1', '-ar', '22050', '-y', options.outFile], { timeout: 120_000 });
+    const durationSeconds = await probeAudioDuration(options.outFile);
+    const bytes = (await readFile(options.outFile)).byteLength;
+    return { file: options.outFile, durationSeconds, bytes, voice };
+  }
 
   const bin = piperPath();
   if (!bin) throw new Error('piper binary not found');
