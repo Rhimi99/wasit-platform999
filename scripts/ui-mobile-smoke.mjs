@@ -6,6 +6,7 @@
  * Usage: node scripts/ui-mobile-smoke.mjs <baseURL>
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:12000').replace(/\/+$/, '');
 const steps = [];
@@ -60,7 +61,7 @@ async function phone() {
   await page.fill('input[type="email"]', 'customer1@wasit.tn');
   await page.fill(
     'input[type="password"]',
-    process.env.DEMO_ACCOUNT_PASSWORD?.trim() || 'Passw0rd!2026',
+    process.env.DEMO_ACCOUNT_PASSWORD?.trim() || demoPasswordFor('customer1@wasit.tn'),
   );
   await page.click('button[type="submit"]');
   await page.waitForURL(/dashboard/, { timeout: 30000 });

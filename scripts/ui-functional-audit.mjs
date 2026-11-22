@@ -19,26 +19,20 @@
  *   DEMO_STAFF_PASSWORD=... node scripts/ui-functional-audit.mjs <baseURL>
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 import fs from 'node:fs';
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:12000').replace(/\/+$/, '');
 const ROLE_FILTER = process.argv[3] ?? null;
 
-// The four public demo accounts share the published demo password; it is
-// documented as the development fallback (`DEMO_PUBLISHED_PASSWORD`) and is not a
-// secret; a rotated deployment passes its credential through DEMO_ACCOUNT_PASSWORD.
-// The staff account is different: its password is a live credential supplied at
-// runtime through DEMO_STAFF_PASSWORD and must never be written into source.
-const DEMO_PUBLISHED_PASSWORD = 'Passw0rd!2026';
-const DEMO_ACCOUNT_PASSWORD =
-  (process.env.DEMO_ACCOUNT_PASSWORD ?? '').trim() || DEMO_PUBLISHED_PASSWORD;
-
+// Since DEMO-SEC-03 every account has its own random password; the helper reads
+// it from the environment or the git-ignored .env.demo and never logs it.
 const ACCOUNTS = {
-  customer: { email: 'customer1@wasit.tn', password: DEMO_ACCOUNT_PASSWORD },
-  supplier: { email: 'suppliera@wasit.tn', password: DEMO_ACCOUNT_PASSWORD },
-  merchant: { email: 'merchanta@wasit.tn', password: DEMO_ACCOUNT_PASSWORD },
-  company: { email: 'companya@wasit.tn', password: DEMO_ACCOUNT_PASSWORD },
-  admin: { email: 'admin@wasit.tn', password: (process.env.DEMO_STAFF_PASSWORD ?? '').trim() },
+  customer: { email: 'customer1@wasit.tn', password: demoPasswordFor('customer1@wasit.tn') },
+  supplier: { email: 'suppliera@wasit.tn', password: demoPasswordFor('suppliera@wasit.tn') },
+  merchant: { email: 'merchanta@wasit.tn', password: demoPasswordFor('merchanta@wasit.tn') },
+  company: { email: 'companya@wasit.tn', password: demoPasswordFor('companya@wasit.tn') },
+  admin: { email: 'admin@wasit.tn', password: demoPasswordFor('admin@wasit.tn') },
 };
 
 const PAGES = [

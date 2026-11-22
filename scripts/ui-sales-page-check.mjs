@@ -7,9 +7,10 @@
  * Usage: node scripts/ui-sales-page-check.mjs <baseURL>
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 
 const BASE = (process.argv[2] ?? 'http://localhost:12000').replace(/\/+$/, '');
-const PW = 'Passw0rd!2026';
+const PW = demoPasswordFor('suppliera@wasit.tn');
 const steps = [];
 const check = (n, ok, d = '') => { steps.push({ n, ok, d }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); };
 

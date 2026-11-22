@@ -4,10 +4,11 @@
  * Usage: node scripts/ui-login-check.mjs <baseURL> [email] [password]
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:12000').replace(/\/+$/, '');
 const EMAIL = process.argv[3] ?? 'customer1@wasit.tn';
-const PASSWORD = process.argv[4] ?? 'Passw0rd!2026';
+const PASSWORD = process.argv[4] ?? demoPasswordFor('customer1@wasit.tn');
 
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });

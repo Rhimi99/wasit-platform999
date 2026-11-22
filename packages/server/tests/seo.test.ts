@@ -6,8 +6,12 @@ import { db, closeDb } from '../src/db/client.js';
 import { categories, products } from '../src/db/schema/products.js';
 import { suppliers, companies, merchants } from '../src/db/schema/trade.js';
 import { users } from '../src/db/schema/auth.js';
+import { env } from '../src/lib/env.js';
 
 const app = createApp();
+// The sitemap is built from APP_URL, so the assertions follow the configured
+// origin instead of assuming the default dev one.
+const BASE = env.APP_URL.replace(/\/$/, '');
 
 async function get(path: string) {
   const res = await app.request(path);
@@ -116,7 +120,7 @@ describe('B1 — SEO surfaces', () => {
       expect(r.text).toContain('Disallow: /admin');
       expect(r.text).toContain('Disallow: /dashboard');
       expect(r.text).toContain('Disallow: /api/');
-      expect(r.text).toContain('Sitemap: http://localhost:5173/sitemap.xml');
+      expect(r.text).toContain(`Sitemap: ${BASE}/sitemap.xml`);
     });
   });
 
@@ -127,18 +131,18 @@ describe('B1 — SEO surfaces', () => {
       expect(r.contentType).toContain('application/xml');
       expect(r.text).toContain('<?xml version="1.0" encoding="UTF-8"?>');
       expect(r.text).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-      expect(r.text).toContain('<loc>http://localhost:5173/marketplace</loc>');
-      expect(r.text).toContain('<loc>http://localhost:5173/suppliers</loc>');
-      expect(r.text).toContain('<loc>http://localhost:5173/merchants</loc>');
-      expect(r.text).toContain('<loc>http://localhost:5173/companies</loc>');
+      expect(r.text).toContain(`<loc>${BASE}/marketplace</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/suppliers</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/merchants</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/companies</loc>`);
     });
 
     it('includes the ACTIVE product, supplier and company just created', async () => {
       const r = await get('/sitemap.xml');
-      expect(r.text).toContain(`<loc>http://localhost:5173/products/${productId}</loc>`);
-      expect(r.text).toContain(`<loc>http://localhost:5173/suppliers/${supplierId}</loc>`);
-      expect(r.text).toContain(`<loc>http://localhost:5173/companies/${companyId}</loc>`);
-      expect(r.text).toContain(`<loc>http://localhost:5173/categories/${categorySlug}</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/products/${productId}</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/suppliers/${supplierId}</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/companies/${companyId}</loc>`);
+      expect(r.text).toContain(`<loc>${BASE}/categories/${categorySlug}</loc>`);
     });
 
     it('excludes private routes and pure search from the sitemap', async () => {

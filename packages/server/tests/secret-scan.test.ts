@@ -78,8 +78,9 @@ describe('repository secret scan', () => {
 
   it('never embeds the staff credential in the functional audit script', () => {
     const script = readFileSync(path.join(ROOT, 'scripts/ui-functional-audit.mjs'), 'utf8');
-    // The admin password must come from the environment, not a literal.
-    expect(script).toMatch(/process\.env\.DEMO_STAFF_PASSWORD/);
+    // The admin password must be resolved at runtime — either straight from the
+    // environment or through the per-account helper that reads it — never a literal.
+    expect(script).toMatch(/process\.env\.DEMO_STAFF_PASSWORD|demoPasswordFor\('admin@wasit\.tn'\)/);
     expect(script).not.toMatch(/admin@wasit\.tn',\s*password:\s*'(?!\s*')/);
   });
 

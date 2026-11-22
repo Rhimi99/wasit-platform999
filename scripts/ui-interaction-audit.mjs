@@ -13,17 +13,18 @@
  * Usage: DEMO_STAFF_PASSWORD=... node scripts/ui-interaction-audit.mjs <baseURL> [role]
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 import fs from 'node:fs';
 
 const BASE = (process.argv[2] ?? 'http://localhost:5173').replace(/\/+$/, '');
 const ROLE_FILTER = process.argv[3] ?? null;
-const PW = 'Passw0rd!2026';
+
 
 const ACCOUNTS = {
-  customer: { email: 'customer1@wasit.tn', password: PW },
-  supplier: { email: 'suppliera@wasit.tn', password: PW },
-  merchant: { email: 'merchanta@wasit.tn', password: PW },
-  admin: { email: 'admin@wasit.tn', password: (process.env.DEMO_STAFF_PASSWORD ?? '').trim() },
+  customer: { email: 'customer1@wasit.tn', password: demoPasswordFor('customer1@wasit.tn') },
+  supplier: { email: 'suppliera@wasit.tn', password: demoPasswordFor('suppliera@wasit.tn') },
+  merchant: { email: 'merchanta@wasit.tn', password: demoPasswordFor('merchanta@wasit.tn') },
+  admin: { email: 'admin@wasit.tn', password: demoPasswordFor('admin@wasit.tn') },
 };
 
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });

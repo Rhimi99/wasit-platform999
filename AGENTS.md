@@ -1197,3 +1197,10 @@ npx playwright install --with-deps chromium
 - **Evidence**: `npm run verify:videos -w @wasit/server` renders one advert per language against a real `products` row and writes `packages/server/artifacts/marketing-videos/report.{json,md}` (build output, git-ignored). Last run: 4 delivered, ar-TN withheld, verdict PASS.
 - **Fonts**: `assets/fonts/NotoSansSC-Regular.otf` (CJK) + `NotoSansArabic-Regular.ttf`; `VIDEO_FONTS_DIR` autodetected.
 - **Rendering pitfalls worth remembering**: fit every headline/CTA with `fitTitle` (libass clips silently), keep price and currency on separate lines (a mixed-direction line splits into two mis-sized boxes in RTL), and drop the `•` prefix in Arabic copy.
+
+## DEMO-01 — تشغيل الرابط التجريبي العام (2026-11-22)
+
+- **التشغيل/الإيقاف/الفحص**: `bash scripts/demo-up.sh [--build]` (يتحقق من PostgreSQL، يشغّل API ثم `vite preview`، وينتظر `/api/health/ready` عبر الـproxy) · `bash scripts/demo-health.sh` (pg + api + web + proxy + الرابط العام) · `bash scripts/demo-down.sh`. ملفات pid والسجلات في `.demo-run/` (git-ignored) — لا `pkill -f node`.
+- **الأسرار**: `scripts/lib/demo-credentials.mjs` (`demoPasswordFor(email)`) يقرأ `DEMO_ACCOUNT_PASSWORD_*`/`DEMO_STAFF_PASSWORD_*` من البيئة أو `.env.demo` (0600، غير متعقّب). **لا كلمة مرور حرفية في أي سكربت** — و`scripts/session/secret-allowlist.txt` بلا استثناءات لكلمات المرور، فأي ظهور لها يُعدّ finding.
+- **فخ تسرّب `.env.demo` إلى الاختبارات**: `set -a; . ./.env.demo; set +a` في shell دائم يترك `APP_URL`/`NODE_ENV`/`DATABASE_URL` مُصدَّرة، فيرثها `vitest` وتفشل مواصفات تعتمد القيم الافتراضية (كانت `seo.test.ts` تفترض `http://localhost:5173`). شغّل الاختبارات بـ`env -u APP_URL -u WEB_URL -u NODE_ENV ...`، و`tests/seo.test.ts` صار يشتق الأصل من `env.APP_URL` بدل قيمة ثابتة.
+- **التحقق على الرابط العام**: `scripts/demo-security-smoke.sh` (74 فحصاً)، `scripts/ui-demo-audit.mjs` (69 فحصاً: 4 لغات + شاشة هاتف + رفض RBAC)، `scripts/ui-mobile-smoke.mjs` (16)، `scripts/ui-flows-check.mjs` (6).
