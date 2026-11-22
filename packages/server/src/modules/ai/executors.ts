@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import type { AgentDefinition } from '../../lib/ai/types';
 import { runAIFeature } from '../../lib/ai/runtime';
@@ -25,6 +25,14 @@ import { env } from '../../lib/env';
 import { planRenderSlides, type RenderSlide } from '../../lib/media/video-provider';
 import { resolveVideoProvider } from '../../lib/media/resolve';
 import { getAgentRunContext } from '../../lib/ai/agent-run-context';
+import { SYSTEM_PRINCIPAL } from './scope';
+import { createHash, randomUUID } from 'node:crypto';
+import { unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { measureMp4DurationSeconds } from '../../lib/media/mp4';
+import { decodeMp4File, probeMp4File } from '../../lib/media/verify';
+import { resolveMediaStorage } from '../../lib/media/resolve';
 import { analyseFailures, buildRepairPackage, buildReviewReport, proposePatch } from './diagnostics';
 
 /**
@@ -80,7 +88,7 @@ interface ProductWithCategory {
   moq: number;
 }
 
-async function pickProduct(db: DB, productId?: unknown): Promise<ProductWithCategory | null> {
+async function pickProduct(db: DB, productId?: unknown, scopeFilter?: SQL): Promise<ProductWithCategory | null> {
   const hasId = typeof productId === 'string' && productId.length > 0;
   const rows = await db
     .select({
@@ -97,7 +105,7 @@ async function pickProduct(db: DB, productId?: unknown): Promise<ProductWithCate
     })
     .from(products)
     .leftJoin(categories, eq(products.categoryId, categories.id))
-    .where(hasId ? eq(products.id, productId as string) : sql`true`);
+    .where(and(hasId ? eq(products.id, productId as string) : sql`true`, scopeFilter));
   if (rows.length === 0) return null;
   // For a general overview, prefer a published/sample product; for a specific id return that row.
   const row = hasId ? rows[0] : rows.find((r) => r.isPublished) ?? rows[0];
@@ -157,11 +165,97 @@ export const EXECUTOR_ACTION: Record<string, string> = {
   'outreach-acquisition-agent': 'discover_markets',
 };
 
+/** The most useful message out of an unknown throw (ffmpeg puts its reason in stderr). */
+function messageOf(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const stderr = (error as { stderr?: Buffer | string }).stderr;
+    if (stderr) return String(stderr);
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+// ---------- row-level data scope ----------
+
+/**
+ * Roles that may read across tenants. Everything else is confined to the rows
+ * its own user owns: a seller entity (supplier/merchant/company) it owns, or the
+ * orders it placed itself. This mirrors `PLATFORM_SCOPE_ROLES`; the catalogue
+ * gates the agents whose data is platform-wide, this gates the *rows* of the
+ * agents that stay available to everyone.
+ */
+const PLATFORM_VIEW_ROLES: readonly string[] = ['ADMIN', 'SUPER_ADMIN'];
+
+export interface RequesterScope {
+  requesterId: string | null;
+  /** True for ADMIN/SUPER_ADMIN: the caller may read platform-wide rows. */
+  isStaff: boolean;
+  /** Supplier/merchant/company entity ids owned by the requester. */
+  sellerIds: string[];
+}
+
+/**
+ * Resolves who is asking and which seller entities they own. Reads only the
+ * three ownership tables (never raw SQL — `db.execute` is refused inside an
+ * agent run by A2), so it works on the scoped handle every executor receives.
+ */
+async function resolveRequesterScope(db: DB, input: Record<string, unknown>): Promise<RequesterScope> {
+  const ctx = getAgentRunContext();
+  const requesterId =
+    ctx?.requestedBy ?? (typeof input.__userId === 'string' ? (input.__userId as string) : null);
+  const roles = (ctx?.requesterRoles ?? []) as readonly string[];
+  // The scheduler's system principal is not a tenant: it keeps the platform
+  // view it had before row scoping existed.
+  const isStaff = requesterId === SYSTEM_PRINCIPAL || roles.some((role) => PLATFORM_VIEW_ROLES.includes(role));
+  if (isStaff || !requesterId) return { requesterId, isStaff, sellerIds: [] };
+
+  const [ownedSuppliers, ownedMerchants, ownedCompanies] = await Promise.all([
+    db.select({ id: suppliers.id }).from(suppliers).where(eq(suppliers.userId, requesterId)),
+    db.select({ id: merchants.id }).from(merchants).where(eq(merchants.userId, requesterId)),
+    db.select({ id: companies.id }).from(companies).where(eq(companies.userId, requesterId)),
+  ]);
+  return {
+    requesterId,
+    isStaff,
+    sellerIds: [...ownedSuppliers, ...ownedMerchants, ...ownedCompanies].map((row) => row.id),
+  };
+}
+
+/** The product rows a requester may read: their own listings, or all for staff. */
+function productScope(scope: RequesterScope): SQL | undefined {
+  if (scope.isStaff) return undefined;
+  if (scope.sellerIds.length === 0) return sql`false`;
+  return inArray(products.sellerId, scope.sellerIds);
+}
+
+/** Orders the requester may read: placed by them, or sold by an entity they own. */
+function orderScope(scope: RequesterScope): SQL | undefined {
+  if (scope.isStaff) return undefined;
+  if (!scope.requesterId) return sql`false`;
+  const clauses: SQL[] = [sql`${orders.buyerId} = ${scope.requesterId}`];
+  if (scope.sellerIds.length > 0) {
+    clauses.push(sql`${orders.sellerId} in (${sql.join(scope.sellerIds.map((id) => sql`${id}`), sql`, `)})`);
+    // A multi-seller parent order carries no single seller_id; its per-seller
+    // identity lives on the order lines (seller_orders is a financial record and
+    // is hard-denied to every agent).
+    clauses.push(
+      sql`exists (select 1 from order_items oi where oi.order_id = ${orders.id} and oi.seller_id in (${sql.join(
+        scope.sellerIds.map((id) => sql`${id}`),
+        sql`, `,
+      )}))`,
+    );
+  }
+  return or(...clauses) as SQL;
+}
+
 // ---------- executors: one specialised query/output per agent ----------
 
 async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const periodDays = Number(input.periodDays ?? 30);
   const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+
+  const scope = await resolveRequesterScope(db, input);
+  const ordersFilter = orderScope(scope);
+  const productsFilter = productScope(scope);
 
   const [orderKpi, recentOrders, activeProducts, suppliersCount, merchantsCount, companiesCount, avgTrust] = await Promise.all([
     db
@@ -173,17 +267,34 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
         net: sql<string>`coalesce(sum(items_total) - sum(commission) - sum(payment_fee),0)::text`,
       })
       .from(orders)
-      .where(gte(orders.createdAt, since)),
+      .where(and(gte(orders.createdAt, since), ordersFilter)),
     db
       .select({ id: orders.id, orderNumber: orders.orderNumber, itemsTotal: orders.itemsTotal, status: orders.status, createdAt: orders.createdAt })
       .from(orders)
+      .where(ordersFilter)
       .orderBy(desc(orders.createdAt))
       .limit(Number(input.limit ?? 5)),
-    db.select({ v: sql<number>`count(*)::int` }).from(products).where(eq(products.isPublished, true)),
-    db.select({ v: sql<number>`count(*)::int` }).from(suppliers).where(eq(suppliers.isActive, true)),
-    db.select({ v: sql<number>`count(*)::int` }).from(merchants).where(eq(merchants.isActive, true)),
-    db.select({ v: sql<number>`count(*)::int` }).from(companies).where(eq(companies.isActive, true)),
-    db.select({ v: sql<number>`round(avg(score))::int` }).from(trustScores),
+    db
+      .select({ v: sql<number>`count(*)::int` })
+      .from(products)
+      .where(and(eq(products.isPublished, true), productsFilter)),
+    // Supplier/merchant/company counts and the platform trust average are
+    // platform metrics: staff only. A tenant gets null rather than a number
+    // about other tenants.
+    scope.isStaff
+      ? db.select({ v: sql<number>`count(*)::int` }).from(suppliers).where(eq(suppliers.isActive, true))
+      : Promise.resolve([{ v: 0 }]),
+    scope.isStaff
+      ? db.select({ v: sql<number>`count(*)::int` }).from(merchants).where(eq(merchants.isActive, true))
+      : Promise.resolve([{ v: 0 }]),
+    scope.isStaff
+      ? db.select({ v: sql<number>`count(*)::int` }).from(companies).where(eq(companies.isActive, true))
+      : Promise.resolve([{ v: 0 }]),
+    scope.isStaff
+      ? db.select({ v: sql<number>`round(avg(score))::int` }).from(trustScores)
+      : scope.requesterId
+        ? db.select({ v: sql<number>`round(avg(score))::int` }).from(trustScores).where(eq(trustScores.userId, scope.requesterId))
+        : Promise.resolve([{ v: 0 }]),
   ]);
 
   const kpi = orderKpi[0];
@@ -195,15 +306,16 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
     paymentFees: kpi?.paymentFees ?? '0',
     net: kpi?.net ?? '0',
     activeProducts: toNum(activeProducts[0]?.v),
-    suppliers: toNum(suppliersCount[0]?.v),
-    merchants: toNum(merchantsCount[0]?.v),
-    companies: toNum(companiesCount[0]?.v),
+    suppliers: scope.isStaff ? toNum(suppliersCount[0]?.v) : null,
+    merchants: scope.isStaff ? toNum(merchantsCount[0]?.v) : null,
+    companies: scope.isStaff ? toNum(companiesCount[0]?.v) : null,
     avgTrust: toNum(avgTrust[0]?.v),
   };
 
   const data: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'identify_leads',
+    dataScope: scope.isStaff ? 'platform' : 'own',
     periodDays,
     kpi: facts,
     recentOrders: recentOrders.map((o) => ({
@@ -213,23 +325,30 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
       status: o.status,
       createdAt: o.createdAt.toISOString(),
     })),
-    leadsPotential: {
-      merchants: facts.merchants,
-      companies: facts.companies,
-      activeProducts: facts.activeProducts,
-      note:
-        facts.orders > 0
-          ? `Active order book (${facts.orders} orders). Focus on repeat buyers and upsell.`
-          : 'No orders in period — prioritise outreach to merchants/companies with active listings.',
-    },
+    leadsPotential: scope.isStaff
+      ? {
+          merchants: facts.merchants,
+          companies: facts.companies,
+          activeProducts: facts.activeProducts,
+          note:
+            facts.orders > 0
+              ? `Active order book (${facts.orders} orders). Focus on repeat buyers and upsell.`
+              : 'No orders in period — prioritise outreach to merchants/companies with active listings.',
+        }
+      : null,
     readOnly: true,
     generatedAt: new Date().toISOString(),
   };
 
-  const text = adviceText(
-    'Sales analysis over last {{periodDays}}d: {{orders}} orders, GMV {{gmv}}, net {{net}}. Solicit {{merchants}} merchants and {{companies}} companies with {{activeProducts}} active products.',
-    { periodDays: facts.periodDays, orders: facts.orders, gmv: facts.gmv, net: facts.net, merchants: facts.merchants, companies: facts.companies, activeProducts: facts.activeProducts },
-  );
+  const text = scope.isStaff
+    ? adviceText(
+        'Sales analysis over last {{periodDays}}d: {{orders}} orders, GMV {{gmv}}, net {{net}}. Solicit {{merchants}} merchants and {{companies}} companies with {{activeProducts}} active products.',
+        { periodDays: facts.periodDays, orders: facts.orders, gmv: facts.gmv, net: facts.net, merchants: facts.merchants, companies: facts.companies, activeProducts: facts.activeProducts },
+      )
+    : adviceText(
+        'Sales analysis over last {{periodDays}}d (own scope): {{orders}} orders, GMV {{gmv}}, net {{net}} across {{activeProducts}} active listings.',
+        { periodDays: facts.periodDays, orders: facts.orders, gmv: facts.gmv, net: facts.net, activeProducts: facts.activeProducts },
+      );
 
   const out = await runAIFeature(db, {
     userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
@@ -246,20 +365,25 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
 
 async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const limit = Math.min(Number(input.limit ?? 5), 10);
+  const scope = await resolveRequesterScope(db, input);
+  const productsFilter = productScope(scope);
   const [published, topCategories, brands] = await Promise.all([
-    db.select({ v: sql<number>`count(*)::int` }).from(products).where(eq(products.isPublished, true)),
+    db
+      .select({ v: sql<number>`count(*)::int` })
+      .from(products)
+      .where(and(eq(products.isPublished, true), productsFilter)),
     db
       .select({ category: categories.name, p: sql<number>`count(*)::int` })
       .from(products)
       .leftJoin(categories, eq(products.categoryId, categories.id))
-      .where(eq(products.isPublished, true))
+      .where(and(eq(products.isPublished, true), productsFilter))
       .groupBy(categories.name)
       .orderBy(sql`count(*) desc`)
       .limit(limit),
     db
       .select({ brand: products.brand, p: sql<number>`count(*)::int` })
       .from(products)
-      .where(and(sql`${products.brand} is not null`, eq(products.isPublished, true)))
+      .where(and(sql`${products.brand} is not null`, eq(products.isPublished, true), productsFilter))
       .groupBy(products.brand)
       .orderBy(sql`count(*) desc`)
       .limit(limit),
@@ -309,6 +433,7 @@ async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<
   const data: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'recommend_campaign',
+    dataScope: scope.isStaff ? 'platform' : 'own',
     snapshot: facts,
     campaignSuggestion,
     marketingVideos,
@@ -382,7 +507,10 @@ async function execMarketingVideoAgent(
     agentKey: agent.key,
     action: 'plan_video',
     readOnly: true,
+    // A file on disk is produced (the render runs here); no business row is
+    // written: media_assets and audit_logs stay out of reach for an agent.
     renders: false,
+    writesPlatformRows: false,
     publishes: false,
     durationWindow: { min: MARKETING_VIDEO_DURATION.min, max: MARKETING_VIDEO_DURATION.max },
     generatedAt: new Date().toISOString(),
@@ -486,8 +614,105 @@ async function execMarketingVideoAgent(
   const providerAvailable = await provider.isAvailable();
   const providerReason = provider.unavailableReason();
 
+  const steps: Array<{ step: string; ok: boolean; ms: number; detail?: string }> = [];
+  const timed = async <T>(step: string, fn: () => Promise<T>): Promise<T> => {
+    const started = Date.now();
+    try {
+      const value = await fn();
+      steps.push({ step, ok: true, ms: Date.now() - started });
+      return value;
+    } catch (error) {
+      steps.push({ step, ok: false, ms: Date.now() - started, detail: messageOf(error).slice(0, 300) });
+      throw error;
+    }
+  };
+
+  const wantsRender = input.render !== false;
+  let video: Record<string, unknown> | null = null;
+  let render:
+    | { status: 'READY' | 'FAILED' | 'SKIPPED'; error?: string; failedChecks?: string[]; provider: string }
+    | { status: 'UNAVAILABLE'; error: string; provider: string };
+
+  if (!wantsRender) {
+    render = { status: 'SKIPPED', provider: provider.id, error: 'render=false: the plan was requested without a render.' };
+  } else if (!providerAvailable) {
+    // Preflight: never start a render whose toolchain is missing.
+    render = { status: 'UNAVAILABLE', provider: provider.id, error: providerReason ?? 'renderer unavailable' };
+    steps.push({ step: 'precheck_renderer', ok: false, ms: 0, detail: render.error });
+  } else {
+    steps.push({ step: 'precheck_renderer', ok: true, ms: 0, detail: `ffmpeg present, fonts ${env.VIDEO_ARABIC_FONT}/${env.VIDEO_FONT}` });
+    const tempFile = path.join(tmpdir(), `wasit-verify-${randomUUID()}.mp4`);
+    try {
+      const rendered = await timed('render', () => provider.render(spec));
+      const bytes = rendered.bytes;
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+
+      const stored = await timed('store', () =>
+        resolveMediaStorage().put({
+          key: `agent-videos/${requesterId ?? 'system'}/${ctx?.taskId ?? randomUUID()}-${sha256.slice(0, 12)}.mp4`,
+          body: bytes,
+          contentType: 'video/mp4',
+        }),
+      );
+
+      const probe = await timed('probe', async () => {
+        await writeFile(tempFile, bytes);
+        return probeMp4File(tempFile);
+      });
+      const decode = await timed('decode', () => decodeMp4File(tempFile));
+      const headerDuration = measureMp4DurationSeconds(bytes);
+
+      const failedChecks: string[] = [];
+      if (!probe.ok) failedChecks.push('probe: no video stream');
+      if (probe.codec !== 'h264') failedChecks.push(`codec: ${probe.codec ?? 'unknown'} (expected h264)`);
+      if (probe.width !== env.VIDEO_WIDTH || probe.height !== env.VIDEO_HEIGHT) {
+        failedChecks.push(`resolution: ${probe.width}x${probe.height} (expected ${env.VIDEO_WIDTH}x${env.VIDEO_HEIGHT})`);
+      }
+      const measured = probe.durationSeconds;
+      if (measured === null || measured < MARKETING_VIDEO_DURATION.min || measured > MARKETING_VIDEO_DURATION.max) {
+        failedChecks.push(`duration: ${measured ?? 'unknown'}s outside ${MARKETING_VIDEO_DURATION.min}–${MARKETING_VIDEO_DURATION.max}s`);
+      } else if (Math.abs(measured - durationSeconds) > 0.5) {
+        failedChecks.push(`duration: ${measured}s does not match the requested ${durationSeconds}s`);
+      }
+      if (headerDuration === null || (measured !== null && Math.abs(headerDuration - measured) > 0.5)) {
+        failedChecks.push(`container: mp4 header says ${headerDuration ?? 'unknown'}s, ffprobe says ${measured ?? 'unknown'}s`);
+      }
+      if (!decode.ok) failedChecks.push('decode: the file does not play end to end');
+      if (stored.size !== bytes.length) failedChecks.push('storage: written size differs from the rendered bytes');
+
+      video = {
+        storageKey: stored.key,
+        storage: resolveMediaStorage().id,
+        contentType: stored.contentType,
+        bytes: stored.size,
+        sha256,
+        durationSeconds: measured,
+        codec: probe.codec,
+        width: probe.width,
+        height: probe.height,
+        frameRate: probe.frameRate,
+        frames: probe.frames,
+        containerDurationSeconds: headerDuration,
+        decode: { ok: decode.ok, detail: decode.detail },
+        verified: failedChecks.length === 0,
+        language,
+        fonts: { arabic: env.VIDEO_ARABIC_FONT, latin: env.VIDEO_FONT },
+      };
+      render =
+        failedChecks.length === 0
+          ? { status: 'READY', provider: provider.id }
+          : { status: 'FAILED', provider: provider.id, failedChecks };
+    } catch (error) {
+      video = null;
+      render = { status: 'FAILED', provider: provider.id, error: messageOf(error).slice(0, 500) };
+    } finally {
+      await unlink(tempFile).catch(() => undefined);
+    }
+  }
+
   const content = JSON.stringify({
     ...base,
+    renders: render.status === 'READY',
     product: {
       id: product.id,
       name: localizedName,
@@ -520,6 +745,9 @@ async function execMarketingVideoAgent(
         maxBytes: env.MEDIA_MAX_VIDEO_BYTES,
       },
     },
+    render,
+    steps,
+    video,
     readiness: {
       provider: provider.id,
       available: providerAvailable,
@@ -527,10 +755,11 @@ async function execMarketingVideoAgent(
       renderer: 'local ffmpeg + libass (structural)',
       fonts: { latin: env.VIDEO_FONT, arabic: env.VIDEO_ARABIC_FONT },
       externalServices: false,
+      paidServices: false,
     },
-    // The exact call that produces the asset. Executed by the owner (or an
-    // admin), never by this agent: the write is audited, and audit_logs is
-    // hard-denied to agents.
+    // The same render through the media module, for callers who want a
+    // downloadable media_assets row (owner or admin, audited). The agent itself
+    // only writes the file and reports it.
     renderRequest: {
       method: 'POST',
       path: '/api/media/marketing-videos',
@@ -542,8 +771,6 @@ async function execMarketingVideoAgent(
       action: 'video.publish',
       reason: 'No publishing executor exists and video.publish is a sensitive action; nothing is published automatically.',
     },
-    whyNoRender:
-      'Rendering creates a media_assets row and an audit entry. Agents cannot write audit_logs (A2 hard deny), so the render runs in the media module, which enforces ownership, budget and the 35–120s window on the measured bytes.',
   });
 
   const out = await runAIFeature(db, {
@@ -551,9 +778,9 @@ async function execMarketingVideoAgent(
     roles: ['SUPER_ADMIN'],
     requestType: `AGENT:${agent.key}`,
     system: 'You are the WASIT Marketing Video Agent.',
-    user: `Planned a ${durationSeconds}s ${style} ${language.toUpperCase()} video for "${localizedName}" (${slides.length} slides). Renderer ${provider.id} available=${providerAvailable}.`,
+    user: `Planned a ${durationSeconds}s ${style} ${language.toUpperCase()} video for "${localizedName}" (${slides.length} slides). Renderer ${provider.id} available=${providerAvailable} status=${render.status}.`,
     maxTokens: 96,
-    metadata: { agentKey: agent.key, productId: product.id },
+    metadata: { agentKey: agent.key, productId: product.id, renderStatus: render.status, videoSha256: video?.sha256 ?? null },
   });
 
   return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
@@ -637,12 +864,20 @@ async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string
 }
 
 async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
-  const p = await pickProduct(db, input.productId);
+  const scope = await resolveRequesterScope(db, input);
+  const p = await pickProduct(db, input.productId, productScope(scope));
   if (!p) {
+    // One refusal for "not found" and "not yours": a distinct answer would tell
+    // a tenant whether another tenant's product id exists.
     const content = JSON.stringify({
       agentKey: agent.key,
       action: input.action ?? 'analyze_product',
-      error: 'No product found. Provide a productId.',
+      dataScope: scope.isStaff ? 'platform' : 'own',
+      error: scope.isStaff
+        ? 'No product found. Provide a productId.'
+        : 'No product available to you. Provide the id of one of your own products.',
+      refused: !scope.isStaff,
+      code: scope.isStaff ? 'PRODUCT_NOT_FOUND' : 'PRODUCT_NOT_AVAILABLE',
       readOnly: true,
       generatedAt: new Date().toISOString(),
     });
@@ -696,6 +931,7 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
   const data: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'analyze_product',
+    dataScope: scope.isStaff ? 'platform' : 'own',
     product: facts,
     completeness: {
       score: Math.round(((1 - issues.length / 6) * 100)),
@@ -913,6 +1149,33 @@ async function execMarketResearchAgent(db: DB, agent: AgentDefinition, input: Re
 }
 
 async function execB2BAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const scope = await resolveRequesterScope(db, input);
+  // Partner matching names other tenants, so it cannot be row-filtered without
+  // disclosing them. The catalogue already restricts this agent to platform
+  // roles; the executor refuses too, so a future gate change cannot leak.
+  if (!scope.isStaff) {
+    const refusal = JSON.stringify({
+      agentKey: agent.key,
+      action: input.action ?? 'match_b2b',
+      dataScope: 'own',
+      refused: true,
+      code: 'SCOPE_REQUIRED',
+      error: 'B2B partner matching reads other tenants; only platform roles may run it.',
+      readOnly: true,
+      generatedAt: new Date().toISOString(),
+    });
+    const out = await runAIFeature(db, {
+      userId: scope.requesterId ?? 'system',
+      roles: ['SUPER_ADMIN'],
+      requestType: `AGENT:${agent.key}`,
+      system: 'You are the WASIT B2B Agent.',
+      user: 'Refused: platform scope required.',
+      maxTokens: 32,
+      metadata: { agentKey: agent.key, refused: true },
+    });
+    return { content: refusal, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  }
+
   const [suppliersAll, merchantsAll, companiesAll] = await Promise.all([
     db
       .select({ id: suppliers.id, companyName: suppliers.companyName, countryId: suppliers.countryId, verified: suppliers.verified })

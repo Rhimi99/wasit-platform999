@@ -500,6 +500,10 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use'],
+    // Partner matching names other suppliers/merchants/companies, so no row
+    // filter can hide them without emptying the answer. Platform roles only
+    // (AI-FIRST-COMPLETION-03); the executor refuses independently.
+    requiresPlatformScope: true,
     requiresHumanApproval: true,
     executable: true,
   },

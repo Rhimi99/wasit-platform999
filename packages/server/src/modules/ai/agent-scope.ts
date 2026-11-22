@@ -172,7 +172,7 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'sales-agent',
     specialization: 'Sales / lead identification',
     allowedDomains: ['COMMERCE', 'MARKETPLACE', 'B2B', 'TRUST'],
-    allowedTables: ['orders', 'products', 'suppliers', 'merchants', 'companies', 'trust_scores'],
+    allowedTables: ['orders', 'order_items', 'products', 'suppliers', 'merchants', 'companies', 'trust_scores'],
     readOnly: true,
     prohibitedDomains: prohibited(['COMMERCE', 'MARKETPLACE', 'B2B', 'TRUST']),
     canDelegate: false,
@@ -182,7 +182,9 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'marketing-agent',
     specialization: 'Marketing content & channel mix',
     allowedDomains: ['MARKETPLACE', 'MEDIA'],
-    allowedTables: ['products', 'categories', 'media_assets'],
+    // suppliers/merchants/companies are read only to resolve which listings
+    // the requester owns; every product query is filtered by that ownership.
+    allowedTables: ['products', 'categories', 'media_assets', 'suppliers', 'merchants', 'companies'],
     readOnly: true,
     prohibitedDomains: prohibited(['MARKETPLACE', 'MEDIA']),
     canDelegate: false,
@@ -215,7 +217,8 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'product-agent',
     specialization: 'Product listing analysis',
     allowedDomains: ['MARKETPLACE'],
-    allowedTables: ['products', 'categories', 'product_variants', 'product_images', 'inventory_items'],
+    // suppliers/merchants/companies resolve product ownership for the requester.
+    allowedTables: ['products', 'categories', 'product_variants', 'product_images', 'inventory_items', 'suppliers', 'merchants', 'companies'],
     readOnly: true,
     prohibitedDomains: prohibited(['MARKETPLACE']),
     canDelegate: false,

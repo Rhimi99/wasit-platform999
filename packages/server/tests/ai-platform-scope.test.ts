@@ -73,6 +73,7 @@ describe('platform-scope boundary', () => {
       [
         'ads-agent',
         'analytics-agent',
+        'b2b-agent',
         'compliance-agent',
         'development-agent',
         'dispute-assistant',

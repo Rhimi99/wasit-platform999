@@ -124,7 +124,7 @@ afterAll(async () => {
 });
 
 describe('AI — Marketing Video Agent (real DB)', () => {
-  it('plans from live product data and writes nothing', async () => {
+  it('plans from live product data and renders a verified file without writing platform rows', async () => {
     const supplierUser = await createUser('SUPPLIER');
     const supplierId = await createSupplier(supplierUser);
     const productId = await createProduct(supplierId);
@@ -133,7 +133,8 @@ describe('AI — Marketing Video Agent (real DB)', () => {
     const { advice } = await runVideoTask(supplierUser, { productId, durationSeconds: 60 });
 
     expect(advice.readOnly).toBe(true);
-    expect(advice.renders).toBe(false);
+    expect(advice.renders).toBe(true);
+    expect(advice.writesPlatformRows).toBe(false);
     expect(advice.publishes).toBe(false);
     expect(advice.product).toMatchObject({ id: productId, status: 'ACTIVE', currencyCode: 'TND' });
     expect(advice.plan.durationSeconds).toBe(60);
@@ -155,8 +156,49 @@ describe('AI — Marketing Video Agent (real DB)', () => {
     });
     expect(advice.publish.available).toBe(false);
 
-    // The agent performed no write: no asset row was created by planning.
+    // The render ran inside the agent task and the file was verified by ffprobe
+    // plus a full decode — not by its extension.
+    expect(advice.render.status).toBe('READY');
+    expect(advice.video).toMatchObject({
+      storage: 'local',
+      contentType: 'video/mp4',
+      codec: 'h264',
+      width: 720,
+      height: 1280,
+      verified: true,
+    });
+    expect(advice.video.storageKey).toMatch(/^agent-videos\/[0-9a-f-]{36}\//);
+    expect(advice.video.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(advice.video.bytes).toBeGreaterThan(10_000);
+    expect(advice.video.durationSeconds).toBeGreaterThanOrEqual(35);
+    expect(advice.video.durationSeconds).toBeLessThanOrEqual(120);
+    expect(Math.abs(advice.video.durationSeconds - advice.video.containerDurationSeconds)).toBeLessThanOrEqual(0.5);
+    expect(advice.video.decode.ok).toBe(true);
+    expect(advice.steps.map((s: { step: string }) => s.step)).toEqual([
+      'precheck_renderer',
+      'render',
+      'store',
+      'probe',
+      'decode',
+    ]);
+    expect(advice.steps.every((s: { ok: boolean }) => s.ok)).toBe(true);
+
+    // No platform row was written: rendering is a file, not a media_assets or
+    // audit_logs write (both are out of reach for an agent).
     expect(await mediaAssetCount()).toBe(before);
+  }, 90_000);
+
+  it('can plan without rendering when the caller asks for a plan only', async () => {
+    const supplierUser = await createUser('SUPPLIER');
+    const supplierId = await createSupplier(supplierUser);
+    const productId = await createProduct(supplierId);
+
+    const { advice } = await runVideoTask(supplierUser, { productId, render: false });
+
+    expect(advice.renders).toBe(false);
+    expect(advice.render.status).toBe('SKIPPED');
+    expect(advice.video).toBeNull();
+    expect(advice.plan.slides).toHaveLength(4);
   });
 
   it('clamps the requested duration into the 35–120s window', async () => {

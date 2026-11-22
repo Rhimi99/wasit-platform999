@@ -406,13 +406,14 @@ npx playwright install --with-deps chromium
 - **`CORE_SPECIALIST_KEYS`** هي القائمة الرسمية المرتّبة: sales, marketing, ads, product, support,
   analytics, market-research, b2b, risk, dispute-assistant, development, **marketing-video**.
   `catalogueIntegrity()` يفحص الاتجاهين — لا تعدّل أحدهما وحده.
-- **العدّ الحالي (بعد AI-FIRST-COMPLETION-02)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
+- **العدّ الحالي (بعد AI-FIRST-COMPLETION-03)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
   `allAgentSpecs()` = 22 (مع Copilot)، `declaredOnlyAgents()` = **6**، `executableAgents()` = **14**،
-  `requiresPlatformScope` = **10**.
+  `requiresPlatformScope` = **11** (`b2b-agent` أُضيف).
   أي اختبار يثبّت رقماً يجب تحديثه معاً (r1 · ai-reg01 unit+HTTP · phase14 · a2 · r2 · agent-scope-contract).
-- **`marketing-video-agent` منفّذ للتخطيط فقط** (`executable: true`، `EXECUTOR_ACTION` = `plan_video`):
-  يقرأ منتجاً حقيقياً بملكية محققة ويُعيد خطة + طلب رندر قابل للتنفيذ. **لا رندر ولا نشر عبر الوكيل**:
-  الرندر يكتب `media_assets` + `audit_logs` وA2 يمنع كتابة التدقيق على الوكلاء، والنشر قرار مالك.
+- **`marketing-video-agent` يخطّط ويرندر ويتحقق داخل المهمة** (`plan_video`): يقرأ منتجاً حقيقياً بملكية محققة،
+  يرندر محلياً (ffmpeg+libass) إلى `agent-videos/<requester>/<taskId>-<sha12>.mp4`، ثم `ffprobe` + فك ترميز كامل،
+  ويُعيد `video{storageKey,bytes,sha256,durationSeconds,codec,width,height,frames,decode,verified}` و`steps[]`.
+  **لا يكتب `media_assets` ولا `audit_logs`** (A2) ولا ينشر. `render:false` يطلب خطة فقط.
   `video.publish`/`video.render_paid` إجراءان حسّاسان (موافقة بشرية دائماً).
 - **`validatePlan` يرفض وقت التخطيط** أي خطوة تستهدف وكيلاً غير قابل للتنفيذ أو المشرف أو Copilot —
   قبل كتابة صف تشغيل. لا تعد إلى قبولها «لأن الإرسال يرفضها»: الرفض المبكر هو العقد.
@@ -1086,10 +1087,23 @@ npx playwright install --with-deps chromium
 - **`modules/ai/diagnostics.ts`** (جديد، دوال نقية بلا DB/IO): `classifyFamily` (11 عائلة + `UNKNOWN`)، `failureSignature` (تطبيع UUID/بريد/أرقام ⇒ سبب واحد = بصمة واحدة)، `clusterFailures` (ترتيب بالتكرار + ثقة: 3+=high، 2=medium، 1/UNKNOWN=low)، `proposePatch`، `analyseFailures`، `buildReviewReport`. تُستدعى من `execDevelopmentAgent` فقط؛ لا تكتب شيئاً — المخرجات في `agent_tasks.result`.
 - **قاعدة صارمة**: أي مسار في `likelyFiles` يجب أن يكون ملفاً موجوداً فعلاً — `tests/unit/ai-maintenance-rootcause.test.ts` يفحص كل العائلات بـ`existsSync`. لا تُضِف مساراً غير موجود.
 - **ما لا يفعله الوكيل ومصرَّح به**: لا تشغيل اختبارات معزولة ولا `apply_patch`/`merge` (لا منفّذ، AD-050). `reviewReport.checklist` يقول `blocked`/`pending_approval` صراحةً بدل تخطّي الخطوة؛ `repairProtocol.blocked` يحمل نفس القائمة.
-- **`requiresPlatformScope` صار مفروضاً** في `createAgentTask`: `PLATFORM_SCOPE_ROLES = ADMIN, SUPER_ADMIN`. 10 وكلاء بعرض المنصة (ads, analytics, compliance, development, dispute-assistant, finance, market-research, operations, outreach-acquisition, risk) صارت للطاقم فقط، والرفض يُدقَّق `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` + metric `blocked` **قبل** كتابة أي صف. لا تُعِد فتحها لعميل/تاجر: A2 يحدّ الجداول لا الصفوف، فأي وكيل بعرض المنصة يقرأ صفوف كل المستأجرين (فلترة الصفوف فجوة مفتوحة، §6.4 في `docs/AI-FIRST-COMPLETION-01.md`).
-- **حدود الجداول فقط**: `withAgentDataScope` يتحقق من اسم الجدول؛ لا فلتر صفوف عام. **الاستثناء الوحيد المنفَّذ**: `execSupportAgent` يفلتر صفياً (`threads.participant_ids @> [requesterId]` + حصر الرسائل في خيوط المشارك، و`activeUsers = null` لغير الموظفين) لأن `ai:use` ممنوح للعملاء. أي وكيل آخر يعلن `*:read:own` ويعيد تجميعات منصة هو خلل تصميم لا خطأ في الصلاحية.
+- **`requiresPlatformScope` صار مفروضاً** في `createAgentTask`: `PLATFORM_SCOPE_ROLES = ADMIN, SUPER_ADMIN`. 11 وكيلاً بعرض المنصة (ads, analytics, b2b, compliance, development, dispute-assistant, finance, market-research, operations, outreach-acquisition, risk) صارت للطاقم فقط، والرفض يُدقَّق `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` + metric `blocked` **قبل** كتابة أي صف. لا تُعِد فتحها لعميل/تاجر: A2 يحدّ الجداول لا الصفوف، فأي وكيل بعرض المنصة يقرأ صفوف كل المستأجرين (فلترة الصفوف فجوة مفتوحة، §6.4 في `docs/AI-FIRST-COMPLETION-01.md`).
+- **حدود الجداول فقط**: `withAgentDataScope` يتحقق من اسم الجدول؛ لا فلتر صفوف تلقائي. **الفلترة الصفية منفَّذة في المنفّذات**: `execSupportAgent` (خيوط المشارك)، و`execSalesAgent`/`execMarketingAgent`/`execProductAgent` عبر `resolveRequesterScope` (ملكية `suppliers/merchants/companies.user_id` + `orders.buyer_id` + `order_items.seller_id`)، و`execB2BAgent` يرفض غير الطاقم. `execSupportAgent` يفلتر بـ`threads.participant_ids @> [requesterId]` + حصر الرسائل في خيوط المشارك، و`activeUsers = null` لغير الموظفين. أي وكيل آخر يعلن `*:read:own` ويعيد تجميعات منصة هو خلل تصميم لا خطأ في الصلاحية.
 - **تشغيل الاختبارات**: `TEST_DATABASE_URL=postgresql://wasit:wasit_dev_password@127.0.0.1:5434/wasit_test npx vitest run` (بلا هذا المتغير يرفض `vitest.config.ts` الإقلاع). الحزمة الكاملة بعد هذه المرحلة: **160 ملفاً / 2068 اختباراً / exit 0**.
 - **ملفات الاختبار الجديدة**: `tests/unit/ai-maintenance-rootcause.test.ts` (15)، `tests/ai-maintenance-rootcause.test.ts` (6)، `tests/ai-platform-scope.test.ts` (10)، `tests/ai-video-agent.test.ts` (5)، `tests/unit/ai-video-plan.test.ts` (5)، `tests/ai-support-scope.test.ts` (3).
+
+## AI-FIRST COMPLETION 03 (2026-11-22) — نطاق البيانات الصفّي + رندر داخل المهمة
+
+- **`resolveRequesterScope(db, input)`** في `executors.ts`: تعيد `{ requesterId, isStaff, sellerIds }` من `getAgentRunContext()` (لا من `input`)، وتقرأ الملكية من `suppliers/merchants/companies.user_id` عبر `select` عادي (**لا `db.execute`** — A2 يرفض SQL الخام).
+- **`orderScope`**: `buyer_id = requester` أو `seller_id ∈ ملكه` أو `exists(order_items.seller_id ∈ ملكه)` (الطلب الأب متعدد البائعين). **`seller_orders` ممنوع منيع** (`HARD_DENY_TABLES`) — لا تستخدمه.
+- **`productScope`**: `inArray(products.sellerId, sellerIds)`؛ لا ملكية ⇒ `sql`false`` (لا استعلام بلا شرط).
+- **أرقام المنصة `null` لغير الطاقم**: `kpi.suppliers/merchants/companies`, `leadsPotential`. `PLATFORM_VIEW_ROLES = ADMIN, SUPER_ADMIN` فقط (SUPPORT ليس منها).
+- **`product-agent` لا يكشف الوجود**: منتج الغير وغير الموجود يعطيان نفس `PRODUCT_NOT_AVAILABLE` بلا اسم/SKU.
+- **`b2b-agent` إداري فقط**: `requiresPlatformScope: true` + رفض `SCOPE_REQUIRED` داخل المنفّذ (دفاع مزدوج).
+- **رندر الوكيل**: `lib/media/verify.ts` (`probeMp4File`, `decodeMp4File` — spawn لـffprobe/ffmpeg بمهلة) + `resolveMediaStorage().put()` بمفتاح `agent-videos/...`. الفحوص: h264 · 720×1280 · المدة 35–120 ومطابقة ±0.5s · مدة الحاوية = ffprobe ±0.5s · decode كامل · حجم المخزَّن = البايتات.
+- **لا تكتب الوكيل `media_assets` ولا `audit_logs`**: الملف على القرص + البيانات في `agent_tasks.result`. لا تنزيل عبر API لهذا الملف (قرار مطلوب، موثّق).
+- **الاختبارات**: `tests/ai-agent-data-scope.test.ts` (15) · `tests/ai-video-agent.test.ts` (6، رندر حقيقي) · `tests/unit/ai-video-plan.test.ts` (5).
+- **عزل معروف**: `ai-met01-agent-metrics` يعدّ صفوفاً عالمية ⇒ يتأثر بالتوازي؛ ينجح منفرداً (18/18).
 
 ## AI-FIRST COMPLETION 02 (2026-11-22) — القرارات المعتمدة + الوكلاء التنفيذيون
 
