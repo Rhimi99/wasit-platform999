@@ -18,6 +18,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
   AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
+  AiSpendOverview, AiSpendLimitList, AiSpendLimitRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -1267,6 +1268,33 @@ export const api = {
       body: JSON.stringify({ mode }),
     });
   },
+  async adminAiSpend(params: { days?: number; environment?: string } = {}) {
+    const q = new URLSearchParams();
+    if (params.days) q.set('days', String(params.days));
+    if (params.environment) q.set('environment', params.environment);
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return request<AiSpendOverview>(`/api/admin/ai/spend${suffix}`);
+  },
+  async adminAiSpendLimits(environment?: string) {
+    const suffix = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+    return request<AiSpendLimitList>(`/api/admin/ai/spend/limits${suffix}`);
+  },
+  async adminUpsertAiSpendLimit(body: {
+    environment?: string;
+    scope: 'GLOBAL' | 'PROVIDER' | 'AGENT';
+    targetKey?: string | null;
+    period: 'DAILY' | 'MONTHLY';
+    maxCost?: string | null;
+    maxRequests?: number | null;
+    warnRatio?: string;
+    isActive?: boolean;
+  }) {
+    return request<AiSpendLimitRow>('/api/admin/ai/spend/limits', { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async adminDeleteAiSpendLimit(id: string) {
+    return request<{ deleted: boolean }>(`/api/admin/ai/spend/limits/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
   async adminAiProviderUsage(key: string, days = 30) {
     return request<AiProviderUsage>(`/api/admin/ai/providers/${encodeURIComponent(key)}/usage?days=${days}`);
   },

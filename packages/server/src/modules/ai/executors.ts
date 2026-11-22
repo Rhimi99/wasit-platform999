@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
-import type { DB } from '../../db/client';
+import { platformDb, type DB } from '../../db/client';
 import type { AgentDefinition } from '../../lib/ai/types';
 import { runAIFeature } from '../../lib/ai/runtime';
 import { requireAction } from '../../lib/ai/agent-run-context';
@@ -1992,7 +1992,11 @@ async function execFinanceAgent(db: DB, agent: AgentDefinition, input: Record<st
       .from(orders)
       .where(gte(orders.createdAt, since))
       .groupBy(orders.currencyCode),
-    db
+    // Platform-level AI spend, read through `platformDb()` because the ledger is
+    // hard-denied to agents. The projection carries no agent, user or task
+    // identity — only request type and currency — so no other agent's work is
+    // exposed to this one.
+    platformDb(db)
       .select({
         requestType: aiRequests.requestType,
         currencyCode: aiRequests.currencyCode,

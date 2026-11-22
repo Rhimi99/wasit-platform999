@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import { AiProvidersPanel } from '@/components/AiProvidersPanel';
+import { AiSpendPanel } from '@/components/AiSpendPanel';
 import type {
   AgentRegistryRow,
   AgentLayerCounts,
@@ -17,7 +18,7 @@ import type {
   AgentHealth,
 } from '@/lib/types';
 
-type Tab = 'overview' | 'requests' | 'models' | 'providers' | 'budgets' | 'agents' | 'tasks';
+type Tab = 'overview' | 'requests' | 'models' | 'providers' | 'spend' | 'budgets' | 'agents' | 'tasks';
 
 const STATUS_COLOR: Record<string, 'green' | 'amber' | 'red' | 'teal' | 'slate' | 'indigo'> = {
   SUCCESS: 'green',
@@ -260,6 +261,7 @@ export function AdminAiPage() {
     { id: 'requests', label: t('adminAi.tab.requests') },
     { id: 'models', label: t('adminAi.tab.models') },
     { id: 'providers', label: t('adminAi.tab.providers') },
+    { id: 'spend', label: t('adminAi.tab.spend') },
     { id: 'budgets', label: t('adminAi.tab.budgets') },
     { id: 'agents', label: t('adminAi.tab.agents') },
     { id: 'tasks', label: t('adminAi.tab.tasks') },
@@ -491,6 +493,8 @@ export function AdminAiPage() {
           )}
 
           {tab === 'providers' && <AiProvidersPanel catalogue={models} />}
+
+          {tab === 'spend' && <AiSpendPanel />}
 
           {tab === 'requests' && (
             requests.length === 0 ? <EmptyState title={t('common.noData')} hint={t('adminAi.tab.requests')} /> : (

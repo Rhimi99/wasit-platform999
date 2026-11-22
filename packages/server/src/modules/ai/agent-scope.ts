@@ -24,9 +24,10 @@ import {
  * Enforcement model (fail-closed at every step):
  *  - Business tables are **read-only** and only the tables the agent's executor
  *    actually needs. A read of any other table is refused.
- *  - Platform accounting tables (`ai_models`/`ai_requests`/`ai_usage`/
- *    `ai_budgets`) are runtime-owned and allowed for every agent (the AI ledger
- *    is infrastructure, not agent data).
+ *  - The model catalogue (`ai_models`) is platform metadata and readable by
+ *    every agent. The AI usage ledger and the spend controls are NOT: they name
+ *    other agents' work and money, so they are hard-denied to every agent and
+ *    reached only by platform code through `platformDb()` (AI-05).
  *  - A hard-deny set (credentials, sessions, financial mutation, audit) is
  *    refused for EVERY agent, even if a contract listed it by mistake.
  *  - Owner-scoped tables (`agent_metrics`/`agent_memory`) additionally require a
@@ -85,10 +86,9 @@ export interface AgentScopeContract {
  * NOT agent business data, so allowing them does not widen any data domain.
  */
 export const PLATFORM_INFRA_TABLES: ReadonlySet<string> = new Set([
+  // Model catalogue only: pricing metadata an executor may need to reason about
+  // routing. It carries no other user's activity.
   'ai_models',
-  'ai_requests',
-  'ai_usage',
-  'ai_budgets',
 ]);
 
 /**
@@ -106,6 +106,16 @@ export const HARD_DENY_TABLES: ReadonlySet<string> = new Set([
   'authenticator_apps',
   // AI provider credentials (AI-04): agents never read provider configuration.
   'ai_providers',
+  // AI usage ledger and spend controls (AI-05). An agent must never read another
+  // agent's (or another tenant's) requests, tokens or cost, and must never read
+  // or alter a limit. Platform bookkeeping reaches these tables through
+  // `platformDb()`, which the agent's own query builder cannot obtain.
+  'ai_requests',
+  'ai_usage',
+  'ai_budgets',
+  'ai_spend_limits',
+  'ai_spend_counters',
+  'ai_spend_alerts',
   'security_settings',
   'rate_limit_counters',
   'profiles',

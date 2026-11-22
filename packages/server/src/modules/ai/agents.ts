@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import Decimal from 'decimal.js';
 import { ApiError, type UserRole } from '@wasit/shared';
-import type { DB } from '../../db/client';
+import { platformDb, type DB } from '../../db/client';
 import { agentRegistry, agentTasks } from '../../db/schema/agents';
 import { agentRunSteps } from '../../db/schema/agent_runs';
 import { aiRequests } from '../../db/schema/ai';
@@ -1079,7 +1079,7 @@ export async function reconcileTaskCostFromLedger(
   // already settled (succeeded/failed/approved/rejected) is left untouched.
   if (task.status !== 'running') return { recovered: false, reason: 'not_running' };
 
-  const ledger = await db
+  const ledger = await platformDb(db)
     .select()
     .from(aiRequests)
     // Key on the SERVER-OWNED evidence id, never the caller-supplied `taskId`.

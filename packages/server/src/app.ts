@@ -33,6 +33,7 @@ import { adminRoutes } from './modules/admin/routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
 import { adminAiProviderRoutes } from './modules/admin/ai-provider-routes.js';
+import { adminAiSpendRoutes } from './modules/admin/ai-spend-routes.js';
 import { adminAnalyticsRoutes } from './modules/admin/analytics-routes.js';
 import { adminPolicyRoutes } from './modules/admin/policy-routes.js';
 import { adminCountryRoutes } from './modules/admin/country-routes.js';
@@ -218,6 +219,7 @@ export function createApp(): Hono {
   // Registered before the broad `/api/admin` mounts: Hono dispatches to the
   // first mount that matches, so a later one would answer 404 for these paths.
   app.route('/api/admin/ai/providers', adminAiProviderRoutes);
+  app.route('/api/admin/ai/spend', adminAiSpendRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);

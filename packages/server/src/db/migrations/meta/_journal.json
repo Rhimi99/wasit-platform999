@@ -302,6 +302,13 @@
       "when": 1795368642440,
       "tag": "0042_ai_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1795374754731,
+      "tag": "0043_ai_spend_control",
+      "breakpoints": true
     }
   ]
 }

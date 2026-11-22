@@ -5,7 +5,9 @@ import type { DB } from '../../db/client';
 import { aiModels } from '../../db/schema/ai';
 import { ApiError } from '@wasit/shared';
 import { LocalHeuristicProvider, VENDOR_MODEL_NAMES } from './provider';
-import { resolveProviderChain } from './provider-config';
+import { configEnvironment, resolveProviderChain } from './provider-config';
+import { spendStatus } from './spend-limits';
+import { getAgentRunContext } from './agent-run-context';
 import type { AIProvider } from './types';
 import { resolveModelPrice, type ModelPrice } from './runtime';
 import { env } from '../env';
@@ -86,6 +88,14 @@ export async function resolveAiRoute(
   // yields a provider outside the allowlist.
   const chain = await resolveProviderChain(db);
   const wantsPaid = targetKey !== 'local-heuristic' && targetKey !== 'noop';
+  const environment = configEnvironment();
+  const agentKey = getAgentRunContext()?.agentKey ?? null;
+  // A provider that is already out of budget is skipped here so the router never
+  // selects a vendor the runtime would refuse. A GLOBAL or AGENT cap blocks every
+  // vendor; a PROVIDER cap blocks only its own provider. Routing to a different
+  // vendor would evade a provider cap, so it is not used as an escape.
+  const blocked = async (providerKey: string): Promise<boolean> =>
+    (await spendStatus(db, { environment, providerKey, agentKey })).blocked;
 
   if (wantsPaid) {
     const catalogue = await db
@@ -97,7 +107,7 @@ export async function resolveAiRoute(
 
     // 1) The provider that owns the requested model.
     const owner = chain.find((e) => e.key === vendor && e.provider.isAvailable());
-    if (owner) {
+    if (owner && !(await blocked(owner.key))) {
       return {
         modelKey: targetKey,
         providerId: owner.key,
@@ -113,7 +123,7 @@ export async function resolveAiRoute(
     const fallback = chain.find(
       (e) => e.key !== 'local-heuristic' && e.key !== 'noop' && e.key !== vendor && e.provider.isAvailable(),
     );
-    if (fallback) {
+    if (fallback && !(await blocked(fallback.key))) {
       const price = await resolveModelPrice(db, fallback.model);
       return {
         modelKey: fallback.model,

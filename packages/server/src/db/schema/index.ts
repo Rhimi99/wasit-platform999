@@ -29,3 +29,4 @@ export * from './payouts';
 export * from './reconciliation';
 export * from './receipts';
 export * from './tax';
+export * from './ai-spend';

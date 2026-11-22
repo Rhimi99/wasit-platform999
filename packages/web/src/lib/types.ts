@@ -831,6 +831,86 @@ export interface AiProviderRow {
   usage?: AiProviderUsage;
 }
 
+/** AI-05 consumption desk: every figure comes from recorded request rows. */
+export interface AiSpendTotals {
+  requests: number;
+  succeeded: number;
+  failed: number;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCost: string;
+  vendorCost: string;
+  localRequests: number;
+  unknownCostRequests: number;
+}
+
+export interface AiSpendByAgent {
+  agentKey: string;
+  providerKey: string;
+  vendorModel: string;
+  requests: number;
+  failed: number;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCost: string;
+  vendorCost: string;
+}
+
+export interface AiSpendByProviderModel {
+  providerKey: string;
+  vendorModel: string;
+  environment: string;
+  requests: number;
+  failed: number;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCost: string;
+  vendorCost: string;
+}
+
+export interface AiSpendLimitRow {
+  id: string;
+  scope: 'GLOBAL' | 'PROVIDER' | 'AGENT';
+  targetKey: string;
+  period: 'DAILY' | 'MONTHLY';
+  maxCost: string | null;
+  maxRequests: number | null;
+  warnRatio: string;
+  currencyCode: string;
+  isActive: boolean;
+  spent: string;
+  requests: number;
+  state: 'OK' | 'WARNING' | 'BLOCKED';
+}
+
+export interface AiSpendAlertRow {
+  id: string;
+  scope: string;
+  targetKey: string;
+  period: string;
+  level: string;
+  spent: string;
+  limitAmount: string | null;
+  currencyCode: string;
+  createdAt: string;
+}
+
+export interface AiSpendOverview {
+  from: string;
+  to: string;
+  environment: string;
+  totals: AiSpendTotals;
+  byAgent: AiSpendByAgent[];
+  byProviderModel: AiSpendByProviderModel[];
+  limits: AiSpendLimitRow[];
+  alerts: AiSpendAlertRow[];
+}
+
+export interface AiSpendLimitList {
+  environment: string;
+  limits: Omit<AiSpendLimitRow, 'spent' | 'requests' | 'state'>[];
+}
+
 export interface AiProviderList {
   environment: string;
   secretStorage: { available: boolean; reason: string };
