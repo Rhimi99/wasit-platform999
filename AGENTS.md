@@ -529,6 +529,21 @@ npx playwright install --with-deps chromium
 - **لا كلمات مرور في السجلات**: `seed-demo` لم يعد يطبع كلمة المرور المنشورة ولا كلمة مرور الموظفين المولَّدة.
 - **الاختبارات**: `tests/unit/demo-audit-authorization.test.ts` (قاعدة السقف)، `tests/demo-auto-login.test.ts` (401/403/404 + منع التصعيد + جلسة العميل)، `e2e/demo-owner.spec.ts` (زائر/SUPER_ADMIN/ADMIN).
 
+## Public demo (DEMO-02 — 2026-11-22)
+
+- الرابط العام الحالي يُخدَم من `vite preview` على 12000 + API على 3000 + PostgreSQL 17 على
+  `127.0.0.1:5434` بقاعدة **`wasit_demo` معزولة** (migrate + `seed.ts` + `seed-demo.ts`).
+  التفاصيل والاستعادة في `docs/DEMO-02_PUBLIC_DEMO_RESTART.md`.
+- **سبب تعطّل الرابط السابق**: قاعدة `wasit_demo` كانت في حاوية Docker اختفت مع إعادة إنشاء
+  الحاوية، و`vite preview` يرفض أي Host غير مُدرج. الآن `allowedHosts` يُشتق من `APP_URL`
+  و`CORS_ORIGIN` و`WEB_ALLOWED_HOSTS` (`packages/web/vite.config.ts`, اختبار
+  `tests/preview-hosts.test.ts`) — فلا حاجة لتعديل الكود عند تغيّر اسم نطاق التشغيل.
+- **إعدادان إلزاميان للعرض العام في `.env.demo`**: `DEMO_AUTO_LOGIN=false` (لا جلسة بلا بيانات
+  اعتماد) و`ALLOW_DEV_TOOLING=false` (وإلا صار `devResetToken` متاحاً لأي بريد بما فيه
+  `admin@wasit.tn`). `DEMO_SKIP_EMAIL_VERIFICATION=true` يبقى لأن البريد `log` فقط.
+- **شريط التنقّل**: `AppSidebar` صار drawer تحت `lg` (زر في `TopHeader`، إغلاق تلقائي عند
+  التنقّل) — كان يُضغط محتوى لوحة التحكم على هواتف 412px.
+
 ## Landing page (public marketing surface)
 
 - The homepage is the **dark navy premium** theme (`bg-ink-950`, i.e. `#050c24`). All other public routes keep the light/white header.
