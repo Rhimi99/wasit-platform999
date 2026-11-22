@@ -1167,3 +1167,13 @@ npx playwright install --with-deps chromium
 - **`e2e/global-setup.ts`** يقرأ الآن `DEMO_ACCOUNT_PASSWORD_*` / `DEMO_STAFF_PASSWORD_*` — كلمة المرور المنشورة لم تعد صالحة على بيئة مُدوَّرة (DEMO-SEC-03).
 - **CSRF**: أي `request.newContext` في Playwright يستدعي مساراً يغيّر الحالة يجب أن يرسل `Origin` (وإلا 403 `Request origin could not be verified`).
 - **E2E**: `e2e/agent-surfaces.spec.ts` — 6/6 (Desktop Chrome + Pixel 7 project `mobile-chromium`).
+
+## AFC-06 — Marketing video agent, commercial grade (2026-11-20)
+
+- **Pipeline**: `lib/media/video-script.ts` (script from real product facts) → `tts.ts` (Piper, local, MIT) → `music.ts` (procedural bed) → `audio-mix.ts` (loudnorm + ducking) → `marketing-video.ts` (`produceMarketingVideo`, `planTimeline`, `buildMarketingAss`, `fitTitle`) → `video-quality.ts` (18-check gate).
+- **Nothing ships ungated**: `evaluateMarketingVideo()` must pass before the file is stored; the UI hides preview/download unless `qualityGate.passed === true`. Checks cover voiceover presence, −16…−13 LUFS, ≤ −1 dBTP, h264/yuv420p/720×1280/25fps, AAC stereo 44.1kHz, subtitle cues, and every number in the copy traced to product data.
+- **Languages**: ar / fr / en / zh deliver; **ar-TN is withheld on purpose** — the public Tunisian models are CC-BY-NC or unlicensed, so labelling an MSA voice "Tunisian" would be a false claim. `resolveVoice()` returns `{voice: null, reason}` and the gate fails `audio.voiceover`.
+- **TTS install**: `scripts/install-tts.sh` (also `npm run install:tts -w @wasit/server`) extracts Piper into `packages/server/vendor/piper/` (git-ignored) with `espeak-ng-data` beside the binary — the binary resolves its data relative to itself, so an unflattened `piper/piper/` breaks with `EACCES`/missing `phontab`.
+- **Evidence**: `npm run verify:videos -w @wasit/server` renders one advert per language against a real `products` row and writes `packages/server/artifacts/marketing-videos/report.{json,md}` (build output, git-ignored). Last run: 4 delivered, ar-TN withheld, verdict PASS.
+- **Fonts**: `assets/fonts/NotoSansSC-Regular.otf` (CJK) + `NotoSansArabic-Regular.ttf`; `VIDEO_FONTS_DIR` autodetected.
+- **Rendering pitfalls worth remembering**: fit every headline/CTA with `fitTitle` (libass clips silently), keep price and currency on separate lines (a mixed-direction line splits into two mis-sized boxes in RTL), and drop the `•` prefix in Arabic copy.

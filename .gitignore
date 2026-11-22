@@ -15,6 +15,8 @@ backups/
 # Playwright E2E artifacts — session cookies + failure output must never be committed.
 test-results/
 logs/
+vendor/piper/
+packages/server/vendor/
 playwright-report/
 e2e/.auth/
 # Scratch backup heartbeat written by the E2E run
@@ -41,3 +43,6 @@ packages/server/.wasit-media-test/
 
 # Local media scratch from functional audit — never commit.
 .wasit-media-local
+
+# Rendered marketing videos + verification reports are build output, not source.
+packages/server/artifacts/

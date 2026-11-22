@@ -15,6 +15,7 @@ import { suppliers } from '../src/db/schema/trade.js';
 import { products, categories } from '../src/db/schema/products.js';
 import { env } from '../src/lib/env.js';
 import { cleanupOwnedRows } from './support/ownership-cleanup.js';
+import { resolveVoice } from '../src/lib/media/tts.js';
 
 /**
  * AI-FIRST-COMPLETION-04 — agent video delivery + retention.
@@ -112,7 +113,7 @@ async function insertProduct(sellerId: string, name: string) {
   return id;
 }
 
-describe('AFC-04 — agent video download and retention', () => {
+describe.skipIf(resolveVoice('en').voice === null)('AFC-04 — agent video download and retention', () => {
   let owner: { id: string; email: string };
   let stranger: { id: string; email: string };
   let staff: { id: string; email: string };
@@ -139,6 +140,7 @@ describe('AFC-04 — agent video download and retention', () => {
         : created;
     expect(finished.error ?? null).toBeNull();
     taskId = created.id;
+    console.log('DEBUG_RESULT', JSON.stringify((finished.result as any)?.advice ?? finished.result).slice(0, 1200));
   }, 120_000);
 
   it('streams the rendered video to its owner with an audit row', async () => {

@@ -23,12 +23,15 @@ import { dailyKpis } from '../../db/schema/analytics';
 import { listRecentMarketingVideos } from '../media/service';
 import { MARKETING_VIDEO_DURATION } from '@wasit/shared';
 import { env } from '../../lib/env';
-import { planRenderSlides, type RenderSlide } from '../../lib/media/video-provider';
+import { planTimeline, produceMarketingVideo, type ProducedVideo } from '../../lib/media/marketing-video';
+import { evaluateMarketingVideo, type QualityReport } from '../../lib/media/video-quality';
+import { VOICE_CATALOGUE, VIDEO_LANGUAGES, isVideoLanguage, resolveVoice, type VideoLanguage } from '../../lib/media/tts';
+import { MARKETING_OBJECTIVES, buildVideoScript, isMarketingObjective, type MarketingObjective } from '../../lib/media/video-script';
 import { resolveVideoProvider } from '../../lib/media/resolve';
 import { getAgentRunContext } from '../../lib/ai/agent-run-context';
 import { SYSTEM_PRINCIPAL } from './scope';
 import { createHash, randomUUID } from 'node:crypto';
-import { unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { measureMp4DurationSeconds } from '../../lib/media/mp4';
@@ -492,19 +495,18 @@ async function execMarketingVideoAgent(
   const isAdmin = roles.includes('ADMIN') || roles.includes('SUPER_ADMIN');
   const productId = typeof input.productId === 'string' && input.productId.length > 0 ? input.productId : null;
 
-  const languages = ['ar', 'fr', 'en', 'zh'] as const;
+  const languages = VIDEO_LANGUAGES;
   const audiences = ['B2B', 'B2C'] as const;
   const styles = ['MODERN', 'MINIMAL', 'BOLD', 'ELEGANT'] as const;
 
-  const language: (typeof languages)[number] = languages.includes(input.language as never)
-    ? (input.language as (typeof languages)[number])
-    : 'en';
+  const language: VideoLanguage = isVideoLanguage(input.language) ? input.language : 'en';
   const audience: (typeof audiences)[number] = audiences.includes(input.audience as never)
     ? (input.audience as (typeof audiences)[number])
     : 'B2B';
   const style: (typeof styles)[number] = styles.includes(input.style as never)
     ? (input.style as (typeof styles)[number])
     : 'MODERN';
+  const objective: MarketingObjective = isMarketingObjective(input.objective) ? input.objective : 'SALES';
   const requestedDuration = Number(input.durationSeconds ?? MARKETING_VIDEO_DURATION.default);
   const durationSeconds = Number.isFinite(requestedDuration)
     ? Math.min(Math.max(Math.round(requestedDuration), MARKETING_VIDEO_DURATION.min), MARKETING_VIDEO_DURATION.max)
@@ -520,6 +522,8 @@ async function execMarketingVideoAgent(
     writesPlatformRows: false,
     publishes: false,
     durationWindow: { min: MARKETING_VIDEO_DURATION.min, max: MARKETING_VIDEO_DURATION.max },
+    supportedLanguages: VIDEO_LANGUAGES,
+    objectives: MARKETING_OBJECTIVES,
     generatedAt: new Date().toISOString(),
   };
 
@@ -591,35 +595,25 @@ async function execMarketingVideoAgent(
   }
 
   const localizedName =
-    language === 'ar' ? product.nameAr ?? product.name : language === 'fr' ? product.nameFr ?? product.name : product.name;
+    language === 'ar' || language === 'ar-TN'
+      ? product.nameAr ?? product.name
+      : language === 'fr'
+        ? product.nameFr ?? product.name
+        : product.name;
 
-  const spec = {
-    productId: product.id,
-    productName: localizedName,
-    description: product.description?.trim() || localizedName,
+  const facts = {
+    name: localizedName,
     brand: product.brand,
+    description: product.description,
     price: product.basePrice,
     currencyCode: product.currencyCode,
     sellerName,
-    imageUrl: null,
-    language,
-    audience,
-    style,
-    durationSeconds,
-  } as const;
+  };
 
-  const slideSeconds = durationSeconds / 4;
-  const slides = planRenderSlides(spec, slideSeconds).map((slide: RenderSlide) => ({
-    index: slide.index,
-    style: slide.style,
-    startSeconds: slide.startSeconds,
-    endSeconds: slide.endSeconds,
-    text: slide.lines.join('\n'),
-  }));
-
-  const provider = resolveVideoProvider();
-  const providerAvailable = await provider.isAvailable();
-  const providerReason = provider.unavailableReason();
+  // A plan-only request still answers with the real script and cut list; the
+  // voice lengths are unknown until synthesis, so the timeline uses the floors.
+  const plannedScript = buildVideoScript({ language, objective, audience, facts });
+  const plannedTimeline = planTimeline(plannedScript, new Map(), durationSeconds);
 
   const steps: Array<{ step: string; ok: boolean; ms: number; detail?: string }> = [];
   const timed = async <T>(step: string, fn: () => Promise<T>): Promise<T> => {
@@ -635,88 +629,122 @@ async function execMarketingVideoAgent(
   };
 
   const wantsRender = input.render !== false;
+  const voiceStatus = resolveVoice(language);
   let video: Record<string, unknown> | null = null;
+  let quality: QualityReport | null = null;
+  let produced: ProducedVideo | null = null;
   let render:
     | { status: 'READY' | 'FAILED' | 'SKIPPED'; error?: string; failedChecks?: string[]; provider: string }
     | { status: 'UNAVAILABLE'; error: string; provider: string };
 
+  const provider = resolveVideoProvider();
+  const providerAvailable = await provider.isAvailable();
+  const providerReason = provider.unavailableReason();
+  const rendererId = 'structural+voice';
+
   if (!wantsRender) {
-    render = { status: 'SKIPPED', provider: provider.id, error: 'render=false: the plan was requested without a render.' };
+    render = { status: 'SKIPPED', provider: rendererId, error: 'render=false: the plan was requested without a render.' };
   } else if (!providerAvailable) {
     // Preflight: never start a render whose toolchain is missing.
-    render = { status: 'UNAVAILABLE', provider: provider.id, error: providerReason ?? 'renderer unavailable' };
+    render = { status: 'UNAVAILABLE', provider: rendererId, error: providerReason ?? 'renderer unavailable' };
     steps.push({ step: 'precheck_renderer', ok: false, ms: 0, detail: render.error });
   } else {
-    steps.push({ step: 'precheck_renderer', ok: true, ms: 0, detail: `ffmpeg present, fonts ${env.VIDEO_ARABIC_FONT}/${env.VIDEO_FONT}` });
-    const tempFile = path.join(tmpdir(), `wasit-verify-${randomUUID()}.mp4`);
-    try {
-      const rendered = await timed('render', () => provider.render(spec));
-      const bytes = rendered.bytes;
-      const sha256 = createHash('sha256').update(bytes).digest('hex');
+    steps.push({
+      step: 'precheck_renderer',
+      ok: true,
+      ms: 0,
+      detail: `ffmpeg present, fonts ${env.VIDEO_ARABIC_FONT}/${env.VIDEO_FONT}`,
+    });
+    steps.push({
+      step: 'precheck_voice',
+      ok: voiceStatus.voice !== null,
+      ms: 0,
+      detail: voiceStatus.voice ? `${voiceStatus.voice.id} (${voiceStatus.voice.locale})` : voiceStatus.reason ?? 'no voice',
+    });
 
-      const stored = await timed('store', () =>
-        resolveMediaStorage().put({
-          key: `agent-videos/${requesterId ?? 'system'}/${ctx?.taskId ?? randomUUID()}-${sha256.slice(0, 12)}.mp4`,
-          body: bytes,
-          contentType: 'video/mp4',
+    const workDir = await mkdtemp(path.join(tmpdir(), 'wasit-mv-'));
+    try {
+      produced = await timed('produce', () =>
+        produceMarketingVideo({
+          facts,
+          language,
+          objective,
+          audience,
+          style,
+          targetSeconds: durationSeconds,
+          workDir,
+          outFile: path.join(workDir, 'out.mp4'),
         }),
       );
 
-      const probe = await timed('probe', async () => {
-        await writeFile(tempFile, bytes);
-        return probeMp4File(tempFile);
-      });
-      const decode = await timed('decode', () => decodeMp4File(tempFile));
-      const headerDuration = measureMp4DurationSeconds(bytes);
+      quality = await timed('quality_gate', () =>
+        evaluateMarketingVideo({
+          file: produced!.file,
+          produced: produced!,
+          expected: { language, width: env.VIDEO_WIDTH, height: env.VIDEO_HEIGHT, fps: env.VIDEO_FPS },
+          productSource: [facts.name, facts.brand, facts.description, facts.price, facts.currencyCode, facts.sellerName]
+            .filter(Boolean)
+            .join(' '),
+        }),
+      );
 
-      const failedChecks: string[] = [];
-      if (!probe.ok) failedChecks.push('probe: no video stream');
-      if (probe.codec !== 'h264') failedChecks.push(`codec: ${probe.codec ?? 'unknown'} (expected h264)`);
-      if (probe.width !== env.VIDEO_WIDTH || probe.height !== env.VIDEO_HEIGHT) {
-        failedChecks.push(`resolution: ${probe.width}x${probe.height} (expected ${env.VIDEO_WIDTH}x${env.VIDEO_HEIGHT})`);
+      if (!quality.passed) {
+        // A file that failed the gate is never stored: nothing to download, no
+        // half-finished advert left where a buyer could mistake it for one.
+        render = {
+          status: 'FAILED',
+          provider: rendererId,
+          failedChecks: quality.checks.filter((c) => c.required && !c.passed).map((c) => `${c.id}: ${c.detail}`),
+          error: quality.message ?? 'quality gate failed',
+        };
+      } else {
+        const bytes = await timed('read', () => readFile(produced!.file));
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        const stored = await timed('store', () =>
+          resolveMediaStorage().put({
+            key: `agent-videos/${requesterId ?? 'system'}/${ctx?.taskId ?? randomUUID()}-${sha256.slice(0, 12)}.mp4`,
+            body: bytes,
+            contentType: 'video/mp4',
+          }),
+        );
+        const headerDuration = measureMp4DurationSeconds(bytes);
+        video = {
+          storageKey: stored.key,
+          storage: resolveMediaStorage().id,
+          contentType: stored.contentType,
+          bytes: stored.size,
+          sha256,
+          durationSeconds: quality.metrics.durationSeconds,
+          codec: quality.metrics.video.codec,
+          width: quality.metrics.video.width,
+          height: quality.metrics.video.height,
+          frameRate: quality.metrics.video.frameRate,
+          frames: quality.metrics.video.frames,
+          containerDurationSeconds: headerDuration,
+          decode: { ok: quality.metrics.decodedFully, detail: 'verified by the quality gate' },
+          verified: true,
+          language,
+          voice: produced.voice?.id ?? null,
+          audio: {
+            codec: quality.metrics.audio.codec,
+            sampleRate: quality.metrics.audio.sampleRate,
+            channels: quality.metrics.audio.channels,
+            loudnessLufs: quality.metrics.audio.loudnessLufs,
+            truePeakDb: quality.metrics.audio.truePeakDb,
+          },
+        };
+        render = { status: 'READY', provider: rendererId };
       }
-      const measured = probe.durationSeconds;
-      if (measured === null || measured < MARKETING_VIDEO_DURATION.min || measured > MARKETING_VIDEO_DURATION.max) {
-        failedChecks.push(`duration: ${measured ?? 'unknown'}s outside ${MARKETING_VIDEO_DURATION.min}–${MARKETING_VIDEO_DURATION.max}s`);
-      } else if (Math.abs(measured - durationSeconds) > 0.5) {
-        failedChecks.push(`duration: ${measured}s does not match the requested ${durationSeconds}s`);
-      }
-      if (headerDuration === null || (measured !== null && Math.abs(headerDuration - measured) > 0.5)) {
-        failedChecks.push(`container: mp4 header says ${headerDuration ?? 'unknown'}s, ffprobe says ${measured ?? 'unknown'}s`);
-      }
-      if (!decode.ok) failedChecks.push('decode: the file does not play end to end');
-      if (stored.size !== bytes.length) failedChecks.push('storage: written size differs from the rendered bytes');
-
-      video = {
-        storageKey: stored.key,
-        storage: resolveMediaStorage().id,
-        contentType: stored.contentType,
-        bytes: stored.size,
-        sha256,
-        durationSeconds: measured,
-        codec: probe.codec,
-        width: probe.width,
-        height: probe.height,
-        frameRate: probe.frameRate,
-        frames: probe.frames,
-        containerDurationSeconds: headerDuration,
-        decode: { ok: decode.ok, detail: decode.detail },
-        verified: failedChecks.length === 0,
-        language,
-        fonts: { arabic: env.VIDEO_ARABIC_FONT, latin: env.VIDEO_FONT },
-      };
-      render =
-        failedChecks.length === 0
-          ? { status: 'READY', provider: provider.id }
-          : { status: 'FAILED', provider: provider.id, failedChecks };
     } catch (error) {
       video = null;
-      render = { status: 'FAILED', provider: provider.id, error: messageOf(error).slice(0, 500) };
+      render = { status: 'FAILED', provider: rendererId, error: messageOf(error).slice(0, 500) };
     } finally {
-      await unlink(tempFile).catch(() => undefined);
+      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
+  const scenes = produced?.timeline.scenes ?? plannedTimeline.scenes;
+  const script = produced?.script ?? plannedScript;
   const content = JSON.stringify({
     ...base,
     renders: render.status === 'READY',
@@ -730,21 +758,38 @@ async function execMarketingVideoAgent(
     },
     plan: {
       language,
+      dialect: script.dialect,
+      objective,
       audience,
       style,
       durationSeconds,
-      slideSeconds,
-      slides,
-      script: slides.map((s) => s.text).join('\n\n'),
-      storyboard: slides.map((s) => ({
-        scene: s.index,
-        from: s.startSeconds,
-        to: s.endSeconds,
-        shot: s.style === 'Title' ? 'headline card' : 'description card',
+      sceneCount: scenes.length,
+      scenes: scenes.map((scene) => ({
+        index: scene.index,
+        kind: scene.kind,
+        from: Number(scene.startSeconds.toFixed(2)),
+        to: Number(scene.endSeconds.toFixed(2)),
+        headline: scene.headline,
+        bullets: scene.bullets,
+        voiceover: scene.voiceover,
       })),
+      script: script.scenes.map((s) => s.voiceover).join('\n'),
+      cta: script.cta,
+      facts: script.facts,
+      voiceover: produced?.voice
+        ? {
+            voiceId: produced.voice.id,
+            locale: produced.voice.locale,
+            engine: produced.voice.engine,
+            license: produced.voice.license,
+            dialectNative: produced.voice.dialectNative,
+          }
+        : { voiceId: null, reason: produced?.voiceGap ?? voiceStatus.reason ?? null },
+      music: produced?.music ?? null,
       delivery: {
         container: 'mp4',
         videoCodec: 'h264',
+        audioCodec: 'aac',
         pixelFormat: 'yuv420p',
         width: env.VIDEO_WIDTH,
         height: env.VIDEO_HEIGHT,
@@ -753,14 +798,29 @@ async function execMarketingVideoAgent(
       },
     },
     render,
+    qualityGate: quality
+      ? {
+          passed: quality.passed,
+          reason: quality.reason,
+          message: quality.message,
+          checks: quality.checks,
+          metrics: quality.metrics,
+        }
+      : null,
     steps,
     video,
     readiness: {
-      provider: provider.id,
+      provider: rendererId,
       available: providerAvailable,
       reason: providerReason,
-      renderer: 'local ffmpeg + libass (structural)',
-      fonts: { latin: env.VIDEO_FONT, arabic: env.VIDEO_ARABIC_FONT },
+      renderer: 'local ffmpeg + libass + piper TTS',
+      voice: {
+        engine: env.TTS_ENGINE,
+        available: voiceStatus.voice !== null,
+        reason: voiceStatus.reason,
+        supportedLanguages: VOICE_CATALOGUE.map((v) => ({ language: v.language, locale: v.locale, id: v.id })),
+      },
+      fonts: { latin: env.VIDEO_FONT, arabic: env.VIDEO_ARABIC_FONT, chinese: 'Noto Sans SC' },
       externalServices: false,
       paidServices: false,
     },
@@ -785,9 +845,16 @@ async function execMarketingVideoAgent(
     roles: ['SUPER_ADMIN'],
     requestType: `AGENT:${agent.key}`,
     system: 'You are the WASIT Marketing Video Agent.',
-    user: `Planned a ${durationSeconds}s ${style} ${language.toUpperCase()} video for "${localizedName}" (${slides.length} slides). Renderer ${provider.id} available=${providerAvailable} status=${render.status}.`,
+    user: `Produced a ${durationSeconds}s ${style} ${language.toUpperCase()} video for "${localizedName}": ${scenes.length} scenes, voice ${produced?.voice?.id ?? 'none'}, render ${render.status}${quality ? `, gate ${quality.passed ? 'passed' : `failed (${quality.reason})`}` : ''}.`,
     maxTokens: 96,
-    metadata: { agentKey: agent.key, productId: product.id, renderStatus: render.status, videoSha256: video?.sha256 ?? null },
+    metadata: {
+      agentKey: agent.key,
+      productId: product.id,
+      renderStatus: render.status,
+      qualityPassed: quality?.passed ?? null,
+      qualityReason: quality?.reason ?? null,
+      videoSha256: video?.sha256 ?? null,
+    },
   });
 
   return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };

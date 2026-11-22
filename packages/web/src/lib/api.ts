@@ -955,6 +955,13 @@ export const api = {
       copilot: { key: string; name: string; description: string };
     }>('/api/ai/agents');
   },
+  async aiVoiceCapabilities() {
+    return request<{
+      engine: string;
+      ready: boolean;
+      languages: Array<{ language: string; voice: string | null; available: boolean; reason: string | null }>;
+    }>('/api/ai/voice-capabilities');
+  },
   async aiCreateAgentTask(agentKey: string, input: Record<string, unknown>, requestedModel?: string) {
     return request<{
       id: string;

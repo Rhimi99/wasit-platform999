@@ -6,16 +6,52 @@ import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import type { AgentTaskRow, ProductSummary } from '@/lib/types';
 
-const LANGUAGES = ['ar', 'fr', 'en', 'zh'] as const;
+const LANGUAGES = ['ar', 'ar-TN', 'fr', 'en', 'zh'] as const;
 const AUDIENCES = ['B2B', 'B2C'] as const;
 const STYLES = ['MODERN', 'MINIMAL', 'BOLD', 'ELEGANT'] as const;
+const OBJECTIVES = ['SALES', 'AWARENESS', 'LAUNCH', 'RETENTION'] as const;
 
 /** Every stage the executor reports, in the order it runs them. */
-const STAGES = ['precheck_renderer', 'render', 'store', 'probe', 'decode'] as const;
+const STAGES = ['precheck_renderer', 'precheck_voice', 'produce', 'quality_gate', 'read', 'store'] as const;
+
+interface QualityCheck {
+  id: string;
+  label: string;
+  required: boolean;
+  passed: boolean;
+  detail: string;
+}
+
+interface QualityGate {
+  passed: boolean;
+  reason: string | null;
+  message: string | null;
+  checks: QualityCheck[];
+  metrics?: {
+    durationSeconds: number | null;
+    audio: { present: boolean; loudnessLufs: number | null; truePeakDb: number | null };
+    scenes: Array<{ index: number; hasVoiceover: boolean; rmsDb: number | null }>;
+    subtitleCues: number;
+  };
+}
+
+interface VoiceLanguage {
+  language: string;
+  voice: string | null;
+  available: boolean;
+  reason: string | null;
+}
 
 interface VideoAdvice {
   product?: { id: string; name: string };
-  plan?: { durationSeconds: number; slides?: Array<{ index: number; text: string }> };
+  plan?: {
+    durationSeconds: number;
+    language?: string;
+    scenes?: Array<{ index: number; kind: string; from: number; to: number; headline: string; voiceover: string }>;
+    voiceover?: { voiceId: string | null; locale?: string; reason?: string | null };
+    music?: { provider: string; license: string } | null;
+  };
+  qualityGate?: QualityGate | null;
   render?: { status: string; error?: string; failedChecks?: string[]; provider?: string };
   steps?: Array<{ step: string; ok: boolean; ms: number; detail?: string }>;
   video?: {
@@ -72,7 +108,9 @@ export function DashboardAgentVideoPage() {
   const [active, setActive] = useState<AgentTaskRow | null>(null);
 
   const [productId, setProductId] = useState('');
+  const [voices, setVoices] = useState<VoiceLanguage[]>([]);
   const [language, setLanguage] = useState<(typeof LANGUAGES)[number]>('ar');
+  const [objective, setObjective] = useState<(typeof OBJECTIVES)[number]>('SALES');
   const [audience, setAudience] = useState<(typeof AUDIENCES)[number]>('B2B');
   const [style, setStyle] = useState<(typeof STYLES)[number]>('MODERN');
   const [durationSeconds, setDurationSeconds] = useState<number>(MARKETING_VIDEO_DURATION.default);
@@ -81,12 +119,14 @@ export function DashboardAgentVideoPage() {
   const alive = useRef(true);
 
   const load = useCallback(async () => {
-    const [p, t2] = await Promise.all([
+    const [p, t2, v] = await Promise.all([
       apiCall(() => api.listMyProducts({ pageSize: 100 })),
       apiCall(() => api.aiMyTasks('marketing-video-agent')),
+      apiCall(() => api.aiVoiceCapabilities()),
     ]);
     if (p.data) setProducts(p.data.items.filter((item) => item.status === 'ACTIVE'));
     if (t2.data) setTasks(t2.data.items);
+    if (v.data) setVoices(v.data.languages);
     setLoadError(p.error ?? t2.error ?? null);
     setLoading(false);
   }, []);
@@ -140,6 +180,7 @@ export function DashboardAgentVideoPage() {
       const created = await api.aiCreateAgentTask('marketing-video-agent', {
         productId,
         language,
+        objective,
         audience,
         style,
         durationSeconds: clamped,
@@ -183,7 +224,11 @@ export function DashboardAgentVideoPage() {
 
   const renderStatus = advice?.render?.status ?? null;
   const completed = active?.status === 'succeeded' || active?.status === 'approved';
-  const hasVideo = Boolean(advice?.video) && renderStatus === 'READY' && completed;
+  // A file only counts as a video when the gate passed: that is the promise the
+  // download button makes to whoever buys the advert.
+  const gatePassed = advice?.qualityGate?.passed === true;
+  const hasVideo = Boolean(advice?.video) && renderStatus === 'READY' && completed && gatePassed;
+  const selectedVoice = voices.find((v) => v.language === language);
   const videoUrl = active ? api.aiTaskVideoUrl(active.id) : '';
 
   const renderError = useMemo(() => {
@@ -231,7 +276,26 @@ export function DashboardAgentVideoPage() {
             <div>
               <label className="label" htmlFor="av-language">{t('agentVideo.language')}</label>
               <select id="av-language" value={language} onChange={(e) => setLanguage(e.target.value as never)} className="input" data-testid="agent-video-language">
-                {LANGUAGES.map((l) => <option key={l} value={l}>{l.toUpperCase()}</option>)}
+                {LANGUAGES.map((l) => {
+                  const entry = voices.find((v) => v.language === l);
+                  return <option key={l} value={l}>{l.toUpperCase()}{entry && !entry.available ? ' — ✕' : ''}</option>;
+                })}
+              </select>
+              {selectedVoice && (
+                <p
+                  className={`mt-1 text-xs ${selectedVoice.available ? 'text-green-700' : 'text-amber-700'}`}
+                  data-testid="agent-video-voice-status"
+                >
+                  {selectedVoice.available
+                    ? `${t('agentVideo.voice.available')} · ${selectedVoice.voice}`
+                    : `${t('agentVideo.voice.missing')} ${selectedVoice.reason ?? ''}`}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="label" htmlFor="av-objective">{t('agentVideo.objective')}</label>
+              <select id="av-objective" value={objective} onChange={(e) => setObjective(e.target.value as never)} className="input" data-testid="agent-video-objective">
+                {OBJECTIVES.map((o) => <option key={o} value={o}>{t(`agentVideo.objective.${o}`)}</option>)}
               </select>
             </div>
             <div>
@@ -262,7 +326,12 @@ export function DashboardAgentVideoPage() {
                 {MARKETING_VIDEO_DURATION.min}–{MARKETING_VIDEO_DURATION.max}s
               </p>
             </div>
-            <button type="submit" disabled={busy || products.length === 0} className="btn-primary sm:col-span-2" data-testid="agent-video-start">
+            <button
+              type="submit"
+              disabled={busy || products.length === 0 || (selectedVoice ? !selectedVoice.available : false)}
+              className="btn-primary sm:col-span-2"
+              data-testid="agent-video-start"
+            >
               {busy ? t('agentVideo.starting') : t('agentVideo.start')}
             </button>
           </form>
@@ -339,12 +408,59 @@ export function DashboardAgentVideoPage() {
                 </div>
               )}
 
-              {advice?.plan?.slides && (
+              {advice?.qualityGate && (
+                <div className="rounded-md border border-slate-200 p-2" data-testid="agent-video-gate">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-semibold text-slate-700">{t('agentVideo.gate.title')}</h4>
+                    <Badge color={advice.qualityGate.passed ? 'green' : 'red'} testId="agent-video-gate-status">
+                      {advice.qualityGate.passed ? t('agentVideo.gate.passed') : t('agentVideo.gate.failed')}
+                    </Badge>
+                  </div>
+                  {advice.qualityGate.metrics && (
+                    <p className="mt-1 text-[11px] text-slate-500" data-testid="agent-video-gate-metrics">
+                      {t('agentVideo.gate.loudness')}: {advice.qualityGate.metrics.audio.loudnessLufs ?? '—'} LUFS ·{' '}
+                      {t('agentVideo.gate.scenes')}: {advice.qualityGate.metrics.scenes.filter((s) => s.hasVoiceover).length}/
+                      {advice.qualityGate.metrics.scenes.length} · {t('agentVideo.gate.cues')}: {advice.qualityGate.metrics.subtitleCues}
+                    </p>
+                  )}
+                  <ul className="mt-1 space-y-0.5">
+                    {advice.qualityGate.checks.map((check) => (
+                      <li key={check.id} className="flex items-start gap-1.5 text-[11px]">
+                        <span aria-hidden className={check.passed ? 'text-green-600' : 'text-red-600'}>{check.passed ? '●' : '✕'}</span>
+                        <span className="flex-1 text-slate-600">
+                          {check.label}
+                          {!check.passed && <span className="block text-red-600">{check.detail}</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {!advice.qualityGate.passed && (
+                    <p className="mt-1 text-[11px] text-red-700" data-testid="agent-video-gate-withheld">
+                      {t('agentVideo.gate.withheld')}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {advice?.plan?.scenes && advice.plan.scenes.length > 0 && (
                 <details className="text-xs text-slate-600">
                   <summary className="cursor-pointer font-medium">{t('agentVideo.script')}</summary>
-                  <ol className="mt-1 list-decimal space-y-1 ps-4">
-                    {advice.plan.slides.map((slide) => <li key={slide.index}>{slide.text}</li>)}
+                  <ol className="mt-1 list-decimal space-y-1 ps-4" data-testid="agent-video-scenes">
+                    {advice.plan.scenes.map((scene) => (
+                      <li key={scene.index}>
+                        <span className="text-slate-400">[{scene.kind}]</span> {scene.headline}
+                        <span className="block text-slate-500">{scene.voiceover}</span>
+                      </li>
+                    ))}
                   </ol>
+                  {advice.plan.voiceover && (
+                    <p className="mt-1 text-[11px] text-slate-500" data-testid="agent-video-voice">
+                      {t('agentVideo.voice.title')}: {advice.plan.voiceover.voiceId ?? advice.plan.voiceover.reason ?? '—'}
+                    </p>
+                  )}
+                  {advice.plan.music && (
+                    <p className="text-[11px] text-slate-500">{advice.plan.music.license}</p>
+                  )}
                 </details>
               )}
             </div>

@@ -54,6 +54,12 @@ test.describe('AFC-05 — agent video production surface', () => {
     await product.selectOption({ index: 1 });
     await page.getByTestId('agent-video-duration').fill('35');
 
+    // Every supported language is offered, and the voice status explains the
+    // one language the platform cannot speak (Tunisian) instead of hiding it.
+    const language = page.getByTestId('agent-video-language');
+    await expect(language.locator('option')).toHaveCount(5);
+    await expect(page.getByTestId('agent-video-voice-status')).toBeVisible();
+
     const created = page.waitForResponse(
       (res) => res.url().includes('/api/ai/agents/marketing-video-agent/tasks') && res.request().method() === 'POST',
     );
@@ -95,6 +101,12 @@ test.describe('AFC-05 — agent video production surface', () => {
       const video = document.querySelector('[data-testid="agent-video-preview"]') as HTMLVideoElement | null;
       return Boolean(video && video.readyState >= 1 && video.duration > 0);
     }, undefined, { timeout: 60_000 });
+
+    // The delivery gate is shown with its verdict; a withheld video has no
+    // preview and no download button at all.
+    await expect(page.getByTestId('agent-video-gate')).toBeVisible();
+    await expect(page.getByTestId('agent-video-gate-status')).toBeVisible();
+    await expect(page.getByTestId('agent-video-gate-metrics')).toContainText(/LUFS/i);
 
     const facts = await page.getByTestId('agent-video-facts').innerText();
     expect(facts).toMatch(/\d+(\.\d+)?s/);

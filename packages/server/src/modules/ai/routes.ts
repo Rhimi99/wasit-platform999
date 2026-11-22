@@ -38,6 +38,7 @@ import {
 } from '../../lib/ai/routing.js';
 import { currentPeriodWindow, aiUsageForPeriod } from '../../lib/ai/cost-control.js';
 import { writeAudit } from '../../lib/audit.js';
+import { ttsStatus } from '../../lib/media/tts.js';
 import { parseVideoRange, readTaskVideo, resolveTaskVideo } from './agent-videos.js';
 import {
   rememberMemory,
@@ -131,6 +132,26 @@ aiRoutes.get('/status', requirePermission(PERMISSIONS.AI_USE), async (c) => {
   const ctx = getContext(c);
   const result = await getAiStatus(ctx.db, ctx.user!.id, ctx.user!.roles as UserRole[]);
   return c.json({ success: true, data: result });
+});
+
+// Voice capabilities for the Marketing Video Agent: which languages can be
+// spoken today, and why a language cannot. The UI reads this instead of
+// offering a language the platform would silently render without a voice.
+aiRoutes.get('/voice-capabilities', requirePermission(PERMISSIONS.AI_USE), async (c) => {
+  const status = ttsStatus();
+  return c.json({
+    success: true,
+    data: {
+      engine: status.engine,
+      ready: status.binary,
+      languages: status.languages.map((entry) => ({
+        language: entry.language,
+        voice: entry.voice,
+        available: entry.voice !== null,
+        reason: entry.reason,
+      })),
+    },
+  });
 });
 
 aiRoutes.get('/activity', requirePermission(PERMISSIONS.AI_USE), async (c) => {

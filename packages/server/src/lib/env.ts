@@ -464,6 +464,20 @@ const envSchema = z.object({
   VIDEO_ARABIC_FONT: z.string().default('Noto Sans Arabic'),
   /** Directory of bundled fonts passed to libass; autodetected when unset. */
   VIDEO_FONTS_DIR: z.string().optional(),
+  /**
+   * Voiceover engine for marketing videos (AFC-06). `piper` is a local neural
+   * TTS (MIT) that runs offline; `none` disables voiceover, which the quality
+   * gate then reports as a hard failure instead of shipping a silent advert.
+   */
+  TTS_ENGINE: z.enum(['piper', 'none']).default('piper'),
+  /** Explicit piper binary path; autodetected when unset. */
+  TTS_PIPER_PATH: z.string().optional(),
+  /** Directory holding the piper `.onnx` voices (never committed). */
+  TTS_VOICES_DIR: z.string().optional(),
+  /** Music bed level relative to the voiceover, in dB (negative = quieter). */
+  VIDEO_MUSIC_GAIN_DB: z.coerce.number().default(-21),
+  /** Ceiling for the mixed programme loudness target (EBU R128, LUFS). */
+  VIDEO_LOUDNESS_TARGET_LUFS: z.coerce.number().default(-16),
   /** Lifetime of a signed media download link, in seconds. */
   MEDIA_DOWNLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   MEDIA_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(52_428_800),
