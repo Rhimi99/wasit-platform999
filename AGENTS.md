@@ -1096,7 +1096,7 @@ npx playwright install --with-deps chromium
 
 - **`resolveRequesterScope(db, input)`** في `executors.ts`: تعيد `{ requesterId, isStaff, sellerIds }` من `getAgentRunContext()` (لا من `input`)، وتقرأ الملكية من `suppliers/merchants/companies.user_id` عبر `select` عادي (**لا `db.execute`** — A2 يرفض SQL الخام).
 - **`orderScope`**: `buyer_id = requester` أو `seller_id ∈ ملكه` أو `exists(order_items.seller_id ∈ ملكه)` (الطلب الأب متعدد البائعين). **`seller_orders` ممنوع منيع** (`HARD_DENY_TABLES`) — لا تستخدمه.
-- **`productScope`**: `inArray(products.sellerId, sellerIds)`؛ لا ملكية ⇒ `sql`false`` (لا استعلام بلا شرط).
+- **`productScope`**: `inArray(products.sellerId, sellerIds)`؛ لا ملكية ⇒ شرط SQL ثابت `false` (لا استعلام بلا شرط).
 - **أرقام المنصة `null` لغير الطاقم**: `kpi.suppliers/merchants/companies`, `leadsPotential`. `PLATFORM_VIEW_ROLES = ADMIN, SUPER_ADMIN` فقط (SUPPORT ليس منها).
 - **`product-agent` لا يكشف الوجود**: منتج الغير وغير الموجود يعطيان نفس `PRODUCT_NOT_AVAILABLE` بلا اسم/SKU.
 - **`b2b-agent` إداري فقط**: `requiresPlatformScope: true` + رفض `SCOPE_REQUIRED` داخل المنفّذ (دفاع مزدوج).
