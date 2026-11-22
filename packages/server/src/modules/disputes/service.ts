@@ -25,6 +25,7 @@ import { resolveOrderCountry } from '../../lib/country';
 import { resolveMergedPolicy } from '../../lib/policy-engine';
 import { recordCountryPolicyGap, resolveCountryPolicyGap } from '../../lib/country-policy-gaps';
 import { writeAudit } from '../../lib/audit';
+import { requestDisputeAssistant } from './assistant';
 import { createNotification } from '../../lib/notifications-service';
 import { generateDisputeNumber, newId } from '../../lib/ids';
 import { roundMoney, toDecimal } from '../../lib/money';
@@ -483,6 +484,17 @@ export async function createDispute(
     entityId: id,
     after: { orderId: input.orderId, reasonCode: input.reasonCode },
   });
+
+  // AI-03: record the request for automatic assistance. With no reviewer yet
+  // there is nobody to own the task, so nothing is created here — the request is
+  // audited as PENDING_NO_REVIEWER and fulfilled when a reviewer is assigned.
+  await requestDisputeAssistant(db, {
+    disputeId: id,
+    trigger: 'DISPUTE_OPENED',
+    actorId: userId,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
   return { id };
 }
 
@@ -714,7 +726,13 @@ export async function listAllDisputes(db: DB, query: AdminListQuery = {}): Promi
   return { items, page, pageSize, total: Number(total) };
 }
 
-export async function assignDispute(db: DB, disputeId: string, actorId: string, reviewerUserId: string): Promise<{ id: string }> {
+export async function assignDispute(
+  db: DB,
+  disputeId: string,
+  actorId: string,
+  reviewerUserId: string,
+  ctx: { ipAddress?: string | null; userAgent?: string | null } = {},
+): Promise<{ id: string; aiAssistant: { state: string; taskId: string | null; reason: string | null } }> {
   const d = await loadDisputeBase(db, disputeId);
   if (!d) throw ApiError.notFound('Dispute');
   const [reviewer] = await db.select().from(users).where(eq(users.id, reviewerUserId)).limit(1);
@@ -723,14 +741,27 @@ export async function assignDispute(db: DB, disputeId: string, actorId: string, 
   await db.update(disputes).set({ assignedToId: reviewerUserId, assignedAt: new Date(), updatedAt: new Date() }).where(eq(disputes.id, disputeId));
   await writeDisputeEvent(db, disputeId, actorId, 'ASSIGNED', { assignedToId: d.assignedToId ?? null }, { assignedToId: reviewerUserId });
   await writeAudit(db, { actorId }, { action: 'DISPUTE.ASSIGNED', entityType: 'DISPUTE', entityId: disputeId, before: { assignedToId: d.assignedToId }, after: { assignedToId: reviewerUserId } });
+
+  // AI-03: the assignment is the trigger. A qualified reviewer gets one
+  // `dispute-assistant` task owned by them; an unqualified one gets none (and
+  // the reason is audited), and any task left open by the previous assignment
+  // is superseded. This call never throws into the assignment.
+  const assistant = await requestDisputeAssistant(db, {
+    disputeId,
+    trigger: 'REVIEWER_ASSIGNED',
+    actorId,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+
   await createNotification(db, {
     userId: reviewerUserId,
     type: 'DISPUTE.ASSIGNED',
     title: 'Dispute assigned to you',
     body: `Dispute ${d.disputeNumber} (${d.reasonCode}) has been assigned to you.`,
-    data: { disputeId, disputeNumber: d.disputeNumber },
+    data: { disputeId, disputeNumber: d.disputeNumber, aiAssistant: { state: assistant.state, taskId: assistant.taskId } },
   });
-  return { id: disputeId };
+  return { id: disputeId, aiAssistant: { state: assistant.state, taskId: assistant.taskId, reason: assistant.reason } };
 }
 
 export async function updateDisputeStatus(db: DB, disputeId: string, actorId: string, status: DisputeStatus, note?: string): Promise<{ id: string }> {

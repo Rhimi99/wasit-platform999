@@ -54,6 +54,25 @@ export interface AgentTaskFencing {
 }
 
 /**
+ * Trusted, server-side provenance for a task created by an internal automation
+ * (AI-03). Every field is produced by the service layer that owns the trigger —
+ * never read from a request body — so a caller can neither choose the dedupe key
+ * nor forge the record a task is linked to.
+ */
+export interface AgentTaskOrigin {
+  /** Idempotency key; the open-task unique index is (requested_by, dedupe_key). */
+  dedupeKey?: string;
+  /** What produced the task. Stored on the row for filtering and audit. */
+  triggeredBy?: 'user' | 'scheduler' | 'dispute-assignment';
+  /**
+   * Link to the dispute assignment cycle that produced the task. Injected into
+   * the stored input as `__dispute*` fields *after* caller input is stripped, so
+   * the executor can verify the owner still holds the assignment.
+   */
+  disputeLink?: { disputeId: string; cycle: string };
+}
+
+/**
  * The executable slice of the agent layer (AI-REG-01).
  *
  * Derived from the single reference source (`catalogue.ts`) instead of being a
@@ -325,6 +344,7 @@ export async function createAgentTask(
   input: CreateAgentTaskInput,
   audit: AuditContext,
   fencing?: AgentTaskFencing,
+  origin?: AgentTaskOrigin,
 ): Promise<ResolvedAgentTask> {
   // Central AI Kill Switch (A1): no NEW AI task may be created while disabled —
   // user requests, scheduler dispatches and approval-triggered runs all pass
@@ -431,13 +451,37 @@ export async function createAgentTask(
   if (agent.key === 'dispute-assistant') {
     // The dispute policy lives in `policies`, which every agent is hard-denied
     // from reading, so it is resolved here (service layer) and frozen into the
-    // task. Any caller-supplied snapshot is dropped first: a request cannot
-    // rewrite the rules its own advice will be judged against.
-    const { __disputePolicy: _ignored, ...rest } = effectiveInput as Record<string, unknown>;
-    void _ignored;
-    const disputeId = typeof rest.disputeId === 'string' ? rest.disputeId : null;
+    // task. Every internal marker is dropped first: a request cannot rewrite the
+    // rules its own advice will be judged against, and it cannot claim to be an
+    // assignment-triggered task for a dispute (or an owner) it does not own.
+    const {
+      __disputePolicy: _policy,
+      __disputeId: _disputeId,
+      __disputeCycle: _cycle,
+      __disputeSource: _source,
+      ...rest
+    } = effectiveInput as Record<string, unknown>;
+    void _policy; void _disputeId; void _cycle; void _source;
+    // A linked task (AI-03) summarises exactly the dispute the service attached;
+    // a caller-supplied `disputeId` cannot redirect it.
+    const disputeId = origin?.disputeLink
+      ? origin.disputeLink.disputeId
+      : typeof rest.disputeId === 'string'
+        ? rest.disputeId
+        : null;
     const snapshot = await disputePolicySnapshot(db, disputeId);
-    effectiveInput = { ...rest, __disputePolicy: snapshot };
+    effectiveInput = {
+      ...rest,
+      ...(origin?.disputeLink
+        ? {
+            disputeId: origin.disputeLink.disputeId,
+            __disputeId: origin.disputeLink.disputeId,
+            __disputeCycle: origin.disputeLink.cycle,
+            __disputeSource: 'ASSIGNMENT',
+          }
+        : {}),
+      __disputePolicy: snapshot,
+    };
   }
 
   if (fencing) {
@@ -486,6 +530,8 @@ export async function createAgentTask(
         status: initialStatus,
         requiresApproval,
         model: 'local-heuristic',
+        ...(origin?.dedupeKey ? { dedupeKey: origin.dedupeKey } : {}),
+        ...(origin?.triggeredBy ? { triggeredBy: origin.triggeredBy } : {}),
       });
     });
   } else {
@@ -497,6 +543,8 @@ export async function createAgentTask(
       status: initialStatus,
       requiresApproval,
       model: 'local-heuristic',
+      ...(origin?.dedupeKey ? { dedupeKey: origin.dedupeKey } : {}),
+      ...(origin?.triggeredBy ? { triggeredBy: origin.triggeredBy } : {}),
     });
   }
 

@@ -6,7 +6,7 @@ import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
-  DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
+  DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeAssistantView, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
   FavoriteRow, LibraryEntityType, LibraryListResponse, SavedItemRow, SearchHistoryRow,
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
@@ -736,6 +736,15 @@ export const api = {
   },
   async adminUpdateDisputeStatus(id: string, status: string, note?: string) {
     return request<{ id: string }>(`/api/admin/disputes/${id}/status`, { method: 'POST', body: JSON.stringify({ status, note }) });
+  },
+  async adminDisputeAssistant(id: string) {
+    return request<DisputeAssistantView>(`/api/admin/disputes/${id}/assistant`);
+  },
+  async adminRetryDisputeAssistant(id: string) {
+    return request<{ disputeId: string; state: string; reason: string | null; taskId: string | null }>(
+      `/api/admin/disputes/${id}/assistant/retry`,
+      { method: 'POST' },
+    );
   },
   async adminDecideDispute(id: string, decision: string, note?: string) {
     return request<{ id: string }>(`/api/admin/disputes/${id}/decide`, { method: 'POST', body: JSON.stringify({ decision, note }) });

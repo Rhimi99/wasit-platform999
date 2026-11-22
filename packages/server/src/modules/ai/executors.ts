@@ -1520,6 +1520,21 @@ async function execDisputeAssistant(db: DB, agent: AgentDefinition, input: Recor
   const [dispute] = await db.select().from(disputes).where(eq(disputes.id, disputeId)).limit(1);
   if (!dispute) throw ApiError.notFound('Dispute not found');
 
+  // AI-03: a task created by an assignment belongs to the reviewer who held the
+  // assignment. If the dispute was reassigned in the meantime, the old owner's
+  // task must not run — it would analyse the case under an authority that no
+  // longer applies (and could surface a case they no longer review). The owner
+  // is read from the stored task row, never from `input`.
+  if (input.__disputeSource === 'ASSIGNMENT') {
+    // The owner comes from the trusted run context (the stored task row), not
+    // from `input` and not from a query — `agent_tasks` is outside this agent's
+    // A2 data scope, and reading it here would be refused by the scope gate.
+    const ownerId = getAgentRunContext()?.requestedBy ?? null;
+    if (!ownerId || dispute.assignedToId !== ownerId) {
+      throw ApiError.conflict('This dispute is no longer assigned to the task owner; request a fresh assistant task');
+    }
+  }
+
   const [orderRow] = await db
     .select({
       id: orders.id,

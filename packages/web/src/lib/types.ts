@@ -1181,6 +1181,46 @@ export interface DisputeDetail extends DisputeSummary {
   appeals: DisputeAppealRow[];
 }
 
+/** AI-03 — the automatic dispute-assistant state for one case (admin only). */
+export interface DisputeAssistantSummary {
+  disputeNumber: string | null;
+  status: string | null;
+  recommendation: { action: string; confidence: number; rationale: string } | null;
+  gaps: string[];
+  evidenceCount: number | null;
+  messages: number | null;
+  deadlines: Record<string, unknown> | null;
+}
+
+export interface DisputeAssistantTask {
+  id: string;
+  status: string;
+  requestedBy: string;
+  reviewerEmail: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  requiresApproval: boolean;
+  summary: DisputeAssistantSummary | null;
+  error: string | null;
+}
+
+export interface DisputeAssistantView {
+  disputeId: string;
+  state:
+    | 'CLOSED_CASE'
+    | 'PENDING_NO_REVIEWER'
+    | 'PENDING_REVIEWER_NOT_QUALIFIED'
+    | 'PENDING_TASK'
+    | 'TASK_CREATED'
+    | 'TASK_EXISTS'
+    | 'TASK_FAILED';
+  reason: string | null;
+  assignmentCycle: string | null;
+  reviewer: { id: string; email: string | null; qualified: boolean; qualificationReason: string | null } | null;
+  task: DisputeAssistantTask | null;
+  supersededTaskCount: number;
+}
+
 /** Public legal document as disclosed by GET /api/public/legal/documents (no session). */
 export interface PublicLegalDocument {
   code: string;
