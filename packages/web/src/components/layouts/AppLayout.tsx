@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/lib/auth-context';
 import { AppSidebar, TopHeader } from './AppSidebar';
 import { Spinner } from '@/components/ui';
@@ -12,12 +12,19 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 export function AppLayout({ children }: { children: ReactNode }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
   return (
     <div className="flex min-h-screen bg-slate-50">
-      <AppSidebar />
+      <AppSidebar open={menuOpen} onClose={() => setMenuOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopHeader />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <TopHeader menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} />
+        <main className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
       </div>
     </div>
   );

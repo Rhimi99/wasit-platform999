@@ -2,15 +2,43 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
-/** Public runtime hosts allowed to reach the demo web server. */
-const ALLOWED_HOSTS = [
+/**
+ * Public runtime hosts allowed to reach the demo web server.
+ *
+ * A runtime container gets a new hostname every time it is recreated, so the
+ * demo's own origins (`APP_URL`/`CORS_ORIGIN`) are read from the environment and
+ * `WEB_ALLOWED_HOSTS` adds any extra host. The list below only keeps the
+ * hostnames of earlier runtimes reachable; it is not the gate itself — Vite
+ * still refuses every host that is not listed.
+ */
+const RUNTIME_HOSTS = [
   'work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
   'work-2-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
   'work-1-qpzssfljriaoounj.prod-runtime.all-hands.dev',
   'work-2-qpzssfljriaoounj.prod-runtime.all-hands.dev',
   'work-1-wqozutzaflweunqz.prod-runtime.all-hands.dev',
   'work-2-wqozutzaflweunqz.prod-runtime.all-hands.dev',
+  'work-1-jbrbmtqnypyjfriv.prod-runtime.all-hands.dev',
+  'work-2-jbrbmtqnypyjfriv.prod-runtime.all-hands.dev',
 ] as const;
+
+/** Hostnames of the demo's own origins plus any explicit `WEB_ALLOWED_HOSTS`. */
+export function allowedHosts(env: NodeJS.ProcessEnv = process.env): string[] {
+  const hosts = new Set<string>(RUNTIME_HOSTS);
+  for (const source of [env.WEB_ALLOWED_HOSTS, env.APP_URL, env.CORS_ORIGIN]) {
+    if (!source) continue;
+    for (const entry of source.split(',')) {
+      const value = entry.trim();
+      if (!value) continue;
+      try {
+        hosts.add(new URL(value.includes('://') ? value : `https://${value}`).hostname);
+      } catch {
+        // A malformed entry cannot widen the allow-list; ignore it.
+      }
+    }
+  }
+  return [...hosts];
+}
 
 const API_FALLBACK = 'http://localhost:3000';
 
@@ -95,7 +123,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.WEB_PORT ?? 5173),
     host: true,
-    allowedHosts: [...ALLOWED_HOSTS],
+    allowedHosts: allowedHosts(),
     proxy: proxyToApi(),
   },
   // The public demo serves the built SPA through `vite preview` rather than the
@@ -104,7 +132,7 @@ export default defineConfig({
   preview: {
     port: Number(process.env.WEB_PORT ?? 4173),
     host: true,
-    allowedHosts: [...ALLOWED_HOSTS],
+    allowedHosts: allowedHosts(),
     proxy: proxyToApi(),
   },
 });
