@@ -544,6 +544,19 @@ npx playwright install --with-deps chromium
 - **شريط التنقّل**: `AppSidebar` صار drawer تحت `lg` (زر في `TopHeader`، إغلاق تلقائي عند
   التنقّل) — كان يُضغط محتوى لوحة التحكم على هواتف 412px.
 
+## Demo credentials (DEMO-SEC-03 — 2026-11-22)
+
+- كل حساب تجريبي له **كلمة مرور فريدة** (`DEMO_ACCOUNT_PASSWORD_<NAME>`) وليس واحدة مشتركة،
+  والـstaff له `DEMO_STAFF_PASSWORD_ADMIN` / `_ADMIN2`. المنطق في `lib/demo-credentials.ts`
+  (يستخدمه `seed-demo` وسكربت التدوير معاً)، والاختبار `tests/demo-credentials.test.ts`.
+- التدوير: `npx tsx src/scripts/rotate-demo-credentials.ts --include-staff` — يولّد أسراراً
+  جديدة، يبطل كل الجلسات + رموز إعادة التعيين + تحديات MFA، ويكتب `AUTH.DEMO_CREDENTIAL_ROTATED`.
+  لا Migration ولا RBAC change.
+- الأسرار في `.env.demo.secrets` و`.env.demo` بصلاحية 0600 ومستبعدة من git (`.env.demo.*`).
+  **لا تُطبع ولا تُنسخ إلى تقرير أو commit.**
+- أعد تشغيل `seed-demo` مع `.env.demo` الكامل (يحوي مفاتيح كل حساب) كي لا تعود كلمة المرور
+  المنشورة. التفاصيل: `docs/DEMO-03_CREDENTIAL_ROTATION.md`.
+
 ## Landing page (public marketing surface)
 
 - The homepage is the **dark navy premium** theme (`bg-ink-950`, i.e. `#050c24`). All other public routes keep the light/white header.

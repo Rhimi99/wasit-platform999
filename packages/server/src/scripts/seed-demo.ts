@@ -18,7 +18,12 @@ import { createCompany } from '../modules/companies/service';
 import { createProduct } from '../modules/products/service';
 import { createOrder } from '../modules/orders/service';
 import { openDirectThread, sendMessage } from '../modules/messaging/service';
-import { DEMO_PUBLISHED_PASSWORD, DEMO_TEST_ACCOUNT_EMAIL, resolveStaffPassword } from '../lib/demo-account';
+import { DEMO_TEST_ACCOUNT_EMAIL, resolveStaffPassword } from '../lib/demo-account';
+import {
+  resolveDemoAccountPassword,
+  resolveDemoStaffPassword,
+  shouldRotateDemoPassword,
+} from '../lib/demo-credentials';
 import { users, userRoles, roles } from '../db/schema/auth';
 import { suppliers, merchants, companies } from '../db/schema/trade';
 import { categories, products } from '../db/schema/products';
@@ -44,17 +49,20 @@ const RESET_STOCK = process.env.SEED_RESET_STOCK === '1';
  * `DEMO_ACCOUNT_PASSWORD` in the environment, so the credential stays in the
  * git-ignored demo env (`.env.demo`) exactly like every other demo secret.
  *
- * DEMO-SEC-01 — the same variable rotates the four trade fixtures. When it is
- * set the seeder re-hashes every demo account, so a published credential from an
- * older run stops working; when it is absent (dev/test/E2E) the published
- * fallback is kept, which is what the local suites expect.
+ * DEMO-SEC-01/03 — an explicit credential (`DEMO_ACCOUNT_PASSWORD`, or the
+ * per-account `DEMO_ACCOUNT_PASSWORD_<SLUG>` written by the rotation script)
+ * makes the seeder re-hash every demo account, so a credential from an older run
+ * stops working; when nothing is configured (dev/test/E2E) the published fallback
+ * is kept, which is what the local suites expect. Resolution lives in
+ * `lib/demo-credentials.ts`.
  */
-const CONFIGURED_DEMO_PASSWORD = process.env.DEMO_ACCOUNT_PASSWORD?.trim();
 
 /**
- * Password for the two staff fixtures below. Delegates the policy to
+ * Password for the two staff fixtures. Delegates the policy to
  * {@link resolveStaffPassword}: an explicit `DEMO_STAFF_PASSWORD` wins, the public
  * demo generates a random one, and dev/test keeps the known password for E2E.
+ * Per-account overrides (`DEMO_STAFF_PASSWORD_ADMIN`) are applied by
+ * {@link resolveDemoStaffPassword} at the call sites.
  */
 function staffPassword(): string {
   const pw = resolveStaffPassword({
@@ -256,27 +264,23 @@ async function main(): Promise<void> {
   console.log('Demo Seeder — seeding dev/test environment...');
   await loadRefs();
 
-  const pw = CONFIGURED_DEMO_PASSWORD ?? DEMO_PUBLISHED_PASSWORD;
-  // Rotation is opt-in: only an explicit deployment credential rewrites the
-  // stored hashes. Dev/E2E keep the published fallback so their fixtures stay
-  // predictable.
-  const rotateDemoPassword = Boolean(CONFIGURED_DEMO_PASSWORD);
-  const staffPw = staffPassword();
-
+  // Rotation is opt-in: only an explicit deployment credential (shared or
+  // per-account) rewrites the stored hashes. Dev/E2E keep the published fallback
+  // so their fixtures stay predictable.
   // المستخدمون التجريبيون
-  const customer = await ensureDevUser('customer1@wasit.tn', pw, 'CUSTOMER', {
-    enforcePassword: rotateDemoPassword,
+  const customer = await ensureDevUser('customer1@wasit.tn', resolveDemoAccountPassword('customer1@wasit.tn'), 'CUSTOMER', {
+    enforcePassword: shouldRotateDemoPassword('customer1@wasit.tn'),
   });
-  const supplierUser = await ensureDevUser('supplierA@wasit.tn', pw, 'SUPPLIER', {
-    enforcePassword: rotateDemoPassword,
+  const supplierUser = await ensureDevUser('supplierA@wasit.tn', resolveDemoAccountPassword('suppliera@wasit.tn'), 'SUPPLIER', {
+    enforcePassword: shouldRotateDemoPassword('suppliera@wasit.tn'),
   });
-  const merchantUser = await ensureDevUser('merchantA@wasit.tn', pw, 'MERCHANT', {
-    enforcePassword: rotateDemoPassword,
+  const merchantUser = await ensureDevUser('merchantA@wasit.tn', resolveDemoAccountPassword('merchanta@wasit.tn'), 'MERCHANT', {
+    enforcePassword: shouldRotateDemoPassword('merchanta@wasit.tn'),
   });
-  const companyUser = await ensureDevUser('companyA@wasit.tn', pw, 'COMPANY', {
-    enforcePassword: rotateDemoPassword,
+  const companyUser = await ensureDevUser('companyA@wasit.tn', resolveDemoAccountPassword('companya@wasit.tn'), 'COMPANY', {
+    enforcePassword: shouldRotateDemoPassword('companya@wasit.tn'),
   });
-  const adminUser = await ensureDevUser('admin@wasit.tn', staffPw, 'SUPER_ADMIN', {
+  const adminUser = await ensureDevUser('admin@wasit.tn', resolveDemoStaffPassword('admin', staffPassword()), 'SUPER_ADMIN', {
     enforcePassword: true,
   });
   await assignRoleDirect(adminUser.userId, 'SUPER_ADMIN');
@@ -286,7 +290,7 @@ async function main(): Promise<void> {
   // a dispute from reviewing the appeal of that decision, so proving the positive
   // review path (from the UI) requires a distinct staff actor. There is no
   // product endpoint that grants a staff role, so this fixture is seeded here.
-  const reviewerUser = await ensureDevUser('admin2@wasit.tn', staffPw, 'ADMIN', {
+  const reviewerUser = await ensureDevUser('admin2@wasit.tn', resolveDemoStaffPassword('admin2', staffPassword()), 'ADMIN', {
     enforcePassword: true,
   });
   await assignRoleDirect(reviewerUser.userId, 'ADMIN');
@@ -303,7 +307,7 @@ async function main(): Promise<void> {
   // rotates the account when `DEMO_ACCOUNT_PASSWORD` changes.
   const demoTestUser = await ensureDevUser(
     DEMO_TEST_ACCOUNT_EMAIL,
-    pw,
+    resolveDemoAccountPassword(DEMO_TEST_ACCOUNT_EMAIL),
     'CUSTOMER',
     { enforcePassword: true },
   );
@@ -577,7 +581,7 @@ async function main(): Promise<void> {
   // Never print a credential: these logs are captured by the runtime. The
   // passwords come from DEMO_ACCOUNT_PASSWORD / DEMO_STAFF_PASSWORD in the
   // git-ignored demo env.
-  console.log('Test users (credential: DEMO_ACCOUNT_PASSWORD):');
+  console.log('Test users (credential: DEMO_ACCOUNT_PASSWORD_<NAME>, one per account):');
   console.log('  customer1@wasit.tn (CUSTOMER)');
   console.log('  supplierA@wasit.tn (SUPPLIER)');
   console.log('  merchantA@wasit.tn (MERCHANT)');
