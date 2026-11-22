@@ -91,6 +91,9 @@
 ```
 packages/server: npx vitest run tests/pr10-notification-preferences.test.ts
 → 11/11 passed
+
+packages/server: npx vitest run   (الحزمة الكاملة على فرع هذه المهمة)
+→ 158 ملفاً · 2053/2053 ناجحة · exit 0
 ```
 
 | # | الحالة |
