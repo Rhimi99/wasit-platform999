@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { api, apiCall, ApiClientError } from '@/lib/api';
+import { api, apiCall, apiErrorMessage, ApiClientError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
+import type { NotificationPreferenceMatrix } from '@/lib/types';
 
 export function DashboardProfilePage() {
   const { t } = useI18n();
@@ -274,6 +275,148 @@ export function DashboardSettingsPage() {
       <Card>
         <p className="text-sm text-slate-600">{t('settings.description')}</p>
       </Card>
+      <NotificationPreferencesCard />
     </AppLayout>
+  );
+}
+
+/**
+ * PR-10 — notification preferences.
+ *
+ * The matrix is edited locally and saved in one PUT, so a user can flip several
+ * switches without a request per toggle. Nothing is claimed about delivery here:
+ * the card states the choice is saved, which is exactly what the server does.
+ */
+function NotificationPreferencesCard() {
+  const { t } = useI18n();
+  const [matrix, setMatrix] = useState<NotificationPreferenceMatrix | null>(null);
+  const [draft, setDraft] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const key = (channel: string, category: string) => `${channel}:${category}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .notificationPreferences()
+      .then((data) => {
+        if (cancelled) return;
+        setMatrix(data);
+        setDraft(Object.fromEntries(data.rows.map((r) => [key(r.channel, r.category), r.enabled])));
+        setError(null);
+      })
+      .catch((e) => !cancelled && setError(apiErrorMessage(e)))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const dirty =
+    matrix !== null &&
+    matrix.rows.some((r) => draft[key(r.channel, r.category)] !== r.enabled);
+
+  async function save() {
+    if (!matrix) return;
+    const changes = matrix.rows
+      .filter((r) => draft[key(r.channel, r.category)] !== r.enabled)
+      .map((r) => ({
+        channel: r.channel,
+        category: r.category,
+        enabled: draft[key(r.channel, r.category)] ?? r.enabled,
+      }));
+    if (changes.length === 0) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const data = await api.updateNotificationPreferences(changes);
+      setMatrix(data);
+      setDraft(Object.fromEntries(data.rows.map((r) => [key(r.channel, r.category), r.enabled])));
+      setSaved(true);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-bold text-slate-800">{t('settings.notifications.title')}</h3>
+          <p className="mt-1 text-xs text-slate-500">{t('settings.notifications.subtitle')}</p>
+        </div>
+        <button
+          type="button"
+          data-testid="notification-preferences-save"
+          className="btn-primary px-3 py-1.5 text-xs"
+          disabled={!dirty || saving}
+          aria-busy={saving}
+          onClick={save}
+        >
+          {t('common.save')}
+        </button>
+      </div>
+
+      {loading && <div className="mt-4"><Spinner /></div>}
+      {!loading && error && <div className="mt-4"><ErrorState message={error} /></div>}
+
+      {!loading && matrix && (
+        <div className="mt-4 overflow-x-auto" data-testid="notification-preferences">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-slate-500">
+                <th className="py-2 text-start font-medium">{t('settings.notifications.category')}</th>
+                {matrix.channels.map((channel) => (
+                  <th key={channel} className="py-2 text-center font-medium">
+                    {t(`settings.notifications.channel.${channel}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.categories.map((category) => (
+                <tr key={category} className="border-t border-slate-100">
+                  <td className="py-2 pe-3">{t(`settings.notifications.category.${category}`)}</td>
+                  {matrix.channels.map((channel) => {
+                    const row = matrix.rows.find((r) => r.channel === channel && r.category === category);
+                    const id = `notif-pref-${channel}-${category}`;
+                    return (
+                      <td key={channel} className="py-2 text-center">
+                        <input
+                          id={id}
+                          data-testid={id}
+                          type="checkbox"
+                          className="h-4 w-4 accent-teal-600"
+                          checked={draft[key(channel, category)] ?? row?.enabled ?? true}
+                          aria-label={`${t(`settings.notifications.category.${category}`)} — ${t(
+                            `settings.notifications.channel.${channel}`,
+                          )}`}
+                          onChange={(e) =>
+                            setDraft((prev) => ({ ...prev, [key(channel, category)]: e.target.checked }))
+                          }
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-3 text-[11px] text-slate-400">{t('settings.notifications.footnote')}</p>
+          {saved && (
+            <p role="status" data-testid="notification-preferences-saved" className="mt-2 text-xs text-teal-700">
+              {t('settings.notifications.saved')}
+            </p>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

@@ -10,6 +10,12 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from './service.js';
+import {
+  NOTIFICATION_CATEGORIES,
+  NOTIFICATION_CHANNELS,
+  listNotificationPreferences,
+  updateNotificationPreferences,
+} from './preferences.js';
 
 const idSchema = z.object({ id: z.string().min(1).max(36) });
 const listQuerySchema = z.object({
@@ -20,6 +26,39 @@ const listQuerySchema = z.object({
 export const notificationRoutes = new Hono();
 
 notificationRoutes.use('*', requireAuth, requirePermission(PERMISSIONS.MESSAGE_READ_OWN));
+
+/**
+ * PR-10: the preference matrix. Read returns every channel/category pair with the
+ * effective value (default on), so the client never has to know the defaults.
+ */
+notificationRoutes.get('/preferences', async (c) => {
+  const ctx = getContext(c);
+  const matrix = await listNotificationPreferences(ctx.db, ctx.user!.id);
+  return c.json({ success: true, data: matrix });
+});
+
+const preferencesSchema = z.object({
+  preferences: z
+    .array(
+      z.object({
+        channel: z.enum(NOTIFICATION_CHANNELS),
+        category: z.enum(NOTIFICATION_CATEGORIES),
+        enabled: z.boolean(),
+      }),
+    )
+    .min(1)
+    .max(NOTIFICATION_CHANNELS.length * NOTIFICATION_CATEGORIES.length),
+});
+
+notificationRoutes.put('/preferences', validateBody(preferencesSchema), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<{ preferences: Array<{ channel: (typeof NOTIFICATION_CHANNELS)[number]; category: (typeof NOTIFICATION_CATEGORIES)[number]; enabled: boolean }> }>(c);
+  const matrix = await updateNotificationPreferences(ctx.db, ctx.user!.id, body.preferences, {
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: matrix });
+});
 
 notificationRoutes.get('/', async (c) => {
   const ctx = getContext(c);

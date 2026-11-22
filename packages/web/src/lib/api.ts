@@ -7,7 +7,8 @@ import type {
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
-  MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
+  MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse,
+  NotificationPreferenceMatrix, NotificationPreferenceInput, Order, OrderStatus, PaginationInfo,
   FavoriteRow, LibraryEntityType, LibraryListResponse, SavedItemRow, SearchHistoryRow,
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
@@ -844,6 +845,15 @@ export const api = {
   },
   async markAllNotificationsRead() {
     return request<{ count: number }>('/api/notifications/read-all', { method: 'POST' });
+  },
+  async notificationPreferences() {
+    return request<NotificationPreferenceMatrix>('/api/notifications/preferences');
+  },
+  async updateNotificationPreferences(preferences: NotificationPreferenceInput[]) {
+    return request<NotificationPreferenceMatrix>('/api/notifications/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ preferences }),
+    });
   },
 
   // ---- Ads ----

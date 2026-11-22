@@ -1049,6 +1049,42 @@ export interface NotificationItem {
   createdAt: string;
 }
 
+export type NotificationChannel = 'IN_APP' | 'EMAIL' | 'SMS';
+
+export type NotificationCategory =
+  | 'MESSAGE'
+  | 'ORDER'
+  | 'PAYMENT'
+  | 'REFUND'
+  | 'DISPUTE'
+  | 'INVENTORY'
+  | 'VERIFICATION'
+  | 'RISK'
+  | 'AI'
+  | 'PAYOUT';
+
+export interface NotificationPreferenceRow {
+  channel: NotificationChannel;
+  category: NotificationCategory;
+  enabled: boolean;
+  /** False when this is the default and the user has not chosen anything yet. */
+  explicit: boolean;
+  updatedAt: string | null;
+}
+
+export interface NotificationPreferenceMatrix {
+  channels: NotificationChannel[];
+  categories: NotificationCategory[];
+  rows: NotificationPreferenceRow[];
+  mandatoryCategories: NotificationCategory[];
+}
+
+export interface NotificationPreferenceInput {
+  channel: NotificationChannel;
+  category: NotificationCategory;
+  enabled: boolean;
+}
+
 export interface NotificationListResponse {
   items: NotificationItem[];
   page: number;
