@@ -502,6 +502,18 @@ npx playwright install --with-deps chromium
 - استجابة `createOrder` والـ Audit يعرضان `paymentFeePolicyId`/`feePolicyId`.
 - الاختبارات: `tests/payment-fee-policy.test.ts` يثبت أن تغيير السياسة يغيّر الرسوم (مضاد Hardcoding).
 
+## AI-04 — Secure AI Provider Management (2026-11-22, `afc-09`)
+
+- **`ai_providers`** (`schema/ai_providers.ts`, migration `0042`): one row per (environment, provider). `model` holds a **catalogue key** (`ai_models.key`), never a vendor name — `VENDOR_MODEL_NAMES` translates at the adapter boundary. Validation rejects a model that is unknown or belongs to another provider.
+- **Secrets never leave**: `lib/ai/secret-box.ts` seals with AES-256-GCM under `AI_SECRET_ENCRYPTION_KEY` (32B base64, env only) and `aad = environment:provider:v1`. No route returns a key; `keyState` exposes presence/source/`sha256[:16]` fingerprint only. No master key → `409 SECRET_STORAGE_DISABLED`, nothing written. A stored key is invisible to another `AI_CONFIG_ENVIRONMENT`.
+- **Chain**: `default → fallback → local-heuristic`, resolved by `resolveProviderChain` (never throws). A fallback serves **its own** model/price; a vendor never receives another vendor's model name. `noop` is refused in production. No key anywhere → the platform runs on the local engine at zero cost.
+- **Backward compatibility**: a provider row no admin has touched (`updatedBy IS NULL`) stays active when `AI_PROVIDER` names it, so env-only deployments need no migration step.
+- **Agent isolation**: `ai_providers` is in `HARD_DENY_TABLES`; platform resolution inside an agent run unwraps the scoped handle via `platformDb()` (`PLATFORM_DB` symbol in `db/client.ts`). An agent's own query is still refused — proven in `tests/afc09-ai-providers.test.ts`.
+- **Live probes are opt-in** (`AI_PROVIDER_ALLOW_LIVE_TEST=true`), send only `ping`/`max_tokens:1`, and `baseUrl` must be HTTPS + allowlisted (`AI_PROVIDER_ALLOWED_HOSTS`) — SSRF guard.
+- **API**: `/api/admin/ai/providers` (list, `-readiness`, `:key`, PATCH, `PUT/DELETE :key/secret`, `POST :key/test`, `GET :key/usage`) under `AI_MANAGE`/`ADMIN_AI`, audited as `AI_PROVIDER.*`. Mounted **before** `app.route('/api/admin', ...)` — Hono dispatches to the first matching mount.
+- **UI**: tab «المزوّدون» in `/admin/ai` (`components/AiProvidersPanel.tsx`), i18n `adminAi.providers.*` in ar/en/fr/zh.
+- **Tests**: `tests/afc09-ai-providers.test.ts` (23). Full suite after AI-04: **174 files / 2233 tests**.
+
 ## Money Path Invariants (2026-09-24)
 
 - **`Payment ≠ Settlement`** (عقد مُنفَّذ في الكود): تأكيد الدفع (`applyPaymentSucceeded`) **لا يكتب** `transaction_ledger.status='SETTLED'` أبداً — القيود تبقى `PENDING`. الكاتب **الوحيد** لـ`SETTLED` هو `applySettlementConfirmed` في `modules/payments/service.ts`، ولا يُستدعى إلا من حدث webhook نوعه `settlement.confirmed` من مزوّد يعلن `capabilities.settlementEvidence`.

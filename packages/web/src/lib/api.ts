@@ -17,6 +17,7 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
+  AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -1224,6 +1225,50 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
     });
+  },
+
+  // ---- AI provider management (server enforces AI_MANAGE / ADMIN_AI) ----
+  async adminAiProviders() {
+    return request<AiProviderList>('/api/admin/ai/providers');
+  },
+  async adminAiProvider(key: string) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}`);
+  },
+  async adminUpdateAiProvider(
+    key: string,
+    patch: {
+      enabled?: boolean;
+      model?: string;
+      baseUrl?: string | null;
+      keyEnvVar?: string | null;
+      role?: 'DEFAULT' | 'FALLBACK' | 'NONE';
+    },
+  ) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+  /** Write-only: the value is never read back. */
+  async adminSetAiProviderSecret(key: string, secret: string) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}/secret`, {
+      method: 'PUT',
+      body: JSON.stringify({ secret }),
+    });
+  },
+  async adminClearAiProviderSecret(key: string) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}/secret`, {
+      method: 'DELETE',
+    });
+  },
+  async adminTestAiProvider(key: string, mode: 'CONFIG' | 'LIVE' = 'CONFIG') {
+    return request<AiProviderTestResult>(`/api/admin/ai/providers/${encodeURIComponent(key)}/test`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    });
+  },
+  async adminAiProviderUsage(key: string, days = 30) {
+    return request<AiProviderUsage>(`/api/admin/ai/providers/${encodeURIComponent(key)}/usage?days=${days}`);
   },
 
   // ---- Admin observability (server enforces ADMIN_SYSTEM) ----

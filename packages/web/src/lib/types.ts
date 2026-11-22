@@ -791,6 +791,62 @@ export interface AiAdminModel {
   updatedAt: string;
 }
 
+/**
+ * AI provider configuration as the admin UI sees it. A key is described, never
+ * returned: `keyState` says whether one exists and where it comes from.
+ */
+export interface AiProviderKeyState {
+  present: boolean;
+  source: 'DB' | 'ENV' | 'NONE';
+  envVar: string | null;
+  fingerprint: string | null;
+  updatedAt: string | null;
+}
+
+export interface AiProviderUsage {
+  provider: string;
+  windowDays: number;
+  models: { key: string; displayName: string; isActive: boolean }[];
+  requests: number;
+  tokensInput: number;
+  tokensOutput: number;
+  cost: string;
+  agents: { agentKey: string; model: string; tasks: number }[];
+}
+
+export interface AiProviderRow {
+  key: string;
+  displayName: string;
+  kind: 'vendor' | 'local' | 'test';
+  enabled: boolean;
+  activeFromEnv: boolean;
+  isDefault: boolean;
+  isFallback: boolean;
+  model: string;
+  baseUrl: string | null;
+  requiresKey: boolean;
+  keyState: AiProviderKeyState;
+  lastTest: { status: string; mode: string | null; testedAt: string | null; detail: unknown };
+  updatedAt: string;
+  usage?: AiProviderUsage;
+}
+
+export interface AiProviderList {
+  environment: string;
+  secretStorage: { available: boolean; reason: string };
+  liveTestAllowed: boolean;
+  items: AiProviderRow[];
+}
+
+export interface AiProviderTestResult {
+  provider: string;
+  mode: 'CONFIG' | 'LIVE';
+  status: 'OK' | 'FAILED' | 'CONFIG_ONLY' | 'BLOCKED';
+  checks: { id: string; ok: boolean; detail: string }[];
+  latencyMs: number | null;
+  testedAt: string;
+}
+
 /** Aggregated usage for the current monthly window + every configured budget. */
 export interface AiAdminUsage {
   window: { start: string; end: string };

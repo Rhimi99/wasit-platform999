@@ -56,6 +56,26 @@ const envSchema = z.object({
   AI_BUDGET_MONTHLY_USD: z.coerce.number().default(100),
   /** Hard ceiling on a single outbound provider call, so a hung vendor cannot pin a request. */
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * AI provider configuration scope. Settings written for one environment are
+   * never read by another, so a demo key can never serve production traffic.
+   * Defaults to NODE_ENV.
+   */
+  AI_CONFIG_ENVIRONMENT: z.enum(['production', 'staging', 'development', 'test']).optional(),
+  /**
+   * Master key for secrets stored in the database (32 bytes, base64). It lives
+   * outside the database on purpose: without it, stored provider keys cannot be
+   * decrypted. Absent → the admin API refuses to store keys and only
+   * environment-referenced keys are usable.
+   */
+  AI_SECRET_ENCRYPTION_KEY: z.string().optional(),
+  /** Live provider probes are opt-in: they cost money and leave the platform. */
+  AI_PROVIDER_ALLOW_LIVE_TEST: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** Comma-separated host:port allowlist for provider base URLs (SSRF guard). */
+  AI_PROVIDER_ALLOWED_HOSTS: z.string().optional(),
   // Payments — provider-agnostic. `PAYMENT_PROVIDER=noop` keeps the platform
   // from taking money until an acquirer is contracted and configured.
   // `flouci` and `clictopay` are online adapters; `manual` is the offline desk

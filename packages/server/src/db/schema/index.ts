@@ -13,6 +13,7 @@ export * from './messaging';
 export * from './ads';
 export * from './subscriptions';
 export * from './ai';
+export * from './ai_providers';
 export * from './agents';
 export * from './agent_schedules';
 export * from './agent_runs';

@@ -45,6 +45,17 @@ afterEach(() => {
   }
 });
 
+
+/** Flips the provider row used by the routing tests (real DB, restored by the test). */
+async function setProviderEnabled(providerKey: string, enabled: boolean): Promise<void> {
+  const { aiProviders } = await import('../src/db/schema/ai_providers.js');
+  const { configEnvironment } = await import('../src/lib/ai/provider-config.js');
+  await db
+    .update(aiProviders)
+    .set({ enabled, updatedBy: enabled ? 'routing-test' : null })
+    .where(and(eq(aiProviders.environment, configEnvironment()), eq(aiProviders.providerKey, providerKey)));
+}
+
 /** Minimal local stand-in for a vendor endpoint. Records the last request body. */
 interface VendorServer {
   baseUrl: string;
@@ -153,13 +164,34 @@ describe('F3 routing decorates the selected vendor and model', () => {
     env.AI_API_KEY = 'test-key';
     env.AI_DEFAULT_MODEL = 'openai-gpt-4o-mini';
 
-    // MARKET_ANALYSIS maps to the expensive anthropic model for admins...
-    const admin = await resolveAiRoute(db, 'MARKET_ANALYSIS', ['ADMIN']);
-    expect(admin.modelKey).toBe('anthropic-claude-sonnet-4');
+    // Both vendors configured, so the admin's expensive capability is reachable
+    // (an unconfigured vendor is never impersonated — see the degradation test).
+    process.env.AI_ANTHROPIC_API_KEY = 'sk-ant-test-000000000000';
+    await setProviderEnabled('anthropic', true);
+    try {
+      // MARKET_ANALYSIS maps to the expensive anthropic model for admins...
+      const admin = await resolveAiRoute(db, 'MARKET_ANALYSIS', ['ADMIN']);
+      expect(admin.modelKey).toBe('anthropic-claude-sonnet-4');
+      expect(admin.providerId).toBe('anthropic');
 
-    // ...but a CUSTOMER is clamped to the default, cheaper model.
-    const customer = await resolveAiRoute(db, 'MARKET_ANALYSIS', ['CUSTOMER']);
-    expect(customer.modelKey).toBe('openai-gpt-4o-mini');
+      // ...but a CUSTOMER is clamped to the default, cheaper model.
+      const customer = await resolveAiRoute(db, 'MARKET_ANALYSIS', ['CUSTOMER']);
+      expect(customer.modelKey).toBe('openai-gpt-4o-mini');
+    } finally {
+      delete process.env.AI_ANTHROPIC_API_KEY;
+      await setProviderEnabled('anthropic', false);
+    }
+  });
+
+  it('never sends one vendor a model owned by another: an unconfigured vendor degrades', async () => {
+    env.AI_PROVIDER = 'openai';
+    env.AI_API_KEY = 'test-key';
+    // Anthropic has no key here, so the expensive capability cannot be served.
+    const route = await resolveAiRoute(db, 'MARKET_ANALYSIS', ['ADMIN']);
+    expect(route.providerId).toBe('openai');
+    // The route carries OpenAI's own catalogue model, never the Anthropic name.
+    expect(route.modelKey).toBe('openai-gpt-4o-mini');
+    expect(route.vendorModel).toBe('gpt-4o-mini');
   });
 });
 

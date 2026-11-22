@@ -7,7 +7,8 @@ import { env } from '../env';
 import { assertAiExecutionEnabled } from './kill-switch';
 import { ApiError } from '@wasit/shared';
 import type { AIFeatureResult, AIProvider } from './types';
-import { resolveProvider, estimateTokens } from './provider';
+import { estimateTokens, VENDOR_MODEL_NAMES } from './provider';
+import { primaryProvider } from './provider-config';
 import { logger } from '../observability/logger';
 import {
   getAgentRunBudget,
@@ -173,17 +174,29 @@ export async function runAIFeature(
   // agent executors, smart features and one-off `/api/ai/run` alike — before any
   // budget reservation or provider call. Fail-closed and LLM-independent.
   assertAiExecutionEnabled();
-  // Precedence: explicit caller model → deployment AI_MODEL → AI_DEFAULT_MODEL.
-  const requestedModelKey = input.modelKey?.trim() || env.AI_MODEL?.trim() || env.AI_DEFAULT_MODEL;
-  // The router may have chosen a provider; otherwise resolve from configuration.
-  const provider = input.provider ?? resolveProvider();
+  // A caller that did not route (feature endpoints, structured runs) gets the
+  // admin-configured chain: default → fallback → local. It never throws, so a
+  // deployment with no vendor key keeps working on the local engine.
+  let chainedModel: string | null = null;
+  let provider = input.provider;
+  if (!provider) {
+    const entry = await primaryProvider(db);
+    provider = entry.provider;
+    if (entry.key !== 'local-heuristic' && entry.key !== 'noop') chainedModel = entry.model;
+  }
+  // Precedence: explicit caller model → routed/configured model → deployment
+  // AI_MODEL → AI_DEFAULT_MODEL.
+  const requestedModelKey =
+    input.modelKey?.trim() || chainedModel || env.AI_MODEL?.trim() || env.AI_DEFAULT_MODEL;
   // Price follows the provider that actually runs the call. A free local engine
   // must not be billed at a paid model's catalogue rate just because a paid
   // model was requested and then degraded away for lack of credentials.
   const isFree = provider.id === 'local-heuristic' || provider.id === 'noop';
   const modelKey = isFree ? 'local-heuristic' : requestedModelKey;
   const price = await resolveModelPrice(db, modelKey);
-  const vendorModel = isFree ? 'local-heuristic' : (input.vendorModel?.trim() || modelKey);
+  const vendorModel = isFree
+    ? 'local-heuristic'
+    : (input.vendorModel?.trim() || VENDOR_MODEL_NAMES[modelKey] || modelKey);
 
   const period = 'MONTHLY';
   const estimated = estimateBudget({ system: input.system, user: input.user, maxTokens: input.maxTokens }, price);

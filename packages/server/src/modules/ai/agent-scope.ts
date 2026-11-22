@@ -1,4 +1,5 @@
 import { getTableName } from 'drizzle-orm';
+import { PLATFORM_DB } from '../../db/client';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { getAgentRunContext, type AgentRunContext } from '../../lib/ai/agent-run-context';
@@ -103,6 +104,8 @@ export const HARD_DENY_TABLES: ReadonlySet<string> = new Set([
   'phone_verification_tokens',
   'mfa_challenges',
   'authenticator_apps',
+  // AI provider credentials (AI-04): agents never read provider configuration.
+  'ai_providers',
   'security_settings',
   'rate_limit_counters',
   'profiles',
@@ -565,6 +568,7 @@ export function withAgentDataScope(db: DB): DB {
 
   return new Proxy(db as object, {
     get(target, prop) {
+      if (prop === PLATFORM_DB) return db;
       if (prop === 'select') {
         return (...args: unknown[]) =>
           wrapBuilder((target as unknown as { select: AnyFn }).select(...args) as object);
