@@ -1157,3 +1157,13 @@ npx playwright install --with-deps chromium
 - **إثبات الفيديو الحقيقي**: `npx tsx src/scripts/render-test-video.ts --seconds=35 --language=ar` ⇒ MP4 35.000s، h264 High/yuv420p/720×1280/25fps/875 إطاراً، فك ترميز كامل، وتقرير في `docs/evidence/ai/`. الفيديو نفسه في `backups/media/` (git-ignored).
 - **حدود معروفة (لا تُخفى)**: خمسة وكلاء يعلنون `own`/بلا نطاق ويُعيدون **مجاميع منصة** (`sales`, `marketing`, `product`, `b2b`, `finance`, `outreach`) — أرقام لا صفوف مستخدمين، لكنها تكشف مؤشرات أعمال؛ تحتاج فلترة صفية أو تقييداً (قرار مطلوب).
 - **الاختبارات**: 163 ملفاً · 2085 اختباراً · exit 0 · `tsc --noEmit` = 0. التفاصيل: `docs/AI-FIRST-COMPLETION-02.md`.
+
+## AI-FIRST COMPLETION 05 — واجهات تشغيل الفيديو/الشركاء + احتفاظ + جدولة (2026-11-20)
+
+- **`/dashboard/agent-video`** (`DashboardAgentVideoPage.tsx`): تشغيل حقيقي لـ`marketing-video-agent` — منتج مملوك (`/api/products/mine`)، مدة داخل حدود `MARKETING_VIDEO_DURATION`، ثم معاينة `<video>` وتنزيل عبر `GET /api/ai/tasks/:id/video[?download=1]` فقط. **`storageKey` لا يصل الواجهة أبداً.**
+- **حالتان نهائيتان**: المهمة غير المُبوَّبة تنتهي `succeeded`، والمُبوَّبة (`requiresHumanApproval`) تنتهي **`approved`**. أي واجهة تستقصي الحالة يجب أن تعتبر `approved` مكتملة، و`awaiting_approval` نهائية للاستقصاء (زر تحديث بدل انتظار أبدي).
+- **`/dashboard/partners`** (`DashboardPartnersPage.tsx`): موافقة `B2B_PARTNER_DISCOVERY` عبر `/api/privacy/consents`، ثم `b2b-agent` (مُبوَّب أيضاً) — بلا بريد/هاتف/عنوان ولا مراسلة تلقائية؛ السحب يمسح النتائج.
+- **احتفاظ الفيديو**: `purgeAgentVideos` يصنّف من DB — `TEST` 7 أيام، `DRAFT` 30 يوماً، `APPROVED` لا يُحذف، `UNKNOWN` يُحفظ. الجدولة **خارج العملية**: `scripts/agent-video-purge.sh` (flock + سطر JSON) عبر `scripts/deploy/wasit-agent-video-purge.{service,timer}` أو `agent-video-purge.cron`.
+- **`e2e/global-setup.ts`** يقرأ الآن `DEMO_ACCOUNT_PASSWORD_*` / `DEMO_STAFF_PASSWORD_*` — كلمة المرور المنشورة لم تعد صالحة على بيئة مُدوَّرة (DEMO-SEC-03).
+- **CSRF**: أي `request.newContext` في Playwright يستدعي مساراً يغيّر الحالة يجب أن يرسل `Origin` (وإلا 403 `Request origin could not be verified`).
+- **E2E**: `e2e/agent-surfaces.spec.ts` — 6/6 (Desktop Chrome + Pixel 7 project `mobile-chromium`).

@@ -468,10 +468,12 @@ const envSchema = z.object({
   MEDIA_DOWNLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   MEDIA_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(52_428_800),
   /**
-   * Retention for agent-rendered videos (AFC-04). Files older than this are
-   * removed by `purgeAgentVideos`; reads never delete.
+   * Retention for agent-rendered videos (AFC-05). Retention is per class:
+   * temporary test renders (7d) and drafts (30d) expire; approved videos are
+   * never removed automatically. Reads never delete.
    */
-  AGENT_VIDEO_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  AGENT_VIDEO_TEST_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  AGENT_VIDEO_DRAFT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 const parsed = envSchema.safeParse(process.env);

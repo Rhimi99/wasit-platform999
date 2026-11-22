@@ -1,0 +1,13 @@
+[Unit]
+Description=WASIT BUSINESS GLOBAL — agent video retention purge timer
+
+[Timer]
+# Daily at 03:15 UTC, offset from the backup so both jobs never compete for I/O.
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=600
+# Run on resume if the host was down at the scheduled time.
+Persistent=true
+Unit=wasit-agent-video-purge.service
+
+[Install]
+WantedBy=timers.target

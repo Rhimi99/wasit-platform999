@@ -981,6 +981,26 @@ export const api = {
       }>;
     }>(path);
   },
+  /** One task, owner-scoped server-side (403 for a stranger). */
+  async aiTask(taskId: string) {
+    return request<AgentTaskRow>(`/api/ai/tasks/${encodeURIComponent(taskId)}`);
+  },
+  /**
+   * Same-origin URL of the rendered MP4. The server resolves the storage key
+   * from the task row and checks ownership, so no key ever reaches the client.
+   */
+  aiTaskVideoUrl(taskId: string, download = false) {
+    return `/api/ai/tasks/${encodeURIComponent(taskId)}/video${download ? '?download=1' : ''}`;
+  },
+  async privacyConsents() {
+    return request<Array<{ type: string; label: string; granted: boolean }>>('/api/privacy/consents');
+  },
+  async setPrivacyConsent(consentType: string, granted: boolean) {
+    return request<{ success: boolean }>('/api/privacy/consents', {
+      method: 'PUT',
+      body: JSON.stringify({ consentType, granted }),
+    });
+  },
   async aiSmartFeatures(path: 'smart-search' | 'recommendations' | 'supplier-recommendations', body: Record<string, unknown>) {
     return request<{ kind: string; model: string; data: Record<string, unknown>; estimate: string }>(`/api/ai/${path}`, {
       method: 'POST',

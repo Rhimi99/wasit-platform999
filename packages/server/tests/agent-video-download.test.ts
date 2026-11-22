@@ -9,6 +9,7 @@ import { createAgentTask, decideAgentTask } from '../src/modules/ai/agents.js';
 import { purgeAgentVideos } from '../src/modules/ai/agent-videos.js';
 import { db } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
+import { agentTasks } from '../src/db/schema/agents.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { suppliers } from '../src/db/schema/trade.js';
 import { products, categories } from '../src/db/schema/products.js';
@@ -190,21 +191,23 @@ describe('AFC-04 — agent video download and retention', () => {
     expect(res.status).toBe(401);
   }, 30_000);
 
-  it('purges only expired agent videos', async () => {
+  it('keeps a fresh draft and refuses to delete a file it cannot classify', async () => {
     const dir = path.join(env.MEDIA_STORAGE_DIR, 'agent-videos', 'afc04-purge');
     await mkdir(dir, { recursive: true });
-    const oldFile = path.join(dir, 'old.mp4');
-    const freshFile = path.join(dir, 'fresh.mp4');
-    await writeFile(oldFile, Buffer.alloc(2048, 1));
-    await writeFile(freshFile, Buffer.alloc(1024, 2));
-    const longAgo = new Date(Date.now() - 30 * 86_400_000);
-    await utimes(oldFile, longAgo, longAgo);
+    // Free-form name: no task row, so the purge must leave it alone.
+    const stray = path.join(dir, 'old.mp4');
+    await writeFile(stray, Buffer.alloc(2048, 1));
+    const longAgo = new Date(Date.now() - 90 * 86_400_000);
+    await utimes(stray, longAgo, longAgo);
 
-    const result = await purgeAgentVideos({ olderThanDays: 7 });
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
-    await expect(stat(oldFile)).rejects.toThrow();
-    const fresh = await stat(freshFile);
-    expect(fresh.size).toBe(1024);
+    const result = await purgeAgentVideos(db);
+    expect(result.deleted).toBe(0);
+    expect(result.keptReasons.unrecognised_key ?? 0).toBeGreaterThanOrEqual(1);
+    expect((await stat(stray)).size).toBe(2048);
+
+    // The real render from this suite is an unapproved draft (30d), so it stays.
+    const draft = await db.select({ id: agentTasks.id }).from(agentTasks).where(eq(agentTasks.id, taskId));
+    expect(draft).toHaveLength(1);
   }, 30_000);
 });
 
