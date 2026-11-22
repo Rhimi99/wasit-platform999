@@ -129,7 +129,12 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/audit', key: 'admin.audit', icon: '🔎' },
 ];
 
-export function AppSidebar() {
+/**
+ * Navigation rail. It is a permanent column from `lg` up and a drawer below it:
+ * a 240px rail plus content does not fit a phone, so on small screens the rail
+ * slides in over the content and closes as soon as a destination is picked.
+ */
+export function AppSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useI18n();
   const { user, role, can, logout } = useAuth();
   const navigate = useNavigate();
@@ -146,7 +151,21 @@ export function AppSidebar() {
   };
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-e border-slate-200 bg-white">
+    <>
+      {open && (
+        <button
+          type="button"
+          aria-label={t('nav.closeMenu')}
+          className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden"
+          onClick={onClose}
+        />
+      )}
+      <aside
+        id="app-sidebar"
+        className={`fixed inset-y-0 start-0 z-40 flex w-60 shrink-0 flex-col overflow-y-auto border-e border-slate-200 bg-white transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 ${
+          open ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full'
+        }`}
+      >
       <div className="flex items-center justify-center border-b border-slate-100 px-3 py-3">
         <Brand compact />
       </div>
@@ -159,6 +178,7 @@ export function AppSidebar() {
           <Link
             key={i.to}
             to={i.to}
+            onClick={onClose}
             className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-wasit-50 hover:text-wasit-700"
           >
             <span className="text-base" aria-hidden>{i.icon}</span>
@@ -167,23 +187,37 @@ export function AppSidebar() {
         ))}
       </nav>
       <div className="space-y-1 border-t border-slate-100 p-2">
-        <Link to="/" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50">
+        <Link to="/" onClick={onClose} className="block rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50">
           🏠 {t('nav.home')}
         </Link>
         <CookieSettingsLink className="block w-full rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50" />
-        <button onClick={handleLogout} className="block w-full rounded-md px-3 py-2 text-start text-sm font-medium text-red-600 hover:bg-red-50">
+        <button onClick={() => { onClose(); void handleLogout(); }} className="block w-full rounded-md px-3 py-2 text-start text-sm font-medium text-red-600 hover:bg-red-50">
           🚪 {t('nav.logout')}
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 
-export function TopHeader() {
+export function TopHeader({ menuOpen, onToggleMenu }: { menuOpen: boolean; onToggleMenu: () => void }) {
+  const { t } = useI18n();
   const { user } = useAuth();
   return (
     <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
       <div className="flex min-w-0 items-center gap-3">
+        <button
+          type="button"
+          aria-label={t('nav.openMenu')}
+          aria-expanded={menuOpen}
+          aria-controls="app-sidebar"
+          onClick={onToggleMenu}
+          className="rounded-md border border-slate-200 p-1.5 text-slate-600 hover:bg-slate-50 lg:hidden"
+        >
+          <svg viewBox="0 0 20 20" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <path d="M3 5h14M3 10h14M3 15h14" strokeLinecap="round" />
+          </svg>
+        </button>
         {/* The mark alone: the sidebar already carries the full lockup, and the
             compact header has no room for the wordmark on phones. */}
         <AxisMark size={28} title="" className="h-7 w-7 shrink-0 lg:hidden" />
