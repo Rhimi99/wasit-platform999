@@ -1,4 +1,5 @@
-import { and, desc, eq, gte, inArray, like, lt, notLike, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, like, lte, lt, notLike, sql } from 'drizzle-orm';
+import { PERMISSIONS, userHasAnyRole, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { pingDb } from '../../db/client';
 import { env } from '../../lib/env';
@@ -19,7 +20,6 @@ import { alertEvents } from '../../db/schema/observability';
 import { agentCount, allAgentSpecs, executableAgents, declaredOnlyAgents, COPILOT_KEY } from '../ai/catalogue';
 import { buildSupervisorOverview } from '../ai/supervisor';
 import { lastScanAt, openEscalationCount, ESCALATION_RULE_PREFIX } from '../ai/escalations';
-import { metricsCoverage } from '../ai/metrics';
 
 /**
  * OBS-OPS-01 — the operational snapshot the General Manager reads.
@@ -37,6 +37,27 @@ import { metricsCoverage } from '../ai/metrics';
 const HOUR = 3_600_000;
 
 export type Availability = 'available' | 'unavailable';
+
+/**
+ * What the caller may *act on*, as opposed to what they may read.
+ *
+ * The operations desk itself is gated by `admin:system`. Acting on a supervisor
+ * escalation is gated by the AI administration permission the escalations routes
+ * enforce. The two are deliberately independent: holding `admin:system` must not
+ * imply the right to decide an AI case, so the snapshot reports the capability
+ * and the UI hides the actions instead of failing with a 403.
+ */
+export interface OperationsCapabilities {
+  aiEscalations: boolean;
+}
+
+/** Mirrors the gate on `/api/admin/ai/*` (AI_MANAGE or ADMIN_AI). */
+export function operationsCapabilities(roles: UserRole[]): OperationsCapabilities {
+  return {
+    aiEscalations:
+      userHasAnyRole(roles, PERMISSIONS.AI_MANAGE) || userHasAnyRole(roles, PERMISSIONS.ADMIN_AI),
+  };
+}
 
 export interface PlatformHealth {
   db: { status: 'up' | 'down'; latencyMs: number | null; error: string | null };
@@ -109,6 +130,8 @@ export interface NotificationHealth {
 export interface OperationsSnapshot {
   generatedAt: string;
   window: { from: string; to: string };
+  /** Actions the caller may take; computed from the same matrix the routes use. */
+  capabilities: OperationsCapabilities;
   platform: PlatformHealth;
   scheduler: ReturnType<typeof schedulerInfo> & {
     alertsLastEvaluatedAt: string | null;
@@ -175,8 +198,18 @@ async function dbProbe(): Promise<PlatformHealth['db']> {
     await pingDb();
     return { status: 'up', latencyMs: Date.now() - started, error: null };
   } catch (err) {
-    return { status: 'down', latencyMs: null, error: (err as Error).message };
+    return { status: 'down', latencyMs: null, error: redactError((err as Error).message) };
   }
+}
+
+/**
+ * Connection errors can quote the DSN. The desk is admin-only, but a snapshot is
+ * a shareable artifact, so credentials never leave the process even then.
+ */
+function redactError(message: string): string {
+  return message
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]*@/gi, '<redacted>@')
+    .slice(0, 200);
 }
 
 function toNumber(value: unknown): number {
@@ -192,7 +225,7 @@ function countRows(rows: Array<{ status: string | null; count: unknown }>): Reco
 
 export async function buildOperationsSnapshot(
   db: DB,
-  options: { now?: Date } = {},
+  options: { now?: Date; capabilities?: OperationsCapabilities } = {},
 ): Promise<OperationsSnapshot> {
   const now = options.now ?? new Date();
   const from = new Date(now.getTime() - 24 * HOUR);
@@ -212,7 +245,8 @@ export async function buildOperationsSnapshot(
     failedDeliveries,
     failed24h,
     costRows,
-    coverage,
+    tasksInWindowRows,
+    coveredTaskRows,
     ackedFiring,
     recentEvents,
   ] = await Promise.all([
@@ -278,7 +312,21 @@ export async function buildOperationsSnapshot(
       .from(aiRequests)
       .where(gte(aiRequests.createdAt, from))
       .groupBy(aiRequests.currencyCode),
-    metricsCoverage(db, { from, to: now }),
+    db
+      .select({ count: sql`count(*)::int` })
+      .from(agentTasks)
+      .where(and(gte(agentTasks.createdAt, from), lte(agentTasks.createdAt, now))),
+    db
+      .select({ count: sql`count(distinct ${agentTasks.id})::int` })
+      .from(agentTasks)
+      .innerJoin(agentMetrics, eq(agentMetrics.taskId, agentTasks.id))
+      .where(
+        and(
+          gte(agentTasks.createdAt, from),
+          lte(agentTasks.createdAt, now),
+          gte(agentMetrics.createdAt, from),
+        ),
+      ),
     db
       .select({ count: sql`count(*)::int` })
       .from(alertEvents)
@@ -367,8 +415,21 @@ export async function buildOperationsSnapshot(
   if (scheduler.jobs.length === 0) {
     unavailable.push('background jobs have not run in this process yet (registry is process-local)');
   }
-  if (coverage.percent === null) {
+  const tasksInWindow = toNumber(tasksInWindowRows[0]?.count);
+  const coveredTasks = toNumber(coveredTaskRows[0]?.count);
+  // Exact intersection, computed in SQL: the previous helper loaded every task
+  // id and every metric row into memory, which does not scale with history.
+  const coveragePercent = tasksInWindow > 0 ? coveredTasks / tasksInWindow : null;
+  if (coveragePercent === null) {
     unavailable.push('agent metric coverage is undefined (no tasks in the last 24h)');
+  }
+  if (httpRequests === 0) {
+    unavailable.push('HTTP error ratio and latency: no request has been served by this process yet');
+  } else if (latency.p95Seconds === null) {
+    unavailable.push('p95 latency: no duration sample recorded yet');
+  }
+  if (settled === 0) {
+    unavailable.push('agent success rate: no settled run attempt in the last 24h');
   }
   if (costRows.length === 0) {
     unavailable.push('AI cost: no ai_requests recorded in the last 24h');
@@ -377,6 +438,7 @@ export async function buildOperationsSnapshot(
   return {
     generatedAt: now.toISOString(),
     window: { from: from.toISOString(), to: now.toISOString() },
+    capabilities: options.capabilities ?? { aiEscalations: false },
     platform: {
       db: dbHealth,
       http: {
@@ -443,7 +505,7 @@ export async function buildOperationsSnapshot(
           cost: String(row.cost ?? '0'),
           requests: toNumber(row.requests),
         })),
-        metricCoveragePercent: coverage.percent === null ? null : Number((coverage.percent * 100).toFixed(1)),
+        metricCoveragePercent: coveragePercent === null ? null : Number((coveragePercent * 100).toFixed(1)),
       },
     },
     alerts: {

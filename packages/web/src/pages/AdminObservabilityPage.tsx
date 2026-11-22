@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, apiCall, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
-import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
+import { Badge, Card, EmptyState, ErrorState, ReasonDialog, SectionHeader, Spinner } from '@/components/ui';
 import { OperationsPanel } from '@/components/OperationsPanel';
 import type {
   AlertEventRow,
@@ -80,6 +80,8 @@ export function AdminObservabilityPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resolvingAlert, setResolvingAlert] = useState<AlertEventRow | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   // Webhook failure desk — its own pagination, loaded on demand and on refresh.
   const WEBHOOK_PAGE_SIZE = 50;
@@ -124,15 +126,13 @@ export function AdminObservabilityPage() {
     await load();
   };
 
-  const resolveAlert = async (row: AlertEventRow) => {
-    // A reason is required: closing an incident without one loses the "why"
-    // that the next reader needs. The server refuses a rule that still fires.
-    const note = window.prompt(t('adminObs.alert.resolvePrompt'));
-    if (note === null) return;
-    if (note.trim().length < 3) { setError(t('adminObs.alert.resolveNeedsReason')); return; }
+  const resolveAlert = async (note: string) => {
+    if (!resolvingAlert) return;
+    setResolveError(null);
     setNotice(null);
-    const res = await apiCall(() => api.adminResolveAlert(row.id, note.trim()));
-    if (res.error) { setError(res.error); return; }
+    const res = await apiCall(() => api.adminResolveAlert(resolvingAlert.id, note));
+    if (res.error) { setResolveError(res.error); return; }
+    setResolvingAlert(null);
     setNotice(t('adminObs.alert.resolvedManually'));
     await load();
   };
@@ -479,7 +479,7 @@ export function AdminObservabilityPage() {
                                 <button
                                   type="button"
                                   data-testid={`admin-obs-alert-resolve-${a.id}`}
-                                  onClick={() => void resolveAlert(a)}
+                                  onClick={() => { setResolveError(null); setResolvingAlert(a); }}
                                   className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
                                 >
                                   {t('adminObs.alert.resolve')}
@@ -605,6 +605,22 @@ export function AdminObservabilityPage() {
               </div>
             )}
         </>
+      )}
+
+      {resolvingAlert && (
+        <ReasonDialog
+          key={resolvingAlert.id}
+          testId="admin-obs-resolve-dialog"
+          title={t('adminObs.alert.resolveDialogTitle')}
+          description={`${resolvingAlert.rule} · ${resolvingAlert.severity}`}
+          label={t('adminObs.alert.resolveReason')}
+          confirmLabel={t('adminObs.alert.resolveConfirm')}
+          cancelLabel={t('common.cancel')}
+          busy={busy}
+          error={resolveError}
+          onSubmit={(reason) => void resolveAlert(reason)}
+          onCancel={() => setResolvingAlert(null)}
+        />
       )}
     </AppLayout>
   );

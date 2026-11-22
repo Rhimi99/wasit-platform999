@@ -1476,6 +1476,8 @@ export interface EscalationScanResult {
 export interface OperationsSnapshot {
   generatedAt: string;
   window: { from: string; to: string };
+  /** Actions the caller may take; independent of the right to read the desk. */
+  capabilities: { aiEscalations: boolean };
   platform: {
     db: { status: 'up' | 'down'; latencyMs: number | null; error: string | null };
     http: {

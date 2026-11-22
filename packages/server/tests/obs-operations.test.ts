@@ -15,6 +15,10 @@ import {
   schedulerInfo,
   trackJob,
 } from '../src/lib/observability/job-registry.js';
+import {
+  buildOperationsSnapshot,
+  operationsCapabilities,
+} from '../src/modules/observability/operations.js';
 
 /**
  * OBS-OPS-01 — the GM operational snapshot, and the two human decisions it
@@ -34,6 +38,7 @@ const RULES = {
   supervisor: `supervisor.${PREFIX}_case`,
   scopePlatform: `${PREFIX}_scope_platform`,
   guard: `${PREFIX}_guard`,
+  acked: `${PREFIX}_acked`,
 };
 
 async function createUser(role: 'ADMIN' | 'CUSTOMER'): Promise<string> {
@@ -214,6 +219,11 @@ describe('Operational snapshot — content', () => {
     expect(Array.isArray(snap.recentEvents)).toBe(true);
     expect(snap.generatedAt).toBeTruthy();
     expect(snap.window.from < snap.window.to).toBe(true);
+    // Reading the desk and deciding AI escalations are separate capabilities.
+    expect(snap.capabilities).toEqual({ aiEscalations: true });
+    // Every unavailable figure must carry a reason, never a silent zero.
+    expect(Array.isArray(snap.unavailable)).toBe(true);
+    for (const reason of snap.unavailable) expect(typeof reason).toBe('string');
   });
 
   it('surfaces a stalled agent task and an open escalation instead of hiding them', async () => {
@@ -356,5 +366,61 @@ describe('Alert resolution', () => {
     // The row is untouched: a refused mute must not close anything.
     const [after] = await db.select().from(alertEvents).where(eq(alertEvents.id, row.id)).limit(1);
     expect(after.status).toBe('FIRING');
+  });
+});
+
+describe('Capability separation (admin:system vs admin:ai)', () => {
+  it('derives the escalation capability from the same matrix the AI routes enforce', () => {
+    // ADMIN and SUPER_ADMIN hold both permissions today.
+    expect(operationsCapabilities(['ADMIN'])).toEqual({ aiEscalations: true });
+    expect(operationsCapabilities(['SUPER_ADMIN'])).toEqual({ aiEscalations: true });
+    // A role that may not decide AI cases never gets the action, even when the
+    // operations desk itself is readable by an admin.
+    expect(operationsCapabilities(['CUSTOMER'])).toEqual({ aiEscalations: false });
+    expect(operationsCapabilities(['SUPPORT'])).toEqual({ aiEscalations: false });
+    expect(operationsCapabilities(['RISK'])).toEqual({ aiEscalations: false });
+    expect(operationsCapabilities([])).toEqual({ aiEscalations: false });
+  });
+
+  it('still refuses the escalations endpoints to a role without the AI permission', async () => {
+    const supportEmail = await createUser('CUSTOMER');
+    const customer = await makeClient().login(supportEmail);
+    const res = await customer.req('/api/admin/ai/escalations?status=OPEN');
+    expect(res.status).toBe(403);
+    // ...while the desk itself is refused for a different reason (admin:system).
+    expect((await customer.req('/api/admin/observability/operations')).status).toBe(403);
+  });
+
+  it('builds the snapshot without the action flag when asked to', async () => {
+    const snap = await buildOperationsSnapshot(db, { capabilities: { aiEscalations: false } });
+    expect(snap.capabilities).toEqual({ aiEscalations: false });
+    // The read-only figures stay available: only the actions are withheld.
+    expect(snap.agents.escalations.open).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('Operational snapshot — honesty about gaps', () => {
+  it('counts acknowledged firing alerts without turning them into resolved ones', async () => {
+    const id = await insertAlert({ rule: RULES.acked, status: 'FIRING' });
+    const admin = await makeClient().login(adminEmail);
+    await admin.req(`/api/admin/observability/alerts/${id}/acknowledge`, {
+      method: 'POST',
+      body: { note: 'investigating' },
+    });
+    const snap = (await admin.req('/api/admin/observability/operations')).data.data;
+    expect(snap.alerts.acknowledgedFiring).toBeGreaterThanOrEqual(1);
+    // Acknowledgement is attention, not resolution: the stored row stays FIRING.
+    const [row] = await db.select().from(alertEvents).where(eq(alertEvents.id, id)).limit(1);
+    expect(row.status).toBe('FIRING');
+    expect(row.resolvedAt).toBeNull();
+    expect((row.details as { ack?: { note?: string } }).ack?.note).toBe('investigating');
+  });
+
+  it('never returns a raw connection string in a database error', async () => {
+    const snap = await buildOperationsSnapshot(db);
+    if (snap.platform.db.error) {
+      expect(snap.platform.db.error).not.toMatch(/:\/\/[^\s'"]*@/);
+    }
+    expect(JSON.stringify(snap)).not.toMatch(/postgres(ql)?:\/\/[^"\s]*:[^"\s]*@/);
   });
 });

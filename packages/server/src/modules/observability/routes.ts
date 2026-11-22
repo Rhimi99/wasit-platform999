@@ -16,7 +16,7 @@ import {
 } from '../../lib/observability/alerts';
 import { alertStatus } from '../../lib/observability/resolve-notifier';
 import { alertEvents } from '../../db/schema/observability';
-import { buildOperationsSnapshot } from './operations';
+import { buildOperationsSnapshot, operationsCapabilities } from './operations';
 
 /** Supervisor cases live in the same table; they have their own lifecycle. */
 const SUPERVISOR_RULE_PREFIX = 'supervisor.';
@@ -122,7 +122,11 @@ adminObservabilityRoutes.get('/alerts', validateQuery(alertsQuerySchema), async 
  */
 adminObservabilityRoutes.get('/operations', async (c) => {
   const ctx = getContext(c);
-  const snapshot = await buildOperationsSnapshot(ctx.db);
+  // Actions are gated independently of reading: `admin:system` opens the desk,
+  // but deciding an AI escalation still needs the AI administration permission.
+  const snapshot = await buildOperationsSnapshot(ctx.db, {
+    capabilities: operationsCapabilities(ctx.user!.roles),
+  });
   return c.json({ success: true, data: snapshot });
 });
 

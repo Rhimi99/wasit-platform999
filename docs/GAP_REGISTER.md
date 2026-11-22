@@ -1407,14 +1407,22 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 | `modules/observability/operations.ts` (جديد) | `buildOperationsSnapshot` — قراءة واحدة، بلا كتابة، و`unavailable[]` لكل رقم غير موثوق |
 | `modules/observability/routes.ts` | `GET /operations` + `POST /alerts/:id/{acknowledge,resolve}` + `scope` على `/alerts` |
 | `components/OperationsPanel.tsx` + تبويب `operations` | لوحة قرار: تصعيدات (إقرار/إغلاق/مسح)، مهام خلفية، وكلاء، تكلفة، فشل إشعارات، «ما لا يمكن قياسه» |
-| `api.ts` / `types.ts` / `i18n.ts` | 7 دوال + أنواع + **62 مفتاحاً** في ar/en/fr/zh |
+| `api.ts` / `types.ts` / `i18n.ts` | 7 دوال + أنواع + **76 مفتاحاً** في ar/en/fr/zh |
 
 **الضوابط:** `supervisor.*` مرفوض على مسارات التنبيهات (409) فلا تُغلق حالة من سطحين · الإقرار لا
 يغيّر الحالة (`FIRING` يبقى) · الإغلاق اليدوي مرفوض أثناء اشتعال القاعدة (409) وبلا سبب (422) ·
 كل قرار يُدقَّق (`OBSERVABILITY.ALERT_ACKNOWLEDGED` / `ALERT_RESOLVED_MANUALLY`) · الصلاحية
 `admin:system` كما هي، لا صلاحية جديدة · لا كتابة على أي جدول من مسار القراءة.
 
-**الإثبات:** `tests/obs-operations.test.ts` **11/11** (PostgreSQL 17 معزول `wasit_test` على `127.0.0.1:5434`)
+**تصليب المسودة (2026-11-22، نفس الفرع `obs-ops-01-wip`، غير مدموج):** فُصلت **قراءة** المكتب
+(`admin:system`) عن **قرار** تصعيدات AI (`admin:ai`): اللقطة تعيد `capabilities.aiEscalations` من نفس
+مصفوفة RBAC، والواجهة تُخفي القسم وتشرح السبب بدل طلب يعود 403 — بلا صلاحية جديدة وبلا منح تلقائي.
+واستُبدل `window.prompt` بحوار داخلي (`ReasonDialog`) يمنع الإغلاق بلا سبب. وأُصلح عدّ i18n في التوثيق
+(62 ← 76 بعد عدّ فعلي)، وأُعيد امتداد `.js` لاستيرادين في `health/routes.ts`. تقنياً: تغطية القياس
+وعدّادات المشرف صارت `count(*)`/`count(distinct)` في SQL بدل تحميل صفوف في الذاكرة؛ ورسالة فشل DB
+تُنقّى من أي DSN؛ و`unavailable[]` يشرح غياب p95/نسبة الأخطاء/معدل النجاح بدل `null` صامت.
+
+**الإثبات:** `tests/obs-operations.test.ts` **16/16** (PostgreSQL 17 معزول `wasit_test` على `127.0.0.1:5434`)
 · تراجع `tests/observability.test.ts` **26/26** · `tsc --noEmit` server = 0 · web = 0 · `vite build` ناجح.
 
 **فجوتان مفتوحتان جديدتان (حدود مُعلنة):**

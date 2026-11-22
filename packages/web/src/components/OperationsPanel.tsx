@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, apiCall, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
-import { Badge, Card, EmptyState, ErrorState, Spinner } from '@/components/ui';
+import { Badge, Card, EmptyState, ErrorState, ReasonDialog, Spinner } from '@/components/ui';
 import type { EscalationRow, OperationsSnapshot } from '@/lib/types';
 
 /**
@@ -11,6 +11,11 @@ import type { EscalationRow, OperationsSnapshot } from '@/lib/types';
  * platform already models: acknowledge or resolve an escalation, and
  * acknowledge a firing platform alert. Nothing here can mute a live incident —
  * the server refuses to resolve a rule that is still firing.
+ *
+ * Reading the desk (`admin:system`) and deciding an AI escalation (`admin:ai`)
+ * are separate capabilities. When the caller lacks the second, the section is
+ * replaced by an explanation and no request is attempted — a guaranteed 403 is
+ * not an error worth showing.
  */
 
 function pct(value: number | null): string {
@@ -39,55 +44,66 @@ export function OperationsPanel() {
   const [snapshot, setSnapshot] = useState<OperationsSnapshot | null>(null);
   const [escalations, setEscalations] = useState<EscalationRow[]>([]);
   const [loading, setLoading] = useState(true);
+  /** Fatal: the desk itself could not be read. */
   const [error, setError] = useState<string | null>(null);
+  /** Local to the escalation card: the desk stays usable without it. */
+  const [escalationError, setEscalationError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [resolving, setResolving] = useState<EscalationRow | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
     setError(null);
-    const [opsRes, escRes] = await Promise.all([
-      apiCall(() => api.adminObservabilityOperations()),
-      apiCall(() => api.adminEscalations({ status: 'OPEN', limit: 20 })),
-    ]);
+    setEscalationError(null);
+    const opsRes = await apiCall(() => api.adminObservabilityOperations());
     setSnapshot(opsRes.data ?? null);
-    setEscalations(escRes.data?.items ?? []);
-    setError(opsRes.error ?? escRes.error);
+    setError(opsRes.error ?? null);
     setLoading(false);
+    // Only ask for escalations when the server said the caller may decide them.
+    if (!opsRes.data?.capabilities.aiEscalations) {
+      setEscalations([]);
+      return;
+    }
+    const escRes = await apiCall(() => api.adminEscalations({ status: 'OPEN', limit: 20 }));
+    setEscalations(escRes.data?.items ?? []);
+    setEscalationError(escRes.error ?? null);
   };
 
   useEffect(() => { void load(); }, []);
 
-  const decide = async (row: EscalationRow, action: 'acknowledge' | 'resolve') => {
-    let note = '';
-    if (action === 'resolve') {
-      const input = window.prompt(t('adminObs.ops.resolvePrompt'));
-      if (input === null) return;
-      if (input.trim().length < 3) {
-        setError(t('adminObs.ops.resolveNeedsReason'));
-        return;
-      }
-      note = input.trim();
-    }
+  const acknowledge = async (row: EscalationRow) => {
     setBusyId(row.id);
     setNotice(null);
-    const res = await apiCall(() =>
-      action === 'acknowledge'
-        ? api.adminAcknowledgeEscalation(row.id, note || undefined)
-        : api.adminResolveEscalation(row.id, note),
-    );
+    setEscalationError(null);
+    const res = await apiCall(() => api.adminAcknowledgeEscalation(row.id));
     setBusyId(null);
-    if (res.error) { setError(res.error); return; }
-    setNotice(action === 'acknowledge' ? t('adminObs.ops.escalationAcknowledged') : t('adminObs.ops.escalationResolved'));
+    if (res.error) { setEscalationError(res.error); return; }
+    setNotice(t('adminObs.ops.escalationAcknowledged'));
+    await load();
+  };
+
+  const submitResolve = async (reason: string) => {
+    if (!resolving) return;
+    setBusyId(resolving.id);
+    setResolveError(null);
+    setNotice(null);
+    const res = await apiCall(() => api.adminResolveEscalation(resolving.id, reason));
+    setBusyId(null);
+    if (res.error) { setResolveError(res.error); return; }
+    setResolving(null);
+    setNotice(t('adminObs.ops.escalationResolved'));
     await load();
   };
 
   const scanNow = async () => {
     setBusyId('scan');
     setNotice(null);
+    setEscalationError(null);
     const res = await apiCall(() => api.adminScanEscalations());
     setBusyId(null);
-    if (res.error) { setError(res.error); return; }
+    if (res.error) { setEscalationError(res.error); return; }
     setNotice(`${t('adminObs.ops.scanDone')} · ${res.data?.opened ?? 0}`);
     await load();
   };
@@ -174,19 +190,35 @@ export function OperationsPanel() {
             <p className="text-sm font-bold text-slate-800">{t('adminObs.ops.escalationsTitle')}</p>
             <p className="text-xs text-slate-500">
               {t('adminObs.ops.lastScan')}: {scheduler.escalationsLastScanAt ? formatDate(scheduler.escalationsLastScanAt) : t('adminObs.neverEvaluated')}
+              {' · '}
+              {t('adminObs.ops.escalationsOpen')}: <span dir="ltr">{agents.escalations.open}</span>
             </p>
           </div>
-          <button
-            type="button"
-            data-testid="admin-ops-scan-escalations"
-            disabled={busyId === 'scan'}
-            onClick={() => void scanNow()}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-          >
-            {busyId === 'scan' ? t('common.processing') : t('adminObs.ops.scanNow')}
-          </button>
+          {snapshot.capabilities.aiEscalations && (
+            <button
+              type="button"
+              data-testid="admin-ops-scan-escalations"
+              disabled={busyId === 'scan'}
+              onClick={() => void scanNow()}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {busyId === 'scan' ? t('common.processing') : t('adminObs.ops.scanNow')}
+            </button>
+          )}
         </div>
-        {escalations.length === 0 ? <EmptyState title={t('adminObs.ops.noEscalations')} /> : (
+        {!snapshot.capabilities.aiEscalations ? (
+          <div
+            role="note"
+            data-testid="admin-ops-escalations-denied"
+            className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+          >
+            {t('adminObs.ops.escalationsDenied')}
+          </div>
+        ) : escalationError ? (
+          <div role="alert" data-testid="admin-ops-escalations-error" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {escalationError}
+          </div>
+        ) : escalations.length === 0 ? <EmptyState title={t('adminObs.ops.noEscalations')} /> : (
           <div className="overflow-x-auto">
             <table className="table-base">
               <thead>
@@ -216,7 +248,7 @@ export function OperationsPanel() {
                             type="button"
                             data-testid={`admin-ops-escalation-ack-${row.id}`}
                             disabled={busyId === row.id}
-                            onClick={() => void decide(row, 'acknowledge')}
+                            onClick={() => void acknowledge(row)}
                             className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                           >
                             {t('adminObs.ops.acknowledge')}
@@ -226,7 +258,7 @@ export function OperationsPanel() {
                           type="button"
                           data-testid={`admin-ops-escalation-resolve-${row.id}`}
                           disabled={busyId === row.id}
-                          onClick={() => void decide(row, 'resolve')}
+                          onClick={() => { setResolveError(null); setResolving(row); }}
                           className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 disabled:opacity-50"
                         >
                           {t('adminObs.ops.resolve')}
@@ -373,7 +405,23 @@ export function OperationsPanel() {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card testId="admin-ops-unavailable">
+        {resolving && (
+        <ReasonDialog
+          key={resolving.id}
+          testId="admin-ops-resolve-dialog"
+          title={t('adminObs.ops.resolveDialogTitle')}
+          description={`${resolving.code} · ${resolving.agentKey ?? '—'}`}
+          label={t('adminObs.ops.resolveReason')}
+          confirmLabel={t('adminObs.ops.resolveConfirm')}
+          cancelLabel={t('common.cancel')}
+          busy={busyId === resolving.id}
+          error={resolveError}
+          onSubmit={(reason) => void submitResolve(reason)}
+          onCancel={() => { if (busyId !== resolving.id) setResolving(null); }}
+        />
+      )}
+
+      <Card testId="admin-ops-unavailable">
           <p className="mb-2 text-sm font-bold text-slate-800">{t('adminObs.ops.unavailableTitle')}</p>
           {snapshot.unavailable.length === 0 ? (
             <p className="text-xs text-green-700">{t('adminObs.ops.allAvailable')}</p>

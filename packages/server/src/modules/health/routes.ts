@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { pingDb } from '../../db/client';
-import { getDb } from '../../lib/request-context';
+import { pingDb } from '../../db/client.js';
+import { getDb } from '../../lib/request-context.js';
 import { mailStatus } from '../../lib/mail/resolve.js';
 import { smsStatus } from '../../lib/sms/resolve.js';
 import { rateLimitStoreStatus } from '../../lib/rate-limit/resolve.js';

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useI18n } from '@/lib/i18n-context';
 
@@ -61,6 +62,115 @@ export function SectionHeader({ title, subtitle, action }: { title: string; subt
         {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
       </div>
       {action}
+    </div>
+  );
+}
+/**
+ * In-app replacement for `window.prompt` when a decision needs a written reason.
+ *
+ * The reason is mandatory: the submit button stays disabled until it reaches
+ * `minLength`, so an incident can never be closed with an empty justification.
+ * Escape and the backdrop cancel (no action), which is the honest way out — the
+ * dialog refuses to submit, it does not pretend the decision was made.
+ */
+export function ReasonDialog({
+  title,
+  description,
+  label,
+  confirmLabel,
+  cancelLabel,
+  minLength = 3,
+  busy = false,
+  error,
+  onSubmit,
+  onCancel,
+  testId = 'reason-dialog',
+}: {
+  title: string;
+  description?: string;
+  label: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  minLength?: number;
+  busy?: boolean;
+  error?: string | null;
+  onSubmit: (reason: string) => void;
+  onCancel: () => void;
+  testId?: string;
+}) {
+  const [reason, setReason] = useState('');
+  const trimmed = reason.trim();
+  const valid = trimmed.length >= minLength;
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      data-testid={testId}
+      onClick={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}
+    >
+      <form
+        className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid && !busy) onSubmit(trimmed);
+        }}
+      >
+        <h3 className="text-base font-bold text-slate-900">{title}</h3>
+        {description && <p className="mt-1 text-xs text-slate-500">{description}</p>}
+
+        <label className="label mt-4 block" htmlFor={`${testId}-input`}>{label}</label>
+        <textarea
+          id={`${testId}-input`}
+          data-testid={`${testId}-input`}
+          className="input min-h-[80px]"
+          value={reason}
+          autoFocus
+          maxLength={500}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        {!valid && (
+          <p className="mt-1 text-[11px] text-slate-400" data-testid={`${testId}-hint`}>
+            {`≥ ${minLength}`}
+          </p>
+        )}
+        {error && (
+          <p role="alert" data-testid={`${testId}-error`} className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            data-testid={`${testId}-cancel`}
+            onClick={onCancel}
+            disabled={busy}
+            className="btn-secondary px-3 py-1.5 text-xs"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="submit"
+            data-testid={`${testId}-confirm`}
+            disabled={!valid || busy}
+            aria-busy={busy}
+            className="btn-primary px-3 py-1.5 text-xs"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

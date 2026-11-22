@@ -490,16 +490,18 @@ export async function buildSupervisorOverview(db: DB, deps: SupervisorDeps = {})
     if (assessment.contain && (assessment.action === 'fail-stuck-task' || assessment.action === 'fail-stale-task' || assessment.action === 'halt-loop')) stuckRuns += 1;
   }
 
+  // Counted in SQL: these three are history-wide, and loading every matching id
+  // only to read `.length` made the overview grow with the whole audit history.
   const failedStepRows = await db
-    .select({ id: agentRunSteps.id })
+    .select({ count: sql<number>`count(*)::int` })
     .from(agentRunSteps)
-    .where(inArray(agentRunSteps.status, ['FAILED']));
+    .where(eq(agentRunSteps.status, 'FAILED'));
   const awaitingRetryRows = await db
-    .select({ id: agentRunSteps.id })
+    .select({ count: sql<number>`count(*)::int` })
     .from(agentRunSteps)
     .where(eq(agentRunSteps.status, 'RETRYING'));
   const containedRows = await db
-    .select({ id: agentRuns.id })
+    .select({ count: sql<number>`count(*)::int` })
     .from(agentRuns)
     .where(and(eq(agentRuns.status, 'FAILED'), sql`${agentRuns.error}->>'contained' = 'true'`));
 
@@ -528,9 +530,9 @@ export async function buildSupervisorOverview(db: DB, deps: SupervisorDeps = {})
   return {
     activeRuns: liveRuns.length,
     stuckRuns,
-    failedSteps: failedStepRows.length,
-    awaitingRetrySteps: awaitingRetryRows.length,
-    containedRuns: containedRows.length,
+    failedSteps: Number(failedStepRows[0]?.count ?? 0),
+    awaitingRetrySteps: Number(awaitingRetryRows[0]?.count ?? 0),
+    containedRuns: Number(containedRows[0]?.count ?? 0),
     budgetExceededRuns,
     limits,
     lastCycleAt: lastCycle ? new Date(lastCycle).toISOString() : null,
