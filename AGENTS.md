@@ -1078,3 +1078,13 @@ npx playwright install --with-deps chromium
 - **الاختبار العملي**: `./scripts/session/session-selftest.sh` (22 فحصًا على فرع اختبار، لا master) — النتائج في `docs/session/08-test-results.md`.
 - **الأدلة**: `docs/session/README.md` + 9 أدلة (بداية، checkpoint، إغلاق، استعادة، backup، تعارضات، احتفاظ، نتائج، نسخة خارجية).
 - **عزل وسائط الاختبار (2026-11-21)**: `vitest.config.ts` يفرض `MEDIA_STORAGE_DIR=.wasit-media-test` (ويحذف أي قيمة موروثة من الـshell)، و`tests/setup.ts` يمسح المجلد قبل التشغيل وبعده عبر `tests/test-media-dir.ts` (حارس مسار يمنع أي هدف غير `.wasit-media-test`). `LocalMediaStorage` يرمي استثناءً عند `NODE_ENV=test`/`VITEST` إذا أُشير إلى `.wasit-media` الحقيقي — فوسائط المستخدم لا تُلمس. إثبات: `tests/media-storage-isolation.test.ts` (6 حالات، DB-free).
+
+## Admin sub-apps — لا `use('*')` على راوتر مُركَّب على `/api/admin` (2026-11-22)
+
+- Hono يطبّق `use('*')` في تطبيق فرعي مُركَّب على `/api/admin` على **كل** مسار تحت البادئة، فحارس
+  `requireRole('ADMIN','SUPER_ADMIN')` بهذا الشكل يرفض مكاتب الطاقم المتخصصة أيضاً
+  (`/api/admin/trust`, `/api/admin/disputes`, `/api/admin/risk`, `/api/admin/verification`) — كشفته الحزمة
+  الكاملة أثناء PR-02 (7 إخفاقات في `perm01a-staff-desk-access` و`lc04-dispute-rails`).
+- الحل: اربط الحارس **لكل مسار** (`get('/x', requireAuth, requireRole(...), handler)`) أو استخدم
+  `isSpecializedDeskPath()` كما في `modules/admin/routes.ts`.
+- `GET /api/admin/entities*` (PR-02 slice 1) قراءة فقط ومحمي بهذه الطريقة؛ لا تُضِف `use('*')` هناك.

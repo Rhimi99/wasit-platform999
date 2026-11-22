@@ -29,6 +29,7 @@ import { DashboardListPage, DashboardFinancePage, DashboardReportsPage, Dashboar
 import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
 import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
+import { AdminEntitiesPage } from './pages/AdminEntitiesPage';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
 import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
@@ -131,6 +132,7 @@ export default function App() {
       <Route path="/admin/analytics" element={<RequireAuth><AdminOnly><AdminAnalyticsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/reports" element={<RequireAuth><AdminOnly><AdminReportsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/users" element={<RequireAuth><AdminOnly><AdminUsersPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/entities" element={<RequireAuth><AdminOnly><AdminEntitiesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/products" element={<RequireAuth><AdminOnly><AdminProductsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />

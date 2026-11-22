@@ -80,9 +80,11 @@
 
 > **إغلاق M2.5-TX-SELLER-ATTRIBUTION (M2.5-T3 — 2026-11-16):** الصف في §13 انتقل من **`IN_PROGRESS`** إلى **`CLOSED`** بعد اكتمال T1 (تصميم) + T2 (تنفيذ طبقة الإسناد + 14/14) + T3 (تدقيق اتساق حالة الدفع + 4 اختبارات إضافية ⇒ 18/18). البند كان **مُحتسباً ضمن «المفتوحة»** ⇒ **«المفتوحة» تنخفض 21 → 20** و**«المغلقة» ترتفع 38 → 39**. لا تغيير على «الكاذبة» (6) ولا «الخارجية» (10). التفاصيل: §13 (الصف) و§22 (سجل الإغلاق).
 
+> **بدء PR-02 (PR-02-SLICE-1 — 2026-11-22):** صف PR-02 في §4 انتقل من **`PENDING`** إلى **`IN_PROGRESS`** بعد تنفيذ الشريحة 1 (Entities Desk) والتحقّق منها بـ**13/13** اختبار تكامل + الحزمة الكاملة **2055/2055**. لأن الصف صار `IN_PROGRESS` لا `PENDING`، فإن **«المفتوحة» تنخفض 20 → 19** و**«المغلقة» تبقى 39** (لم يُدَّعِ إغلاق: الشرائح 2–4 وE2E مفتوحة). التفاصيل: `docs/PR-02_ADMIN_DESKS.md`.
+
 **تفصيل العدّ (تحقّق آلي، محدّث M2.5-T3 — 2026-11-16):**
 
-- **المفتوحة = 20:** P0 → 2 (PS-03, PS-06) · P1 → 4 (AI-02 `IN_PROGRESS`؛ AI-03, AI-04, AI-05) · P2 → 6 (PR-01, PR-02, PR-03, PR-06, PR-10, PR-11) · P3 → 6 (LC-01, LC-04, LC-05, PI-03, PI-05, PI-09) · فجوتا التحقّق → 2 (GAP-A2-01, GAP-A2-02). (المجموع 2+4+6+6+2 = **20**.) منها **5 `BLOCKED`**: PS-03, PS-06, LC-01, LC-05, PI-03.
+- **المفتوحة = 19:** P0 → 2 (PS-03, PS-06) · P1 → 4 (AI-02 `IN_PROGRESS`؛ AI-03, AI-04, AI-05) · P2 → 5 (PR-01, PR-03, PR-06, PR-10, PR-11 — وPR-02 `IN_PROGRESS` غير مُحتسب) · P3 → 6 (LC-01, LC-04, LC-05, PI-03, PI-05, PI-09) · فجوتا التحقّق → 2 (GAP-A2-01, GAP-A2-02). (المجموع 2+4+5+6+2 = **19**.) منها **5 `BLOCKED`**: PS-03, PS-06, LC-01, LC-05, PI-03.
   > **`LC-04`** تُحتسب **مرّة واحدة** هنا (صياغتها القانونية مفتوحة) رغم أن **تكاملها المالي `COMPLETE_VERIFIED`**؛ لذلك لا تُحتسب في «المغلقة» تجنّباً للعدّ المزدوج.
   > **سلسلة M2 (§13–§19):** صارت مُدرجة في العدّاد صراحةً اعتباراً من M2.4-CLOSE — مغلقة (4): `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`؛ مفتوحة (1): `M2.5-TX-SELLER-ATTRIBUTION` (أُغلقت في M2.5-T3 — انظر §22).
 - **المغلقة = 39:** §2 (12) — SEC-01, SEC-02, **SEC-03**, SEC-04B, **SEC-XFF-01**, PERM-01A, PERM-01B, **PERM-01 (المتبقّي: سياسة `revenue:read`/`report:read` لـADMIN)**, **SEC-CSRF-01**, PS-01, PS-02, OBS-01 · §3 (1) — AI-01 · §4 (1) — **PR-05** · §5 (4) — LC-02, LC-03, LC-06, LC-07 · §6 حصراً (14) — PERM-01A-UI, PERM-01B-UI, PERM-01C, `PS-04*`, B1, B2, B7, B10, B12, B14, C1, C2, C4, C5 · §12 (1) — **SEC-011.4** · **سلسلة M2 (6)** — `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`, `M2.4-REFUND-SUBORDER` (§13–§20)، **`M2.5-TX-SELLER-ATTRIBUTION`** (§13 + §21–§22). (المجموع 12+1+1+4+14+1+6 = **39**.)
@@ -161,7 +163,7 @@
 
 | ID | المجال | وصف النقص | الخطورة | الأولوية | الاعتماديات | الحالة | الاختبارات المطلوبة | دليل الإغلاق |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **PR-02** | Product/Admin | لا Admin Desks لـMerchants/Suppliers/Companies/Categories/Currencies/Languages/Commissions (`grep admin/merchants` = ∅). | HIGH | P2 | — | PENDING | مسارات + صفحة + RBAC + E2E | E2E |
+| **PR-02** | Product/Admin | لا Admin Desks لـMerchants/Suppliers/Companies/Categories/Currencies/Languages/Commissions (`grep admin/merchants` = ∅). **الشريحة 1 مُنفَّذة (2026-11-22):** Entities Desk — `GET /api/admin/entities/{summary, ?filters, :type/:id}` (قراءة فقط، الحارس على كل مسار: `requireRole('ADMIN','SUPER_ADMIN')`) + صفحة `/admin/entities` (ملخّص لكل نوع · فلاتر بحث/حالة/تحقّق · تفاصيل كيان · GMV يستثني الملغى/المسترجع) + i18n ×4. **باقٍ:** الشرائح 2–4 (الفئات · العملات واللغات · العمولات قراءةً) + E2E مكتوب ولم يُشغَّل. | HIGH | P2 | — | **IN_PROGRESS** | مسارات + صفحة + RBAC + E2E | `tests/pr02-entities-desk.test.ts` **13/13** + الحزمة الكاملة **2055/2055** (158 ملفاً) + Typecheck (server+web) 0 أخطاء + Web build نظيف؛ التفاصيل: `docs/PR-02_ADMIN_DESKS.md` |
 | **PR-10** | Product | جدول `notification_preferences` موجود في المخطّط بلا أي مسار أو واجهة (تفضيلات الإشعارات). | MEDIUM | P2 | — | PENDING | GET/PUT + E2E | E2E |
 | **PR-11** | Product | لا Support Desk/طابور تذاكر وتصعيد. | MEDIUM | P2 | AI-03 | PENDING | تذكرة + تصعيد + E2E | E2E |
 | **PR-01** | Product | لا Cart دائم/دفع متعدد البنود (`CheckoutPage` = منتج واحد). | MEDIUM | P2 | — | PENDING | سلة + دفع متعدد + E2E | E2E |

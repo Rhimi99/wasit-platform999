@@ -5,6 +5,7 @@ import { shouldRedirectToLegalAcceptance, redirectToLegalAcceptance } from './le
 import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
+  AdminEntityDetail, AdminEntityList, AdminEntitySummary, AdminEntityType,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
@@ -545,6 +546,30 @@ export const api = {
   async adminSetProductStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED' | 'SUSPENDED') {
     return request<{ success: boolean }>(`/api/products/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
   },
+  // ---- PR-02 slice 1: Entities Desk (read-only) ----
+  async adminEntitySummary() {
+    return request<{ items: AdminEntitySummary[] }>('/api/admin/entities/summary');
+  },
+  async adminEntities(params: {
+    type: AdminEntityType;
+    q?: string;
+    status?: 'all' | 'active' | 'inactive';
+    verified?: 'all' | 'yes' | 'no';
+    page?: number;
+    pageSize?: number;
+  }) {
+    const qs = new URLSearchParams({ type: params.type });
+    if (params.q) qs.set('q', params.q);
+    if (params.status && params.status !== 'all') qs.set('status', params.status);
+    if (params.verified && params.verified !== 'all') qs.set('verified', params.verified);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    return request<AdminEntityList>(`/api/admin/entities?${qs.toString()}`);
+  },
+  async adminEntityDetail(type: AdminEntityType, id: string) {
+    return request<AdminEntityDetail>(`/api/admin/entities/${type}/${id}`);
+  },
+
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
   },

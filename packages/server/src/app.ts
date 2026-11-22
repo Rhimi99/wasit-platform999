@@ -30,6 +30,7 @@ import { trustRoutes } from './modules/trust/routes.js';
 import { riskRoutes } from './modules/risk/routes.js';
 import { disputeRoutes, publicDisputeRoutes } from './modules/disputes/routes.js';
 import { adminRoutes } from './modules/admin/routes.js';
+import { adminEntitiesRoutes } from './modules/admin/entities-routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
 import { adminAnalyticsRoutes } from './modules/admin/analytics-routes.js';
@@ -215,6 +216,7 @@ export function createApp(): Hono {
   app.route('/api/admin/policies', adminPolicyRoutes);
   app.route('/api/admin/countries', adminCountryRoutes);
   app.route('/api/admin', adminRoutes);
+  app.route('/api/admin', adminEntitiesRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);
   app.route('/api/admin/analytics', adminAnalyticsRoutes);

@@ -1251,6 +1251,80 @@ export interface AdminDisputePolicy {
   updatedAt: string;
 }
 
+/** PR-02 slice 1 — Entities Desk (merchants / suppliers / companies). */
+export type AdminEntityType = 'merchant' | 'supplier' | 'company';
+
+export interface AdminEntitySummary {
+  type: AdminEntityType;
+  total: number;
+  active: number;
+  inactive: number;
+  verified: number;
+  unverified: number;
+  newLast30Days: number;
+}
+
+export interface AdminEntityRow {
+  type: AdminEntityType;
+  id: string;
+  name: string;
+  slug: string;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  ownerEmail: string | null;
+  ownerActive: boolean | null;
+  countryCode: string | null;
+  productCount: number;
+  orderCount: number;
+  gmv: string;
+}
+
+export interface AdminEntityList {
+  items: AdminEntityRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface AdminEntityDetail {
+  type: AdminEntityType;
+  entity: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    verified: boolean;
+    isActive: boolean;
+    createdAt: string;
+    updatedAt: string;
+    countryCode: string | null;
+    countryName: string | null;
+    registrationNumber: string | null;
+    taxId: string | null;
+    industry: string | null;
+  };
+  owner: { id: string; email: string; isActive: boolean; createdAt: string } | null;
+  metrics: {
+    products: number;
+    publishedProducts: number;
+    orders: number;
+    gmv: string;
+    openDisputes: number;
+    openDisputeValue: string;
+  };
+  trust: { score: number; level: string } | null;
+  verification: { status: string; targetLevel: string; submittedAt: string } | null;
+  recentOrders: Array<{
+    id: string;
+    orderNumber: string;
+    status: string;
+    grandTotal: string;
+    currencyCode: string;
+    createdAt: string;
+  }>;
+}
+
 export interface AdminRetentionPolicy {
   id: string;
   name: string;
