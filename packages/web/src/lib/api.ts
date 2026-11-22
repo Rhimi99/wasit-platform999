@@ -18,6 +18,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
+  OperationsSnapshot, EscalationRow, EscalationListResponse, EscalationScanResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
   OwnedEntity, BuyerRelation, PartnerRelation, DirectorySupplierRow, DirectoryMerchantRow, DirectoryListResponse,
@@ -1212,6 +1213,51 @@ export const api = {
   },
   async adminEvaluateAlerts() {
     return request<AlertEvaluationResult>('/api/admin/observability/alerts/evaluate', { method: 'POST' });
+  },
+  async adminObservabilityOperations() {
+    return request<OperationsSnapshot>('/api/admin/observability/operations');
+  },
+  async adminAcknowledgeAlert(id: string, note?: string) {
+    return request<AlertEventRow>(`/api/admin/observability/alerts/${id}/acknowledge`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+  async adminResolveAlert(id: string, note: string) {
+    return request<AlertEventRow>(`/api/admin/observability/alerts/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  // ---- Supervisor escalations (server enforces ADMIN_AI) ----
+  async adminEscalations(params: { status?: string; severity?: string; agentKey?: string; limit?: number; offset?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.severity) qs.set('severity', params.severity);
+    if (params.agentKey) qs.set('agentKey', params.agentKey);
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<EscalationListResponse>(`/api/admin/ai/escalations${suffix}`);
+  },
+  async adminAcknowledgeEscalation(id: string, note?: string) {
+    return request<EscalationRow>(`/api/admin/ai/escalations/${id}/acknowledge`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+  async adminResolveEscalation(id: string, note: string) {
+    return request<EscalationRow>(`/api/admin/ai/escalations/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+  async adminScanEscalations() {
+    return request<EscalationScanResult>('/api/admin/ai/escalations/scan', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
   },
 
   // ---- Webhook failure desk (server enforces REFUND_MANAGE → ADMIN/SUPER_ADMIN) ----

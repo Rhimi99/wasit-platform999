@@ -1427,6 +1427,161 @@ export interface AlertEvaluationResult {
 }
 
 /**
+ * One supervisor escalation case as the GM sees it. Cases live in
+ * `alert_events` with a `supervisor.` rule prefix and have their own lifecycle
+ * (OPEN → ACKNOWLEDGED → RESOLVED), separate from platform alert rules.
+ */
+export interface EscalationRow {
+  id: string;
+  code: string;
+  severity: 'INFO' | 'WARNING' | 'HIGH' | 'CRITICAL';
+  status: 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED';
+  title: string;
+  recommendation: string;
+  recommendationKey: string;
+  agentKey: string | null;
+  taskId: string | null;
+  runId: string | null;
+  evidence: Record<string, unknown>;
+  occurrences: number;
+  createdAt: string;
+  updatedAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: { id: string; name: string } | null;
+  resolvedAt: string | null;
+  resolvedBy: { id: string; name: string } | null;
+  resolutionNote: string | null;
+}
+
+export interface EscalationListResponse {
+  items: EscalationRow[];
+  total: number;
+  lastScanAt: string | null;
+}
+
+export interface EscalationScanResult {
+  skipped: boolean;
+  findings: number;
+  opened: number;
+  escalated: number;
+}
+
+/**
+ * OBS-OPS-01 operational snapshot — one read answering "is the platform
+ * healthy, are the agents working, what needs a decision".
+ *
+ * Numbers that cannot be trusted arrive as null with a reason in
+ * `unavailable[]`; the UI must show the reason instead of a zero.
+ */
+export interface OperationsSnapshot {
+  generatedAt: string;
+  window: { from: string; to: string };
+  platform: {
+    db: { status: 'up' | 'down'; latencyMs: number | null; error: string | null };
+    http: {
+      requests: number;
+      errors: number;
+      errorRatio: number | null;
+      p95Seconds: number | null;
+      slowestRoute: string | null;
+      topErrorRoutes: Array<{ route: string; method: string; errors: number }>;
+    };
+    rateLimitRejections: number;
+    backup: {
+      configured: boolean;
+      heartbeat: string;
+      lastSuccessAt: string | null;
+      ageHours: number | null;
+      maxAgeHours: number;
+    };
+    killSwitch: { enabled: boolean; source: 'runtime' | 'env' };
+  };
+  scheduler: {
+    running: boolean;
+    startedAt: string | null;
+    jobs: Array<{
+      name: string;
+      lastRunAt: string | null;
+      lastDurationMs: number | null;
+      lastOutcome: 'ok' | 'failed' | 'skipped' | 'never';
+      consecutiveFailures: number;
+      totalRuns: number;
+      totalFailures: number;
+      lastError: string | null;
+    }>;
+    alertsLastEvaluatedAt: string | null;
+    escalationsLastScanAt: string | null;
+    supervisorLastCycleAt: string | null;
+  };
+  agents: {
+    catalogue: {
+      total: number;
+      executable: number;
+      declaredOnly: number;
+      copilot: boolean;
+      registryStatus: { ACTIVE: number; PAUSED: number; DISABLED: number; total: number };
+    };
+    tasks: {
+      byStatus: Record<string, number>;
+      last24h: Record<string, number>;
+      stalled: { count: number; oldestAgeMinutes: number | null; thresholdMinutes: number };
+      pendingApprovals: number;
+    };
+    runs: {
+      active: number;
+      stuck: number;
+      failedSteps: number;
+      awaitingRetrySteps: number;
+      contained: number;
+      budgetExceeded: number;
+      lastCycleAt: string | null;
+    };
+    escalations: { open: number; lastScanAt: string | null };
+    performance24h: {
+      attempts: number;
+      succeeded: number;
+      failed: number;
+      successRate: number | null;
+      scopeFailures: number;
+      worstAgents: Array<{ agentKey: string; attempts: number; failed: number; successRate: number | null }>;
+    };
+    cost24h: {
+      status: 'available' | 'unavailable';
+      reason: string | null;
+      byCurrency: Array<{ currencyCode: string; cost: string; requests: number }>;
+      metricCoveragePercent: number | null;
+    };
+  };
+  alerts: {
+    firing: ObservabilityFiringAlert[];
+    lastEvaluatedAt: string | null;
+    notifier: { notifier: string; available: boolean };
+    firingCount: number;
+    acknowledgedFiring: number;
+  };
+  notifications: {
+    byStatus: Record<string, number>;
+    recentFailures: Array<{
+      id: string;
+      eventType: string;
+      channel: string;
+      attempts: number;
+      lastError: string | null;
+      createdAt: string;
+    }>;
+    failedLast24h: number;
+  };
+  recentEvents: Array<{
+    action: string;
+    entityType: string;
+    entityId: string | null;
+    createdAt: string;
+    metadata: unknown;
+  }>;
+  unavailable: string[];
+}
+
+/**
  * One terminal (FAILED / DEAD_LETTERED) provider webhook event, as surfaced to
  * an operator. Deliberately carries no raw `payload`/signature — only what an
  * operator needs to identify the stuck event and decide to replay it.

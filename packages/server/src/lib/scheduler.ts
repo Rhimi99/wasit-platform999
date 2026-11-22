@@ -9,6 +9,7 @@ import { scanEscalations } from '../modules/ai/escalations';
 import { escalateOverdueDisputes } from '../modules/disputes/service';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
+import { markSchedulerStarted, markSchedulerStopped, trackJob, type JobOutcome } from './observability/job-registry';
 import { logger } from './observability/logger';
 import { newId } from './ids';
 
@@ -89,7 +90,7 @@ export function startScheduler(options: {
   // In-process guard for the escalation sweep; see runEscalations below.
   const escalationsGuard = createInFlightGuard();
 
-  const runRollover = async (): Promise<void> => {
+  const runRollover = async (): Promise<JobOutcome> => {
     try {
       const result = await rolloverDueSubscriptions(db);
       if (result.renewed > 0) {
@@ -98,25 +99,29 @@ export function startScheduler(options: {
           skipped: result.skipped,
         });
       }
+      return 'ok';
     } catch (err) {
       // A failed background job must never take the process down; it will be
       // retried on the next tick.
       logger.error('subscription rollover failed', { error: (err as Error).message });
+      return 'failed';
     }
   };
 
-  const runExpiry = async (): Promise<void> => {
+  const runExpiry = async (): Promise<JobOutcome> => {
     try {
       const result = await expireLapsedSubscriptions(db);
       if (result.expired > 0) {
         logger.info('subscription expiry', { expired: result.expired });
       }
+      return 'ok';
     } catch (err) {
       logger.error('subscription expiry failed', { error: (err as Error).message });
+      return 'failed';
     }
   };
 
-  const runRetentionSweep = async (): Promise<void> => {
+  const runRetentionSweep = async (): Promise<JobOutcome> => {
     try {
       const result = await advanceDueDeletionRetentions(db);
       if (result.retained > 0 || result.eligible > 0) {
@@ -125,34 +130,40 @@ export function startScheduler(options: {
           eligible: result.eligible,
         });
       }
+      return 'ok';
     } catch (err) {
       logger.error('privacy retention sweep failed', { error: (err as Error).message });
+      return 'failed';
     }
   };
 
-  const runRateLimitPurge = async (): Promise<void> => {
+  const runRateLimitPurge = async (): Promise<JobOutcome> => {
     try {
       const removed = await resolveRateLimitStore(db).purgeExpired();
       if (removed > 0) {
         logger.info('rate-limit purge', { removed });
       }
+      return 'ok';
     } catch (err) {
       logger.error('rate-limit purge failed', { error: (err as Error).message });
+      return 'failed';
     }
   };
 
-  const runAlerts = async (): Promise<void> => {
+  const runAlerts = async (): Promise<JobOutcome> => {
     try {
       await evaluateAlerts(db);
+      return 'ok';
     } catch (err) {
       logger.error('alert evaluation failed', { error: (err as Error).message });
+      return 'failed';
     }
   };
 
-  const runAgentSchedules = async (): Promise<void> => {
+  const runAgentSchedules = async (): Promise<JobOutcome> => {
     // In-process guard: never overlap two sweeps in this instance. Cross-instance
     // safety comes from the DB lease inside runDueAgentSchedules, not from this.
-    if (agentRunInFlight) return;
+    if (agentRunInFlight) return 'skipped';
     agentRunInFlight = true;
     try {
       // Reclaim leases left by a crashed worker before claiming new work, so a
@@ -162,33 +173,37 @@ export function startScheduler(options: {
       if (result.claimed > 0) {
         logger.info('agent schedule sweep', { ...result });
       }
+      return 'ok';
     } catch (err) {
       // A DB outage or unexpected error must not take the scheduler down; the
       // next tick retries. Individual run failures are already handled inside.
       logger.error('agent schedule sweep failed', { error: (err as Error).message });
+      return 'failed';
     } finally {
       agentRunInFlight = false;
     }
   };
 
-  const runDisputeEscalation = async (): Promise<void> => {
+  const runDisputeEscalation = async (): Promise<JobOutcome> => {
     try {
       const result = await escalateOverdueDisputes(db);
       if (result.escalated > 0) {
         logger.info('dispute escalation sweep', { scanned: result.scanned, escalated: result.escalated });
       }
+      return 'ok';
     } catch (err) {
       // A failed background job must never take the process down; the next tick retries.
       logger.error('dispute escalation sweep failed', { error: (err as Error).message });
+      return 'failed';
     }
   };
 
-  const runAgentRunRecovery = async (): Promise<void> => {
+  const runAgentRunRecovery = async (): Promise<JobOutcome> => {
     // In-process guard: never overlap two recovery sweeps in this instance. The
     // DB lease inside recoverStuckSteps is what keeps separate instances apart;
     // this guard only prevents self-overlap when a sweep outruns its interval.
     // The guard releases in `finally`, so a thrown sweep never wedges it.
-    await recoveryGuard(async () => {
+    const outcome = await recoveryGuard(async (): Promise<JobOutcome> => {
       const correlationId = newId();
       const startedAt = Date.now();
       try {
@@ -213,6 +228,7 @@ export function startScheduler(options: {
           errors: result.errors,
           durationMs: Date.now() - startedAt,
         });
+        return 'ok';
       } catch (err) {
         // A DB outage or unexpected error must not take the scheduler down; the
         // next tick retries. Individual step failures are isolated inside.
@@ -221,14 +237,16 @@ export function startScheduler(options: {
           durationMs: Date.now() - startedAt,
           error: (err as Error).message,
         });
+        return 'failed';
       }
     });
+    return outcome ?? 'skipped';
   };
 
-  const runSupervisor = async (): Promise<void> => {
+  const runSupervisor = async (): Promise<JobOutcome> => {
     // In-process guard: never overlap two supervisor cycles in this instance.
     // Cross-instance safety is the conditional DB writes inside the cycle.
-    await supervisorGuard(async () => {
+    const outcome = await supervisorGuard(async (): Promise<JobOutcome> => {
       const startedAt = Date.now();
       try {
         const result = await runSupervisorCycle(db, { actorId: null, actorType: 'SYSTEM' });
@@ -241,6 +259,7 @@ export function startScheduler(options: {
           errors: result.errors,
           durationMs: Date.now() - startedAt,
         });
+        return 'ok';
       } catch (err) {
         // A supervisor failure must never take the scheduler down or stop the
         // agents' own work; the next tick retries. Per-run failures are isolated.
@@ -248,14 +267,16 @@ export function startScheduler(options: {
           durationMs: Date.now() - startedAt,
           error: (err as Error).message,
         });
+        return 'failed';
       }
     });
+    return outcome ?? 'skipped';
   };
 
-  const runEscalations = async (): Promise<void> => {
+  const runEscalations = async (): Promise<JobOutcome> => {
     // Overlap protection only; duplicate cases are prevented by the store's
     // per-fingerprint advisory lock, not by this flag.
-    await escalationsGuard(async () => {
+    const outcome = await escalationsGuard(async (): Promise<JobOutcome> => {
       const startedAt = Date.now();
       try {
         const result = await scanEscalations(db, { actorId: null, actorType: 'SYSTEM' });
@@ -267,55 +288,87 @@ export function startScheduler(options: {
           notificationsSent: result.notifications.sent,
           durationMs: Date.now() - startedAt,
         });
+        return 'ok';
       } catch (err) {
         // A failed sweep must not take the scheduler down; the next tick retries.
         logger.error('agent escalation sweep failed', {
           durationMs: Date.now() - startedAt,
           error: (err as Error).message,
         });
+        return 'failed';
       }
     });
+    return outcome ?? 'skipped';
+  };
+
+  // Every job is tracked so the operational snapshot can show liveness and
+  // consecutive failures instead of "the scheduler exists" as a guess.
+  const tracked = {
+    rollover: trackJob('subscriptions.rollover', runRollover),
+    expiry: trackJob('subscriptions.expiry', runExpiry),
+    retention: trackJob('privacy.retention_sweep', runRetentionSweep),
+    rateLimitPurge: trackJob('rate_limit.purge', runRateLimitPurge),
+    alerts: trackJob('observability.alerts', runAlerts),
+    agentSchedules: trackJob('ai.agent_schedules', runAgentSchedules),
+    agentRecovery: trackJob('ai.agent_run_recovery', runAgentRunRecovery),
+    supervisor: trackJob('ai.supervisor', runSupervisor),
+    escalations: trackJob('ai.escalations', runEscalations),
+    disputeEscalation: trackJob('disputes.escalation', runDisputeEscalation),
   };
 
   const tick = async (): Promise<void> => {
-    await runRollover();
-    await runExpiry();
-    await runRetentionSweep();
+    await tracked.rollover();
+    await tracked.expiry();
+    await tracked.retention();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
-      await runRateLimitPurge();
+      await tracked.rateLimitPurge();
     }
   };
 
-  const timer = setInterval(tick, intervalMs);
+  const timer = setInterval(() => void tick(), intervalMs);
   // Don't keep the event loop alive solely for the scheduler, and don't overlap
   // with an in-flight run when the process is shutting down.
   timer.unref();
 
   // Alert evaluation runs on its own cadence: faster than the hourly rollover so
   // a database outage is noticed while it is still happening.
-  const alertTimer = options.alertsEnabled ? setInterval(runAlerts, alertIntervalMs) : null;
+  const alertTimer = options.alertsEnabled
+    ? setInterval(() => void tracked.alerts(), alertIntervalMs)
+    : null;
   alertTimer?.unref();
 
   // Agent schedule sweep on its own cadence. Off unless explicitly enabled.
-  const agentTimer = options.agentSchedulerEnabled ? setInterval(runAgentSchedules, agentIntervalMs) : null;
+  const agentTimer = options.agentSchedulerEnabled
+    ? setInterval(() => void tracked.agentSchedules(), agentIntervalMs)
+    : null;
   agentTimer?.unref();
 
   // Agent-run stuck-step recovery sweep on its own cadence. Off unless enabled.
-  const recoveryTimer = options.agentRunsRecoveryEnabled ? setInterval(runAgentRunRecovery, recoveryIntervalMs) : null;
+  const recoveryTimer = options.agentRunsRecoveryEnabled
+    ? setInterval(() => void tracked.agentRecovery(), recoveryIntervalMs)
+    : null;
   recoveryTimer?.unref();
 
   // Agent-run supervisor cycle on its own cadence. Off unless enabled.
-  const supervisorTimer = options.agentRunsSupervisorEnabled ? setInterval(runSupervisor, supervisorIntervalMs) : null;
+  const supervisorTimer = options.agentRunsSupervisorEnabled
+    ? setInterval(() => void tracked.supervisor(), supervisorIntervalMs)
+    : null;
   supervisorTimer?.unref();
 
   // Supervisor escalation sweep to the GM on its own cadence. Off unless enabled.
-  const escalationsTimer = options.escalationsEnabled ? setInterval(runEscalations, escalationsIntervalMs) : null;
+  const escalationsTimer = options.escalationsEnabled
+    ? setInterval(() => void tracked.escalations(), escalationsIntervalMs)
+    : null;
   escalationsTimer?.unref();
 
   // Dispute auto-escalation sweep on its own cadence. Off unless enabled.
-  const disputeTimer = options.disputeEscalationEnabled ? setInterval(runDisputeEscalation, disputeEscalationIntervalMs) : null;
+  const disputeTimer = options.disputeEscalationEnabled
+    ? setInterval(() => void tracked.disputeEscalation(), disputeEscalationIntervalMs)
+    : null;
   disputeTimer?.unref();
+
+  markSchedulerStarted();
 
   return {
     stop: () => {
@@ -326,6 +379,7 @@ export function startScheduler(options: {
       if (supervisorTimer) clearInterval(supervisorTimer);
       if (escalationsTimer) clearInterval(escalationsTimer);
       if (disputeTimer) clearInterval(disputeTimer);
+      markSchedulerStopped();
     },
   };
 }

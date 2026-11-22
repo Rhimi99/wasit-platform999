@@ -3,6 +3,7 @@ import { api, apiCall, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
+import { OperationsPanel } from '@/components/OperationsPanel';
 import type {
   AlertEventRow,
   ObservabilityDashboard,
@@ -12,7 +13,7 @@ import type {
   WebhookFailureRow,
 } from '@/lib/types';
 
-type Tab = 'overview' | 'metrics' | 'logs' | 'alerts' | 'webhooks';
+type Tab = 'operations' | 'overview' | 'metrics' | 'logs' | 'alerts' | 'webhooks';
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
@@ -115,6 +116,27 @@ export function AdminObservabilityPage() {
     await load();
   };
 
+  const acknowledgeAlert = async (row: AlertEventRow) => {
+    setNotice(null);
+    const res = await apiCall(() => api.adminAcknowledgeAlert(row.id));
+    if (res.error) { setError(res.error); return; }
+    setNotice(t('adminObs.alert.acknowledged'));
+    await load();
+  };
+
+  const resolveAlert = async (row: AlertEventRow) => {
+    // A reason is required: closing an incident without one loses the "why"
+    // that the next reader needs. The server refuses a rule that still fires.
+    const note = window.prompt(t('adminObs.alert.resolvePrompt'));
+    if (note === null) return;
+    if (note.trim().length < 3) { setError(t('adminObs.alert.resolveNeedsReason')); return; }
+    setNotice(null);
+    const res = await apiCall(() => api.adminResolveAlert(row.id, note.trim()));
+    if (res.error) { setError(res.error); return; }
+    setNotice(t('adminObs.alert.resolvedManually'));
+    await load();
+  };
+
   const loadWebhooks = async (offset: number) => {
     setWebhookLoading(true);
     setWebhookError(null);
@@ -149,6 +171,7 @@ export function AdminObservabilityPage() {
   };
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'operations', label: t('adminObs.tab.operations') },
     { id: 'overview', label: t('adminObs.tab.overview') },
     { id: 'metrics', label: t('adminObs.tab.metrics') },
     { id: 'logs', label: t('adminObs.tab.logs') },
@@ -197,7 +220,9 @@ export function AdminObservabilityPage() {
       </div>
 
       {notice && <div role="status" className="mb-4 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">{notice}</div>}
-      {loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={() => void load()} /> : (
+      {tab === 'operations' ? (
+        <OperationsPanel />
+      ) : loading ? <Spinner /> : error ? <ErrorState message={error} onRetry={() => void load()} /> : (
         <>
           {tab === 'overview' && dashboard && (
             <div className="space-y-4">
@@ -428,6 +453,7 @@ export function AdminObservabilityPage() {
                         <th>{t('adminObs.alert.summary')}</th>
                         <th>{t('adminObs.alert.startedAt')}</th>
                         <th>{t('adminObs.alert.notified')}</th>
+                        <th>{t('common.actions')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -439,6 +465,30 @@ export function AdminObservabilityPage() {
                           <td className="text-xs">{a.summary}</td>
                           <td className="text-xs">{formatDate(a.startedAt)}</td>
                           <td className="text-xs" dir="ltr">{a.notifiedChannel ?? '—'}{a.notifiedResult ? ` · ${a.notifiedResult}` : ''}</td>
+                          <td>
+                            {a.status === 'FIRING' ? (
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  data-testid={`admin-obs-alert-ack-${a.id}`}
+                                  onClick={() => void acknowledgeAlert(a)}
+                                  className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+                                >
+                                  {t('adminObs.alert.acknowledge')}
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`admin-obs-alert-resolve-${a.id}`}
+                                  onClick={() => void resolveAlert(a)}
+                                  className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
+                                >
+                                  {t('adminObs.alert.resolve')}
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">—</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
