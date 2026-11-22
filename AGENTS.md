@@ -1216,3 +1216,16 @@ npx playwright install --with-deps chromium
 - **الأسرار**: `scripts/lib/demo-credentials.mjs` (`demoPasswordFor(email)`) يقرأ `DEMO_ACCOUNT_PASSWORD_*`/`DEMO_STAFF_PASSWORD_*` من البيئة أو `.env.demo` (0600، غير متعقّب). **لا كلمة مرور حرفية في أي سكربت** — و`scripts/session/secret-allowlist.txt` بلا استثناءات لكلمات المرور، فأي ظهور لها يُعدّ finding.
 - **فخ تسرّب `.env.demo` إلى الاختبارات**: `set -a; . ./.env.demo; set +a` في shell دائم يترك `APP_URL`/`NODE_ENV`/`DATABASE_URL` مُصدَّرة، فيرثها `vitest` وتفشل مواصفات تعتمد القيم الافتراضية (كانت `seo.test.ts` تفترض `http://localhost:5173`). شغّل الاختبارات بـ`env -u APP_URL -u WEB_URL -u NODE_ENV ...`، و`tests/seo.test.ts` صار يشتق الأصل من `env.APP_URL` بدل قيمة ثابتة.
 - **التحقق على الرابط العام**: `scripts/demo-security-smoke.sh` (74 فحصاً)، `scripts/ui-demo-audit.mjs` (69 فحصاً: 4 لغات + شاشة هاتف + رفض RBAC)، `scripts/ui-mobile-smoke.mjs` (16)، `scripts/ui-flows-check.mjs` (6).
+
+## AI-05 / AFC-10 — ضبط الاستهلاك والتكلفة (2026-11-23)
+
+- **Reserve-before-call / settle-after-call**: `lib/ai/spend-limits.ts` (`reserveSpend`/`settleSpend`/`releaseSpend`). الحجز عبارة عن بيان واحد محروس (`INSERT … SELECT … WHERE` + `ON CONFLICT … DO UPDATE … WHERE`) على `ai_spend_counters`، فطلبان متزامنان لا يستهلكان نفس المتاح. الفشل يعيد `rows=[]` فقط — إشارة الرفض.
+- **حدود من DB لا من الكود**: `ai_spend_limits` بمفاتيح (`environment`, `scope` = GLOBAL|PROVIDER|AGENT, `targetKey`, `period`) + `maxCost`/`maxRequests`/`warnRatio`. صف بلا أي سقف مرفوض (422) — وإلا لأذِن بإنفاق غير محدود.
+- **الرفض ليس عطلاً**: عند بلوغ السقف يتراجع الـruntime إلى `LocalHeuristicProvider` (مجاني) ما لم يمرّر المستدعي `allowLocalFallback: false` (حينها 429). سقف المزوّد لا يُسقط المسار الآمن أبداً. `routing.ts` يتخطى المزوّد المحظور مسبقاً حتى لا يختار الـrouter مزوّداً سيرفضه الـruntime.
+- **`releaseSpend` مقيَّد بالبيئة**: `SpendReservation` يحمل `environment`؛ بدونه كان `release` قد ينقص عدّاد بيئة أخرى له نفس `period_start`.
+- **تكلفة مجهولة ≠ صفر**: `resolveModelPrice().registered === false` ⇒ `costSource: 'UNKNOWN'`. لا تُسجَّل تكلفة صفرية كأنها مجانية، ولا تُتخذ قرارات ميزانية على سعر غير مسجّل.
+- **Idempotency**: `ai_requests.request_key` (فهرس فريد). إعادة المحاولة/الحدث المُعاد تُرجع الصف الأول بلا نداء مزوّد ثانٍ ولا حجز ثانٍ؛ التسابق يحسمه `23505` فيقرأ الخاسر صف الفائز.
+- **الجداول الأربعة (`ai_requests`، `ai_usage`، `ai_budgets`، `ai_spend_*`) ليست ضمن نطاق الوكيل**: `modules/ai/agent-scope.ts` يمنعها في `HARD_DENY`، والقراءات المالية تمرّ عبر `platformDb(db)`.
+- **إدارة**: `/api/admin/ai/spend` (`AI_MANAGE`/`ADMIN_AI`) — overview + limits PUT/DELETE، كل تغيير في `audit_logs` (`AI_SPEND.LIMIT_UPDATED`/`LIMIT_DELETED`). الواجهة: تبويب «الاستهلاك» في `AdminAiPage` (`components/AiSpendPanel.tsx`).
+- **فخ بيئي (ليس عطلاً في الكود)**: مسار TTS يستدعي `ffprobe` من النظام. `ffmpeg-static` يوفّر `ffmpeg` فقط؛ بدون `apt-get install -y ffmpeg` تفشل 4 اختبارات فيديو بـ`spawn ffprobe ENOENT`. الصورة الإنتاجية تُثبّت `ffmpeg`+`ffprobe` عبر apt.
+- **اختبارات**: `tests/afc10-ai-spend.test.ts` (22). لا تُنشئ SUPER_ADMIN في اختبار جديد: `super-admin-bootstrap.test.ts` يفشل إن وُجد صف SUPER_ADMIN أثناء تشغيله (تلوّث بين الملفات).
