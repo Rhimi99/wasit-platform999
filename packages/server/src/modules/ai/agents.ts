@@ -29,6 +29,7 @@ import {
   agentRunRefusal,
   executableAgents,
   findAgentSpec,
+  PLATFORM_SCOPE_ROLES,
   type AgentLayerCounts,
 } from './catalogue.js';
 import { assertAgentScopeContract, assertRunOwnerScope } from './agent-scope.js';
@@ -354,6 +355,33 @@ export async function createAgentTask(
       errorCode: refusal.code,
     });
     throw ApiError.conflict(refusal.message);
+  }
+
+  // A platform-wide agent reads rows that belong to every tenant (A2 bounds
+  // tables, not rows), so the declared `requiresPlatformScope` is enforced here
+  // rather than trusted. Without this a customer holding `ai:use` could run the
+  // maintenance agent and read other principals' stored errors.
+  if (agent.requiresPlatformScope && !role.some((r) => PLATFORM_SCOPE_ROLES.includes(r))) {
+    await writeAudit(db, audit, {
+      action: 'AI.AGENT_RUN_REFUSED',
+      entityType: 'AGENT',
+      entityId: agent.key,
+      metadata: {
+        agentKey: agent.key,
+        code: 'PLATFORM_SCOPE_REQUIRED',
+        reason: 'This agent operates on platform-wide data.',
+        requestedBy,
+        roles: role,
+      },
+    });
+    await recordMetricSafely(db, {
+      agentKey: agent.key,
+      taskId: null,
+      scopeOwner: requestedBy,
+      outcome: 'blocked',
+      errorCode: 'PLATFORM_SCOPE_REQUIRED',
+    });
+    throw ApiError.forbidden('This agent operates on platform-wide data and is limited to platform administrators');
   }
 
   if (!role.includes('ADMIN') && !role.includes('SUPER_ADMIN')) {

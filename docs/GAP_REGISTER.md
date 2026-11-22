@@ -36,7 +36,7 @@
 | المحور | العدد |
 | --- | --- |
 | بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 20 |
-| بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 39 |
+| بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 41 |
 | فجوات كاذبة مُستبعدة | 6 |
 | بنود تحتاج طرفاً خارجياً (عقود/بنية) | 10 |
 | بنود في السجل المرجعي بلا صف تفصيلي هنا (`LC-08`) | 1 |
@@ -85,7 +85,7 @@
 - **المفتوحة = 20:** P0 → 2 (PS-03, PS-06) · P1 → 4 (AI-02 `IN_PROGRESS`؛ AI-03, AI-04, AI-05) · P2 → 6 (PR-01, PR-02, PR-03, PR-06, PR-10, PR-11) · P3 → 6 (LC-01, LC-04, LC-05, PI-03, PI-05, PI-09) · فجوتا التحقّق → 2 (GAP-A2-01, GAP-A2-02). (المجموع 2+4+6+6+2 = **20**.) منها **5 `BLOCKED`**: PS-03, PS-06, LC-01, LC-05, PI-03.
   > **`LC-04`** تُحتسب **مرّة واحدة** هنا (صياغتها القانونية مفتوحة) رغم أن **تكاملها المالي `COMPLETE_VERIFIED`**؛ لذلك لا تُحتسب في «المغلقة» تجنّباً للعدّ المزدوج.
   > **سلسلة M2 (§13–§19):** صارت مُدرجة في العدّاد صراحةً اعتباراً من M2.4-CLOSE — مغلقة (4): `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`؛ مفتوحة (1): `M2.5-TX-SELLER-ATTRIBUTION` (أُغلقت في M2.5-T3 — انظر §22).
-- **المغلقة = 39:** §2 (12) — SEC-01, SEC-02, **SEC-03**, SEC-04B, **SEC-XFF-01**, PERM-01A, PERM-01B, **PERM-01 (المتبقّي: سياسة `revenue:read`/`report:read` لـADMIN)**, **SEC-CSRF-01**, PS-01, PS-02, OBS-01 · §3 (1) — AI-01 · §4 (1) — **PR-05** · §5 (4) — LC-02, LC-03, LC-06, LC-07 · §6 حصراً (14) — PERM-01A-UI, PERM-01B-UI, PERM-01C, `PS-04*`, B1, B2, B7, B10, B12, B14, C1, C2, C4, C5 · §12 (1) — **SEC-011.4** · **سلسلة M2 (6)** — `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`, `M2.4-REFUND-SUBORDER` (§13–§20)، **`M2.5-TX-SELLER-ATTRIBUTION`** (§13 + §21–§22). (المجموع 12+1+1+4+14+1+6 = **39**.)
+- **المغلقة = 41:** §2 (12) — SEC-01, SEC-02, **SEC-03**, SEC-04B, **SEC-XFF-01**, PERM-01A, PERM-01B, **PERM-01 (المتبقّي: سياسة `revenue:read`/`report:read` لـADMIN)**, **SEC-CSRF-01**, PS-01, PS-02, OBS-01 · §3 (3) — AI-01, AI-06, AI-07 · §4 (1) — **PR-05** · §5 (4) — LC-02, LC-03, LC-06, LC-07 · §6 حصراً (14) — PERM-01A-UI, PERM-01B-UI, PERM-01C, `PS-04*`, B1, B2, B7, B10, B12, B14, C1, C2, C4, C5 · §12 (1) — **SEC-011.4** · **سلسلة M2 (6)** — `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`, `M2.4-REFUND-SUBORDER` (§13–§20)، **`M2.5-TX-SELLER-ATTRIBUTION`** (§13 + §21–§22). (المجموع 12+3+1+4+14+1+6 = **41**.)
 - **الفجوات الكاذبة = 6:** نقاط §7 (قائمة).
 - **الخارجية = 10:** معرّفات §8 بعد فكّ الصيغ المركّبة: `PS-03`, `PS-06`, `LC-01`, `LC-03`, `LC-04`, `LC-05`, `PI-03`, `PI-09`, `BU-01`, `BU-02` (زائد `BU-04`، وهو معرّف بلا صف تفصيلي في المستودع).
 - **إضافة DOC-A2-CLOSE (2026-11-07):** «المفتوحة» **22 → 24** بفجوتَي التحقّق `GAP-A2-01` و`GAP-A2-02` (§11)؛ لم تُغلق ولم تُفتح أي فجوة قائمة أخرى.
@@ -147,6 +147,8 @@
 
 ## 3. فجوات P1 (منظومة الذكاء الاصطناعي) — مفتوحة ومُغلقة
 
+> **AI-FIRST COMPLETION (2026-11-22):** أُغلقت `AI-06` (تحليل السبب + patch proposal لوكيل الصيانة) و`AI-07` (فرض `requiresPlatformScope` — ثغرة قراءة عابرة للمستأجرين). المصفوفة الكاملة للوكلاء الـ21 + Copilot: `docs/AI-FIRST-COMPLETION-01.md`.
+
 | ID | المجال | وصف النقص | الخطورة | الأولوية | الاعتماديات | الحالة | الاختبارات المطلوبة | دليل الإغلاق |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **AI-01** | AI/Automation | الوكلاء طلب-استجابة فقط: لا scheduler، لا تشغيل دوري/مستقل. 11 وكيلاً مسجّلين، لكن لا تنفيذ مجدول. | HIGH | P1 | — | **COMPLETED** | تشغيل مجدول لمهمة وكيل + Audit + حدود الميزانية | ✅ جدول `agent_schedules` (ترحيل `0027`) + `modules/ai/scheduling.ts` + وظيفة `runAgentSchedules` في `lib/scheduler.ts` (مُطفأة افتراضياً) + مسارات `/api/admin/ai/agent-schedules`؛ المطالبة الذرّية بالعقد (`FOR UPDATE SKIP LOCKED`) تمنع التنفيذ المزدوج عبر النسخ؛ بوابة الموافقة fail-closed + حدود الميزانية + تدقيق بهوية `SYSTEM`. Backend `ai01-agent-scheduling.test.ts` **12/12** + الحزمة الكاملة **899/899** + تحقّق حيّ (نسختان متزامنتان، تنفيذ واحد فقط) |
@@ -154,7 +156,8 @@
 | **AI-03** | AI/Automation | توجيه النزاعات/الدعم تلقائياً إلى Agent غير موصول بطابور؛ `dispute-assistant`/`support-agent` تشغيلهما يدوي. | MEDIUM | P1 | AI-02 | PENDING | فتح نزاع → مهمة وكيل تلقائية + Approval gate | اختبار تكامل |
 | **AI-04** | AI/Ops | لا سطح إداري لتفعيل مزوّد AI وضبط مفاتيحه وفق إعدادات آمنة (الحالي: متغيّر بيئة فقط، الافتراضي `local-heuristic`). | MEDIUM | P1 | — | PENDING | اختبار إعداد المزوّد + عدم كشف المفتاح | اختبار أمني |
 | **AI-05** | AI/Agents | ترتيب تنفيذ الوكلاء المطلوب في تعليمات سابقة (Supervisor ثم Product/Marketing/Support/Customer-Intelligence ثم Outreach) **غير موثّق في المستودع**: `AI_ARCHITECTURE.md` §3 يسرد 11 وكيلاً بترتيب محايد. يلزم تثبيت الترتيب المطلوب في الوثيقة ثم مواءمة `AGENT_CATALOGUE` معه. | MEDIUM | P1 | AI-02 | PENDING | تثبيت الترتيب + مواءمة الكتالوج + اختبار | اختبار |
-
+| **AI-06** | AI/Agents | وكيل الصيانة كان يشخّص بلا تحليل سبب: `suggestedRepair` نصّ ثابت يطلب من الإنسان «تجميع الأعطال حسب الوكيل ورمز الخطأ». **مُغلق (2026-11-22):** تجميع حتمي حسب بصمة الخطأ (11 عائلة) + فرضية وثقة وأدلة + `patchProposals` (ملفات موجودة فعلاً في الريبو، اختبارات، تحقّق، rollback) + `reviewReport` بحالة كل خطوة. اختبارات معزولة وتطبيق patch يبقيان محجوبين بنيوياً (AD-050) ومصرَّحاً بهما في المخرجات. | HIGH | P1 | — | **COMPLETED** | تجميع + patch + تقرير + لا كتابة | `modules/ai/diagnostics.ts` + 17 اختباراً (`tests/unit/ai-maintenance-rootcause.test.ts`, `tests/ai-maintenance-rootcause.test.ts`) · `docs/AI-FIRST-COMPLETION-01.md` §4.1 |
+| **AI-07** | AI/Security | `requiresPlatformScope: true` معلن على 9 وكلاء و**غير مفروض في أي مكان**: A2 يحدّ الجداول لا الصفوف، فعميل يحمل `ai:use` شغّل وكيل الصيانة وقرأ رسائل أخطاء مهام مستخدمين آخرين وعدّادات المنصة، وشغّل وكيل النمو وكشف كل الموردين/التجار/الشركات. **مُغلق (2026-11-22):** الفرض في `createAgentTask` (`ADMIN`/`SUPER_ADMIN` فقط) مع Audit `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` وmetric `blocked` ورفض **قبل** كتابة أي صف مهمة. لا صلاحية جديدة ولا تغيير في `ROLE_PERMISSIONS`. | HIGH | P1 | — | **COMPLETED** | رفض 5 أدوار + Audit + صفر صفوف مكتوبة | `tests/ai-platform-scope.test.ts` (9) · `docs/AI-FIRST-COMPLETION-01.md` §4.2 |
 ---
 
 ## 4. الفجوات المفتوحة — P2 (الوظائف التجارية)

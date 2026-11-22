@@ -20,6 +20,7 @@ import { agentTasks } from '../../db/schema/agents';
 import { agentRuns, agentRunSteps } from '../../db/schema/agent_runs';
 import { dailyKpis } from '../../db/schema/analytics';
 import { listRecentMarketingVideos } from '../media/service';
+import { analyseFailures, buildReviewReport, proposePatch } from './diagnostics';
 
 /**
  * WASIT specialised agent executors (Phase 14).
@@ -898,7 +899,7 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
       .from(agentTasks)
       .where(and(eq(agentTasks.status, 'failed'), gte(agentTasks.createdAt, since)))
       .orderBy(desc(agentTasks.createdAt))
-      .limit(5),
+      .limit(200),
     db
       .select({ id: agentTasks.id, agentKey: agentTasks.agentKey, startedAt: agentTasks.startedAt })
       .from(agentTasks)
@@ -926,6 +927,21 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
   const failedSteps = byStatus(stepRows, 'FAILED');
   const retryingSteps = byStatus(stepRows, 'RETRYING');
 
+  // Root-cause grouping over the failures already fetched. Deterministic and
+  // read-only: same rows in, same clusters out.
+  const analysis = analyseFailures(
+    failedTaskRows.map((t) => ({
+      taskId: t.id,
+      agentKey: t.agentKey,
+      taskType: t.taskType ?? null,
+      error: t.error,
+      createdAt: t.createdAt,
+    })),
+    { days: windowDays, from: since.toISOString(), to: new Date().toISOString() },
+  );
+  const patchProposals = analysis.clusters.slice(0, 3).map(proposePatch);
+  const reviewReport = buildReviewReport(analysis, patchProposals);
+
   const findings: Array<Record<string, unknown>> = [];
   if (stuckTaskRows.length > 0) {
     findings.push({
@@ -948,20 +964,31 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
       code: 'agent_task_failures',
       severity: failureRate >= 0.25 && taskTotal >= 4 ? 'HIGH' : 'MEDIUM',
       statement: `${failedTasks} of ${taskTotal} task(s) failed in the last ${windowDays} day(s) (${(failureRate * 100).toFixed(1)}%).`,
-      evidence: failedTaskRows.map((t) => ({
+      evidence: failedTaskRows.slice(0, 5).map((t) => ({
         taskId: t.id,
         agentKey: t.agentKey,
         taskType: t.taskType,
         error: t.error,
         createdAt: t.createdAt.toISOString(),
       })),
+      // Computed, not narrated: the grouping the old advice asked a human to do.
+      rootCause: {
+        sampleSize: analysis.sampleSize,
+        dominant: analysis.dominant,
+        clusters: analysis.clusters.slice(0, 5),
+      },
       suggestedRepair: {
-        summary: 'Group the failures by agent and error code, then fix the dominant cause.',
-        steps: [
-          'Read the stored error for each failing task (no log scraping needed).',
-          'Reproduce the dominant failure in an isolated test.',
-          'Ship the fix as a patch with the test that fails before it and passes after.',
-        ],
+        summary: analysis.dominant
+          ? `${analysis.dominant.family}: ${analysis.dominant.hypothesis}`
+          : 'Group the failures by agent and error code, then fix the dominant cause.',
+        steps:
+          analysis.dominant
+            ? analysis.dominant.nextDiagnostics
+            : [
+                'Read the stored error for each failing task (no log scraping needed).',
+                'Reproduce the dominant failure in an isolated test.',
+                'Ship the fix as a patch with the test that fails before it and passes after.',
+              ],
       },
     });
   }
@@ -1032,6 +1059,9 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
       stuckTasks: stuckTaskRows.length,
     },
     findings,
+    rootCauseAnalysis: analysis,
+    patchProposals,
+    reviewReport,
     // The repair protocol is a contract, not a suggestion: every item below is
     // enforced outside the model (approval actions + the absence of an executor).
     repairProtocol: {
@@ -1048,6 +1078,8 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
       ],
       appliesChanges: false,
       note: 'apply_patch and merge_change are approval actions with no executor; the repair is delivered as a proposal.',
+      // Steps this runtime cannot perform, named rather than skipped silently.
+      blocked: reviewReport.checklist.filter((step) => step.state !== 'done'),
     },
     recommendation:
       findings.length === 0

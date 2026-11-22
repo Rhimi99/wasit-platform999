@@ -75,6 +75,19 @@ export const CORE_SPECIALIST_KEYS = [
 export type CoreSpecialistKey = (typeof CORE_SPECIALIST_KEYS)[number];
 
 /**
+ * Roles that may run an agent whose data is platform-wide.
+ *
+ * `requiresPlatformScope` has been declared on eight agents since the catalogue
+ * existed, but nothing enforced it: A2 bounds an agent to *tables*, not rows, so
+ * a platform-wide agent reads every tenant's rows. A caller holding only
+ * `ai:use` could therefore run the maintenance agent and read other principals'
+ * stored task errors, or run the growth agent and enumerate every supplier,
+ * merchant and company. Enforcing the declared flag closes that; it grants
+ * nothing new and removes no permission from any role.
+ */
+export const PLATFORM_SCOPE_ROLES: readonly string[] = ['ADMIN', 'SUPER_ADMIN'];
+
+/**
  * Actions that always require an explicit human approval, regardless of which
  * agent performs them. Declarative in R1: the live approval gate is still
  * `requiresHumanApproval` on the executable catalogue plus the A1/A2 boundary.
