@@ -6,6 +6,7 @@ import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   AdminEntityDetail, AdminEntityList, AdminEntitySummary, AdminEntityType,
+  AdminCategoryDetail, AdminCategoryList, AdminCategorySummary,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
@@ -546,6 +547,34 @@ export const api = {
   async adminSetProductStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED' | 'SUSPENDED') {
     return request<{ success: boolean }>(`/api/products/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
   },
+  // ---- PR-02 slice 2: Categories Desk (read-only) ----
+  async adminCategorySummary() {
+    return request<AdminCategorySummary>('/api/admin/categories/summary');
+  },
+  async adminCategories(params: {
+    q?: string;
+    status?: 'all' | 'active' | 'inactive';
+    level?: 'all' | 'root' | 'child' | 'leaf';
+    parentId?: string;
+    hasProducts?: 'all' | 'yes' | 'no';
+    page?: number;
+    pageSize?: number;
+  } = {}) {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.status && params.status !== 'all') qs.set('status', params.status);
+    if (params.level && params.level !== 'all') qs.set('level', params.level);
+    if (params.parentId) qs.set('parentId', params.parentId);
+    if (params.hasProducts && params.hasProducts !== 'all') qs.set('hasProducts', params.hasProducts);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString();
+    return request<AdminCategoryList>(`/api/admin/categories${suffix ? `?${suffix}` : ''}`);
+  },
+  async adminCategoryDetail(id: string) {
+    return request<AdminCategoryDetail>(`/api/admin/categories/${id}`);
+  },
+
   // ---- PR-02 slice 1: Entities Desk (read-only) ----
   async adminEntitySummary() {
     return request<{ items: AdminEntitySummary[] }>('/api/admin/entities/summary');

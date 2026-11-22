@@ -1325,6 +1325,95 @@ export interface AdminEntityDetail {
   }>;
 }
 
+/** PR-02 slice 2 — Categories Desk (read-only). */
+export interface AdminCategorySummary {
+  total: number;
+  active: number;
+  inactive: number;
+  roots: number;
+  children: number;
+  maxDepth: number;
+  withProducts: number;
+  empty: number;
+  totalProducts: number;
+  publishedProducts: number;
+  newLast30Days: number;
+}
+
+export interface AdminCategoryRow {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  nameFr: string | null;
+  slug: string;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  parentId: string | null;
+  parentName: string | null;
+  depth: number;
+  path: string;
+  childrenCount: number;
+  productCount: number;
+  publishedProductCount: number;
+  subtreeProductCount: number;
+}
+
+export interface AdminCategoryList {
+  items: AdminCategoryRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface AdminCategoryDetail {
+  category: {
+    id: string;
+    name: string;
+    nameAr: string | null;
+    nameFr: string | null;
+    slug: string;
+    description: string | null;
+    icon: string | null;
+    isActive: boolean;
+    sortOrder: number;
+    parentId: string | null;
+    parentName: string | null;
+    depth: number;
+    path: string;
+    createdAt: string;
+    updatedAt: string;
+  };
+  ancestors: Array<{ id: string; name: string; depth: number }>;
+  children: Array<{
+    id: string;
+    name: string;
+    isActive: boolean;
+    sortOrder: number;
+    productCount: number;
+    childrenCount: number;
+  }>;
+  metrics: {
+    directProducts: number;
+    publishedProducts: number;
+    draftProducts: number;
+    subtreeProducts: number;
+    subtreePublishedProducts: number;
+    children: number;
+    descendants: number;
+  };
+  recentProducts: Array<{
+    id: string;
+    name: string;
+    status: string;
+    isPublished: boolean;
+    basePrice: string;
+    currencyCode: string;
+    sellerType: string;
+    createdAt: string;
+  }>;
+}
+
 export interface AdminRetentionPolicy {
   id: string;
   name: string;
