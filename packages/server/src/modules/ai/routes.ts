@@ -38,6 +38,7 @@ import {
 } from '../../lib/ai/routing.js';
 import { currentPeriodWindow, aiUsageForPeriod } from '../../lib/ai/cost-control.js';
 import { writeAudit } from '../../lib/audit.js';
+import { parseVideoRange, readTaskVideo, resolveTaskVideo } from './agent-videos.js';
 import {
   rememberMemory,
   recallMemories,
@@ -306,6 +307,40 @@ aiRoutes.get('/tasks', requirePermission(PERMISSIONS.AI_USE), async (c) => {
   const ctx = getContext(c);
   const tasks = await listMyTasks(ctx.db, ctx.user!.id);
   return c.json({ success: true, data: { items: tasks } });
+});
+
+// Rendered marketing video for a task, streamed from the media store. The key
+// comes from the stored task result, never from the caller; ownership is checked
+// in the resolver. Range requests are supported so the UI can preview/seek.
+aiRoutes.get('/tasks/:taskId/video', requirePermission(PERMISSIONS.AI_USE), async (c) => {
+  const ctx = getContext(c);
+  const taskId = c.req.param('taskId');
+  if (!taskId) throw ApiError.validation([{ field: 'taskId', message: 'taskId is required', code: 'REQUIRED' }]);
+
+  const ref = await resolveTaskVideo(ctx.db, taskId, ctx.user!.id, ctx.user!.roles);
+  const range = parseVideoRange(c.req.header('range'), ref.size);
+  const body = await readTaskVideo(ref, range ?? undefined);
+
+  const headers: Record<string, string> = {
+    'Content-Type': ref.contentType,
+    'Content-Length': String(body.length),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${ref.size}`;
+  headers['Content-Disposition'] = c.req.query('download') === '1'
+    ? `attachment; filename="wasit-agent-video-${ref.taskId}.mp4"`
+    : `inline; filename="wasit-agent-video-${ref.taskId}.mp4"`;
+
+  await writeAudit(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+    action: 'AI.AGENT_VIDEO_DOWNLOADED',
+    entityType: 'AGENT_TASK',
+    entityId: ref.taskId,
+    metadata: { bytes: body.length, range: range ?? null, sha256: ref.sha256 },
+  });
+
+  return new Response(new Uint8Array(body), { status: range ? 206 : 200, headers });
 });
 
 aiRoutes.get('/tasks/:taskId', requirePermission(PERMISSIONS.AI_USE), async (c) => {

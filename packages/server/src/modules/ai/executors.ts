@@ -15,6 +15,7 @@ import { trustScores, reviews } from '../../db/schema/trust';
 import { messages, threads } from '../../db/schema/messaging';
 import { users } from '../../db/schema/auth';
 import { countries } from '../../db/schema/geo';
+import { countryPolicyGaps } from '../../db/schema/engine';
 import { aiRequests } from '../../db/schema/ai';
 import { agentTasks } from '../../db/schema/agents';
 import { agentRuns, agentRunSteps } from '../../db/schema/agent_runs';
@@ -163,6 +164,12 @@ export const EXECUTOR_ACTION: Record<string, string> = {
   'development-agent': 'diagnose_platform',
   'finance-agent': 'report_pnl',
   'outreach-acquisition-agent': 'discover_markets',
+  'payment-settlement-agent': 'monitor_settlement',
+  'compliance-agent': 'check',
+  'supplier-agent': 'onboard',
+  'merchant-agent': 'onboard',
+  'customer-intelligence-agent': 'segment',
+  'operations-agent': 'health_check',
 };
 
 /** The most useful message out of an unknown throw (ffmpeg puts its reason in stderr). */
@@ -1148,86 +1155,159 @@ async function execMarketResearchAgent(db: DB, agent: AgentDefinition, input: Re
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
+/**
+ * B2B Agent — scoped, reasoned partner suggestions.
+ *
+ * Partner matching names other tenants, so it runs only over tenants that hold
+ * an active `B2B_PARTNER_DISCOVERY` consent (resolved by the service layer and
+ * passed in as `__partnerConsent`). The requester needs the same consent, the
+ * candidates are limited to complementary roles, every suggestion carries the
+ * reasons it was made, and no contact detail is ever returned.
+ */
 async function execB2BAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const scope = await resolveRequesterScope(db, input);
-  // Partner matching names other tenants, so it cannot be row-filtered without
-  // disclosing them. The catalogue already restricts this agent to platform
-  // roles; the executor refuses too, so a future gate change cannot leak.
-  if (!scope.isStaff) {
-    const refusal = JSON.stringify({
-      agentKey: agent.key,
-      action: input.action ?? 'match_b2b',
-      dataScope: 'own',
-      refused: true,
-      code: 'SCOPE_REQUIRED',
-      error: 'B2B partner matching reads other tenants; only platform roles may run it.',
-      readOnly: true,
-      generatedAt: new Date().toISOString(),
-    });
-    const out = await runAIFeature(db, {
-      userId: scope.requesterId ?? 'system',
-      roles: ['SUPER_ADMIN'],
-      requestType: `AGENT:${agent.key}`,
-      system: 'You are the WASIT B2B Agent.',
-      user: 'Refused: platform scope required.',
-      maxTokens: 32,
-      metadata: { agentKey: agent.key, refused: true },
-    });
-    return { content: refusal, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  const consent = input.__partnerConsent as
+    | { consentType?: string; requesterGranted?: boolean; discoverableSellerIds?: string[]; discoverableOwners?: number }
+    | undefined;
+
+  if (!consent || !Array.isArray(consent.discoverableSellerIds)) {
+    return refuseWith(db, agent, scope.requesterId, 'CONSENT_UNAVAILABLE',
+      'Partner discovery needs a consent snapshot, which only the service layer can supply.');
+  }
+  if (!scope.isStaff && consent.requesterGranted !== true) {
+    return refuseWith(db, agent, scope.requesterId, 'CONSENT_REQUIRED',
+      'You have not opted in to B2B partner discovery. Grant it first, then re-run.',
+      {
+        consent: { type: consent.consentType ?? 'B2B_PARTNER_DISCOVERY', granted: false },
+        howToGrant: {
+          method: 'PUT',
+          path: '/api/privacy/consents',
+          body: { consentType: 'B2B_PARTNER_DISCOVERY', granted: true },
+        },
+      });
   }
 
-  const [suppliersAll, merchantsAll, companiesAll] = await Promise.all([
-    db
-      .select({ id: suppliers.id, companyName: suppliers.companyName, countryId: suppliers.countryId, verified: suppliers.verified })
-      .from(suppliers)
-      .where(eq(suppliers.isActive, true)),
-    db
-      .select({ id: merchants.id, storeName: merchants.storeName, countryId: merchants.countryId, verified: merchants.verified })
-      .from(merchants)
-      .where(eq(merchants.isActive, true)),
-    db
-      .select({ id: companies.id, legalName: companies.legalName, countryId: companies.countryId, verified: companies.verified })
-      .from(companies)
-      .where(eq(companies.isActive, true)),
+  const discoverable = new Set(consent.discoverableSellerIds);
+  if (discoverable.size === 0) {
+    const data = {
+      agentKey: agent.key,
+      action: EXECUTOR_ACTION[agent.key],
+      suggestions: [],
+      note: 'No tenant has opted in to partner discovery yet, so there is nothing to suggest.',
+      consent: { type: consent.consentType ?? 'B2B_PARTNER_DISCOVERY', granted: consent.requesterGranted === true, optedInTenants: 0 },
+      contactPolicy: 'No contact details are returned; both sides opt in before any introduction.',
+      readOnly: true,
+      generatedAt: new Date().toISOString(),
+    };
+    const out = await runAIFeature(db, {
+      userId: scope.requesterId ?? 'system', roles: ['SUPER_ADMIN'], requestType: `AGENT:${agent.key}`,
+      system: 'You are the WASIT B2B Agent.', user: 'No opted-in partners.', maxTokens: 32,
+      metadata: { agentKey: agent.key, suggestions: 0 },
+    });
+    return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  }
+
+  const ids = [...discoverable];
+  const [supplierRows, merchantRows, companyRows] = await Promise.all([
+    db.select({ id: suppliers.id, name: suppliers.companyName, countryId: suppliers.countryId, verified: suppliers.verified, active: suppliers.isActive })
+      .from(suppliers).where(inArray(suppliers.id, ids)),
+    db.select({ id: merchants.id, name: merchants.storeName, countryId: merchants.countryId, verified: merchants.verified, active: merchants.isActive })
+      .from(merchants).where(inArray(merchants.id, ids)),
+    db.select({ id: companies.id, name: companies.legalName, countryId: companies.countryId, verified: companies.verified, active: companies.isActive })
+      .from(companies).where(inArray(companies.id, ids)),
   ]);
 
-  const facts = {
-    suppliers: suppliersAll.map((s) => ({ id: s.id, name: s.companyName, countryId: s.countryId, verified: s.verified })),
-    merchants: merchantsAll.map((m) => ({ id: m.id, name: m.storeName, countryId: m.countryId, verified: m.verified })),
-    companies: companiesAll.map((c) => ({ id: c.id, name: c.legalName, countryId: c.countryId, verified: c.verified })),
-  };
+  const candidates = [
+    ...supplierRows.map((r) => ({ ...r, type: 'SUPPLIER' as const })),
+    ...merchantRows.map((r) => ({ ...r, type: 'MERCHANT' as const })),
+    ...companyRows.map((r) => ({ ...r, type: 'COMPANY' as const })),
+  ];
 
-  const matches = suppliersAll.map((s) => ({
-    supplier: s.companyName,
-    merchantCandidates: merchantsAll.length,
-    companyCandidates: companiesAll.length,
-    note: s.verified ? 'Verified supplier — strong B2B match signal.' : 'Unverified supplier — suggest verification before closing large deals.',
-  }));
+  // The requester's own entities decide the complementary role and are excluded
+  // from their own suggestions.
+  const ownRows = scope.requesterId
+    ? await Promise.all([
+        db.select({ id: suppliers.id, countryId: suppliers.countryId }).from(suppliers).where(eq(suppliers.userId, scope.requesterId)),
+        db.select({ id: merchants.id, countryId: merchants.countryId }).from(merchants).where(eq(merchants.userId, scope.requesterId)),
+        db.select({ id: companies.id, countryId: companies.countryId }).from(companies).where(eq(companies.userId, scope.requesterId)),
+      ])
+    : [[], [], []];
+  const ownIds = new Set([...ownRows[0], ...ownRows[1], ...ownRows[2]].map((r) => r.id));
+  const ownTypes = new Set([
+    ...(ownRows[0].length > 0 ? ['SUPPLIER'] : []),
+    ...(ownRows[1].length > 0 ? ['MERCHANT'] : []),
+    ...(ownRows[2].length > 0 ? ['COMPANY'] : []),
+  ]);
+  const ownCountries = new Set([...ownRows[0], ...ownRows[1], ...ownRows[2]].map((r) => r.countryId).filter(Boolean) as string[]);
+  const complementary = (type: string): boolean => ownTypes.size === 0 || !ownTypes.has(type);
 
-  const data: Record<string, unknown> = {
+  const published = await db
+    .select({ sellerId: products.sellerId, n: sql<number>`count(*)::int` })
+    .from(products)
+    .where(and(eq(products.isPublished, true), inArray(products.sellerId, candidates.map((c) => c.id))))
+    .groupBy(products.sellerId);
+
+  const limit = clampInt(Number(input.limit ?? 10), 1, 25);
+  const suggestions = candidates
+    .filter((c) => c.active && !ownIds.has(c.id) && complementary(c.type))
+    .map((c) => {
+      const publishedCount = toNum(published.find((p) => p.sellerId === c.id)?.n);
+      const sameCountry = c.countryId !== null && ownCountries.has(c.countryId);
+      const reasons: string[] = [`Complementary role: ${c.type.toLowerCase()} for your ${[...ownTypes].join('/').toLowerCase() || 'buying'} side.`];
+      let score = 40;
+      if (sameCountry) {
+        score += 20;
+        reasons.push('Same country as your entity — shorter logistics and simpler compliance.');
+      }
+      if (c.verified) {
+        score += 20;
+        reasons.push('Verified on WASIT (verification engine, not self-declared).');
+      }
+      if (publishedCount > 0) {
+        score += 15;
+        reasons.push(`${publishedCount} published listing(s) — an active catalogue to trade against.`);
+      }
+      if (!sameCountry) reasons.push('Different country: check import/tax requirements before closing.');
+      return {
+        partnerType: c.type,
+        partnerRef: createHash('sha256').update(c.id).digest('hex').slice(0, 10),
+        displayName: c.name,
+        countryId: c.countryId,
+        verified: c.verified,
+        publishedProducts: publishedCount,
+        score: Math.min(100, score),
+        reasons,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  const data = {
     agentKey: agent.key,
-    action: input.action ?? 'match_b2b',
-    snapshot: { suppliers: facts.suppliers.length, merchants: facts.merchants.length, companies: facts.companies.length },
-    matches,
+    action: EXECUTOR_ACTION[agent.key],
+    suggestions,
+    consent: {
+      type: consent.consentType ?? 'B2B_PARTNER_DISCOVERY',
+      granted: consent.requesterGranted === true,
+      optedInTenants: toNum(consent.discoverableOwners),
+      basis: 'Only tenants holding an active B2B_PARTNER_DISCOVERY consent are visible.',
+    },
+    contactPolicy: 'No contact details are returned; both sides opt in before any introduction.',
+    scope: scope.isStaff ? 'platform' : 'own',
     readOnly: true,
     generatedAt: new Date().toISOString(),
   };
 
-  const text = adviceText(
-    'B2B matching: {{suppliers}} suppliers available to engage {{merchants}} merchants and {{companies}} companies.',
-    { suppliers: facts.suppliers.length, merchants: facts.merchants.length, companies: facts.companies.length },
-  );
-
   const out = await runAIFeature(db, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
+    userId: scope.requesterId ?? 'system',
     roles: ['SUPER_ADMIN'],
     requestType: `AGENT:${agent.key}`,
     system: 'You are the WASIT B2B Agent.',
-    user: text,
+    user: adviceText('{{n}} consented partner suggestion(s) from {{opted}} opted-in tenant(s).',
+      { n: suggestions.length, opted: toNum(consent.discoverableOwners) }),
     maxTokens: 96,
-    metadata: { agentKey: agent.key, action: input.action },
+    metadata: { agentKey: agent.key, suggestions: suggestions.length },
   });
-
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
@@ -1972,6 +2052,529 @@ type AgentExecutor = (
   input: Record<string, unknown>,
 ) => Promise<AgentExecutorResult>;
 
+// ---------- AI-FIRST-COMPLETION-04: the six supporting agents ----------
+
+/**
+ * A refusal that still costs a provider call, so a refused run is accounted for
+ * exactly like a successful one (usage/cost/audit stay comparable).
+ */
+async function refuseWith(
+  db: DB,
+  agent: AgentDefinition,
+  requesterId: string | null,
+  code: string,
+  message: string,
+  extra: Record<string, unknown> = {},
+): Promise<AgentExecutorResult> {
+  const content = JSON.stringify({
+    agentKey: agent.key,
+    action: EXECUTOR_ACTION[agent.key] ?? agent.key,
+    refused: true,
+    code,
+    error: message,
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+    ...extra,
+  });
+  const out = await runAIFeature(db, {
+    userId: requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: `You are the WASIT ${agent.name}.`,
+    user: `${code}: ${message}`,
+    maxTokens: 32,
+    metadata: { agentKey: agent.key, code },
+  });
+  return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+function severityRank(level: string): number {
+  switch (level) {
+    case 'CRITICAL':
+    case 'SEVERE':
+      return 3;
+    case 'HIGH':
+      return 2;
+    case 'MEDIUM':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Payment & Settlement Agent — read-only monitor over order payment/settlement
+ * state. It cannot see provider intents, webhooks, payouts or the ledger: those
+ * are money-movement tables and are hard-denied to every agent (A2). The report
+ * says so instead of implying a coverage it does not have, and never moves money.
+ */
+async function execPaymentSettlementAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const scope = await resolveRequesterScope(db, input);
+  if (!scope.isStaff) {
+    return refuseWith(db, agent, scope.requesterId, 'PLATFORM_SCOPE_REQUIRED',
+      'Payment and settlement monitoring reads platform-wide order state; only platform roles may run it.');
+  }
+  const windowDays = clampInt(Number(input.windowDays ?? 7), 1, 90);
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+  const staleBefore = new Date(Date.now() - 48 * 3_600_000);
+
+  const [paymentStates, settlementStates, refundStates, stalePaid, staleUnpaid] = await Promise.all([
+    db.select({ status: orders.paymentStatus, n: sql<number>`count(*)::int`, amount: sql<string>`coalesce(sum(grand_total),0)::text` })
+      .from(orders).where(gte(orders.createdAt, since)).groupBy(orders.paymentStatus),
+    db.select({ status: orders.settlementStatus, n: sql<number>`count(*)::int` })
+      .from(orders).where(gte(orders.createdAt, since)).groupBy(orders.settlementStatus),
+    db.select({ status: orders.refundStatus, n: sql<number>`count(*)::int` })
+      .from(orders).where(and(gte(orders.createdAt, since), sql`${orders.refundStatus} <> 'NONE'`)).groupBy(orders.refundStatus),
+    db.select({ n: sql<number>`count(*)::int`, amount: sql<string>`coalesce(sum(grand_total),0)::text` })
+      .from(orders).where(and(eq(orders.paymentStatus, 'PAID'), eq(orders.settlementStatus, 'PENDING'), lt(orders.createdAt, staleBefore))),
+    db.select({ n: sql<number>`count(*)::int`, amount: sql<string>`coalesce(sum(grand_total),0)::text` })
+      .from(orders).where(and(eq(orders.paymentStatus, 'UNPAID'), lt(orders.createdAt, staleBefore))),
+  ]);
+
+  const countOf = (rows: { status: string; n: number }[], status: string) =>
+    toNum(rows.find((r) => r.status === status)?.n);
+  const paid = countOf(paymentStates, 'PAID');
+  const total = paymentStates.reduce((acc, r) => acc + toNum(r.n), 0);
+
+  const anomalies: Array<Record<string, unknown>> = [];
+  if (toNum(stalePaid[0]?.n) > 0) {
+    anomalies.push({
+      code: 'paid_not_settled_48h',
+      severity: 'HIGH',
+      statement: `${toNum(stalePaid[0]?.n)} order(s) were paid more than 48h ago and are still PENDING settlement.`,
+      amount: stalePaid[0]?.amount ?? '0',
+      nextStep: 'Check the provider settlement evidence in the audited admin settlement surface, then confirm or investigate.',
+    });
+  }
+  if (toNum(staleUnpaid[0]?.n) > 0) {
+    anomalies.push({
+      code: 'unpaid_past_due',
+      severity: 'MEDIUM',
+      statement: `${toNum(staleUnpaid[0]?.n)} order(s) are still UNPAID more than 48h after creation.`,
+      amount: staleUnpaid[0]?.amount ?? '0',
+      nextStep: 'Expire or re-invite the payer; do not mark the order paid by hand.',
+    });
+  }
+  const refundsPending = countOf(refundStates, 'PENDING');
+  if (refundsPending > 0) {
+    anomalies.push({
+      code: 'refunds_pending',
+      severity: 'MEDIUM',
+      statement: `${refundsPending} order(s) have a pending refund in the window.`,
+      nextStep: 'Follow the refund policy path; the agent cannot execute a refund.',
+    });
+  }
+
+  const data = {
+    agentKey: agent.key,
+    action: EXECUTOR_ACTION[agent.key],
+    windowDays,
+    orders: { total, paid, unpaid: countOf(paymentStates, 'UNPAID'), failed: countOf(paymentStates, 'FAILED') },
+    paymentStates: paymentStates.map((r) => ({ status: r.status, orders: toNum(r.n), amount: r.amount })),
+    settlementStates: settlementStates.map((r) => ({ status: r.status, orders: toNum(r.n) })),
+    refundStates: refundStates.map((r) => ({ status: r.status, orders: toNum(r.n) })),
+    anomalies,
+    moneyMovement: false,
+    blindSpots: [
+      'Provider payment intents, webhook attempts, payouts and the transaction ledger are money-movement tables and are denied to every agent.',
+      'Settlement is confirmed only by a provider settlement event on the audited admin surface; this agent cannot confirm it.',
+    ],
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const out = await runAIFeature(db, {
+    userId: scope.requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Payment & Settlement Agent.',
+    user: adviceText('{{paid}} of {{total}} orders paid; {{anomalies}} anomaly group(s) in the last {{days}} day(s).',
+      { paid, total, anomalies: anomalies.length, days: windowDays }),
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, anomalies: anomalies.length },
+  });
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+/**
+ * Compliance Agent — findings only. It reads the platform's own verification
+ * flags, risk levels, open disputes and unresolved country policy gaps. Consents,
+ * policies, verification documents and the audit trail are hard-denied, so the
+ * agent reports what it can see and never issues a ruling.
+ */
+async function execComplianceAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const scope = await resolveRequesterScope(db, input);
+  if (!scope.isStaff) {
+    return refuseWith(db, agent, scope.requesterId, 'PLATFORM_SCOPE_REQUIRED',
+      'Compliance checks read platform-wide records; only platform roles may run them.');
+  }
+  const windowDays = clampInt(Number(input.windowDays ?? 30), 1, 180);
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+  const staleDisputeBefore = new Date(Date.now() - 7 * 86_400_000);
+
+  const [unverifiedSuppliers, unverifiedMerchants, unverifiedCompanies, riskLevels, severeEvents, staleDisputes, openDisputes, policyGaps] =
+    await Promise.all([
+      db.select({ n: sql<number>`count(*)::int` }).from(suppliers).where(and(eq(suppliers.isActive, true), eq(suppliers.verified, false))),
+      db.select({ n: sql<number>`count(*)::int` }).from(merchants).where(and(eq(merchants.isActive, true), eq(merchants.verified, false))),
+      db.select({ n: sql<number>`count(*)::int` }).from(companies).where(and(eq(companies.isActive, true), eq(companies.verified, false))),
+      db.select({ level: riskProfiles.level, n: sql<number>`count(*)::int` }).from(riskProfiles).groupBy(riskProfiles.level),
+      db.select({ severity: riskEvents.severity, n: sql<number>`count(*)::int` }).from(riskEvents)
+        .where(gte(riskEvents.createdAt, since)).groupBy(riskEvents.severity),
+      db.select({ n: sql<number>`count(*)::int` }).from(disputes)
+        .where(and(sql`${disputes.status} not in ('DECIDED','CLOSED','ARCHIVED')`, lt(disputes.createdAt, staleDisputeBefore))),
+      db.select({ n: sql<number>`count(*)::int` }).from(disputes)
+        .where(sql`${disputes.status} not in ('DECIDED','CLOSED','ARCHIVED')`),
+      db.select({ scope: countryPolicyGaps.scope, status: countryPolicyGaps.status, n: sql<number>`count(*)::int` })
+        .from(countryPolicyGaps).where(eq(countryPolicyGaps.status, 'DECISION_REQUIRED')).groupBy(countryPolicyGaps.scope, countryPolicyGaps.status),
+    ]);
+
+  const unverified = toNum(unverifiedSuppliers[0]?.n) + toNum(unverifiedMerchants[0]?.n) + toNum(unverifiedCompanies[0]?.n);
+  const highRisk = riskLevels.filter((r) => severityRank(r.level) >= 2).reduce((acc, r) => acc + toNum(r.n), 0);
+  const severe = severeEvents.filter((r) => severityRank(r.severity) >= 3).reduce((acc, r) => acc + toNum(r.n), 0);
+
+  const findings: Array<Record<string, unknown>> = [];
+  if (unverified > 0) {
+    findings.push({
+      code: 'unverified_active_entities',
+      severity: 'MEDIUM',
+      statement: `${unverified} active supplier/merchant/company record(s) are not verified.`,
+      evidence: {
+        suppliers: toNum(unverifiedSuppliers[0]?.n),
+        merchants: toNum(unverifiedMerchants[0]?.n),
+        companies: toNum(unverifiedCompanies[0]?.n),
+      },
+      nextStep: 'Route them through the verification engine; do not grant verification from here.',
+    });
+  }
+  if (highRisk > 0 || severe > 0) {
+    findings.push({
+      code: 'risk_exposure',
+      severity: severe > 0 ? 'HIGH' : 'MEDIUM',
+      statement: `${highRisk} profile(s) sit at HIGH/CRITICAL risk and ${severe} severe risk event(s) were recorded in ${windowDays} day(s).`,
+      evidence: { riskLevels, severeEvents },
+      nextStep: 'Review the risk desk; a decision is a human action and is audited there.',
+    });
+  }
+  if (toNum(staleDisputes[0]?.n) > 0) {
+    findings.push({
+      code: 'disputes_aging',
+      severity: 'MEDIUM',
+      statement: `${toNum(staleDisputes[0]?.n)} of ${toNum(openDisputes[0]?.n)} open dispute(s) are older than 7 days.`,
+      nextStep: 'Assign and decide within the dispute policy window.',
+    });
+  }
+  if (policyGaps.length > 0) {
+    findings.push({
+      code: 'policy_gaps_open',
+      severity: 'HIGH',
+      statement: `${policyGaps.reduce((acc, r) => acc + toNum(r.n), 0)} country policy gap(s) are still DECISION_REQUIRED.`,
+      evidence: policyGaps.map((r) => ({ scope: r.scope, gaps: toNum(r.n) })),
+      nextStep: 'Record the legal decision in the policy engine; the agent never invents one.',
+    });
+  }
+
+  const data = {
+    agentKey: agent.key,
+    action: EXECUTOR_ACTION[agent.key],
+    windowDays,
+    snapshot: { unverified, highRiskProfiles: highRisk, severeRiskEvents: severe, openDisputes: toNum(openDisputes[0]?.n), policyGaps: policyGaps.length },
+    findings,
+    findingsOnly: true,
+    blindSpots: [
+      'Consents, policies, verification documents and audit logs are denied to every agent; their status is not inferred.',
+      'No ruling, approval or verification is issued by this agent.',
+    ],
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const out = await runAIFeature(db, {
+    userId: scope.requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Compliance Agent.',
+    user: adviceText('{{findings}} compliance finding(s); {{unverified}} unverified entity record(s).',
+      { findings: findings.length, unverified }),
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, findings: findings.length },
+  });
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+interface RecordReview {
+  completeness: { score: number; present: string[]; missing: string[] };
+}
+
+function reviewRecord(kind: 'supplier' | 'merchant', row: Record<string, unknown>): RecordReview {
+  const nameField = kind === 'supplier' ? 'companyName' : 'storeName';
+  const fields = [nameField, 'description', 'countryId', 'cityId', 'logoUrl'];
+  const weights: Record<string, number> = { [nameField]: 30, description: 20, countryId: 20, cityId: 15, logoUrl: 15 };
+  const present = fields.filter((f) => {
+    const v = row[f];
+    return v !== null && v !== undefined && String(v).trim() !== '';
+  });
+  const score = present.reduce((acc, f) => acc + (weights[f] ?? 0), 0);
+  return { completeness: { score, present, missing: fields.filter((f) => !present.includes(f)) } };
+}
+
+async function execOnboardingAgent(
+  db: DB,
+  agent: AgentDefinition,
+  input: Record<string, unknown>,
+  kind: 'supplier' | 'merchant',
+): Promise<AgentExecutorResult> {
+  const scope = await resolveRequesterScope(db, input);
+  const table = kind === 'supplier' ? suppliers : merchants;
+  const requestedId = typeof input.entityId === 'string' ? input.entityId : null;
+
+  const rows = scope.isStaff
+    ? await db.select().from(table).where(requestedId ? eq(table.id, requestedId) : sql`true`).limit(requestedId ? 1 : 25)
+    : await db.select().from(table).where(eq(table.userId, scope.requesterId ?? '')).limit(1);
+
+  if (rows.length === 0) {
+    return refuseWith(db, agent, scope.requesterId, 'ENTITY_NOT_FOUND',
+      requestedId
+        ? `No ${kind} record matches ${requestedId} in your scope.`
+        : `You do not own a ${kind} record yet; create one before asking for an onboarding review.`);
+  }
+
+  const [productCounts, trust] = await Promise.all([
+    db.select({ sellerId: products.sellerId, n: sql<number>`count(*)::int` })
+      .from(products).where(and(eq(products.isPublished, true), inArray(products.sellerId, rows.map((r) => String(r.id)))))
+      .groupBy(products.sellerId),
+    db.select({ userId: trustScores.userId, score: trustScores.score })
+      .from(trustScores).where(inArray(trustScores.userId, rows.map((r) => String(r.userId)))),
+  ]);
+
+  const reviews = rows.map((row) => {
+    const record = row as unknown as Record<string, unknown>;
+    const review = reviewRecord(kind, record);
+    const publishedProducts = toNum(productCounts.find((p) => p.sellerId === String(record.id))?.n);
+    const trustScore = trust.find((t) => t.userId === String(record.userId))?.score ?? null;
+    const nextSteps: string[] = [];
+    if (review.completeness.missing.length > 0) nextSteps.push(`Fill the missing fields: ${review.completeness.missing.join(', ')}.`);
+    if (record.verified !== true) nextSteps.push('Submit the verification request; only the verification engine can approve it.');
+    if (publishedProducts === 0) nextSteps.push('Publish at least one listing so buyers can find you.');
+    if (trustScore === null) nextSteps.push('Request a trust recomputation to establish a baseline score.');
+    return {
+      id: String(record.id),
+      name: String(record[kind === 'supplier' ? 'companyName' : 'storeName'] ?? ''),
+      verified: record.verified === true,
+      active: record.isActive === true,
+      countryId: (record.countryId as string | null) ?? null,
+      completeness: review.completeness,
+      publishedProducts,
+      trustScore,
+      nextSteps,
+    };
+  });
+
+  const data = {
+    agentKey: agent.key,
+    action: EXECUTOR_ACTION[agent.key],
+    entityType: kind.toUpperCase(),
+    reviews,
+    averageCompleteness: reviews.length === 0 ? 0 : Math.round(reviews.reduce((a, r) => a + r.completeness.score, 0) / reviews.length),
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const out = await runAIFeature(db, {
+    userId: scope.requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: `You are the WASIT ${agent.name}.`,
+    user: adviceText('Reviewed {{n}} {{kind}} record(s); average completeness {{avg}}/100.',
+      { n: reviews.length, kind, avg: data.averageCompleteness }),
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, kind, reviews: reviews.length },
+  });
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+const execSupplierAgent = (db: DB, agent: AgentDefinition, input: Record<string, unknown>) =>
+  execOnboardingAgent(db, agent, input, 'supplier');
+
+const execMerchantAgent = (db: DB, agent: AgentDefinition, input: Record<string, unknown>) =>
+  execOnboardingAgent(db, agent, input, 'merchant');
+
+/**
+ * Customer Intelligence Agent — RFM-style segmentation over the requester's own
+ * orders. Buyer identities are masked: the agent reports segment sizes and value,
+ * never an addressable person.
+ */
+async function execCustomerIntelligenceAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const scope = await resolveRequesterScope(db, input);
+  const windowDays = clampInt(Number(input.windowDays ?? 180), 7, 730);
+  const since = new Date(Date.now() - windowDays * 86_400_000);
+  const ordersFilter = orderScope(scope);
+
+  const rows = await db
+    .select({
+      buyerId: orders.buyerId,
+      orderCount: sql<number>`count(*)::int`,
+      revenue: sql<string>`coalesce(sum(items_total),0)::text`,
+      firstOrderAt: sql<string>`min(created_at)::text`,
+      lastOrderAt: sql<string>`max(created_at)::text`,
+    })
+    .from(orders)
+    .where(and(gte(orders.createdAt, since), ordersFilter))
+    .groupBy(orders.buyerId);
+
+  if (rows.length === 0) {
+    const empty = {
+      agentKey: agent.key, action: EXECUTOR_ACTION[agent.key], windowDays,
+      segments: [], customers: 0,
+      note: 'No orders in the window for your scope, so there is nothing to segment yet.',
+      pii: 'masked', readOnly: true, generatedAt: new Date().toISOString(),
+    };
+    const out = await runAIFeature(db, {
+      userId: scope.requesterId ?? 'system', roles: ['SUPER_ADMIN'], requestType: `AGENT:${agent.key}`,
+      system: 'You are the WASIT Customer Intelligence Agent.', user: 'No orders in scope.',
+      maxTokens: 32, metadata: { agentKey: agent.key, customers: 0 },
+    });
+    return { content: JSON.stringify(empty), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  }
+
+  const now = Date.now();
+  const segmentOf = (orderCount: number, lastDays: number): string => {
+    if (orderCount >= 5 && lastDays <= 30) return 'CHAMPION';
+    if (orderCount >= 5) return lastDays > 90 ? 'AT_RISK' : 'LOYAL';
+    if (orderCount >= 2) return lastDays > 90 ? 'AT_RISK' : 'REPEAT';
+    return lastDays > 90 ? 'DORMANT' : 'NEW';
+  };
+
+  const buckets = new Map<string, { customers: number; revenue: number; orders: number }>();
+  const customers = rows.map((r) => {
+    const lastDays = Math.floor((now - new Date(String(r.lastOrderAt)).getTime()) / 86_400_000);
+    const segment = segmentOf(toNum(r.orderCount), lastDays);
+    const revenue = toNum(r.revenue);
+    const bucket = buckets.get(segment) ?? { customers: 0, revenue: 0, orders: 0 };
+    bucket.customers += 1;
+    bucket.revenue += revenue;
+    bucket.orders += toNum(r.orderCount);
+    buckets.set(segment, bucket);
+    return {
+      // A stable, non-reversible reference: the raw buyer id never leaves the database.
+      customerRef: createHash('sha256').update(String(r.buyerId)).digest('hex').slice(0, 10),
+      orders: toNum(r.orderCount),
+      revenue: revenue.toFixed(2),
+      firstOrderAt: r.firstOrderAt,
+      lastOrderAt: r.lastOrderAt,
+      daysSinceLastOrder: lastDays,
+      segment,
+    };
+  });
+
+  const totalRevenue = customers.reduce((acc, c) => acc + toNum(c.revenue), 0);
+  const segments = [...buckets.entries()]
+    .map(([segment, v]) => ({
+      segment,
+      customers: v.customers,
+      orders: v.orders,
+      revenue: v.revenue.toFixed(2),
+      revenueShare: totalRevenue === 0 ? 0 : Math.round((v.revenue / totalRevenue) * 1000) / 1000,
+      averageBasket: v.orders === 0 ? '0.00' : (v.revenue / v.orders).toFixed(2),
+    }))
+    .sort((a, b) => Number(b.revenue) - Number(a.revenue));
+
+  const data = {
+    agentKey: agent.key,
+    action: EXECUTOR_ACTION[agent.key],
+    windowDays,
+    customers: customers.length,
+    segments,
+    topCustomers: [...customers].sort((a, b) => toNum(b.revenue) - toNum(a.revenue)).slice(0, 5),
+    pii: 'masked',
+    scope: scope.isStaff ? 'platform' : 'own',
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const out = await runAIFeature(db, {
+    userId: scope.requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Customer Intelligence Agent.',
+    user: adviceText('{{customers}} customer(s) across {{segments}} segment(s) in {{days}} day(s).',
+      { customers: customers.length, segments: segments.length, days: windowDays }),
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, customers: customers.length, segments: segments.length },
+  });
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
+/**
+ * Operations Agent — a health check over operational tables the agent layer
+ * owns and the order/inventory state it is allowed to read. Typed queries only.
+ */
+async function execOperationsAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const scope = await resolveRequesterScope(db, input);
+  if (!scope.isStaff) {
+    return refuseWith(db, agent, scope.requesterId, 'PLATFORM_SCOPE_REQUIRED',
+      'Operational health spans every tenant; only platform roles may run it.');
+  }
+  const stuckBefore = new Date(Date.now() - 30 * 60_000);
+  const dayAgo = new Date(Date.now() - 86_400_000);
+
+  const [openOrders, oldestOpen, stuckTasks, failedTasks, failedRuns, lowStock, unread] = await Promise.all([
+    db.select({ status: orders.status, n: sql<number>`count(*)::int` }).from(orders)
+      .where(sql`${orders.status} in ('PENDING','CONFIRMED','PROCESSING')`).groupBy(orders.status),
+    db.select({ createdAt: orders.createdAt }).from(orders)
+      .where(sql`${orders.status} in ('PENDING','CONFIRMED','PROCESSING')`).orderBy(orders.createdAt).limit(1),
+    db.select({ n: sql<number>`count(*)::int` }).from(agentTasks)
+      .where(and(eq(agentTasks.status, 'running'), lt(agentTasks.startedAt, stuckBefore))),
+    db.select({ n: sql<number>`count(*)::int` }).from(agentTasks)
+      .where(and(eq(agentTasks.status, 'failed'), gte(agentTasks.createdAt, dayAgo))),
+    db.select({ n: sql<number>`count(*)::int` }).from(agentRuns)
+      .where(and(eq(agentRuns.status, 'FAILED'), gte(agentRuns.createdAt, dayAgo))),
+    db.select({ n: sql<number>`count(*)::int` }).from(inventoryItems)
+      .where(sql`${inventoryItems.quantity} <= ${inventoryItems.lowStockThreshold}`),
+    db.select({ n: sql<number>`count(*)::int` }).from(messages)
+      .where(and(eq(messages.isDeleted, false), eq(messages.status, 'SENT'), sql`${messages.readAt} is null`)),
+  ]);
+
+  const openTotal = openOrders.reduce((acc, r) => acc + toNum(r.n), 0);
+  const oldestAgeHours = oldestOpen[0]?.createdAt
+    ? Math.floor((Date.now() - new Date(oldestOpen[0].createdAt).getTime()) / 3_600_000)
+    : 0;
+
+  const blockers: Array<Record<string, unknown>> = [];
+  if (toNum(stuckTasks[0]?.n) > 0) blockers.push({ code: 'stuck_agent_tasks', severity: 'HIGH', count: toNum(stuckTasks[0]?.n) });
+  if (toNum(failedTasks[0]?.n) > 0) blockers.push({ code: 'failed_agent_tasks_24h', severity: 'MEDIUM', count: toNum(failedTasks[0]?.n) });
+  if (toNum(failedRuns[0]?.n) > 0) blockers.push({ code: 'failed_runs_24h', severity: 'MEDIUM', count: toNum(failedRuns[0]?.n) });
+  if (toNum(lowStock[0]?.n) > 0) blockers.push({ code: 'low_stock_items', severity: 'MEDIUM', count: toNum(lowStock[0]?.n) });
+  if (oldestAgeHours > 72) blockers.push({ code: 'orders_aging', severity: 'HIGH', count: openTotal, oldestAgeHours });
+
+  const penalty = blockers.reduce((acc, b) => acc + (b.severity === 'HIGH' ? 25 : 10), 0);
+  const healthScore = Math.max(0, 100 - penalty);
+
+  const data = {
+    agentKey: agent.key,
+    action: EXECUTOR_ACTION[agent.key],
+    healthScore,
+    openOrders: { total: openTotal, byStatus: openOrders.map((r) => ({ status: r.status, orders: toNum(r.n) })), oldestAgeHours },
+    agentLayer: { stuckTasks: toNum(stuckTasks[0]?.n), failedTasks24h: toNum(failedTasks[0]?.n), failedRuns24h: toNum(failedRuns[0]?.n) },
+    inventory: { lowStockItems: toNum(lowStock[0]?.n) },
+    support: { unreadMessages: toNum(unread[0]?.n) },
+    blockers,
+    readOnly: true,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const out = await runAIFeature(db, {
+    userId: scope.requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Operations Agent.',
+    user: adviceText('Health {{score}}/100 with {{blockers}} blocker group(s); {{open}} open order(s).',
+      { score: healthScore, blockers: blockers.length, open: openTotal }),
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, healthScore, blockers: blockers.length },
+  });
+  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
 /**
  * The executor table. Its keys are the authoritative "this agent can run" set;
  * the catalogue's `executable` flag must agree with it, and `ai-reg01` tests
@@ -1992,6 +2595,12 @@ const EXECUTORS: Record<string, AgentExecutor> = {
   'development-agent': execDevelopmentAgent,
   'finance-agent': execFinanceAgent,
   'outreach-acquisition-agent': execGrowthAgent,
+  'payment-settlement-agent': execPaymentSettlementAgent,
+  'compliance-agent': execComplianceAgent,
+  'supplier-agent': execSupplierAgent,
+  'merchant-agent': execMerchantAgent,
+  'customer-intelligence-agent': execCustomerIntelligenceAgent,
+  'operations-agent': execOperationsAgent,
 };
 
 /** Agent keys with a real executor (the only ones the catalogue may mark executable). */

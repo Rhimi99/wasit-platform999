@@ -155,14 +155,16 @@ describe('AI-ARCH-ALIGN-01 — Copilot planning is reachable and side-effect fre
 });
 
 describe('AI-ARCH-ALIGN-01 — the Copilot cannot route to an agent that cannot run', () => {
-  it('refuses an agent that is declared with no executor', async () => {
+  it('refuses the only non-runnable identity left (the supervisor)', async () => {
     const admin = await makeUser('SUPER_ADMIN');
+    // AFC-04 wired every specialised agent, so the supervisor is the sole
+    // identity the planner still refuses.
     const r = await planAs(admin.client, [
-      { stepKey: 'settle', agentKey: 'payment-settlement-agent', input: {} },
+      { stepKey: 'sup', agentKey: 'agent-supervisor', input: {} },
     ]);
     expect(r.status).toBe(422);
     expect(r.data.error.code).toBe('VALIDATION_ERROR');
-    expect(r.data.error.fieldErrors[0].code).toBe('AGENT_NOT_EXECUTABLE');
+    expect(r.data.error.fieldErrors[0].code).toBe('SUPERVISOR_NOT_RUNNABLE');
   });
 
   it('refuses the Agent Supervisor', async () => {
@@ -193,7 +195,7 @@ describe('AI-ARCH-ALIGN-01 — the Copilot cannot route to an agent that cannot 
     const before = await db.select({ id: agentRuns.id }).from(agentRuns);
     const r = await planAs(admin.client, [
       { stepKey: 'ok', agentKey: 'product-agent', input: {} },
-      { stepKey: 'bad', agentKey: 'payment-settlement-agent', input: {} },
+      { stepKey: 'bad', agentKey: 'agent-supervisor', input: {} },
     ]);
     expect(r.status).toBe(422);
     const after = await db.select({ id: agentRuns.id }).from(agentRuns);

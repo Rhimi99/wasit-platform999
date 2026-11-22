@@ -99,9 +99,9 @@ describe('R1 — catalogue integrity: unique keys, no duplicates', () => {
 });
 
 describe('R1 — no new execution authority is granted', () => {
-  it('marks exactly the 14 wired agents executable', () => {
+  it('marks exactly the 20 wired agents executable', () => {
     const executable = AGENT_CATALOGUE.filter((a) => a.executable === true).map((a) => a.key);
-    expect(executable).toHaveLength(14);
+    expect(executable).toHaveLength(20);
     for (const key of executable) {
       expect(EXECUTABLE_CATALOGUE.some((a) => a.key === key), key).toBe(true);
     }
@@ -109,17 +109,7 @@ describe('R1 — no new execution authority is granted', () => {
 
   it('marks every agent without an executor non-executable', () => {
     const restored = AGENT_CATALOGUE.filter((a) => a.executable !== true).map((a) => a.key);
-    expect(restored.sort()).toEqual(
-      [
-        'agent-supervisor',
-        'compliance-agent',
-        'customer-intelligence-agent',
-        'merchant-agent',
-        'operations-agent',
-        'payment-settlement-agent',
-        'supplier-agent',
-      ].sort(),
-    );
+    expect(restored.sort()).toEqual(['agent-supervisor']);
   });
 
   it('never marks a non-executable agent as one the runtime catalogue knows', () => {
@@ -129,12 +119,12 @@ describe('R1 — no new execution authority is granted', () => {
     }
   });
 
-  it('keeps the runtime catalogue in step with the executable set (14)', () => {
-    expect(EXECUTABLE_CATALOGUE).toHaveLength(14);
+  it('keeps the runtime catalogue in step with the executable set (20)', () => {
+    expect(EXECUTABLE_CATALOGUE).toHaveLength(20);
   });
 
-  it('gives every executable agent exactly one A2 scope contract (14)', () => {
-    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(14);
+  it('gives every executable agent exactly one A2 scope contract (20)', () => {
+    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(20);
     for (const a of AGENT_CATALOGUE.filter((x) => x.executable !== true)) {
       expect(AGENT_SCOPE_CONTRACTS[a.key], a.key).toBeUndefined();
     }

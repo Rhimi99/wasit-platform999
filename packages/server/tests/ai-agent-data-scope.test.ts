@@ -266,7 +266,7 @@ describe('AI — row-level data scope (AI-FIRST-COMPLETION-03)', () => {
         db,
         ['MERCHANT'],
         merchantUser,
-        { agentKey: 'b2b-agent', requestedBy: merchantUser, input: {} },
+        { agentKey: 'compliance-agent', requestedBy: merchantUser, input: {} },
         { ...AUDIT, actorId: merchantUser },
       ),
     ).rejects.toThrow(/platform-wide/);
@@ -280,7 +280,7 @@ describe('AI — row-level data scope (AI-FIRST-COMPLETION-03)', () => {
     const audits = await db
       .select({ metadata: auditLogs.metadata })
       .from(auditLogs)
-      .where(and(eq(auditLogs.action, 'AI.AGENT_RUN_REFUSED'), eq(auditLogs.entityId, 'b2b-agent')))
+      .where(and(eq(auditLogs.action, 'AI.AGENT_RUN_REFUSED'), eq(auditLogs.entityId, 'compliance-agent')))
       .orderBy(sql`${auditLogs.createdAt} desc`)
       .limit(3);
     const metadata = audits[0]?.metadata as Record<string, unknown> | null;
@@ -293,7 +293,7 @@ describe('AI — row-level data scope (AI-FIRST-COMPLETION-03)', () => {
     const metrics = await db
       .select()
       .from(agentMetrics)
-      .where(and(eq(agentMetrics.agentKey, 'b2b-agent'), eq(agentMetrics.scopeOwner, merchantUser)));
+      .where(and(eq(agentMetrics.agentKey, 'compliance-agent'), eq(agentMetrics.scopeOwner, merchantUser)));
     expect(metrics).toHaveLength(1);
     expect(metrics[0]).toMatchObject({ outcome: 'blocked', errorCode: 'PLATFORM_SCOPE_REQUIRED', taskId: null });
   });
@@ -336,7 +336,7 @@ describe('AI — row-level data scope (AI-FIRST-COMPLETION-03)', () => {
     const platform = AGENT_CATALOGUE.filter((a) => a.requiresPlatformScope).map((a) => a.key);
     expect(platform).toEqual(
       expect.arrayContaining([
-        'b2b-agent',
+        'compliance-agent',
         'finance-agent',
         'outreach-acquisition-agent',
         'development-agent',
@@ -344,8 +344,9 @@ describe('AI — row-level data scope (AI-FIRST-COMPLETION-03)', () => {
         'analytics-agent',
       ]),
     );
-    // The row-filtered agents must stay available to tenants.
-    for (const key of ['sales-agent', 'marketing-agent', 'product-agent']) {
+    // The row-filtered agents must stay available to tenants. `b2b-agent` is
+    // row-filtered by consent since AFC-04 (only opted-in tenants are visible).
+    for (const key of ['sales-agent', 'marketing-agent', 'product-agent', 'b2b-agent']) {
       expect(AGENT_CATALOGUE.find((a) => a.key === key)?.requiresPlatformScope ?? false).toBe(false);
     }
   });

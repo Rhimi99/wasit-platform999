@@ -46,14 +46,14 @@ const ctx = (over: Partial<AgentRunContext> = {}): AgentRunContext => ({
 });
 
 describe('A2 — scope contract completeness', () => {
-  it('defines a contract for each of the 13 production agents', () => {
+  it('defines a contract for each of the 20 production agents', () => {
     for (const key of AGENT_KEYS) {
       const c = getAgentScopeContract(key);
       expect(c, `missing contract for ${key}`).toBeDefined();
       expect(c!.agentKey).toBe(key);
       expect(c!.specialization.length).toBeGreaterThan(0);
     }
-    expect(listAgentScopes()).toHaveLength(14);
+    expect(listAgentScopes()).toHaveLength(20);
   });
 
   it('gives every agent a least-privilege, non-empty, read-only scope', () => {
@@ -171,9 +171,9 @@ describe('A2 — the single access decision (assertTableAccess)', () => {
   it('a forged agent key in the context cannot widen another agent’s scope', () => {
     // Even if a caller forges `agentKey` to a different agent, the contract that
     // applies is that agent's — it never grants a table it does not declare.
-    const forged = ctx({ agentKey: 'b2b-agent', allowedTables: ['products'] });
-    // b2b-agent's contract does not include products, so it is refused.
-    expect(() => assertTableAccess(forged, 'products', 'read')).toThrow(AgentScopeError);
+    const forged = ctx({ agentKey: 'b2b-agent', allowedTables: ['payment_intents'] });
+    // b2b-agent's contract never includes a money table, so it is refused.
+    expect(() => assertTableAccess(forged, 'payment_intents', 'read')).toThrow(AgentScopeError);
   });
 
   it('owner-scoped tables are recognised structurally', () => {

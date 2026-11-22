@@ -1092,6 +1092,21 @@ npx playwright install --with-deps chromium
 - **تشغيل الاختبارات**: `TEST_DATABASE_URL=postgresql://wasit:wasit_dev_password@127.0.0.1:5434/wasit_test npx vitest run` (بلا هذا المتغير يرفض `vitest.config.ts` الإقلاع). الحزمة الكاملة بعد هذه المرحلة: **160 ملفاً / 2068 اختباراً / exit 0**.
 - **ملفات الاختبار الجديدة**: `tests/unit/ai-maintenance-rootcause.test.ts` (15)، `tests/ai-maintenance-rootcause.test.ts` (6)، `tests/ai-platform-scope.test.ts` (10)، `tests/ai-video-agent.test.ts` (5)، `tests/unit/ai-video-plan.test.ts` (5)، `tests/ai-support-scope.test.ts` (3).
 
+## AI-FIRST COMPLETION 04 (2026-11-20) — الوكلاء الستة المتبقّون + B2B بالموافقة + تنزيل الفيديو
+
+- **القابلون للتنفيذ 14 → 20** (من 20 مختصاً + المشرف). الستة الجدد: `payment-settlement-agent`، `compliance-agent`، `supplier-agent`، `merchant-agent`، `customer-intelligence-agent`، `operations-agent`. لكل واحد منفّذ حتمي في `executors.ts` + عقد A2 في `agent-scope.ts`.
+- **`payment-settlement-agent` لا يمسّ المال**: يقرأ حالة الدفع/التسوية المسجّلة على `orders` فقط؛ `payment_intents`/`payment_webhook_events`/`payouts`/`transaction_ledger` ممنوعة بنيوياً على كل وكيل. المخرجات تحمل `moneyMovement: false` و`blindSpots` صريحة.
+- **`compliance-agent` findings فقط**: يقرأ verified/risk/disputes/`country_policy_gaps` ويعيد `findings[]` + `nextStep`، و`findingsOnly: true`. لا حكم ولا إجراء.
+- **`supplier-agent`/`merchant-agent` ملكية صارمة**: الكيان يُحدَّد من `userId` للطالب (الطاقم قد يمرّر `entityId`)، وإلا `ENTITY_NOT_FOUND`. لا مراجعة كيان غيره أبداً.
+- **`customer-intelligence-agent`**: شرائح RFM من `orders` مقيّدة بـ`orderScope`؛ `customerRef` = SHA-256 مقطوع 10 hex، `pii: 'masked'`. لا معرّف مشترٍ خام في أي حقل.
+- **`operations-agent`**: `healthScore` + `blockers[]` من عدّادات حقيقية (طلبات/مهام/تشغيلات/مخزون/رسائل). منصّي.
+- **`b2b-agent` تغيير ضمان**: `requiresPlatformScope: true → false`. الفلتر صار **موافقة**: نوع جديد `B2B_PARTNER_DISCOVERY` في `CONSENT_TYPES`. `createAgentTask` تحسب `resolvePartnerConsent()` (لأن `consents` ممنوع على الوكلاء) وتحقنها في `input.__partnerConsent`، **وأي لقطة يرسلها العميل تُحذف**. بدون موافقة الطالب ⇒ `CONSENT_REQUIRED` + `howToGrant`. المنفّذ يرى الموافقين فقط، أدواراً تكميلية، بلا بريد/هاتف/معرّف خام، ومع `reasons[]` و`score`.
+- **تحديث اختبارات الضمان**: `ai-platform-scope` (أُخرج `b2b`، أُضيف `payment-settlement`) و`ai-agent-data-scope` (عيّنة «الرفض قبل كتابة صف» انتقلت إلى `compliance-agent`). لا تُعِد `b2b` إلى منصّي بلا إعادة تصميم الفلتر.
+- **تنزيل فيديو الوكيل**: `GET /api/ai/tasks/:taskId/video` — بالمعرّف المهمة فقط (المفتاح من `result.advice.video.storageKey`)، مالك أو `ADMIN`/`SUPER_ADMIN`، غير ذلك **404**، `Range` ⇒ **206**، `private, no-store`، تدقيق `AI.AGENT_VIDEO_DOWNLOADED`. لا مجلد عام ولا رابط موقّع.
+- **احتفاظ الفيديو**: `AGENT_VIDEO_RETENTION_DAYS` (7) + `purgeAgentVideos()` + `npx tsx src/scripts/purge-agent-videos.ts [--days N] [--dry-run]`. يحذف `agent-videos/` فقط — لا يلمس `media_assets`.
+- **وكيل التطوير يبقى بلا PR آلي** (AD-050/AD-051): حزمة إصلاح + موافقة بشرية. `DECISION REQUIRED` مسجّل.
+- **الاختبارات**: `tests/ai-first-04.test.ts` (11) · `tests/agent-video-download.test.ts` (6) + تحديث عدّادات 8 ملفات. `ffmpeg` مطلوب لاختبارات الفيديو (`apt-get install -y ffmpeg` — غير مثبّت افتراضياً في الحاوية).
+
 ## AI-FIRST COMPLETION 03 (2026-11-22) — نطاق البيانات الصفّي + رندر داخل المهمة
 
 - **`resolveRequesterScope(db, input)`** في `executors.ts`: تعيد `{ requesterId, isStaff, sellerIds }` من `getAgentRunContext()` (لا من `input`)، وتقرأ الملكية من `suppliers/merchants/companies.user_id` عبر `select` عادي (**لا `db.execute`** — A2 يرفض SQL الخام).

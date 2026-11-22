@@ -6,6 +6,7 @@ import { agentRegistry, agentTasks } from '../../db/schema/agents';
 import { agentRunSteps } from '../../db/schema/agent_runs';
 import { aiRequests } from '../../db/schema/ai';
 import { roles, userRoles } from '../../db/schema/auth';
+import { resolvePartnerConsent } from './partner-consent';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { buildPriorContext, recordTaskOutcomeMemory } from './memory.js';
 import { recordMetricSafely } from './metrics.js';
@@ -416,6 +417,17 @@ export async function createAgentTask(
 
   const id = newId();
 
+  // AI-FIRST-COMPLETION-04: partner matching names other tenants, so the consent
+  // snapshot is resolved HERE (the service layer may read `consents`, agents may
+  // not) and passed in as immutable input. Any caller-supplied `__partnerConsent`
+  // is dropped first, so a request cannot forge or widen its own visibility.
+  let effectiveInput = input.input as Record<string, unknown>;
+  if (agent.key === 'b2b-agent') {
+    const { __partnerConsent: _ignored, ...rest } = effectiveInput as Record<string, unknown>;
+    void _ignored;
+    effectiveInput = { ...rest, __partnerConsent: await resolvePartnerConsent(db, requestedBy) };
+  }
+
   if (fencing) {
     // Service-level fencing (AI-02.3.2). The task is created only if the step is
     // still RUNNING and still owned by the exact claim that dispatched it. The
@@ -458,7 +470,7 @@ export async function createAgentTask(
         id,
         agentKey: agent.key,
         requestedBy,
-        input: input.input as never,
+        input: effectiveInput as never,
         status: initialStatus,
         requiresApproval,
         model: 'local-heuristic',
@@ -469,7 +481,7 @@ export async function createAgentTask(
       id,
       agentKey: agent.key,
       requestedBy,
-      input: input.input as never,
+      input: effectiveInput as never,
       status: initialStatus,
       requiresApproval,
       model: 'local-heuristic',

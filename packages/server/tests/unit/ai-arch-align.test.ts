@@ -206,11 +206,11 @@ describe('AI-ARCH-ALIGN-01 — runnability is not identity', () => {
     }
   });
 
-  it('keeps the executable set at twelve core specialists after AI-AGENT-MERGE-01', () => {
+  it('keeps every specialised agent executable after AI-FIRST-COMPLETION-04', () => {
     // The three new executors are supporting/growth agents; the twelve core
     // specialists now carry twelve executors — the video agent plans, it does
     // not render or publish (those stay approval actions with no executor).
     expect(coreSpecialistAgents().filter((a) => a.executable === true)).toHaveLength(12);
-    expect(executableAgents()).toHaveLength(14);
+    expect(executableAgents()).toHaveLength(20);
   });
 });

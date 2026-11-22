@@ -500,10 +500,12 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use'],
-    // Partner matching names other suppliers/merchants/companies, so no row
-    // filter can hide them without emptying the answer. Platform roles only
-    // (AI-FIRST-COMPLETION-03); the executor refuses independently.
-    requiresPlatformScope: true,
+    // AI-FIRST-COMPLETION-04: the row filter is consent, not role. Only tenants
+    // holding an active B2B_PARTNER_DISCOVERY consent are visible, and the
+    // requester needs the same consent, so a tenant run can no longer disclose
+    // another tenant. The snapshot is resolved by the service layer; the
+    // executor narrows it and never widens it.
+    requiresPlatformScope: false,
     requiresHumanApproval: true,
     executable: true,
   },
@@ -824,8 +826,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use', 'order:read'],
+    requiresPlatformScope: true,
     requiresHumanApproval: true,
-    executable: false,
+    executable: true,
   },
   {
     key: 'compliance-agent',
@@ -865,7 +868,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     permissionsRequired: ['ai:use', 'order:read'],
     requiresPlatformScope: true,
     requiresHumanApproval: true,
-    executable: false,
+    executable: true,
   },
   {
     key: 'supplier-agent',
@@ -904,7 +907,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'merchant-agent',
@@ -943,7 +946,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'customer-intelligence-agent',
@@ -982,7 +985,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     permissionsRequired: ['ai:use', 'analytics:read:own'],
     scope: 'own',
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'operations-agent',
@@ -1022,7 +1025,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     permissionsRequired: ['ai:use'],
     requiresPlatformScope: true,
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'outreach-acquisition-agent',

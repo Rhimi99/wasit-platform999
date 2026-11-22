@@ -109,8 +109,8 @@ describe('AI-AGENT-MERGE-01 — identity is preserved', () => {
       total: 21,
       specialised: 20,
       supervisor: 1,
-      executable: 14,
-      declared: 6,
+      executable: 20,
+      declared: 0,
       copilot: 1,
     });
 

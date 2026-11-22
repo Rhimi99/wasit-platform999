@@ -73,7 +73,6 @@ describe('platform-scope boundary', () => {
       [
         'ads-agent',
         'analytics-agent',
-        'b2b-agent',
         'compliance-agent',
         'development-agent',
         'dispute-assistant',
@@ -81,6 +80,7 @@ describe('platform-scope boundary', () => {
         'market-research-agent',
         'operations-agent',
         'outreach-acquisition-agent',
+        'payment-settlement-agent',
         'risk-agent',
       ].sort(),
     );
