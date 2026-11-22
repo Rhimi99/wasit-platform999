@@ -514,6 +514,17 @@ npx playwright install --with-deps chromium
 - **UI**: tab «المزوّدون» in `/admin/ai` (`components/AiProvidersPanel.tsx`), i18n `adminAi.providers.*` in ar/en/fr/zh.
 - **Tests**: `tests/afc09-ai-providers.test.ts` (23). Full suite after AI-04: **174 files / 2233 tests**.
 
+## GM-ACCESS-01 — دخول المدير العام بلا بريد (2026-11-23)
+
+- **البوابة لم تُعطَّل ولن تُعطَّل**: `loginUser` يبقى يرفض `emailVerified=false` بـ`403 EMAIL_NOT_VERIFIED` لكل حساب. لا تُضِف استثناءً لدور (لا `SUPER_ADMIN` ولا غيره) ولا `if (role === ...) skip`.
+- **مسارات الإشباع الثلاثة**: رابط البريد · **عامل ثانٍ مؤكَّد** (`authenticator_apps.enabled AND confirmed_at IS NOT NULL`، يُقرأ حيًّا عبر `hasConfirmedSecondFactor`) · **تذكرة مشغّل** (`gm_access_tickets`، هاش فقط، 15 دقيقة، أحادية الاستخدام، مقيَّدة بحساب، سقف 3 محاولات).
+- **التذكرة تُولَّد من CLI فقط**: `npm run gm:access -- issue|reset-factor|status --email <..> --reason ".." --confirm` (`src/scripts/gm-access.ts`). لا مسار HTTP يولّدها، و`issueGmAccessTicket` ترفض أي حساب ليس `SUPER_ADMIN` وتدقّق الرفض `GM_ACCESS.TICKET_REFUSED`. لا تُضِف مسار HTTP للاسترداد.
+- **التذكرة لا تتجاوز عاملًا مُفعَّلًا** ولا تمنح دورًا ولا تعيد تعيين كلمة مرور — مُثبت في `tests/gm-access-01.test.ts` (17 حالة). لا تُغيّر ترتيب الفحص: العامل المؤكَّد أولًا، ثم التذكرة، ثم الرفض.
+- **`/api/auth/mfa/enroll` يتطلب كلمة المرور دائمًا** (+ رمز حالي إن كان العامل مُفعَّلًا) عبر `assertIdentityForFactorChange`. لا تُعِد قبول جلسة وحدها: جلسة مسروقة كانت تُزيح عامل المالك.
+- **تغيير العامل يُبطل الجلسات الأخرى**: `revokeOtherSessions` بعد confirm/disable/recovery-codes، و`revokeAllSessionsForUser` في `reset-factor`. الجلسة الطالبة تبقى.
+- **لا أسرار في التدقيق**: صفوف `GM_ACCESS.*` تحمل `ticketId`/السبب/المشغّل فقط. أي إضافة تكتب التذكرة أو هاشها أو كلمة المرور تُفشل `secret-scan` أو اختبار التسريب.
+- **التوثيق**: `docs/GM-ACCESS-01.md` (الإجراء للمالك) + AD-058 + §25 في `docs/GAP_REGISTER.md`.
+
 ## Money Path Invariants (2026-09-24)
 
 - **`Payment ≠ Settlement`** (عقد مُنفَّذ في الكود): تأكيد الدفع (`applyPaymentSucceeded`) **لا يكتب** `transaction_ledger.status='SETTLED'` أبداً — القيود تبقى `PENDING`. الكاتب **الوحيد** لـ`SETTLED` هو `applySettlementConfirmed` في `modules/payments/service.ts`، ولا يُستدعى إلا من حدث webhook نوعه `settlement.confirmed` من مزوّد يعلن `capabilities.settlementEvidence`.

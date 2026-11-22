@@ -30,3 +30,4 @@ export * from './reconciliation';
 export * from './receipts';
 export * from './tax';
 export * from './ai-spend';
+export * from './gm-access';

@@ -106,10 +106,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   // ---- Auth ----
-  async login(email: string, password: string) {
+  /**
+   * `gmTicket` is the single-use operator recovery ticket (GM-ACCESS-01). It is
+   * only consulted by the server when the email-verification gate is the
+   * blocker, so sending it never changes the outcome of a normal sign-in.
+   */
+  async login(email: string, password: string, gmTicket?: string) {
     return request<LoginResponse>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify(gmTicket ? { email, password, gmTicket } : { email, password }),
     });
   },
   async mfaChallenge(challengeToken: string, code: string) {
@@ -159,8 +164,16 @@ export const api = {
   async mfaStatus() {
     return request<MfaStatus>('/api/auth/mfa/status');
   },
-  async mfaEnroll() {
-    return request<MfaEnrollment>('/api/auth/mfa/enroll', { method: 'POST', body: JSON.stringify({}) });
+  /**
+   * Re-proves identity before a factor is created or replaced: the password is
+   * always required, and a current TOTP/recovery code as well when a factor is
+   * already enabled. A session cookie alone must not be able to move the factor.
+   */
+  async mfaEnroll(password: string, code?: string) {
+    return request<MfaEnrollment>('/api/auth/mfa/enroll', {
+      method: 'POST',
+      body: JSON.stringify(code ? { password, code } : { password }),
+    });
   },
   async mfaConfirm(code: string) {
     return request('/api/auth/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) });

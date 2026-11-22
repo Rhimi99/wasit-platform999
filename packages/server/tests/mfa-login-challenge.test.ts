@@ -70,7 +70,7 @@ async function createMfaUser(prefix: string) {
   });
   expect(login.status).toBe(200);
 
-  const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+  const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
   expect(enroll.status).toBe(200);
   const { secretBase32, recoveryCodes } = enroll.data.data as {
     secretBase32: string;

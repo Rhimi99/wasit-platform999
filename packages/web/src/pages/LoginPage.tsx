@@ -18,6 +18,10 @@ export function LoginPage() {
   const [enrollment, setEnrollment] = useState<{ secretBase32: string; qrUri: string; recoveryCodes: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // GM-ACCESS-01: shown only after the server reports that the email gate is the
+  // blocker. The ticket is minted by the operator CLI, never by the browser.
+  const [emailGate, setEmailGate] = useState(false);
+  const [gmTicket, setGmTicket] = useState('');
 
   const afterLogin = (user: { roles: string[] }) => {
     setUser(user as never);
@@ -29,7 +33,7 @@ export function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const res = await api.login(email, password);
+      const res = await api.login(email, password, gmTicket.trim() || undefined);
       if (res.mfaRequired) {
         setChallengeToken(res.challengeToken);
         // LC-06: an internal staff account with no second factor must enroll
@@ -42,6 +46,9 @@ export function LoginPage() {
         afterLogin(res);
       }
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'EMAIL_NOT_VERIFIED') {
+        setEmailGate(true);
+      }
       setError(err instanceof ApiClientError ? err.message : String(err));
     } finally {
       setLoading(false);
@@ -119,6 +126,21 @@ export function LoginPage() {
                 <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="input" required />
               </div>
               {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
+              {emailGate && (
+                <div className="space-y-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+                  <p>{t('auth.gmTicketHint')}</p>
+                  <input
+                    value={gmTicket}
+                    onChange={(e) => setGmTicket(e.target.value)}
+                    className="input font-mono"
+                    dir="ltr"
+                    autoComplete="off"
+                    aria-label={t('auth.gmTicket')}
+                    placeholder={t('auth.gmTicket')}
+                  />
+                  <p className="text-xs">{t('auth.gmTicketNote')}</p>
+                </div>
+              )}
               <button type="submit" disabled={loading} className="btn-primary w-full">{loading ? t('common.loading') : t('auth.login')}</button>
             </form>
           )}

@@ -170,7 +170,7 @@ describe('PHASE 17 — MFA (TOTP / RFC 6238)', () => {
     });
     expect(login.status).toBe(200);
 
-    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
     expect(enroll.status).toBe(200);
     const { secretBase32, recoveryCodes } = enroll.data.data as {
       secretBase32: string;
@@ -205,7 +205,7 @@ describe('PHASE 17 — MFA (TOTP / RFC 6238)', () => {
       method: 'POST',
       body: { email: user.email, password: user.password, allowUnverifiedEmail: true },
     });
-    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
     const { secretBase32 } = enroll.data.data as { secretBase32: string };
     await client.req('/api/auth/mfa/confirm', {
       method: 'POST',
@@ -234,7 +234,7 @@ describe('PHASE 17 — MFA (TOTP / RFC 6238)', () => {
       method: 'POST',
       body: { email: user.email, password: user.password, allowUnverifiedEmail: true },
     });
-    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
     const { secretBase32, recoveryCodes } = enroll.data.data as {
       secretBase32: string;
       recoveryCodes: string[];
@@ -261,7 +261,7 @@ describe('PHASE 17 — MFA (TOTP / RFC 6238)', () => {
       body: { email: user.email, password: user.password, allowUnverifiedEmail: true },
     });
 
-    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
     expect(enroll.status).toBe(200);
     const body = JSON.stringify(enroll.data);
     // The enrollment response legitimately contains raw recovery codes for the
@@ -305,7 +305,7 @@ describe('PHASE 17 — MFA (TOTP / RFC 6238)', () => {
       method: 'POST',
       body: { email: user.email, password: user.password, allowUnverifiedEmail: true },
     });
-    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
     const { secretBase32, recoveryCodes } = enroll.data.data as {
       secretBase32: string;
       recoveryCodes: string[];
@@ -339,7 +339,7 @@ describe('PHASE 17 — MFA (TOTP / RFC 6238)', () => {
       method: 'POST',
       body: { email: user.email, password: user.password, allowUnverifiedEmail: true },
     });
-    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+    const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: user.password } });
     const { secretBase32 } = enroll.data.data as { secretBase32: string };
     await client.req('/api/auth/mfa/confirm', {
       method: 'POST',

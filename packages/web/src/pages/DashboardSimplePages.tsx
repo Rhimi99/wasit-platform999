@@ -111,6 +111,7 @@ function MfaCard() {
   const [enrollment, setEnrollment] = useState<{ secretBase32: string; qrUri: string; recoveryCodes: string[] } | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -141,8 +142,9 @@ function MfaCard() {
     setError(null);
     setNotice(null);
     try {
-      const enrollmentData = await api.mfaEnroll();
+      const enrollmentData = await api.mfaEnroll(password);
       setEnrollment(enrollmentData);
+      setPassword('');
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : String(err));
     } finally {
@@ -260,7 +262,22 @@ function MfaCard() {
           </button>
         </div>
       ) : (
-        <button data-testid="mfa-enable" className="btn-primary" disabled={busy} onClick={enroll}>{t('mfa.enable')}</button>
+        <div className="space-y-3">
+          <div>
+            <label className="label">{t('auth.password')}</label>
+            <input
+              data-testid="mfa-enroll-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="input"
+              autoComplete="current-password"
+            />
+          </div>
+          <button data-testid="mfa-enable" className="btn-primary" disabled={busy || password.length === 0} onClick={enroll}>
+            {t('mfa.enable')}
+          </button>
+        </div>
       )}
     </Card>
   );

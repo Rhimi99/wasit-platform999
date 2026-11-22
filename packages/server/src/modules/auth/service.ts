@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import { ApiError, isSelfSelectableRole, isStaffRole, type UserRole } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import {
@@ -21,6 +21,7 @@ import {
   verifyPassword,
 } from '../../lib/security';
 import { verifyMfaChallenge, enrollMfa, confirmMfa } from '../../lib/mfa';
+import { consumeGmAccessTicket, hasConfirmedSecondFactor, recordGmRecovery, registerGmTicketFailure } from '../../lib/gm-access';
 import { env, demoEmailVerificationSkipped, demoAutoLoginEnabled, staffMfaEnforced } from '../../lib/env';
 import { isLoginBlocked, lockoutPolicy } from '../../lib/lockout';
 import { DEMO_TEST_ACCOUNT_EMAIL, canOpenDemoPersona, resolveDemoAuditPersona } from '../../lib/demo-account';
@@ -409,7 +410,13 @@ export async function devPhoneCode(db: DB, email: string): Promise<string> {
 export async function loginUser(
   db: DB,
   input: { email: string; password: string },
-  ctx: { ipAddress?: string | null; userAgent?: string | null; allowUnverifiedEmail?: boolean },
+  ctx: {
+    ipAddress?: string | null;
+    userAgent?: string | null;
+    allowUnverifiedEmail?: boolean;
+    /** GM-ACCESS-01: single-use operator ticket, accepted only when the email gate is the blocker. */
+    gmTicket?: string | null;
+  },
 ): Promise<LoginOutcome> {
   const email = input.email.trim().toLowerCase();
   const row = await db.select().from(users).where(eq(users.email, email)).limit(1);
@@ -449,18 +456,65 @@ export async function loginUser(
   }
 
   if (!user.emailVerified && !ctx.allowUnverifiedEmail) {
-    if (!demoEmailVerificationSkipped()) {
-      throw new ApiError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email before logging in', {
-        details: { or: 'Check your inbox' },
-      });
+    // GM-ACCESS-01. The email gate stays for every account: what changes is that
+    // it can now be satisfied by something other than a delivered link, because a
+    // deployment with no working mailbox used to leave the general manager with no
+    // way in at all. Two substitutes are accepted, both per account and both
+    // requiring evidence the account holder actually holds:
+    //
+    //   1. a *confirmed* authenticator factor — possession of the second factor is
+    //      stronger proof of control than a mailbox, and it is checked live;
+    //   2. a single-use operator ticket minted by the local CLI, which proves
+    //      deployment ownership out of band (see docs/GM-ACCESS-01.md).
+    //
+    // Email knowledge alone is never enough, no role is exempt, and an
+    // unconfirmed enrollment does not count.
+    let satisfiedBy: 'MFA' | 'GM_TICKET' | null = null;
+    let ticketId: string | null = null;
+
+    if (await hasConfirmedSecondFactor(db, user.id)) {
+      satisfiedBy = 'MFA';
+    } else if (ctx.gmTicket) {
+      const outcome = await consumeGmAccessTicket(db, user.id, ctx.gmTicket);
+      if (outcome.ok) {
+        satisfiedBy = 'GM_TICKET';
+        ticketId = outcome.ticketId ?? null;
+      } else {
+        await registerGmTicketFailure(db, ctx.gmTicket);
+        await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+          action: 'GM_ACCESS.TICKET_REJECTED',
+          entityType: 'USER',
+          entityId: user.id,
+          metadata: { reason: outcome.reason ?? 'UNKNOWN' },
+        });
+      }
     }
-    // Public demo only (never production — see `demoEmailVerificationSkipped`):
-    // the visitor has no mailbox, so an account left unverified — one created
-    // before this waiver existed, or seeded without it — must still be able to
-    // sign in. Mirror registration (which stores demo accounts verified) so the
-    // rest of the app sees one consistent state instead of a half-verified user.
-    await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
-    user.emailVerified = true;
+
+    if (satisfiedBy) {
+      await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
+      user.emailVerified = true;
+      await writeAudit(db, { actorId: user.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+        action: satisfiedBy === 'MFA' ? 'AUTH.EMAIL_VERIFIED_VIA_MFA' : 'GM_ACCESS.EMAIL_GATE_SATISFIED',
+        entityType: 'USER',
+        entityId: user.id,
+        metadata: { ticketId },
+      });
+      if (satisfiedBy === 'GM_TICKET') {
+        await recordGmRecovery(db, { userId: user.id, ticketId, hadFactor: false });
+      }
+    } else if (!demoEmailVerificationSkipped()) {
+      throw new ApiError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email before logging in', {
+        details: { or: 'Check your inbox', gmTicketAccepted: true },
+      });
+    } else {
+      // Public demo only (never production — see `demoEmailVerificationSkipped`):
+      // the visitor has no mailbox, so an account left unverified — one created
+      // before this waiver existed, or seeded without it — must still be able to
+      // sign in. Mirror registration (which stores demo accounts verified) so the
+      // rest of the app sees one consistent state instead of a half-verified user.
+      await db.update(users).set({ emailVerified: true }).where(eq(users.id, user.id));
+      user.emailVerified = true;
+    }
   }
 
   // Second factor: a correct password is not enough when MFA is enabled. Issue a
@@ -973,6 +1027,25 @@ export async function completeStaffMfaEnrollment(
   });
 
   return session;
+}
+
+/**
+ * Revokes every session of an account except the one making the request.
+ *
+ * Called when the second factor changes: sessions issued before the change were
+ * authorised by the old factor (or by no factor at all), so they must not
+ * outlive it. The current session is kept so the owner is not thrown out of the
+ * screen they are using; every other device has to authenticate again.
+ */
+export async function revokeOtherSessions(db: DB, userId: string, currentToken: string | null): Promise<number> {
+  const conditions = [eq(sessions.userId, userId), isNull(sessions.revokedAt)];
+  if (currentToken) conditions.push(ne(sessions.tokenHash, hashToken(currentToken)));
+  const revoked = await db
+    .update(sessions)
+    .set({ revokedAt: new Date() })
+    .where(and(...conditions))
+    .returning({ id: sessions.id });
+  return revoked.length;
 }
 
 export async function logoutUser(db: DB, token: string): Promise<void> {

@@ -214,7 +214,7 @@ describe('staff MFA — login enforcement (LC-06)', () => {
           body: { email: staff.email, password: staff.password, allowUnverifiedEmail: true },
         });
         expect((login.data.data as { mfaRequired: boolean }).mfaRequired).toBe(false);
-        const enroll = await c.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+        const enroll = await c.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: staff.password } });
         const { secretBase32 } = enroll.data.data as { secretBase32: string };
         const confirm = await c.req('/api/auth/mfa/confirm', {
           method: 'POST',
@@ -262,7 +262,7 @@ describe('staff MFA — login enforcement (LC-06)', () => {
       // Enrolling over the existing session (ordinary /mfa/enroll + /mfa/confirm)
       // lifts the block — proving the check follows the account flag, not the
       // session's age.
-      const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: {} });
+      const enroll = await client.req('/api/auth/mfa/enroll', { method: 'POST', body: { password: staff.password } });
       expect(enroll.status).toBe(200);
       const { secretBase32 } = enroll.data.data as { secretBase32: string };
       const confirm = await client.req('/api/auth/mfa/confirm', {
