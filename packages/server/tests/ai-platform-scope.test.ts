@@ -77,6 +77,7 @@ describe('platform-scope boundary', () => {
         'development-agent',
         'dispute-assistant',
         'finance-agent',
+        'market-research-agent',
         'operations-agent',
         'outreach-acquisition-agent',
         'risk-agent',

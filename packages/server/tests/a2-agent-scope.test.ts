@@ -179,7 +179,7 @@ describe('A2 — registry seeding matches the scope contracts', () => {
     for (const key of Object.keys(AGENT_SCOPE_CONTRACTS)) {
       expect(keys).toContain(key);
     }
-    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(13);
+    expect(Object.keys(AGENT_SCOPE_CONTRACTS)).toHaveLength(14);
     expect(getAgentScopeContract('sales-agent')).toBeDefined();
   });
 });

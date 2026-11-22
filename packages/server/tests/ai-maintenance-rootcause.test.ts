@@ -143,6 +143,39 @@ describe('maintenance agent — computed root cause', () => {
     expect(stock.rollback.length).toBeGreaterThan(0);
   });
 
+  it('packages the dominant cause as an independent branch + PR, with no diff and no recorded approval', async () => {
+    const task = await createAgentTask(
+      db,
+      ['SUPER_ADMIN'],
+      adminId,
+      { agentKey: 'development-agent', requestedBy: adminId, input: { windowDays: 7 } },
+      AUDIT,
+    );
+    const advice = adviceOf(task);
+    const pkg = advice.repairPackage as {
+      branch: string;
+      baseBranch: string;
+      prTitle: string;
+      prBody: string;
+      approvalStatus: string;
+      approvalsRequired: string[];
+      rollback: string;
+      blocked: Array<{ step: string }>;
+    } | null;
+
+    expect(pkg).toBeTruthy();
+    expect(pkg!.baseBranch).toBe('master');
+    expect(pkg!.branch).toMatch(/^ai-repair\/[a-z-]+$/);
+    expect(pkg!.prTitle).toContain('INSUFFICIENT_STOCK');
+    expect(pkg!.prBody).toContain('Rollback');
+    expect(pkg!.prBody).toContain('Approval');
+    // Nothing is applied and nothing is approved by the agent itself.
+    expect(pkg!.prBody).not.toContain('```diff');
+    expect(pkg!.approvalStatus).toBe('NOT_RECORDED');
+    expect(pkg!.approvalsRequired).toEqual(['code.apply_patch', 'code.merge']);
+    expect(pkg!.blocked.map((b) => b.step).sort()).toEqual(['apply_patch', 'isolated_tests']);
+  });
+
   it('reports every step of the repair chain, including what it cannot do', async () => {
     const task = await createAgentTask(
       db,

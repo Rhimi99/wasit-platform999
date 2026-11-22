@@ -111,7 +111,45 @@ function fmtTime(s: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${sec}`;
 }
 
-function buildAss(spec: RenderSpec, width: number, height: number, slideSeconds: number): string {
+/**
+ * The slides a render will actually draw, in order.
+ *
+ * Exported so a planning surface (the Marketing Video agent) can describe the
+ * video from the same source the renderer uses, instead of maintaining a second
+ * copy of the copy that drifts from what is produced.
+ */
+export interface RenderSlide {
+  index: number;
+  style: 'Title' | 'Body';
+  startSeconds: number;
+  endSeconds: number;
+  lines: string[];
+}
+
+export function planRenderSlides(spec: RenderSpec, slideSeconds: number): RenderSlide[] {
+  const copy = COPY[spec.language];
+  const priceLine = spec.price ? `${spec.price} ${spec.currencyCode}` : '';
+  const sellerLine = spec.sellerName ?? '';
+  const audienceLine = spec.audience === 'B2B' ? copy.audienceB2b : copy.audienceB2c;
+  const priceAndSeller = [priceLine, sellerLine].filter(Boolean);
+
+  const slides: Array<{ style: 'Title' | 'Body'; lines: string[] }> = [
+    { style: 'Title', lines: [copy.intro, spec.productName] },
+    { style: 'Body', lines: [spec.description.slice(0, 240)] },
+    { style: 'Title', lines: priceAndSeller.length > 0 ? priceAndSeller : [spec.productName] },
+    { style: 'Title', lines: [audienceLine, copy.cta] },
+  ];
+
+  return slides.map((slide, i) => ({
+    index: i + 1,
+    style: slide.style,
+    startSeconds: i * slideSeconds,
+    endSeconds: (i + 1) * slideSeconds,
+    lines: slide.lines,
+  }));
+}
+
+export function buildAss(spec: RenderSpec, width: number, height: number, slideSeconds: number): string {
   const palette = STYLE_PALETTE[spec.style];
   const copy = COPY[spec.language];
   const font = fontFor(spec);
@@ -135,21 +173,14 @@ function buildAss(spec: RenderSpec, width: number, height: number, slideSeconds:
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
 
-  const priceLine = spec.price ? `${spec.price} ${spec.currencyCode}` : '';
-  const sellerLine = spec.sellerName ?? '';
-  const audienceLine = spec.audience === 'B2B' ? copy.audienceB2b : copy.audienceB2c;
-
-  const slides: Array<{ style: string; text: string }> = [
-    { style: 'Title', text: `${assEscape(copy.intro)}\\N${assEscape(spec.productName)}` },
-    { style: 'Body', text: assEscape(spec.description.slice(0, 240)) },
-    { style: 'Title', text: assEscape([priceLine, sellerLine].filter(Boolean).join('\\N') || spec.productName) },
-    { style: 'Title', text: `${assEscape(audienceLine)}\\N${assEscape(copy.cta)}` },
-  ];
-
-  slides.forEach((s, i) => {
-    const start = i * slideSeconds;
-    const end = start + slideSeconds;
-    lines.push(`Dialogue: 0,${fmtTime(start)},${fmtTime(end)},${s.style},,0,0,0,,${s.text}`);
+  // Escape each line, then join with a real ASS line break. Joining *before*
+  // escaping would have produced `\\N`, which libass renders as the literal
+  // characters rather than a newline (the price/seller slide used to do that).
+  planRenderSlides(spec, slideSeconds).forEach((slide) => {
+    const text = slide.lines.map(assEscape).join('\\N');
+    lines.push(
+      `Dialogue: 0,${fmtTime(slide.startSeconds)},${fmtTime(slide.endSeconds)},${slide.style},,0,0,0,,${text}`,
+    );
   });
 
   return lines.join('\n');

@@ -1,7 +1,7 @@
 # Marketing Video Agent — عقد الوكيل
 
 **المفتاح:** `marketing-video-agent` · **Tier:** `CORE_SPECIALIST` · **القسم:** `growth`
-**الحالة:** مُعلن بعقد كامل، **غير قابل للتنفيذ** (`executable: false`)
+**الحالة:** مُنفَّذ للتخطيط (`executable: true`، `EXECUTOR_ACTION = plan_video`) — **لا رندر ولا نشر** (AI-FIRST-COMPLETION-02)
 
 ## 1. المهمة
 
@@ -60,8 +60,8 @@
 | الاختبار | يثبت |
 | --- | --- |
 | `tests/unit/ai-arch-align.test.ts` | العقد الكامل، فصل الإنتاج/الموافقة/النشر، غياب قدرات الدفع والنشر |
-| `tests/ai-arch-align-copilot.test.ts` | رفض الخطة التي تستهدف الوكيل عبر HTTP (422 `AGENT_NOT_EXECUTABLE`) |
-| `tests/unit/ai-reg01-agent-layer.test.ts` | الوكيل ضمن `declaredOnlyAgents` ولا يظهر في `executableAgents` |
+| `tests/ai-arch-align-copilot.test.ts` | رفض الخطة التي تستهدف وكيلاً بلا منفّذ عبر HTTP (422 `AGENT_NOT_EXECUTABLE`) — كان الوكيل مثالاً قبل COMPLETION-02 |
+| `tests/unit/ai-reg01-agent-layer.test.ts` | الوكيل داخل `executableAgents` وخارج `declaredOnlyAgents` (بعد COMPLETION-02) |
 
 ## 7. منظومة الإنتاج الفعلية (جرد 2026-11-20)
 
@@ -113,4 +113,4 @@
 | 6 | الفصل عن `marketing-agent` (تخطيط حملات vs إنتاج أصول) | تداخل في المسؤولية عند ربط المنفّذ |
 
 الوضع الحالي **fail-closed** ولا يتغيّر بأي من هذه القرارات وحدها: الربط يحتاج تعديل
-`catalogue.executable` + منفّذ + عقد نطاق + اختبارات، أي مراجعة كاملة لا تفعيل ضمني.
+`catalogue.executable` + منفّذ + عقد نطاق + اختبارات، أي مراجعة كاملة لا تفعيل ضمني. **تمّ ذلك في AI-FIRST-COMPLETION-02** (منفّذ التخطيط فقط) — انظر `docs/AI-FIRST-COMPLETION-02.md` §2.

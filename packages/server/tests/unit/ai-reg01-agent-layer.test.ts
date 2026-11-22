@@ -28,7 +28,6 @@ import type { DB } from '../../src/db/client.js';
  */
 
 const DECLARED_ONLY = [
-  'marketing-video-agent',
   'payment-settlement-agent',
   'compliance-agent',
   'supplier-agent',
@@ -78,8 +77,8 @@ describe('AI-REG-01 — the agent layer is one source of truth', () => {
       total: 21,
       specialised: 20,
       supervisor: 1,
-      executable: 13,
-      declared: 7,
+      executable: 14,
+      declared: 6,
       copilot: 1,
     });
   });
@@ -98,7 +97,7 @@ describe('AI-REG-01 — the agent layer is one source of truth', () => {
     expect(fromCatalogue).toEqual([...EXECUTABLE_AGENT_KEYS].sort());
     expect(RUNTIME_CATALOGUE.map((a) => a.key).sort()).toEqual(fromCatalogue);
     expect(RUNTIME_CATALOGUE.every((a) => a.executable === true)).toBe(true);
-    expect(fromCatalogue).toHaveLength(13);
+    expect(fromCatalogue).toHaveLength(14);
   });
 
   it('keeps a scope contract for every executable agent and none for the rest', () => {
@@ -113,12 +112,12 @@ describe('AI-REG-01 — the agent layer is one source of truth', () => {
     }
   });
 
-  it('declares the nine declared-only agents explicitly', () => {
+  it('declares the six declared-only agents explicitly', () => {
     expect(declaredOnlyAgents().map((a) => a.key).sort()).toEqual(DECLARED_ONLY);
   });
 
   it('refuses every agent without an executor, and the supervisor by name', () => {
-    expect(declaredOnlyAgents()).toHaveLength(7);
+    expect(declaredOnlyAgents()).toHaveLength(6);
     for (const agent of declaredOnlyAgents()) {
       const refusal = agentRunRefusal(agent);
       expect(refusal?.code).toBe('AGENT_NOT_EXECUTABLE');

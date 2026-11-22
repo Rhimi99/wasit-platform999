@@ -406,11 +406,13 @@ npx playwright install --with-deps chromium
 - **`CORE_SPECIALIST_KEYS`** هي القائمة الرسمية المرتّبة: sales, marketing, ads, product, support,
   analytics, market-research, b2b, risk, dispute-assistant, development, **marketing-video**.
   `catalogueIntegrity()` يفحص الاتجاهين — لا تعدّل أحدهما وحده.
-- **العدّ الحالي (بعد AI-AGENT-MERGE-01)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
-  `allAgentSpecs()` = 22 (مع Copilot)، `declaredOnlyAgents()` = **7**، `executableAgents()` = **13**.
+- **العدّ الحالي (بعد AI-FIRST-COMPLETION-02)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
+  `allAgentSpecs()` = 22 (مع Copilot)، `declaredOnlyAgents()` = **6**، `executableAgents()` = **14**،
+  `requiresPlatformScope` = **10**.
   أي اختبار يثبّت رقماً يجب تحديثه معاً (r1 · ai-reg01 unit+HTTP · phase14 · a2 · r2 · agent-scope-contract).
-- **`marketing-video-agent` هوية بلا منفّذ** (`executable: false`): قدرة الرندر موجودة في `lib/media/*`
-  ويشغّلها المالك عبر API الوسائط، لكن إسناد مهمة للوكيل مرفوض `AGENT_NOT_EXECUTABLE`.
+- **`marketing-video-agent` منفّذ للتخطيط فقط** (`executable: true`، `EXECUTOR_ACTION` = `plan_video`):
+  يقرأ منتجاً حقيقياً بملكية محققة ويُعيد خطة + طلب رندر قابل للتنفيذ. **لا رندر ولا نشر عبر الوكيل**:
+  الرندر يكتب `media_assets` + `audit_logs` وA2 يمنع كتابة التدقيق على الوكلاء، والنشر قرار مالك.
   `video.publish`/`video.render_paid` إجراءان حسّاسان (موافقة بشرية دائماً).
 - **`validatePlan` يرفض وقت التخطيط** أي خطوة تستهدف وكيلاً غير قابل للتنفيذ أو المشرف أو Copilot —
   قبل كتابة صف تشغيل. لا تعد إلى قبولها «لأن الإرسال يرفضها»: الرفض المبكر هو العقد.
@@ -1084,7 +1086,17 @@ npx playwright install --with-deps chromium
 - **`modules/ai/diagnostics.ts`** (جديد، دوال نقية بلا DB/IO): `classifyFamily` (11 عائلة + `UNKNOWN`)، `failureSignature` (تطبيع UUID/بريد/أرقام ⇒ سبب واحد = بصمة واحدة)، `clusterFailures` (ترتيب بالتكرار + ثقة: 3+=high، 2=medium، 1/UNKNOWN=low)، `proposePatch`، `analyseFailures`، `buildReviewReport`. تُستدعى من `execDevelopmentAgent` فقط؛ لا تكتب شيئاً — المخرجات في `agent_tasks.result`.
 - **قاعدة صارمة**: أي مسار في `likelyFiles` يجب أن يكون ملفاً موجوداً فعلاً — `tests/unit/ai-maintenance-rootcause.test.ts` يفحص كل العائلات بـ`existsSync`. لا تُضِف مساراً غير موجود.
 - **ما لا يفعله الوكيل ومصرَّح به**: لا تشغيل اختبارات معزولة ولا `apply_patch`/`merge` (لا منفّذ، AD-050). `reviewReport.checklist` يقول `blocked`/`pending_approval` صراحةً بدل تخطّي الخطوة؛ `repairProtocol.blocked` يحمل نفس القائمة.
-- **`requiresPlatformScope` صار مفروضاً** في `createAgentTask`: `PLATFORM_SCOPE_ROLES = ADMIN, SUPER_ADMIN`. 9 وكلاء بعرض المنصة (ads, analytics, compliance, development, dispute-assistant, finance, operations, outreach-acquisition, risk) صارت للطاقم فقط، والرفض يُدقَّق `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` + metric `blocked` **قبل** كتابة أي صف. لا تُعِد فتحها لعميل/تاجر: A2 يحدّ الجداول لا الصفوف، فأي وكيل بعرض المنصة يقرأ صفوف كل المستأجرين (فلترة الصفوف فجوة مفتوحة، §6.4 في `docs/AI-FIRST-COMPLETION-01.md`).
-- **حدود الجداول فقط**: `withAgentDataScope` يتحقق من اسم الجدول؛ لا يوجد فلتر صفوف. أي وكيل يعلن `*:read:own` ويعيد تجميعات منصة هو خلل تصميم لا خطأ في الصلاحية.
+- **`requiresPlatformScope` صار مفروضاً** في `createAgentTask`: `PLATFORM_SCOPE_ROLES = ADMIN, SUPER_ADMIN`. 10 وكلاء بعرض المنصة (ads, analytics, compliance, development, dispute-assistant, finance, market-research, operations, outreach-acquisition, risk) صارت للطاقم فقط، والرفض يُدقَّق `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` + metric `blocked` **قبل** كتابة أي صف. لا تُعِد فتحها لعميل/تاجر: A2 يحدّ الجداول لا الصفوف، فأي وكيل بعرض المنصة يقرأ صفوف كل المستأجرين (فلترة الصفوف فجوة مفتوحة، §6.4 في `docs/AI-FIRST-COMPLETION-01.md`).
+- **حدود الجداول فقط**: `withAgentDataScope` يتحقق من اسم الجدول؛ لا فلتر صفوف عام. **الاستثناء الوحيد المنفَّذ**: `execSupportAgent` يفلتر صفياً (`threads.participant_ids @> [requesterId]` + حصر الرسائل في خيوط المشارك، و`activeUsers = null` لغير الموظفين) لأن `ai:use` ممنوح للعملاء. أي وكيل آخر يعلن `*:read:own` ويعيد تجميعات منصة هو خلل تصميم لا خطأ في الصلاحية.
 - **تشغيل الاختبارات**: `TEST_DATABASE_URL=postgresql://wasit:wasit_dev_password@127.0.0.1:5434/wasit_test npx vitest run` (بلا هذا المتغير يرفض `vitest.config.ts` الإقلاع). الحزمة الكاملة بعد هذه المرحلة: **160 ملفاً / 2068 اختباراً / exit 0**.
-- **ملفات الاختبار الجديدة**: `tests/unit/ai-maintenance-rootcause.test.ts` (12)، `tests/ai-maintenance-rootcause.test.ts` (5)، `tests/ai-platform-scope.test.ts` (9).
+- **ملفات الاختبار الجديدة**: `tests/unit/ai-maintenance-rootcause.test.ts` (15)، `tests/ai-maintenance-rootcause.test.ts` (6)، `tests/ai-platform-scope.test.ts` (10)، `tests/ai-video-agent.test.ts` (5)، `tests/unit/ai-video-plan.test.ts` (5)، `tests/ai-support-scope.test.ts` (3).
+
+## AI-FIRST COMPLETION 02 (2026-11-22) — القرارات المعتمدة + الوكلاء التنفيذيون
+
+- **القرار (1) مُنفَّذ**: لا صلاحية جديدة ولا تعديل `ROLE_PERMISSIONS`؛ `requiresPlatformScope` مفروض على 10 وكلاء (أُضيف `market-research-agent` الذي كان يعلن `scope: 'platform'` بلا تفعيل)، و**فلترة صفية حقيقية** لوكيل الدعم بدل حرمان العملاء منه.
+- **القرار (2) مُنفَّذ**: `buildRepairPackage(cluster, proposal, now)` في `diagnostics.ts` يُنتج `branch: ai-repair/<slug>`, `baseBranch: master`, `prTitle`, `prBody` (سبب/أدلة/اختبارات/تحقق/**تراجع**/بوابات موافقة), `approvalStatus: 'NOT_RECORDED'`, `delivery: { appliedBy: 'human', mergeBlockedUntilApproval: true }`. **لا diff ولا تطبيق**؛ التطبيق والموافقة بشريان.
+- **وكيل الفيديو**: منفّذ تخطيط (`plan_video`) يقرأ منتجاً حقيقياً بملكية محققة، ويعيد `plan` (4 شرائح من `planRenderSlides` — نفس دالة الرندر) + `readiness` من فحص ffmpeg الحقيقي + `renderRequest` جاهز. لا رندر/نشر/إنفاق.
+- **`planRenderSlides` مصدر واحد**: أي تغيير في الشرائح يغيّر الخطة والفيديو معاً. `buildAss` مُصدَّر للاختبار (فاصل السطر `\N` الحقيقي — كان `\\N` يطبع حرفياً).
+- **إثبات الفيديو الحقيقي**: `npx tsx src/scripts/render-test-video.ts --seconds=35 --language=ar` ⇒ MP4 35.000s، h264 High/yuv420p/720×1280/25fps/875 إطاراً، فك ترميز كامل، وتقرير في `docs/evidence/ai/`. الفيديو نفسه في `backups/media/` (git-ignored).
+- **حدود معروفة (لا تُخفى)**: خمسة وكلاء يعلنون `own`/بلا نطاق ويُعيدون **مجاميع منصة** (`sales`, `marketing`, `product`, `b2b`, `finance`, `outreach`) — أرقام لا صفوف مستخدمين، لكنها تكشف مؤشرات أعمال؛ تحتاج فلترة صفية أو تقييداً (قرار مطلوب).
+- **الاختبارات**: 163 ملفاً · 2085 اختباراً · exit 0 · `tsc --noEmit` = 0. التفاصيل: `docs/AI-FIRST-COMPLETION-02.md`.

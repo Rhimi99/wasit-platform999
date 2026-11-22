@@ -430,10 +430,13 @@ describe('AI-MET-01 — failure containment and access control', () => {
 
     // And the real path still settles: a task completes even when a metric row
     // for it already exists with a conflicting value (duplicate absorbed).
-    const owner = await customer();
+    // market-research reads every seller, product and order, so it is a
+    // platform tool: the real path runs as staff (a customer is refused).
+    const owner = await makeUser('SUPER_ADMIN', 'metresearch');
+    createdUserIds.push(owner.id);
     const task = await createAgentTask(
       db,
-      ['CUSTOMER'],
+      ['SUPER_ADMIN'],
       owner.id,
       { agentKey: 'market-research-agent', requestedBy: owner.id, input: { action: 'summary' } },
       AUDIT,

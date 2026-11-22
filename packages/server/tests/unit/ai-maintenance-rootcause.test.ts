@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   analyseFailures,
+  buildRepairPackage,
   buildReviewReport,
   classifyFamily,
   clusterFailures,
@@ -182,6 +183,51 @@ describe('patch proposals', () => {
     const proposal = proposePatch(scope);
     expect(proposal.riskClass).toBe('high');
     expect(proposal.requiresGmApproval).toBe(true);
+  });
+});
+
+describe('repair package (branch + PR deliverable)', () => {
+  const rows = [
+    sample({ taskId: 't1', message: 'Insufficient stock for product 111' }),
+    sample({ taskId: 't2', message: 'Insufficient stock for product 222' }),
+    sample({ taskId: 't3', message: 'Insufficient stock for product 333' }),
+  ];
+  const analysis = analyseFailures(rows, { days: 7, from: '2026-11-13T00:00:00Z', to: '2026-11-20T00:00:00Z' });
+  const cluster = analysis.clusters[0]!;
+  const proposal = proposePatch(cluster);
+  const pkg = buildRepairPackage(cluster, proposal, new Date('2026-11-20T12:00:00Z'));
+
+  it('names an independent branch off master and a PR title for the family', () => {
+    expect(pkg.baseBranch).toBe('master');
+    expect(pkg.branch).toBe('ai-repair/insufficient-stock');
+    expect(pkg.prTitle).toContain('INSUFFICIENT_STOCK');
+    expect(pkg.family).toBe('INSUFFICIENT_STOCK');
+  });
+
+  it('carries the evidence, the tests, the verification and the rollback', () => {
+    for (const fragment of [
+      cluster.signature,
+      'Occurrences:',
+      'Blast radius',
+      'Tests to add',
+      'Verification',
+      'Rollback',
+      proposal.rollback,
+    ]) {
+      expect(pkg.prBody).toContain(fragment);
+    }
+    expect(pkg.verification.length).toBeGreaterThan(0);
+    expect(pkg.rollback.length).toBeGreaterThan(0);
+  });
+
+  it('delivers no diff and records no approval: a human applies and approves', () => {
+    expect(pkg.prBody).not.toContain('```diff');
+    expect(pkg.prBody).toContain('A General');
+    expect(pkg.approvalStatus).toBe('NOT_RECORDED');
+    expect(pkg.delivery).toEqual({ appliedBy: 'human', mergeBlockedUntilApproval: true });
+    expect(pkg.approvalsRequired).toEqual(['code.apply_patch', 'code.merge']);
+    expect(pkg.blocked.map((b) => b.step).sort()).toEqual(['apply_patch', 'isolated_tests']);
+    expect(pkg.generatedAt).toBe('2026-11-20T12:00:00.000Z');
   });
 });
 

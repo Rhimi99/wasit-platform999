@@ -1,0 +1,52 @@
+{
+  "generatedAt": "2026-11-22T09:02:42.849Z",
+  "file": "/tmp/vid-fallback/wasit-marketing-video-2026-11-22T09-02-39-472Z.mp4",
+  "bytes": 112679,
+  "sha256": "2d2f753202b0dbd555ad46b8a00ad78507e4ae67ae474e73f83a95752a54814f",
+  "probe": {
+    "formatName": "mov,mp4,m4a,3gp,3g2,mj2",
+    "durationSeconds": 35,
+    "sizeBytes": 112679,
+    "video": {
+      "codec": "h264",
+      "profile": "High",
+      "pixelFormat": "yuv420p",
+      "width": 720,
+      "height": 1280,
+      "frameRate": "25/1",
+      "frames": "875"
+    }
+  },
+  "verification": {
+    "mp4HeaderDurationSeconds": 35,
+    "ffprobeDurationSeconds": 35,
+    "decode": {
+      "ok": true,
+      "detail": "full decode completed with no errors"
+    },
+    "withinWindow": true
+  },
+  "materials": {
+    "background": "ffmpeg lavfi colour source (generated, no external asset)",
+    "text": "WASIT copy rendered by libass (no stock footage, no images)",
+    "fonts": {
+      "arabic": {
+        "family": "NoSuchFamilyXYZ",
+        "license": "SIL Open Font License 1.1 (per font name table)"
+      },
+      "latin": {
+        "family": "DejaVu Sans",
+        "license": "DejaVu (Bitstream Vera / public domain additions), system font"
+      }
+    },
+    "externalServices": false,
+    "paidServices": false
+  },
+  "renderer": {
+    "provider": "structural",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "width": 720,
+    "height": 1280,
+    "fps": 25
+  }
+}

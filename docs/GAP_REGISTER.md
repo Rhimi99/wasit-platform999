@@ -158,6 +158,7 @@
 | **AI-05** | AI/Agents | ترتيب تنفيذ الوكلاء المطلوب في تعليمات سابقة (Supervisor ثم Product/Marketing/Support/Customer-Intelligence ثم Outreach) **غير موثّق في المستودع**: `AI_ARCHITECTURE.md` §3 يسرد 11 وكيلاً بترتيب محايد. يلزم تثبيت الترتيب المطلوب في الوثيقة ثم مواءمة `AGENT_CATALOGUE` معه. | MEDIUM | P1 | AI-02 | PENDING | تثبيت الترتيب + مواءمة الكتالوج + اختبار | اختبار |
 | **AI-06** | AI/Agents | وكيل الصيانة كان يشخّص بلا تحليل سبب: `suggestedRepair` نصّ ثابت يطلب من الإنسان «تجميع الأعطال حسب الوكيل ورمز الخطأ». **مُغلق (2026-11-22):** تجميع حتمي حسب بصمة الخطأ (11 عائلة) + فرضية وثقة وأدلة + `patchProposals` (ملفات موجودة فعلاً في الريبو، اختبارات، تحقّق، rollback) + `reviewReport` بحالة كل خطوة. اختبارات معزولة وتطبيق patch يبقيان محجوبين بنيوياً (AD-050) ومصرَّحاً بهما في المخرجات. | HIGH | P1 | — | **COMPLETED** | تجميع + patch + تقرير + لا كتابة | `modules/ai/diagnostics.ts` + 17 اختباراً (`tests/unit/ai-maintenance-rootcause.test.ts`, `tests/ai-maintenance-rootcause.test.ts`) · `docs/AI-FIRST-COMPLETION-01.md` §4.1 |
 | **AI-07** | AI/Security | `requiresPlatformScope: true` معلن على 9 وكلاء و**غير مفروض في أي مكان**: A2 يحدّ الجداول لا الصفوف، فعميل يحمل `ai:use` شغّل وكيل الصيانة وقرأ رسائل أخطاء مهام مستخدمين آخرين وعدّادات المنصة، وشغّل وكيل النمو وكشف كل الموردين/التجار/الشركات. **مُغلق (2026-11-22):** الفرض في `createAgentTask` (`ADMIN`/`SUPER_ADMIN` فقط) مع Audit `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` وmetric `blocked` ورفض **قبل** كتابة أي صف مهمة. لا صلاحية جديدة ولا تغيير في `ROLE_PERMISSIONS`. | HIGH | P1 | — | **COMPLETED** | رفض 5 أدوار + Audit + صفر صفوف مكتوبة | `tests/ai-platform-scope.test.ts` (9) · `docs/AI-FIRST-COMPLETION-01.md` §4.2 |
+| **AI-08** | AI/Security | **تسريب محتوى رسائل عبر وكيل الدعم + إعلان نطاق بلا تفعيل:** `execSupportAgent` أعاد آخر الرسائل غير المقروءة **على مستوى المنصة** (`senderId` + 120 حرفاً من النص) لأي حامل `ai:use` — عميل يقرأ رسائل غيره. و`market-research-agent` كان يعلن `scope: 'platform'` ويقرأ كل الموردين/المنتجات/الطلبات بلا `requiresPlatformScope`. **مُغلق (2026-11-22):** فلترة صفية حقيقية للدعم (`threads.participant_ids @> [requesterId]` + حصر الرسائل في خيوط المشارك، و`activeUsers = null` لغير الموظفين، وأطقم الدعم تحتفظ بالعرض الكامل) + تفعيل `requiresPlatformScope` على `market-research-agent`. لا صلاحية جديدة ولا تغيير في `ROLE_PERMISSIONS`. | HIGH | P1 | — | **COMPLETED** | عميل يرى خيوطه فقط · 5 أدوار تُرفض على market-research · صفر صفوف مكتوبة | `tests/ai-support-scope.test.ts` (3) · `tests/ai-platform-scope.test.ts` (10) · `docs/AI-FIRST-COMPLETION-02.md` §4.1 |
 ---
 
 ## 4. الفجوات المفتوحة — P2 (الوظائف التجارية)
@@ -1345,14 +1346,14 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 | فصل الداعمين | `tier: 'SUPPORTING'` على الثمانية + `supportingAgents()` |
 | فصل الحوكمة | `governanceAgents()` = Copilot + Supervisor، و`tier: 'GOVERNANCE'` لكل منهما |
 | فحص التكامل | `catalogueIntegrity()` — مفاتيح ناقصة/زائدة/مكرّرة/Copilot داخل الكتالوج |
-| وكيل الفيديو | `marketing-video-agent` بعقد كامل، `executable: false`، `scope: 'own'`، `ai:use` فقط |
+| وكيل الفيديو | `marketing-video-agent` بعقد كامل، `executable: false`، `scope: 'own'`، `ai:use` فقط — **عُدِّل في AI-FIRST-COMPLETION-02: صار منفّذاً للتخطيط (`plan_video`) بلا رندر/نشر** |
 | فصل الإنتاج عن النشر | `render_video`/`publish_video` بموافقة، و`video.publish`/`video.render_paid` في `SENSITIVE_ACTIONS` |
 | منع توجيه وكيل بلا منفّذ | `agentRunRefusal` داخل `validatePlan` — رفض 422 قبل أي كتابة |
 | إتاحة التنسيق | `POST /api/admin/ai/agent-runs` (PLANNING فقط، `AI_MANAGE`، Kill Switch) |
 
 **حدود مُعلنة (ليست تنفيذاً ناقصاً مخفياً):**
 
-1. منفّذ وكيل الفيديو غير موجود — الربط يحتاج قرارات ميزانية/ملكية/نشر (AD-049 `DECISION REQUIRED`).
+1. ~~منفّذ وكيل الفيديو غير موجود~~ — **حُلَّ جزئياً في AI-FIRST-COMPLETION-02:** منفّذ التخطيط موجود؛ الإنتاج والنشر ما زالا يحتاجان قرار ميزانية/ملكية/نشر (AD-049 `DECISION REQUIRED`).
 2. لا تفكيك أهداف آلي (لا LLM Planner) ولا اختيار وكيل تلقائي — قرار المتصل، والكود يتحقق فقط.
 3. لا واجهة ويب لطبقة التنسيق؛ المسار الإداري فقط.
 
@@ -1377,13 +1378,15 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 | `outreach-acquisition-agent` | Global Growth & Acquisition: ترتيب أسواق من العرض/الكتالوج، فرص مؤهلة بدليل، شرائح، مسودات متعددة اللغات | `execGrowthAgent` (`discover_markets`) | `requiresHumanApproval: true`؛ الإرسال/الحملات `approvalActions` بلا منفّذ |
 | `finance-agent` | Finance & Cost Accounting: إيراد/تكلفة/مساهمة لكل عملة من `orders`+`campaigns`+`ai_requests` | `execFinanceAgent` (`report_pnl`) | تلقائي (قراءة فقط)؛ ledger/policies محجوبة |
 | `development-agent` | Platform Maintenance & Repair: تشخيص من `agent_tasks`/`agent_runs`/`agent_run_steps` مع دليل وخطورة | `execDevelopmentAgent` (`diagnose_platform`) | التشخيص تلقائي؛ `code.apply_patch`/`code.merge` بلا منفّذ |
-| `marketing-video-agent` | كما هو | — | `AGENT_NOT_EXECUTABLE` (AD-049) |
+| `marketing-video-agent` | كما هو | — | `AGENT_NOT_EXECUTABLE` (AD-049) — **أُلغي في AI-FIRST-COMPLETION-02**: منفّذ تخطيط، والرندر/النشر يبقيان بلا منفّذ |
 
 **الضوابط:** لا صلاحية RBAC تغيّرت (مقارنة snapshot) · عقد A2 جديدان (مالية/نمو) + توسيع عقد الصيانة
 لجداول التشغيل · `code.apply_patch`, `code.merge`, `growth.paid_campaign` في `SENSITIVE_ACTIONS` ·
 لا خلط عملات في المالية (`null` + سبب عند غياب التكلفة) · لا إرسال/شراء/تعديل كود بأي مسار.
 
 **الأرقام:** 21 وكيلاً (بلا تغيير) · القابلون للتنفيذ 11 → **13** · عقود النطاق 11 → 13 · المعلنون فقط 9 → 7.
+
+**تعديل لاحق (AI-FIRST-COMPLETION-02، 2026-11-22):** القابلون للتنفيذ 13 → **14** (منفّذ تخطيط الفيديو) · عقود النطاق 13 → 14 · المعلنون فقط 7 → **6** · `requiresPlatformScope` 9 → **10** (`market-research-agent`) · `support-agent` صار مفلتراً صفياً. التفاصيل: `docs/AI-FIRST-COMPLETION-02.md`.
 
 **الإثبات:** `tests/unit/ai-agent-merge-01.test.ts` (14) · `tests/ai-agent-merge-01.test.ts` (5، PostgreSQL حقيقي)
 · تحديث عقود العدّ في 7 ملفات · `tsc --noEmit` = 0 · المجموعة الكاملة خضراء.

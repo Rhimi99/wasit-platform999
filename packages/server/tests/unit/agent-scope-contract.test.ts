@@ -53,7 +53,7 @@ describe('A2 — scope contract completeness', () => {
       expect(c!.agentKey).toBe(key);
       expect(c!.specialization.length).toBeGreaterThan(0);
     }
-    expect(listAgentScopes()).toHaveLength(13);
+    expect(listAgentScopes()).toHaveLength(14);
   });
 
   it('gives every agent a least-privilege, non-empty, read-only scope', () => {

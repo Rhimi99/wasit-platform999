@@ -155,10 +155,10 @@ describe('AI-ARCH-ALIGN-01 — Copilot planning is reachable and side-effect fre
 });
 
 describe('AI-ARCH-ALIGN-01 — the Copilot cannot route to an agent that cannot run', () => {
-  it('refuses the Marketing Video Agent (declared, no executor)', async () => {
+  it('refuses an agent that is declared with no executor', async () => {
     const admin = await makeUser('SUPER_ADMIN');
     const r = await planAs(admin.client, [
-      { stepKey: 'video', agentKey: 'marketing-video-agent', input: {} },
+      { stepKey: 'settle', agentKey: 'payment-settlement-agent', input: {} },
     ]);
     expect(r.status).toBe(422);
     expect(r.data.error.code).toBe('VALIDATION_ERROR');
@@ -193,7 +193,7 @@ describe('AI-ARCH-ALIGN-01 — the Copilot cannot route to an agent that cannot 
     const before = await db.select({ id: agentRuns.id }).from(agentRuns);
     const r = await planAs(admin.client, [
       { stepKey: 'ok', agentKey: 'product-agent', input: {} },
-      { stepKey: 'bad', agentKey: 'marketing-video-agent', input: {} },
+      { stepKey: 'bad', agentKey: 'payment-settlement-agent', input: {} },
     ]);
     expect(r.status).toBe(422);
     const after = await db.select({ id: agentRuns.id }).from(agentRuns);

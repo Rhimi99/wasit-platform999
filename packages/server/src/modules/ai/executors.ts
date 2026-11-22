@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import type { DB } from '../../db/client';
 import type { AgentDefinition } from '../../lib/ai/types';
 import { runAIFeature } from '../../lib/ai/runtime';
@@ -20,7 +20,12 @@ import { agentTasks } from '../../db/schema/agents';
 import { agentRuns, agentRunSteps } from '../../db/schema/agent_runs';
 import { dailyKpis } from '../../db/schema/analytics';
 import { listRecentMarketingVideos } from '../media/service';
-import { analyseFailures, buildReviewReport, proposePatch } from './diagnostics';
+import { MARKETING_VIDEO_DURATION } from '@wasit/shared';
+import { env } from '../../lib/env';
+import { planRenderSlides, type RenderSlide } from '../../lib/media/video-provider';
+import { resolveVideoProvider } from '../../lib/media/resolve';
+import { getAgentRunContext } from '../../lib/ai/agent-run-context';
+import { analyseFailures, buildRepairPackage, buildReviewReport, proposePatch } from './diagnostics';
 
 /**
  * WASIT specialised agent executors (Phase 14).
@@ -110,11 +115,11 @@ async function pickProduct(db: DB, productId?: unknown): Promise<ProductWithCate
   };
 }
 
-async function countOpenSupportMessages(db: DB): Promise<number> {
+async function countOpenSupportMessages(db: DB, scope?: SQL): Promise<number> {
   const rows = await db
     .select({ v: sql<number>`count(*)::int` })
     .from(messages)
-    .where(and(eq(messages.isDeleted, false), eq(messages.status, 'SENT'), sql`${messages.readAt} is null`));
+    .where(and(eq(messages.isDeleted, false), eq(messages.status, 'SENT'), sql`${messages.readAt} is null`, scope));
   return Number(rows[0]?.v ?? 0);
 }
 
@@ -138,6 +143,7 @@ async function countOpenSupportMessages(db: DB): Promise<number> {
 export const EXECUTOR_ACTION: Record<string, string> = {
   'sales-agent': 'identify_leads',
   'marketing-agent': 'recommend_campaign',
+  'marketing-video-agent': 'plan_video',
   'ads-agent': 'recommend_ads',
   'product-agent': 'analyze_product',
   'support-agent': 'draft_reply',
@@ -332,6 +338,227 @@ async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<
   return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
 }
 
+/**
+ * Marketing Video Agent — plans a video from live product data and hands the
+ * owner an executable render request.
+ *
+ * Why it does not render here: a render must create a `media_assets` row and an
+ * audit entry, and `audit_logs` is hard-denied to every agent run (A2). An
+ * executor therefore cannot perform an audited business write, so the render is
+ * executed by the media module — the same local ffmpeg/libass renderer, with
+ * ownership, budget and duration checks. Planning, validation and readiness are
+ * real work and run here.
+ */
+async function execMarketingVideoAgent(
+  db: DB,
+  agent: AgentDefinition,
+  input: Record<string, unknown>,
+): Promise<AgentExecutorResult> {
+  const ctx = getAgentRunContext();
+  const requesterId = ctx?.requestedBy ?? (typeof input.__userId === 'string' ? input.__userId : null);
+  const roles = (ctx?.requesterRoles ?? []) as readonly string[];
+  const isAdmin = roles.includes('ADMIN') || roles.includes('SUPER_ADMIN');
+  const productId = typeof input.productId === 'string' && input.productId.length > 0 ? input.productId : null;
+
+  const languages = ['ar', 'fr', 'en', 'zh'] as const;
+  const audiences = ['B2B', 'B2C'] as const;
+  const styles = ['MODERN', 'MINIMAL', 'BOLD', 'ELEGANT'] as const;
+
+  const language: (typeof languages)[number] = languages.includes(input.language as never)
+    ? (input.language as (typeof languages)[number])
+    : 'en';
+  const audience: (typeof audiences)[number] = audiences.includes(input.audience as never)
+    ? (input.audience as (typeof audiences)[number])
+    : 'B2B';
+  const style: (typeof styles)[number] = styles.includes(input.style as never)
+    ? (input.style as (typeof styles)[number])
+    : 'MODERN';
+  const requestedDuration = Number(input.durationSeconds ?? MARKETING_VIDEO_DURATION.default);
+  const durationSeconds = Number.isFinite(requestedDuration)
+    ? Math.min(Math.max(Math.round(requestedDuration), MARKETING_VIDEO_DURATION.min), MARKETING_VIDEO_DURATION.max)
+    : MARKETING_VIDEO_DURATION.default;
+
+  const base = {
+    agentKey: agent.key,
+    action: 'plan_video',
+    readOnly: true,
+    renders: false,
+    publishes: false,
+    durationWindow: { min: MARKETING_VIDEO_DURATION.min, max: MARKETING_VIDEO_DURATION.max },
+    generatedAt: new Date().toISOString(),
+  };
+
+  const refuse = async (code: string, message: string, extra: Record<string, unknown> = {}) => {
+    const content = JSON.stringify({ ...base, refused: true, error: { code, message }, ...extra });
+    const out = await runAIFeature(db, {
+      userId: requesterId ?? 'system',
+      roles: ['SUPER_ADMIN'],
+      requestType: `AGENT:${agent.key}`,
+      system: 'You are the WASIT Marketing Video Agent.',
+      user: `${code}: ${message}`,
+      maxTokens: 32,
+      metadata: { agentKey: agent.key, code },
+    });
+    return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  };
+
+  if (!productId) return refuse('PRODUCT_REQUIRED', 'A productId is required to plan a marketing video.');
+
+  const rows = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      nameAr: products.nameAr,
+      nameFr: products.nameFr,
+      description: products.description,
+      brand: products.brand,
+      basePrice: products.basePrice,
+      currencyCode: products.currencyCode,
+      status: products.status,
+      sellerId: products.sellerId,
+      sellerType: products.sellerType,
+      purchaseIntent: products.purchaseIntent,
+    })
+    .from(products)
+    .where(eq(products.id, productId))
+    .limit(1);
+
+  const product = rows[0];
+  if (!product) return refuse('PRODUCT_NOT_FOUND', 'No product matches that productId.');
+
+  let sellerName: string | null = null;
+  if (!isAdmin) {
+    if (!requesterId) return refuse('REQUESTER_REQUIRED', 'The run has no requester to check ownership against.');
+    const [ownedSuppliers, ownedMerchants, ownedCompanies] = await Promise.all([
+      db.select({ id: suppliers.id, name: suppliers.companyName }).from(suppliers).where(eq(suppliers.userId, requesterId)),
+      db.select({ id: merchants.id, name: merchants.storeName }).from(merchants).where(eq(merchants.userId, requesterId)),
+      db.select({ id: companies.id, name: companies.legalName }).from(companies).where(eq(companies.userId, requesterId)),
+    ]);
+    const owned = new Map<string, string>();
+    for (const row of [...ownedSuppliers, ...ownedMerchants, ...ownedCompanies]) owned.set(row.id, row.name);
+    if (!owned.has(product.sellerId)) {
+      return refuse('PRODUCT_NOT_OWNED', 'This product belongs to another seller; a video may only be planned for your own catalogue.');
+    }
+    sellerName = owned.get(product.sellerId) ?? null;
+  } else {
+    const [s, m, c] = await Promise.all([
+      db.select({ name: suppliers.companyName }).from(suppliers).where(eq(suppliers.id, product.sellerId)).limit(1),
+      db.select({ name: merchants.storeName }).from(merchants).where(eq(merchants.id, product.sellerId)).limit(1),
+      db.select({ name: companies.legalName }).from(companies).where(eq(companies.id, product.sellerId)).limit(1),
+    ]);
+    sellerName = s[0]?.name ?? m[0]?.name ?? c[0]?.name ?? null;
+  }
+
+  if (product.status !== 'ACTIVE') {
+    return refuse('PRODUCT_NOT_ACTIVE', 'Only ACTIVE products can be turned into a marketing video.', {
+      product: { id: product.id, status: product.status },
+    });
+  }
+
+  const localizedName =
+    language === 'ar' ? product.nameAr ?? product.name : language === 'fr' ? product.nameFr ?? product.name : product.name;
+
+  const spec = {
+    productId: product.id,
+    productName: localizedName,
+    description: product.description?.trim() || localizedName,
+    brand: product.brand,
+    price: product.basePrice,
+    currencyCode: product.currencyCode,
+    sellerName,
+    imageUrl: null,
+    language,
+    audience,
+    style,
+    durationSeconds,
+  } as const;
+
+  const slideSeconds = durationSeconds / 4;
+  const slides = planRenderSlides(spec, slideSeconds).map((slide: RenderSlide) => ({
+    index: slide.index,
+    style: slide.style,
+    startSeconds: slide.startSeconds,
+    endSeconds: slide.endSeconds,
+    text: slide.lines.join('\n'),
+  }));
+
+  const provider = resolveVideoProvider();
+  const providerAvailable = await provider.isAvailable();
+  const providerReason = provider.unavailableReason();
+
+  const content = JSON.stringify({
+    ...base,
+    product: {
+      id: product.id,
+      name: localizedName,
+      status: product.status,
+      sellerType: product.sellerType,
+      price: product.basePrice,
+      currencyCode: product.currencyCode,
+    },
+    plan: {
+      language,
+      audience,
+      style,
+      durationSeconds,
+      slideSeconds,
+      slides,
+      script: slides.map((s) => s.text).join('\n\n'),
+      storyboard: slides.map((s) => ({
+        scene: s.index,
+        from: s.startSeconds,
+        to: s.endSeconds,
+        shot: s.style === 'Title' ? 'headline card' : 'description card',
+      })),
+      delivery: {
+        container: 'mp4',
+        videoCodec: 'h264',
+        pixelFormat: 'yuv420p',
+        width: env.VIDEO_WIDTH,
+        height: env.VIDEO_HEIGHT,
+        fps: env.VIDEO_FPS,
+        maxBytes: env.MEDIA_MAX_VIDEO_BYTES,
+      },
+    },
+    readiness: {
+      provider: provider.id,
+      available: providerAvailable,
+      reason: providerReason,
+      renderer: 'local ffmpeg + libass (structural)',
+      fonts: { latin: env.VIDEO_FONT, arabic: env.VIDEO_ARABIC_FONT },
+      externalServices: false,
+    },
+    // The exact call that produces the asset. Executed by the owner (or an
+    // admin), never by this agent: the write is audited, and audit_logs is
+    // hard-denied to agents.
+    renderRequest: {
+      method: 'POST',
+      path: '/api/media/marketing-videos',
+      body: { productId: product.id, language, audience, style, durationSeconds },
+      performedBy: 'product owner or platform admin',
+    },
+    publish: {
+      available: false,
+      action: 'video.publish',
+      reason: 'No publishing executor exists and video.publish is a sensitive action; nothing is published automatically.',
+    },
+    whyNoRender:
+      'Rendering creates a media_assets row and an audit entry. Agents cannot write audit_logs (A2 hard deny), so the render runs in the media module, which enforces ownership, budget and the 35–120s window on the measured bytes.',
+  });
+
+  const out = await runAIFeature(db, {
+    userId: requesterId ?? 'system',
+    roles: ['SUPER_ADMIN'],
+    requestType: `AGENT:${agent.key}`,
+    system: 'You are the WASIT Marketing Video Agent.',
+    user: `Planned a ${durationSeconds}s ${style} ${language.toUpperCase()} video for "${localizedName}" (${slides.length} slides). Renderer ${provider.id} available=${providerAvailable}.`,
+    maxTokens: 96,
+    metadata: { agentKey: agent.key, productId: product.id },
+  });
+
+  return { content, tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+}
+
 async function execAdsAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
   const [campaignsAll, impressions, clicks, conversions] = await Promise.all([
     db
@@ -498,14 +725,30 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
 }
 
 async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
+  const ctx = getAgentRunContext();
+  const requesterId = ctx?.requestedBy ?? (typeof input.__userId === 'string' ? input.__userId : null);
+  const roles = (ctx?.requesterRoles ?? []) as readonly string[];
+  // Support desks answer every thread; everybody else sees only the threads they
+  // take part in. Without this filter a customer could read other users' message
+  // bodies through `recentUnread`.
+  const isStaff = roles.some((role) => role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'SUPPORT');
+  const threadScope = isStaff
+    ? undefined
+    : sql`${threads.participantIds} @> ${JSON.stringify([requesterId])}::jsonb`;
+  const messageScope = isStaff
+    ? undefined
+    : sql`${messages.threadId} in (select id from threads where participant_ids @> ${JSON.stringify([requesterId])}::jsonb)`;
+
   const [openThreads, unreadMessages, usersCount, recentUnread] = await Promise.all([
-    db.select({ v: sql<number>`count(*)::int` }).from(threads).where(eq(threads.isBlocked, false)),
-    countOpenSupportMessages(db),
-    db.select({ v: sql<number>`count(*)::int` }).from(users).where(eq(users.isActive, true)),
+    db.select({ v: sql<number>`count(*)::int` }).from(threads).where(and(eq(threads.isBlocked, false), threadScope)),
+    countOpenSupportMessages(db, messageScope),
+    isStaff
+      ? db.select({ v: sql<number>`count(*)::int` }).from(users).where(eq(users.isActive, true))
+      : Promise.resolve([{ v: 0 }]),
     db
       .select({ id: messages.id, senderId: messages.senderId, body: messages.body, createdAt: messages.createdAt })
       .from(messages)
-      .where(and(eq(messages.isDeleted, false), sql`${messages.readAt} is null`))
+      .where(and(eq(messages.isDeleted, false), sql`${messages.readAt} is null`, messageScope))
       .orderBy(desc(messages.createdAt))
       .limit(Number(input.limit ?? 5)),
   ]);
@@ -513,7 +756,9 @@ async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<st
   const facts = {
     activeThreads: toNum(openThreads[0]?.v),
     unreadMessages,
-    activeUsers: toNum(usersCount[0]?.v),
+    // Platform-wide user counts are staff information; a participant sees only
+    // their own scope and gets null rather than a fabricated number.
+    activeUsers: isStaff ? toNum(usersCount[0]?.v) : null,
     recentUnread: recentUnread.map((m) => ({ id: m.id, senderId: m.senderId, body: m.body.slice(0, 120), createdAt: m.createdAt.toISOString() })),
   };
 
@@ -525,6 +770,7 @@ async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<st
   const data: Record<string, unknown> = {
     agentKey: agent.key,
     action: input.action ?? 'draft_reply',
+    dataScope: isStaff ? 'platform' : 'own',
     snapshot: facts,
     recommendation: responseTimeSuggestion,
     readOnly: true,
@@ -533,7 +779,7 @@ async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<st
 
   const text = adviceText(
     'Support snapshot: {{activeThreads}} threads, {{unreadMessages}} unread messages across {{activeUsers}} active users.',
-    { activeThreads: facts.activeThreads, unreadMessages: facts.unreadMessages, activeUsers: facts.activeUsers },
+    { activeThreads: facts.activeThreads, unreadMessages: facts.unreadMessages, activeUsers: facts.activeUsers ?? 'own scope' },
   );
 
   const out = await runAIFeature(db, {
@@ -941,6 +1187,13 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
   );
   const patchProposals = analysis.clusters.slice(0, 3).map(proposePatch);
   const reviewReport = buildReviewReport(analysis, patchProposals);
+  // The GM asked for repairs to be delivered as an independent branch + PR, not
+  // applied here. The package carries everything to review one; it carries no
+  // diff, because inventing one would be a guess dressed as a fix.
+  const repairPackage =
+    analysis.dominant && patchProposals[0]
+      ? buildRepairPackage(analysis.dominant, patchProposals[0])
+      : null;
 
   const findings: Array<Record<string, unknown>> = [];
   if (stuckTaskRows.length > 0) {
@@ -1061,6 +1314,7 @@ async function execDevelopmentAgent(db: DB, agent: AgentDefinition, input: Recor
     findings,
     rootCauseAnalysis: analysis,
     patchProposals,
+    repairPackage,
     reviewReport,
     // The repair protocol is a contract, not a suggestion: every item below is
     // enforced outside the model (approval actions + the absence of an executor).
@@ -1463,6 +1717,7 @@ type AgentExecutor = (
 const EXECUTORS: Record<string, AgentExecutor> = {
   'sales-agent': execSalesAgent,
   'marketing-agent': execMarketingAgent,
+  'marketing-video-agent': execMarketingVideoAgent,
   'ads-agent': execAdsAgent,
   'product-agent': execProductAgent,
   'support-agent': execSupportAgent,

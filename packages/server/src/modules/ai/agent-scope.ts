@@ -188,6 +188,19 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     canDelegate: false,
     ownerScoped: true,
   },
+  'marketing-video-agent': {
+    agentKey: 'marketing-video-agent',
+    specialization: 'Marketing video planning',
+    allowedDomains: ['MARKETPLACE', 'MEDIA', 'B2B'],
+    // Reads the product it is planning for, its seller's display name and the
+    // videos already produced for it. It cannot write any of them: a render is
+    // an audited business write and stays in the media module (A2).
+    allowedTables: ['products', 'media_assets', 'suppliers', 'merchants', 'companies'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['MARKETPLACE', 'MEDIA', 'B2B']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
   'ads-agent': {
     agentKey: 'ads-agent',
     specialization: 'Advertising budget & placement',

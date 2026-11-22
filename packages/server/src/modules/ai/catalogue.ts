@@ -468,6 +468,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     scope: 'platform',
+    // It reads every seller, product and order on the platform, so it is a
+    // platform tool: only roles with platform authority may run it (AI-07).
+    requiresPlatformScope: true,
     requiresHumanApproval: false,
     executable: true,
   },
@@ -710,9 +713,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     // Production (render) and publication are distinct approvals; publishing is
     // always external and therefore always human.
     requiresHumanApproval: true,
-    // No executor on this branch: no approved production tool exists, so the
-    // agent is declared, described and REFUSED for execution (fail-closed).
-    executable: false,
+    // Planning, readiness and the render request run here. The render itself is
+    // executed by the media module: it writes a media_assets row and an audit
+    // entry, and agents may not write audit_logs (A2). Publishing still has no
+    // executor at all.
+    executable: true,
   },
 
   // ------------------------------- 12–20: restored organisational definitions
