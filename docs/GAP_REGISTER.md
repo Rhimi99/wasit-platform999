@@ -35,8 +35,8 @@
 
 | المحور | العدد |
 | --- | --- |
-| بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 20 |
-| بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 43 |
+| بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 21 |
+| بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 44 |
 | فجوات كاذبة مُستبعدة | 6 |
 | بنود تحتاج طرفاً خارجياً (عقود/بنية) | 10 |
 | بنود في السجل المرجعي بلا صف تفصيلي هنا (`LC-08`) | 1 |
@@ -137,6 +137,8 @@
 | **PS-01** | Payment/Settlement | لا واجهة (UI) لأي عملية من: تأكيد تسوية، إنشاء/إرسال دفعة، مواءمة، إيصال. الـBackend موجود لكن غير قابل للاستخدام التشغيلي. | HIGH | P0 | — | **COMPLETED** | E2E: من `/admin/finance` تأكيد تسوية بمرجع + رفض بلا مرجع | ✅ سطح `/admin/finance` مُنفَّذ (5 تبويبات: settlement/payouts/reconciliation/receipts/providers) + 8 دوال api مطابقة + i18n (ar/fr/en/zh) + مسار محروس ADMIN/SUPER_ADMIN؛ Typecheck + Build (server+web) نظيفان؛ **تحقّق حيّ على PostgreSQL 16 معزول (`wasit_test`)**: Backend `finance-routes.test.ts` **16/16**، E2E `admin-finance.spec.ts` **10/10** — الإجمالي **26 passed / 0 failed / 0 skipped**؛ `dispatch`/`sync` لا يُكملان الدفعة (`COMPLETED`) دون إثبات تحويل خارجي. الملفات: `docs/PS-01_ADMIN_FINANCE_DESK.md` + `e2e/admin-finance.spec.ts` + `packages/web/src/pages/AdminFinancePages.tsx` |
 | **PS-02** | Payment/Settlement | لا «settlement desk» لإتمام دفع `manual`/offline من الواجهة. | MEDIUM | P0 | PS-01 | **COMPLETED** | E2E: intent manual → إتمام من الواجهة → PAID | ✅ مكتب إتمام دفع يدوي (DEMO فقط) في تبويب `/admin/finance`: `completeManualPayment` يعيد استخدام `applyPaymentSucceeded` نفسه (لا كاتب جديد)؛ بوّابات مغلقة (503 خارج DEMO، 409 لمزوّد غير `manual`، 422 بلا مرجع)؛ مسار محروس ADMIN/SUPER_ADMIN؛ Audit `PAYMENT.MANUAL_COMPLETED`؛ تأكيد قبل الفعل في الواجهة. الملفات: `docs/PS-02_MANUAL_PAYMENT_COMPLETION.md` + `packages/server/tests/manual-payment-completion{,-guard}.test.ts` + `e2e/manual-payment-completion.spec.ts`. **تحقّق حيّ (PostgreSQL 16 معزول `wasit_test`): Backend 10/10 + بوّابات 4/4 + E2E 5/5 + تراجع PS-01 (finance-routes 16/16, admin-finance E2E 10/10) = 45 passed / 0 failed / 0 skipped** |
 | **PS-03** | Payment/Settlement | قدرة **Split** لدى مزوّد الدفع (iPay/ClicToPay/Flouci) غير مؤكَّدة وغير موثَّقة: لا endpoint منشور للـsplit/sub-merchant، والنموذج المالي (1020 = 980 + 40) يحتاج split أو WASIT كحامل أموال. | CRITICAL | P0 | مزوّد | BLOCKED | — | يحتاج تأكيداً كتابياً موثقاً من المزوّد + تصنيف صريح `Split supported` أو `Provider capability gap` |
+| **SEC-DEP-01** | Security/Supply-chain | **مُغلق (SEC-01، 2026-11-23).** تدقيق اعتماديات كامل (`npm audit --omit=dev` و`npm audit` الكامل) على `package-lock.json` الوحيد للمستودع: 7 ثغرات إنتاج (3 high، 4 moderate، 0 critical) و18 إجمالاً (2 critical في أدوات التطوير). أُصلح ما يُصلَح داخل النطاق الدلالي المعلن بلا كسر: `hono` 4.13.7→**4.13.21** (6 استشارات، منها **`RegExpRouter` يتخطّى wildcard middleware** وهي مسار WASIT الفعلي لـ`app.use('/api/*')`)، `@hono/node-server` 1.19.17→**1.19.19** (backslash كفاصل مسار يتجاوز الحجب عند reverse proxy)، `source-map-js` 1.2.1→**1.2.4**، `postcss-selector-parser` 6.1.4→**6.1.6**. النتيجة: **الإنتاج 7 → 6** (0 critical) و**الإجمالي 18 → 15**. `npm audit fix --dry-run` يؤكد أنه لا يوجد إصلاح آخر ممكن بلا ترقية كاسرة. | MEDIUM | P0 | — | **COMPLETE_VERIFIED** | audit + build + حزمة كاملة | قبل/بعد في §31 · Typecheck (server+web)=0 · Build + `build:prod` · Web 73/73 · Server **2335/2335** · CI أخضر |
+| **SEC-DEP-02** | Security/Supply-chain | **قرار مطلوب — ترقيات كاسرة متبقّية (6 ثغرات إنتاج / 9 حزم).** كل ما تبقّى يتطلّب قفزة major أو كسر 0.x، ولم يُنفَّذ (قاعدة «لا major بلا موافقة»): `zod` 3.25.76→4.6.7 (استنفاد ذاكرة على مجموعات ضخمة — **مُخفَّف** بسقف جسم الطلب 1 MiB + nginx 20m)، `nodemailer` 6.10.1→10.6.1 (22 استشارة؛ القابل للمساس منها فئات addressparser DoS لأن عناوين المستخدمين تُمرَّر إلى `sendMail`)، `drizzle-orm` 0.36.4→0.45.4 (SQL injection عبر **معرّفات** غير مُهرَّبة — **غير قابل للوصول** حالياً: كل `sql.raw` بقيم كودية/مُحقَّقة)، `@hono/node-server` 1.19.19→2.1.11 (`serveStatic` — **غير مستخدم** في WASIT)، `react-router-dom` 6.30.6→7.18.6 (open redirect + SSR `deserializeErrors` — SPA بلا SSR)، وأدوات تطوير فقط: `vite` 5→8، `vitest` 2→5 (+`tinypool`/`vite-node`/`@vitest/mocker`، critical لا يمسّ الإنتاج)، `esbuild` 0.24→0.28، `drizzle-kit` 0.28→0.31. | HIGH | P0 | مراجعة معمارية لكل ترقية | PENDING (قرار مطلوب — لا كود) | ترقية + حزمة كاملة + CI لكل حزمة | خطة الترقية والتصنيف في §31 |
 | **PS-06** | Payment/Settlement | لا مسار استرداد لـClicToPay: `clictopay.refund()` يرفض العملية بـ**503** عمداً (لا endpoint استرداد موثَّق علناً). | HIGH | P0 | مزوّد | BLOCKED | — | يحتاج توثيقاً رسمياً/عقداً من SPS/ClicToPay يحدّد آلية الاسترداد (لا اختراع endpoint) |
 | **OBS-01** | Security/Observability | `/api/payments/webhook-failures` و`/:id/replay` كانا موجودين بلا سطح إداري ولا توثيق للمشغّل. | MEDIUM | P0 | — | **COMPLETED** | E2E: فشل webhook يظهر + replay يعمل | ✅ تبويب `webhooks` في `/admin/observability` + ترقيم (offset/total) + تأكيد قبل الفعل + Audit بالهوية؛ Backend `p6-p7-dispute-webhook.test.ts` **19/19** + الحزمة الكاملة **887/887**؛ E2E `admin-webhook-failures.spec.ts` **4/4** + الحزمة الكاملة **226 passed / 8 skipped** — تحقّق حيّ على PostgreSQL 16 معزول (`wasit_test`). **تحديث 2026-11-20 (OBS-01-RECOVERY):** محرّك استعادة خادمي كامل — تصنيف الفشل (TRANSIENT/CONFLICT/PERMANENT/CAPABILITY/STALE)، backoff أسي محدود (`WEBHOOK_RETRY_*`)، claim ذرّي بـlease يمنع التطبيق المزدوج تحت التزامن، سجل `payment_webhook_attempts` لكل محاولة، سقف `replay` (`WEBHOOK_REPLAY_MAX`) + Audit، ومسار `GET /webhook-failures/:id/attempts`. الاختبارات: وحدة **14/14** + تكامل **13/13** + تراجع الـwebhooks **19/19** على PostgreSQL 17 معزول (`wasit_test`، `127.0.0.1:5434`)؛ التفاصيل: `docs/OBS-01_WEBHOOK_RECOVERY.md` |
 | **SEC-CSRF-01** | Security/API | لا حماية CSRF لمركزية: الطلبات المُغيِّرة للحالة (POST/PUT/PATCH/DELETE) التي تحمل كوكي الجلسة (`wasit_session`، `SameSite=Lax`) تُنفَّذ دون التحقق من `Origin`/`Referer`، فيمكن لموقع خارجي إرغام متصفح المستخدم المصادَق على إرسال طلب كتابة (كوكي `Lax` لا يمنع POST/PUT/PATCH/DELETE عبر fetch/no-cors، ويُرسَل عبر top-level navigations GET فقط). | HIGH | P1 | — | **COMPLETE_VERIFIED** | رفض Origin غير موثوق على طلب يحمل الكوكي؛ قبول same-origin؛ عدم المساس بطلبات بلا كوكي (توكن/webhooks)؛ سلامة GET/HEAD/OPTIONS؛ استمرار CORS/RBAC | ✅ `middleware/csrf.ts` (مركزي، بلا مسارات مستثناة؛ بعد CORS وقبل routing) + `CSRF_PROTECTION` في `env.ts` + ربطه في `app.ts`؛ **تحقق معزول بلا DB/Docker (WASIT-EXECUTION-005):** `packages/server/tests/csrf.test.ts` **21/21** ✅ (يشمل: الطرق الأربع POST/PUT/PATCH/DELETE، `null` origin، Referer أجنبي/مطابق، رفض مغلق بلا origin مع الكوكي، عدم المساس بطلبات بلا كوكي، سلامة GET/HEAD/OPTIONS، inert في off/auto-dev، فرض `auto` الافتراضي في production عبر التطبيق الحقيقي، عدم استثناء المسارات الحسّاسة، وترتيب CORS→CSRF→routes) + `cors.test.ts` **4/4** (تراجع) + `secret-scan.test.ts` **3/3** + `staff-mfa-enforcement.test.ts` **17/17** (تراجع) + Typecheck (server+web) نظيف ✅ |
@@ -407,6 +409,10 @@
 | 2026-11-23 | CI-01-CLOSEOUT | التحقق: `admin-webhook-failures.spec.ts` **4/4** · المواصفات السبع الأخرى الناشرة لـwebhooks **32/32** · `obs01-webhook-recovery` **13/13** بلا تجاوز (backoff 30s وتضاعفه ورفض NOT_DUE كما هي) · الخادم **2335/2335** · Typecheck+Build نظيفان · إثبات DB: `DEAD_LETTERED/attempts=5/next_attempt_at=NULL` + `REPLAY` بفاعل USER و`DEAD_LETTERED` بفاعل SYSTEM | COMPLETE_VERIFIED |
 | 2026-11-23 | OBS-01-CONTRACT | تسجيل قرار مطلوب (بلا كود): عقد HTTP الموجّه للمزوّد — `503 + Retry-After` للفاشل العابر و`NOT_DUE`، `409/422` للدائم، `200` للإقرارات النهائية فقط، وحلّ بقاء `FAILED` بلا replay. «المفتوحة» 19 → **20** | PENDING (قرار) |
 | 2026-11-23 | CI-01-CLOSEOUT | جرد الـ15 متخطّى في E2E بلا تغيير: `agent-surfaces` 6 (بيئية + فجوة تغطية موثّقة)، `demo-auto-login` 2 و`demo-owner` 7 (مقصودة، والحالة السلبية مُختبَرة) | COMPLETED |
+| 2026-11-23 | SEC-DEP-01 | تدقيق اعتماديات: `npm audit --omit=dev` = **7** (3 high / 4 moderate / 0 critical)، الكامل = **18** (2 critical في أدوات التطوير). كل استشارة فُحصت مقابل الكود (استدعاء الـAPI + مصدر المدخل) قبل التصنيف | COMPLETED |
+| 2026-11-23 | SEC-DEP-01 | إصلاح غير كاسر: `hono` 4.13.7→**4.13.21** (6 استشارات، أهمّها تخطّي wildcard middleware في `RegExpRouter` — عمود حماية WASIT)، `@hono/node-server` 1.19.17→**1.19.19**، `source-map-js` 1.2.1→**1.2.4**، `postcss-selector-parser` 6.1.4→**6.1.6**؛ `package-lock.json` تغيّر في 4 حزم فقط | IMPLEMENTED |
+| 2026-11-23 | SEC-DEP-01 | التحقق: `npm audit --omit=dev` **7→6**، الكامل **18→15**، `npm audit fix --dry-run` = 0 تغييرات (لا إصلاح آخر بلا كسر) · Typecheck server+web = 0 · Build + `build:prod` (bundle 2.79 MB) · Web 73/73 · Server **2335/2335** (179 ملفاً) · لا تغيير في المصادقة/RBAC/الدفع/Webhooks | **COMPLETE_VERIFIED** |
+| 2026-11-23 | SEC-DEP-02 | تسجيل الترقيات الكاسرة المتبقّية كقرار مستقل: zod 3→4، nodemailer 6→10، drizzle-orm 0.36→0.45، @hono/node-server 1→2، react-router-dom 6→7، vite 5→8، vitest 2→5، esbuild 0.24→0.28، drizzle-kit 0.28→0.31. «المفتوحة» 20 → **21** | PENDING (قرار) |
 
 ### تفاصيل إصلاح PERM-01C
 
@@ -1512,3 +1518,52 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 - **الأثر على الإنتاج**: صفر — لا كود خادم، ولا `.env`، ولا Demo، ولا قاعدة بيانات. `WEBHOOK_RETRY_BASE_DELAY_MS` الافتراضي (30s) و`WEBHOOK_RETRY_MAX_ATTEMPTS` (5) بلا تغيير، و`obs01-webhook-recovery` يُثبتهما.
 
 **جرد الـ15 اختباراً المتخطّى (بلا تغيير):** `agent-surfaces` 6 (3 اختبارات × مشروعان؛ `hasCredentials=false` — **بيئية + فجوة تغطية**: مسار توليد/تنزيل الفيديو مُغطّى في اختبارات التكامل على CI نفسه)، `demo-auto-login` 2 و`demo-owner` 7 (**مقصودة**: `DEMO_AUTO_LOGIN=false` افتراضياً، والحالة السلبية مُختبَرة في `demo-auto-login.spec.ts:61` و`demo-owner.spec.ts:182`). الحل المقترح لفجوة `agent-surfaces`: وظيفة CI منفصلة بـ`DEMO_AUTO_LOGIN=true` وكلمتَي مرور الديمو، لأن تفعيله في التشغيل الافتراضي يقلب مواصفات الرفض المقصودة.
+
+## 31. SEC-01 — تدقيق الاعتماديات وإغلاق ما يمكن إغلاقه (2026-11-23)
+
+**المنهج:** `package-lock.json` واحد للمستودع (workspaces). شُغِّل `npm audit --omit=dev` و`npm audit` الكامل، ثم فُحصت **كل** استشارة مقابل الكود الفعلي (هل تُستدعى الـAPI المثابة؟ هل المدخل من مستخدم؟) قبل تصنيفها. الخطورة المعلنة هي خطورة npm كما هي — **لم تُخفَّض ولم يُتجاهل أي بند**.
+
+### 31.1 قبل/بعد
+
+| الحزمة | قبل | بعد | الاستشارات | الخطورة | الإجراء |
+| --- | --- | --- | --- | --- | --- |
+| `hono` | 4.13.7 | **4.13.21** | 6 (serveStatic double-decode، `mount()` bypass، **`RegExpRouter` wildcard middleware skip**، `css` helper، `csrf()` text/ping، `validator('form')` multipart) | moderate | ✅ ترقية داخل `^4` |
+| `@hono/node-server` | 1.19.17 | **1.19.19** | 2 (backslash كفاصل مسار ⇒ تجاوز ACL عند proxy، و`serveStatic` double-decode) | moderate | ✅ جزئياً: أُصلح backslash؛ `serveStatic` يتطلّب 2.x |
+| `source-map-js` | 1.2.1 | **1.2.4** | 1 (DoS عبر إزاحات sections) | high | ✅ `npm update` (نطاق `postcss` يسمح) |
+| `postcss-selector-parser` | 6.1.4 | **6.1.6** | 1 (تعقيد تربيعي ⇒ استهلاك CPU) | moderate | ✅ `npm update` (نطاق `tailwindcss` يسمح) |
+| `zod` | 3.25.76 | 3.25.76 | 1 (استنفاد ذاكرة على مجموعات ضخمة، CVSS 7.5) | high | ⛔ يتطلّب 4.6.7 (major) |
+| `nodemailer` | 6.10.1 | 6.10.1 | 22 (addressparser DoS، تجاوز نطاق المستلم، SMTP command injection، CRLF، file/SSRF عبر `raw`) | high | ⛔ يتطلّب 10.1.4 (major) |
+| `drizzle-orm` | 0.36.4 | 0.36.4 | 1 (SQL injection عبر معرّفات غير مُهرَّبة) | high | ⛔ يتطلّب 0.45.2 (كسر 0.x) |
+| `react-router` / `react-router-dom` | 6.30.6 | 6.30.6 | 2 (open redirect عبر backslash، SSR `deserializeErrors` constructor injection) | moderate | ⛔ يتطلّب 7.18.0 (major) |
+| `vite` | 5.4.21 | 5.4.21 | 8 (path traversal، `server.fs.deny` bypass، launch-editor) | high | ⛔ أدوات تطوير — يتطلّب 8.x |
+| `vitest` (+`tinypool`, `vite-node`, `@vitest/mocker`) | 2.1.9 | 2.1.9 | 4 (منها **critical**: UI server يقرأ/ينفّذ ملفات، prototype pollution ⇒ RCE) | critical | ⛔ أدوات تطوير — يتطلّب 5.1.1 |
+| `esbuild` (مباشر + عبر vite/drizzle-kit) | 0.24.2 | 0.24.2 | 1 (dev server يقرأ استجابات أي موقع) | moderate | ⛔ أدوات تطوير — يتطلّب 0.28.2 |
+| `drizzle-kit` (+`@esbuild-kit/*`) | 0.28.1 | 0.28.1 | 3 | moderate | ⛔ أداة migrations — يتطلّب 0.31.11 |
+
+**النتيجة:** الإنتاج **7 → 6** (critical 0 في الحالتين) · الإجمالي **18 → 15** (critical 2 → 2، كلها في أدوات التطوير) · `npm audit fix --dry-run` = **0 تغييرات** ⇒ لا إصلاح آخر ممكن دون كسر.
+
+### 31.2 قابلية الاستغلال في WASIT (تصنيف، لا تخفيف)
+
+| الاستشارة | قابلية الوصول | الحكم |
+| --- | --- | --- |
+| `hono` — **`RegExpRouter` يتخطّى wildcard middleware** | `app.use('/api/*', …)` هو عمود WASIT الأمني (CSRF، MFA للطاقم، rate-limit، legal gate) | **قابلة للاستغلال — أُصلحت** (الأولوية القصوى في هذا التدقيق) |
+| `hono` — `serveStatic`/`mount()`/`css`/`csrf()`/`validator('form')` | لا استدعاء لأي منها في `src` (CSRF عندنا مكتوب داخلياً؛ الملفات الثابتة من nginx) | غير قابلة للوصول — أُصلحت مجاناً بالترقية |
+| `@hono/node-server` — backslash كفاصل مسار | الخادم خلف nginx يمرّر المسار كما هو | **قابلة للاستغلال — أُصلحت** |
+| `@hono/node-server` — `serveStatic` double-decode | `serveStatic` غير مستخدم | نظرية — ترقية 2.x مؤجّلة |
+| `source-map-js` / `postcss-selector-parser` | وقت البناء فقط (postcss/tailwind) | غير قابلة للوصول في وقت التشغيل — أُصلحت |
+| `zod` — استنفاد ذاكرة | كل جسم طلب يمرّ بـzod، لكن `MAX_REQUEST_BODY_BYTES` (1 MiB) + nginx (20m) يحدّان الحجم | **مُخفَّفة عملياً**؛ الترقية 4.x تبقى مطلوبة |
+| `nodemailer` | `lib/mail/smtp.ts` يمرّر بريد المستخدم إلى `sendMail`؛ لا `raw`/`jsonTransport`/DKIM/OAuth2/`resolveContent` | **DoS/تفسير عنوان** ممكن نظرياً؛ الترقية 6→10 مطلوبة |
+| `drizzle-orm` | كل `sql.raw` بقيم كودية أو `granularity` مُتحقَّق؛ لا معرّف من المستخدم | **غير قابلة للوصول** حالياً — الترقية مطلوبة كتحصين |
+| `react-router` | SPA بلا SSR ⇒ `deserializeErrors` غير مستخدم؛ أهداف التنقّل ثابتة | نظرية |
+| `vite`/`vitest`/`tinypool`/`esbuild`/`drizzle-kit` | لا تُشحن في `dist-bundle` (`--platform=node`، خارجي = argon2 فقط) ولا تُشغَّل في الإنتاج | **خارج سطح الإنتاج**؛ تبقى ديناً تقنياً |
+
+### 31.3 خطة SEC-DEP-02 (مقترحة، غير منفَّذة)
+
+1. `zod` 3→4 (الأوسع أثراً: 42 ملفاً) — فرع مستقل + تحديث `fieldErrors` (شكل `error.issues` لم يتغيّر جوهرياً) + حزمة كاملة.
+2. `nodemailer` 6→10 — مستقل؛ تحقّق من `createTransport`/`sendMail` فقط (واجهة مستقرة) + اختبارات `mail`.
+3. `drizzle-orm` 0.36→0.45 — مستقل؛ يمسّ كل الوحدات ⇒ حزمة كاملة + E2E.
+4. `@hono/node-server` 1→2 — مستقل (لا `serveStatic` عندنا).
+5. `react-router-dom` 6→7 — مستقل (واجهة فقط).
+6. `vite` 5→8 + `vitest` 2→5 + `esbuild`/`drizzle-kit` — حزمة أدوات واحدة، بعد استقرار ما سبق.
+
+> **قاعدة معلنة:** لا تُدمج أي من هذه الترقيات مع إصلاح أمني آخر، ولا بلا حزمة كاملة خضراء + CI أخضر.

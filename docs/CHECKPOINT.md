@@ -1321,3 +1321,16 @@ npm run test:e2e          # Playwright، يشغّل server + web تلقائيا�
 | 5 | `demo-owner.spec.ts:57,80,101,114,126,137,155` | 7 | نفس البوّابة (`/api/auth/demo-session` غير مُفعَّل) | **مقصودة** — الحالة السلبية `:182` مُختبَرة |
 
 - **فجوة التغطية الباقية (مسجّلة، غير منفَّذة)**: سطح إنتاج الفيديو واقتراحات الشراكة في الواجهة لا يُمارَسان في CI لأن حسابَي الديمو غير مُصدَّرين. الحل المقترح لاحقاً: وظيفة CI منفصلة بـ`DEMO_AUTO_LOGIN=true` + كلمتَي المرور، لأن تفعيله في التشغيل الافتراضي يقلب مواصفات «الرفض» المقصودة.
+
+## Milestone — SEC-01: تدقيق الاعتماديات وإغلاق ما يُغلَق بلا كسر (2026-11-23)
+
+- **النطاق**: `package-lock.json` واحد للمستودع (workspaces: server/shared/web). `npm audit --omit=dev` = **7** ثغرة إنتاج (3 high · 4 moderate · 0 critical)؛ `npm audit` الكامل = **18** (2 critical، كلها في أدوات التطوير).
+- **المنهج**: كل استشارة فُحصت مقابل الكود قبل التصنيف — هل تُستدعى الـAPI المثابة فعلاً؟ وهل المدخل من مستخدم؟ لم تُخفَّض أي خطورة ولم يُستثنَ أي بند (`--audit-level` أو `npm audit --ignore` لم تُستعمل).
+- **أُصلح (داخل النطاق الدلالي المعلن — بلا كسر)**:
+  - `hono` 4.13.7 → **4.13.21** (6 استشارات). الأهمّ: `GHSA-h7mg-cq63-vhpq` — `RegExpRouter` يتخطّى **wildcard middleware** لبعض مجموعات المسارات وللمسارات ذات محرف سطر مُرمَّز. هذا هو عمود حماية WASIT: `app.use('/api/*', csrf)`، `requireStaffMfa`، rate-limit، legal gate. الاستشارات الخمس الأخرى (`serveStatic`، `mount()`، `css`، `csrf()`، `validator('form')`) **غير قابلة للوصول** لأن WASIT لا يستدعي أيّاً منها (CSRF مكتوب داخلياً، والملفات الثابتة من nginx).
+  - `@hono/node-server` 1.19.17 → **1.19.19** — `GHSA-jpvv-r467-5p4w`: backslash يُعامَل كفاصل مسار ⇒ تجاوز حجب مبني على المسار عند reverse proxy. يبقى `serveStatic` (يحتاج 2.x) وهو **غير مستخدم** عندنا.
+  - `source-map-js` 1.2.1 → **1.2.4** (high، عبر `postcss` — وقت البناء فقط) و`postcss-selector-parser` 6.1.4 → **6.1.6** (عبر `tailwindcss`) — تحديثا lock فقط، بلا تغيير في `package.json`.
+  - **النتيجة**: الإنتاج **7 → 6**، الإجمالي **18 → 15**، و`npm audit fix --dry-run` = **0 تغييرات** (أي لا إصلاح آخر ممكن دون كسر — لا ثغرة أُهملت).
+- **لم يُصلَح (يحتاج ترقية كاسرة ⇒ `SEC-DEP-02`، قرار مستقل)**: `zod` 3→4 (استنفاد ذاكرة — مُخفَّف بسقف جسم الطلب 1 MiB + nginx 20m)، `nodemailer` 6→10 (22 استشارة؛ الملموس عندنا فئات addressparser DoS)، `drizzle-orm` 0.36→0.45 (SQL injection عبر معرّفات — غير قابل للوصول: كل `sql.raw` بقيم كودية)، `@hono/node-server` 1→2، `react-router-dom` 6→7 (SPA بلا SSR)، وأدوات التطوير `vite`/`vitest`/`tinypool`/`esbuild`/`drizzle-kit` (لا تُشحن في `dist-bundle`).
+- **لا تغيير في السلوك**: المصادقة، RBAC، الدفع، Webhooks، Migrations، Seeds — لم تُلمس. تغيّرت **4 حزم فقط** في الـlock (تحقّق آلي بمقارنة `packages` قبل/بعد).
+- **التحقق**: `npm audit` (قبل/بعد) · Typecheck server+web = 0 · `build` + `build:prod` (bundle 2.79 MB) · Web typecheck/build + **73/73** اختبار واجهة · الخادم **2335/2335** (179 ملفاً) · CI كامل على GitHub.
