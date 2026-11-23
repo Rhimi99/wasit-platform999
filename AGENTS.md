@@ -1287,3 +1287,10 @@ npx playwright install --with-deps chromium
 - **Baseline contains no secret**: account id, masked email, `email_verified`, `mfa_enabled`, confirmed-factor presence, roles, hash *algorithm*, live session count, last audit id. `verify` fails if the audit row carries a secret-shaped key (`auditPayloadLeaksSecret`).
 - **Shell arg convention**: `require_email "$@"` reads `$1/$2` without consuming them — every script must `shift 2`, not `shift`.
 - **Docs**: `docs/GM-ACCESS-05.md` (runbook, refusal layers, test limits), AD-061, gap §28. Tests: `tests/gm-access-05.test.ts` (33).
+
+## E2E harness env scoping (CI-01-CLOSEOUT, 2026-11-23)
+
+- `webServer.env` in `playwright.config.ts` is **one process-wide env**, not per spec. Any per-spec tuning must therefore be inert for every other spec, and that must be verified, not assumed.
+- `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` lives in `SERVER_ENV` for that reason: the webhook failure desk spec drives an event to `DEAD_LETTERED` by re-delivering it, and the production 30s gate would answer `200` (`retryScheduled`) after the first attempt so the budget is never spent. Only that spec posts failing events, and no spec asserts `retryScheduled`/`nextAttemptAt`.
+- Keep `WEBHOOK_RETRY_MAX_ATTEMPTS` at the production value (5): changing the budget changes what the spec proves. The real 30s → doubling backoff and the not-due refusal stay asserted against the default in `packages/server/tests/obs01-webhook-recovery.test.ts`.
+- Provider-facing webhook status contract (`404` on first failure, `200` on not-due) is **not** settled for a real acquirer: see `OBS-01-CONTRACT` in `docs/GAP_REGISTER.md` §5.

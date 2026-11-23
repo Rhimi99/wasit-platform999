@@ -35,7 +35,7 @@
 
 | المحور | العدد |
 | --- | --- |
-| بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 19 |
+| بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 20 |
 | بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 43 |
 | فجوات كاذبة مُستبعدة | 6 |
 | بنود تحتاج طرفاً خارجياً (عقود/بنية) | 10 |
@@ -195,6 +195,7 @@
 | **PI-03** | Infra | النسخ الاحتياطي محلي فقط: لا تشفير ولا نقل offsite ولا WAL streaming. | HIGH | P3 | بنية خارجية | BLOCKED | — | يحتاج وجهة خارجية |
 | **PI-05** | Infra | لا Error tracking (Sentry/Datadog). | MEDIUM | P3 | مزوّد | PENDING | تكامل + اختبار | — |
 | **PI-09** | Infra | لا مفاتيح AI إنتاجية (الافتراضي `local-heuristic`). | MEDIUM | P3 | AI-04 | PENDING | إعداد المزوّد + اختبار | — |
+| **OBS-01-CONTRACT** | Payments/Observability | **قرار مطلوب قبل تفعيل أي مزوّد دفع حقيقي** — عقد HTTP الموجّه للمزوّد في `POST /api/payment-webhooks` لم يُحسم: (أ) الفشل العابر الأول يردّ **404** (دلالياً «لا مسار»، وبعض المزوّدين يعطّلون endpoint يتكرّر 404) بدل `503`؛ (ب) **`NOT_DUE` يردّ 200** أي «توقّف عن إعادة المحاولة» بينما WASIT **لا تملك مؤقّتاً داخلياً** (مبدأ OBS-01 §2: المزوّد هو محرّك إعادة المحاولة) ⇒ حدث فشل عابر قد يبقى `FAILED` بلا مسار، لأن `replay` مقيّد بـ`DEAD_LETTERED` (`replayDeadLetter` يرفض غيره) ولا يظهر للمشغّل أي إجراء. **المطلوب مراجعته**: `503 + Retry-After` للفشل العابر و`NOT_DUE` · `409/422` للدائم/التعارض بلا `Retry-After` · `200` للإقرارات النهائية فقط (مُطبَّق/مكرّر/قديم/قيد التنفيذ/مُسدَّل) · وحلّ بقاء `FAILED` بلا replay (إمّا إقرار غير-2xx لـ`NOT_DUE` أو السماح بـreplay على `FAILED` بنفس السقف). **لم يُنفَّذ عمداً** في CI-01-CLOSEOUT: لا مزوّد حقيقي مُفعَّل، والعقد الحالي مُثبَت في اختبارات التكامل. | HIGH | P3 | مراجعة هندسية + مزوّد دفع حقيقي | PENDING (قرار مطلوب — لا كود) | مراجعة عقد + تحديث `obs01-webhook-recovery` + E2E | — (قرار) |
 
 ---
 
@@ -402,6 +403,10 @@
 | 2026-11-07 | PERM-01 | **الاختبار (معزول بلا DB، بلا `globalSetup`):** `perm01-admin-revenue-report.test.ts` **17/17** ✅ — مصفوفة RBAC (ADMIN بلا revenue:*/report:read؛ SUPER_ADMIN كامل)، منع ADMIN على `/api/revenue/report|scenarios|scenario`، 401 لغير المصادق، بقاء مكتب التقارير متاحاً لـADMIN (200-class) وممنوعاً لـCUSTOMER/MERCHANT (403)، منع CUSTOMER/MERCHANT/SUPPLIER/COMPANY/MARKETER على `/api/admin/stats`، عدم التسريب عبر endpoint بديل (كل مسارات الإيراد خلف revenue:read/simulate)، التحقق لكل طلب (نفس جلسة ADMIN: 200-class على الإدارة و403 على الإيراد)، وعدم التجاوز بتغيير الدور. | COMPLETE_VERIFIED |
 | 2026-11-07 | PERM-01 | **تراجع + TypeScript:** csrf(21)/cors(4)/secret-scan(3)/staff-mfa-enforcement(17) ✅؛ Typecheck (server+web) نظيف ✅؛ **لا تغيير صلاحيات ولا كود إنتاج ولا schema/migration/seed**؛ الموارد المؤقتة (ملف vitest للعزل) حُذفت. | COMPLETE_VERIFIED |
 | 2026-11-07 | PERM-01 | **إغلاق:** صف PERM-01 (المتبقّي) → `COMPLETE_VERIFIED`؛ «المفتوحة» 20 → 19 و«المغلقة» 28 → 29؛ أُضيف صف §6. | COMPLETE_VERIFIED |
+| 2026-11-23 | CI-01-CLOSEOUT | إغلاق الفشلين المتبقّيين: `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` في `SERVER_ENV` داخل `playwright.config.ts` (بيئة الـE2E فقط) ⇒ كل تسليم فاشل يصبح مستحقاً فوراً فتُستنفد ميزانية الإنتاج (5) ويُبلَغ `DEAD_LETTERED`. لا تغيير في المواصفة ولا في كود الخادم ولا في العقد الإنتاجي ولا في `.env`/Demo | COMPLETE_VERIFIED |
+| 2026-11-23 | CI-01-CLOSEOUT | التحقق: `admin-webhook-failures.spec.ts` **4/4** · المواصفات السبع الأخرى الناشرة لـwebhooks **32/32** · `obs01-webhook-recovery` **13/13** بلا تجاوز (backoff 30s وتضاعفه ورفض NOT_DUE كما هي) · الخادم **2335/2335** · Typecheck+Build نظيفان · إثبات DB: `DEAD_LETTERED/attempts=5/next_attempt_at=NULL` + `REPLAY` بفاعل USER و`DEAD_LETTERED` بفاعل SYSTEM | COMPLETE_VERIFIED |
+| 2026-11-23 | OBS-01-CONTRACT | تسجيل قرار مطلوب (بلا كود): عقد HTTP الموجّه للمزوّد — `503 + Retry-After` للفاشل العابر و`NOT_DUE`، `409/422` للدائم، `200` للإقرارات النهائية فقط، وحلّ بقاء `FAILED` بلا replay. «المفتوحة» 19 → **20** | PENDING (قرار) |
+| 2026-11-23 | CI-01-CLOSEOUT | جرد الـ15 متخطّى في E2E بلا تغيير: `agent-surfaces` 6 (بيئية + فجوة تغطية موثّقة)، `demo-auto-login` 2 و`demo-owner` 7 (مقصودة، والحالة السلبية مُختبَرة) | COMPLETED |
 
 ### تفاصيل إصلاح PERM-01C
 
@@ -1484,3 +1489,26 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 30s)، فلا تُستنفد المحاولات في 5 تسليمات متتالية. المواصفة لم تُحدَّث مع العقد الجديد،
 وقرار الشكل (`200` مقابل `404`) وتسليط `WEBHOOK_RETRY_*` في بيئة الـE2E يخصّان OBS-01
 ولم يُلمسا هنا. البوابة الآن **تُظهر هذا العيب بدل أن تخفيه**.
+
+> **مُغلق في §30 (CI-01-CLOSEOUT):** الفشلان أُغلقا بتسليط `WEBHOOK_RETRY_BASE_DELAY_MS='0'`
+> في بيئة الـE2E فقط — بلا تغيير في المواصفة ولا في العقد الإنتاجي. قرار عقد الحالة
+> الموجّه للمزوّد سُجِّل كبند مفتوح مستقل: **`OBS-01-CONTRACT`** في §5.
+
+## 30. CI-01-CLOSEOUT — مكتب فشل الـWebhooks من طرف إلى طرف (2026-11-23)
+
+> **العدّ:** لا يُغلق هذا البند فجوة منتج، ولا يُغيّر «المغلقة» (43). يُضيف **بنداً
+> مفتوحاً واحداً** (`OBS-01-CONTRACT` في §5: قرار عقد HTTP قبل أي مزوّد حقيقي) ⇒
+> «المفتوحة» 19 → **20**.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **CI-01-CLOSEOUT** | الفشلان المتبقّيان في `e2e/admin-webhook-failures.spec.ts`: المواصفة تُرسل الحدث الفاشل 5 مرات فوراً وتتوقّع `404` من كل تسليم، لكن محرّك الاستعادة يردّ `200` على التسليمات الواقعة داخل نافذة الـbackoff (`NOT_DUE`) ⇒ لا تُستنفد الميزانية ولا يُبلَغ `DEAD_LETTERED`، فلا يظهر الصف في المكتب ولا يمكن اختبار `replay`. | MEDIUM | P0 | — | **COMPLETE_VERIFIED** | الحدث يصل `DEAD_LETTERED` فعلاً · يظهر في المكتب · `replay` وفق الصلاحيات · Audit بهوية المشغّل · backoff الحقيقي ما زال مُثبَتاً بالقيم الافتراضية · العقد الإنتاجي بلا تغيير · بلا `skip` | `playwright.config.ts` (سطر واحد في `SERVER_ENV` + تعليق) · `admin-webhook-failures.spec.ts` **4/4** · المواصفات السبع الأخرى الناشرة لـwebhooks **32/32** · `obs01-webhook-recovery.test.ts` **13/13** (بلا تجاوز) · الخادم **2335/2335** · Typecheck+Build نظيفان · إثبات DB مباشر: `DEAD_LETTERED/attempts=5/next_attempt_at=NULL` + `REPLAY` بفاعل `USER` |
+
+**لماذا هذا الشكل وليس غيره:**
+- **تعديل المواصفة** (نشر واحد + توقّع `FAILED`) كان سيُفقد الاختبار موضوعه: `replay` يعمل على `DEAD_LETTERED` فقط.
+- **تعديل الخادم** (مثلاً `NOT_DUE` → 404) تغيير عقد موجّه للمزوّد، ويخصّ قراراً مستقلاً (`OBS-01-CONTRACT`).
+- **تسليط `WEBHOOK_RETRY_MAX_ATTEMPTS`** لم يُستعمل: تغيير الميزانية يغيّر عدد المحاولات التي يُثبتها الاختبار؛ تأخير `base` فقط يجعل كل تسليم مستحقاً فوراً ويُبقي الميزانية على قيمة الإنتاج (5).
+- **التسليط على المواصفة وحدها غير ممكن تقنياً**: `webServer.env` في Playwright واحد للعملية كلها. لذلك تحقّق أن الإعداد **خامل** لبقية المواصفات: المواصفة الوحيدة التي تنشر أحداثاً فاشلة هي مكتب الـwebhooks، ولا مواصفة E2E تعتمد `retryScheduled`/`nextAttemptAt`.
+- **الأثر على الإنتاج**: صفر — لا كود خادم، ولا `.env`، ولا Demo، ولا قاعدة بيانات. `WEBHOOK_RETRY_BASE_DELAY_MS` الافتراضي (30s) و`WEBHOOK_RETRY_MAX_ATTEMPTS` (5) بلا تغيير، و`obs01-webhook-recovery` يُثبتهما.
+
+**جرد الـ15 اختباراً المتخطّى (بلا تغيير):** `agent-surfaces` 6 (3 اختبارات × مشروعان؛ `hasCredentials=false` — **بيئية + فجوة تغطية**: مسار توليد/تنزيل الفيديو مُغطّى في اختبارات التكامل على CI نفسه)، `demo-auto-login` 2 و`demo-owner` 7 (**مقصودة**: `DEMO_AUTO_LOGIN=false` افتراضياً، والحالة السلبية مُختبَرة في `demo-auto-login.spec.ts:61` و`demo-owner.spec.ts:182`). الحل المقترح لفجوة `agent-surfaces`: وظيفة CI منفصلة بـ`DEMO_AUTO_LOGIN=true` وكلمتَي مرور الديمو، لأن تفعيله في التشغيل الافتراضي يقلب مواصفات الرفض المقصودة.

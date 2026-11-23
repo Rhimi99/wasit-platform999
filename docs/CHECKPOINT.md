@@ -1300,3 +1300,24 @@ npm run test:e2e          # Playwright، يشغّل server + web تلقائيا�
 - **التحقق على runner حقيقي (تشغيل `#45133544390` على `GM-ACCESS-01`)**: `Typecheck & build` ✅ · `Unit & integration tests` ✅ **179 ملف / 2335 اختباراً / 0 فاشل / 0 متخطّى** (353s، ffmpeg/ffprobe 8.0.1، piper ready) · `Backup & restore drill` ✅ **113 PASS** بما فيها E3 (استعادة مشفّرة بهوية صحيحة، 120 صفاً، `pg_dump 18.7` ← خادم 17) · `E2E` **242 ناجح / 15 متخطّى / فشلان**.
 - **لم يُخفَ أي اختبار**: لا `skipIf` جديد، ولا تخفيف لأي تأكيد، وعدد التخطّي في حزمة الخادم صار **صفراً** في CI (كان 26 قبل تثبيت piper).
 - **متبقٍ خارج النطاق (OBS-01)**: الفشلان في `e2e/admin-webhook-failures.spec.ts` — المواصفة تتوقّع `404` لكل تسليم ثم `DEAD_LETTERED` بعد 5 محاولات سريعة، بينما محرّك الاستعادة (OBS-01-RECOVERY) يردّ `200` (إقرار + تصنيف + backoff 30s) فلا تُستنفد المحاولات. قرار الشكل وتسليط `WEBHOOK_RETRY_*` في بيئة الـE2E يخصّان OBS-01 ولم يُلمسا.
+
+## Milestone — CI-01-CLOSEOUT: مكتب فشل الـWebhooks يُثبَت من طرف إلى طرف (2026-11-23)
+
+- **العطب المتبقّي**: مواصفة `e2e/admin-webhook-failures.spec.ts` كانت تُرسل نفس الحدث الفاشل 5 مرات فوراً وتتوقّع `404` من كل تسليم. محرّك الاستعادة (OBS-01-RECOVERY) يردّ على التسليم الثاني وما بعده **200** (`retryScheduled`) لأن `next_attempt_at` لم يستحقّ بعد (30s) ⇒ لا تُستنفد الميزانية ولا يُبلَغ `DEAD_LETTERED`. لم يكن عيباً في المواصفة وحدها: كان افتراضها «كل تسليم = محاولة» صحيحاً قبل الـbackoff.
+- **الإصلاح (سطر واحد، بيئة E2E فقط)**: `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` في `SERVER_ENV` داخل `playwright.config.ts`. الـ`webServer` في Playwright بيئته واحدة للعملية كلها، لذا لا يوجد تسليط لكل مواصفة على حدة؛ التسليط تحقّق بأن الإعداد **خامل** لبقية المواصفات: المواصفة الوحيدة التي تنشر أحداثاً فاشلة هي مكتب الـwebhooks، ولا مواصفة تعتمد `retryScheduled`/`nextAttemptAt`، و`maxAttempts` بقي على قيمة الإنتاج (5). **لا تغيير** في الكود الإنتاجي، ولا في `.env`، ولا في Demo.
+- **Backoff الحقيقي بقي مُثبَتاً بالقيم الافتراضية**: `tests/obs01-webhook-recovery.test.ts` **13/13** (بلا أي تجاوز: `30s` ثم تضاعف، ورفض المحاولة قبل الاستحقاق 200 `retryScheduled`، و`DEAD_LETTERED` بعد استنفاد الميزانية، و`CONFLICT` يُسدَّل من المحاولة الأولى 409).
+- **إثبات الانتقال النهائي (قاعدة البيانات مباشرة، بعد تشغيل المواصفة)**: صف `DEAD_LETTERED` بـ`attempts=5`, `failure_class=TRANSIENT`, `next_attempt_at=NULL`, `dead_lettered_at` مضبوط، وسجل المحاولات `1..4 retry_scheduled=t` و`5 retry_scheduled=f`؛ وصف مُعاد تشغيله صار `RECEIVED/attempts=0` مع صف محاولة `REPLAY`. الـAudit: `PAYMENT.WEBHOOK_DEAD_LETTERED` بفاعل `SYSTEM` (بلا هوية)، و`PAYMENT.WEBHOOK_REPLAY` بفاعل `USER` (هوية المشغّل).
+- **التحقق**: `admin-webhook-failures.spec.ts` **4/4** (بما فيها رفض التاجر 403 على المسارين) · المواصفات السبع الأخرى التي تنشر webhooks **32/32** (payments, settlement-integrity, admin-refunds, dispute-refund, order-lifecycle, financial-audit, admin-finance) · الخادم **2335/2335** (179 ملفاً، 0 متخطّى) · Typecheck (server+web) وBuild نظيفان.
+- **لا اختبار أُخفي**: لا `skip` جديد، ولا تخفيف لتأكيد، وعدد التخطّي في E2E بقي 15 (كلها بوّابات بيئية قائمة، موثّقة أدناه).
+
+### جرد الـ15 اختباراً المتخطّى في E2E (تدقيق — بلا تغيير)
+
+| # | المواصفة | العدد | سبب التخطّي | التصنيف |
+| --- | --- | --- | --- | --- |
+| 1 | `agent-surfaces.spec.ts:43` (إنتاج/بوّابة/معاينة/تنزيل فيديو) | 2 (chromium + mobile) | `hasCredentials=false`: `DEMO_ACCOUNT_PASSWORD_MERCHANTA`/`DEMO_STAFF_PASSWORD_ADMIN` غير مُصدَّرين في CI | **بيئية + فجوة تغطية** (مسار التوليد مُغطّى في `tests/ai-video-agent.test.ts` و`tests/agent-video-download.test.ts` على CI نفسه) |
+| 2 | `agent-surfaces.spec.ts:138` (غريب لا يقرأ المهمة/الفيديو) | 2 | نفس البوّابة، وأيضاً `items.length === 0` عند غياب مهمة | **بيئية + فجوة تغطية** |
+| 3 | `agent-surfaces.spec.ts:169` (موافقة الشراكة تحكم الاكتشاف) | 2 | نفس البوّابة | **بيئية + فجوة تغطية** |
+| 4 | `demo-auto-login.spec.ts:29, :50` | 2 | `DEMO_AUTO_LOGIN=false` افتراضياً (مقصود: الاختبار المقابل `:61` يُثبت **الرفض**) | **مقصودة** — الحالة السلبية مُختبَرة |
+| 5 | `demo-owner.spec.ts:57,80,101,114,126,137,155` | 7 | نفس البوّابة (`/api/auth/demo-session` غير مُفعَّل) | **مقصودة** — الحالة السلبية `:182` مُختبَرة |
+
+- **فجوة التغطية الباقية (مسجّلة، غير منفَّذة)**: سطح إنتاج الفيديو واقتراحات الشراكة في الواجهة لا يُمارَسان في CI لأن حسابَي الديمو غير مُصدَّرين. الحل المقترح لاحقاً: وظيفة CI منفصلة بـ`DEMO_AUTO_LOGIN=true` + كلمتَي المرور، لأن تفعيله في التشغيل الافتراضي يقلب مواصفات «الرفض» المقصودة.
