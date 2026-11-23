@@ -50,10 +50,28 @@ import {
 } from '../lib/gm-access';
 import { revokeAllSessionsForUser } from '../lib/session-admin';
 import { describeIdentity, evaluateProductionGate, readDatabaseIdentity } from '../lib/db-target-guard';
+import {
+  buildBaseline,
+  compareBaseline,
+  lookupRecoveryTarget,
+  passwordResetAuditRowsSince,
+  RecoveryTargetError,
+  type RecoveryBaseline,
+} from '../lib/gm-recovery';
 import { writeAudit } from '../lib/audit';
 import { ApiError } from '@wasit/shared';
 
-type Action = 'issue' | 'reset-factor' | 'status' | 'set-password';
+type Action = 'issue' | 'reset-factor' | 'status' | 'set-password' | 'precheck' | 'verify' | 'generate-password';
+
+const ACTIONS: readonly Action[] = [
+  'issue',
+  'reset-factor',
+  'status',
+  'set-password',
+  'precheck',
+  'verify',
+  'generate-password',
+];
 
 interface Args {
   action: Action;
@@ -63,12 +81,17 @@ interface Args {
   generate: boolean;
   passwordFile: string | null;
   vault: string | null;
+  baselineOut: string | null;
+  baseline: string | null;
 }
 
 function usage(): never {
   console.error(
     [
-      'Usage: npm run gm:access -- <issue|reset-factor|set-password|status> --email <address> [--reason "..."] [--confirm]',
+      'Usage: npm run gm:access -- <issue|reset-factor|set-password|status|precheck|verify> --email <address> [--reason "..."] [--confirm]',
+      '       npm run gm:access -- precheck --email <address> [--baseline-out <path>]',
+      '       npm run gm:access -- verify   --email <address> --baseline <path>',
+      '       npm run gm:access -- generate-password [--email <address>] [--vault <path>] --confirm',
       '',
       '  issue          mint a single-use ticket that satisfies the email-verification',
       '                 gate once at login (valid 15 minutes)',
@@ -88,13 +111,15 @@ function usage(): never {
 
 function parseArgs(argv: string[]): Args {
   const [action, ...rest] = argv;
-  if (!action || !['issue', 'reset-factor', 'set-password', 'status'].includes(action)) usage();
+  if (!action || !ACTIONS.includes(action as Action)) usage();
   let email = '';
   let reason = '';
   let confirm = false;
   let generate = false;
   let passwordFile: string | null = null;
   let vault: string | null = null;
+  let baselineOut: string | null = null;
+  let baseline: string | null = null;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     if (arg === '--email') email = rest[++i] ?? '';
@@ -103,6 +128,8 @@ function parseArgs(argv: string[]): Args {
     else if (arg === '--generate') generate = true;
     else if (arg === '--password-file') passwordFile = rest[++i] ?? '';
     else if (arg === '--vault') vault = rest[++i] ?? '';
+    else if (arg === '--baseline-out') baselineOut = rest[++i] ?? '';
+    else if (arg === '--baseline') baseline = rest[++i] ?? '';
     else if (arg.startsWith('--email=')) email = arg.slice('--email='.length);
     else if (arg.startsWith('--reason=')) reason = arg.slice('--reason='.length);
     else if (arg.startsWith('--password-file=')) passwordFile = arg.slice('--password-file='.length);
@@ -114,12 +141,13 @@ function parseArgs(argv: string[]): Args {
       process.exit(2);
     } else usage();
   }
-  if (!email) usage();
+  // `generate-password` writes a file for a future rotation and needs no account.
+  if (!email && action !== 'generate-password') usage();
   if (passwordFile !== null && generate) {
     console.error('Choose one source: --generate or --password-file, not both.');
     process.exit(2);
   }
-  return { action: action as Action, email, reason, confirm, generate, passwordFile, vault };
+  return { action: action as Action, email, reason, confirm, generate, passwordFile, vault, baselineOut, baseline };
 }
 
 function operatorName(): string {
@@ -233,6 +261,94 @@ async function assertProductionTarget(): Promise<void> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.action === 'generate-password') {
+    const path = vaultPathFor(args.email || 'general-manager', args.vault);
+    assertOutsideGitTree(path);
+    if (!args.confirm) {
+      console.log(`Would write a freshly generated ${GM_PASSWORD_GENERATED_LENGTH}-character password to ${path} (0600).`);
+      console.log('It is not printed and not applied to any account. Re-run with --confirm to write it.');
+      process.exitCode = 2;
+      return;
+    }
+    if (existsSync(path)) {
+      console.error(`Refusing: ${path} already exists; move it aside or pick another --vault.`);
+      process.exitCode = 2;
+      return;
+    }
+    const password = generateGmPassword(GM_PASSWORD_GENERATED_LENGTH);
+    assertStrongGmPassword(password, args.email || 'general-manager');
+    writeSecretFile(path, password);
+    console.log(`password written to ${path} (0600, owner only)`);
+    console.log('It was not printed and not applied. Apply it with:');
+    console.log(`  set-password --email <address> --password-file ${path} --reason "..." --confirm`);
+    return;
+  }
+
+  if (args.action === 'precheck') {
+    const identity = await readDatabaseIdentity(db);
+    const decision = evaluateProductionGate({
+      identity,
+      nodeEnv: process.env.NODE_ENV,
+      declaredName: process.env.WASIT_PRODUCTION_DB_NAME,
+      declaredHost: process.env.WASIT_PRODUCTION_DB_HOST,
+    });
+    console.log(`identity:    ${describeIdentity(identity)}`);
+    console.log(`environment: NODE_ENV=${process.env.NODE_ENV ?? '(unset)'}, declared production database ${process.env.WASIT_PRODUCTION_DB_NAME ?? '(unset)'}`);
+    console.log(`gate:        ${decision.allowed ? 'ALLOWED — this is a declared production target' : `REFUSED (${decision.code})`}`);
+    if (!decision.allowed) {
+      console.error(decision.message);
+      console.error('');
+      console.error('Nothing was changed.');
+      process.exitCode = 2;
+      return;
+    }
+
+    const target = await lookupRecoveryTarget(db, args.email);
+    const account = target.snapshot;
+    console.log(`account:     ${account.emailMasked} (id ${account.id})`);
+    console.log(`roles:       ${account.roles.join(', ')}`);
+    console.log(`active:      ${account.isActive} · email verified: ${account.emailVerified} · MFA enabled: ${account.mfaEnabled} · confirmed factor: ${account.hasConfirmedFactor}`);
+    console.log(`password:    ${account.passwordAlgorithm} hash`);
+    console.log(`targets:     ${target.matchingAccounts} account(s) at that address, ${target.matchingSuperAdmins} of them SUPER_ADMIN (${target.superAdminsTotal} SUPER_ADMIN in total)`);
+    console.log(`sessions:    ${account.liveSessions} live session(s) will be revoked`);
+    if (target.matchingAccounts !== 1 || target.matchingSuperAdmins !== 1) {
+      console.error('Refusing: the target is not exactly one SUPER_ADMIN account.');
+      process.exitCode = 2;
+      return;
+    }
+
+    if (args.baselineOut) {
+      const path = resolve(args.baselineOut);
+      assertOutsideGitTree(path);
+      const baseline = await buildBaseline(db, args.email, identity, {
+        nodeEnv: process.env.NODE_ENV ?? null,
+        declaredName: process.env.WASIT_PRODUCTION_DB_NAME ?? null,
+      });
+      writeSecretFile(path, JSON.stringify(baseline, null, 2));
+      console.log(`baseline:    written to ${path} (0600) — pass it to \`verify\``);
+    }
+    return;
+  }
+
+  if (args.action === 'verify') {
+    if (!args.baseline) {
+      console.error('verify requires --baseline <path> written by `precheck --baseline-out`.');
+      process.exitCode = 2;
+      return;
+    }
+    const baseline = JSON.parse(readFileSync(resolve(args.baseline), 'utf8')) as RecoveryBaseline;
+    const identity = await readDatabaseIdentity(db);
+    const target = await lookupRecoveryTarget(db, args.email);
+    const newAuditRows = await passwordResetAuditRowsSince(db, target.snapshot.id, baseline.createdAt);
+    const checks = compareBaseline(baseline, { database: identity, account: target.snapshot, newAuditRows });
+    for (const check of checks) console.log(`${check.ok ? 'PASS' : 'FAIL'}  ${check.name}: ${check.detail}`);
+    const failed = checks.filter((c) => !c.ok);
+    console.log('');
+    console.log(failed.length === 0 ? `verify: ${checks.length}/${checks.length} checks passed` : `verify: ${failed.length} check(s) failed`);
+    if (failed.length > 0) process.exitCode = 2;
+    return;
+  }
+
   if (SENSITIVE_ACTIONS.has(args.action)) await assertProductionTarget();
   const user = await loadSuperAdmin(args.email);
   const hasFactor = await hasConfirmedSecondFactor(db, user.id);
@@ -375,6 +491,11 @@ main()
     // The guard already explained itself and set the exit code.
     if (err instanceof Error && err.message === '__guarded__') return;
     if (err instanceof ApiError) {
+      console.error(`Refused [${err.code}]: ${err.message}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (err instanceof RecoveryTargetError) {
       console.error(`Refused [${err.code}]: ${err.message}`);
       process.exitCode = 2;
       return;

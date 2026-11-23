@@ -1261,3 +1261,14 @@ npx playwright install --with-deps chromium
 - **إدارة**: `/api/admin/ai/spend` (`AI_MANAGE`/`ADMIN_AI`) — overview + limits PUT/DELETE، كل تغيير في `audit_logs` (`AI_SPEND.LIMIT_UPDATED`/`LIMIT_DELETED`). الواجهة: تبويب «الاستهلاك» في `AdminAiPage` (`components/AiSpendPanel.tsx`).
 - **فخ بيئي (ليس عطلاً في الكود)**: مسار TTS يستدعي `ffprobe` من النظام. `ffmpeg-static` يوفّر `ffmpeg` فقط؛ بدون `apt-get install -y ffmpeg` تفشل 4 اختبارات فيديو بـ`spawn ffprobe ENOENT`. الصورة الإنتاجية تُثبّت `ffmpeg`+`ffprobe` عبر apt.
 - **اختبارات**: `tests/afc10-ai-spend.test.ts` (22). لا تُنشئ SUPER_ADMIN في اختبار جديد: `super-admin-bootstrap.test.ts` يفشل إن وُجد صف SUPER_ADMIN أثناء تشغيله (تلوّث بين الملفات).
+
+## GM-ACCESS-05 — Production recovery deployment package (2026-11-23)
+
+- **`deploy/gm-recovery/`** is the operator-facing package: `check-runtime.sh` → `precheck.sh` (writes a baseline, changes nothing) → `generate-password.sh` (on-host secret) or a 0600 file → `rotate.sh` (typed confirmation of the DB name) → `verify.sh` (10 checks against the baseline) → `login-check.sh` (real login, prints only status/MFA). `package.sh --out <dir>` builds `wasit-gm-recovery-<stamp>.tar.gz` with `SHA256SUMS` and refuses to stage any secret-shaped file.
+- **Bundle is not fully self-contained**: `build:prod` keeps `argon2` external (native addon). The package copies `argon2`, `@phc/format`, `node-gyp-build` into `scripts/node_modules/` (prebuilds for linux-x64/arm64). `check-runtime.sh` proves it loads; on another platform run from the deployed `packages/server`.
+- **CLI needs the deployment env**, not just `DATABASE_URL`: it imports `db/client` → `env.ts`, so `JWT_SECRET` must be present in production (`lib/env.ts` refuses the committed default). Source the deployment env file; never retype the URL.
+- **New read-only CLI actions**: `precheck` (identity + gate decision + masked account + target counts + session count; exit 2 when the gate refuses, writes a baseline only when it passes), `verify` (compares live state with the baseline; exit 2 on any failed check), `generate-password` (writes a 0600 file, applies to no account, needs no `--email`).
+- **Ordering trap (fixed)**: `precheck`/`verify`/`generate-password` are handled **before** `loadSuperAdmin`, so a wrong email cannot mask a wrong database, and generation needs no account.
+- **Baseline contains no secret**: account id, masked email, `email_verified`, `mfa_enabled`, confirmed-factor presence, roles, hash *algorithm*, live session count, last audit id. `verify` fails if the audit row carries a secret-shaped key (`auditPayloadLeaksSecret`).
+- **Shell arg convention**: `require_email "$@"` reads `$1/$2` without consuming them — every script must `shift 2`, not `shift`.
+- **Docs**: `docs/GM-ACCESS-05.md` (runbook, refusal layers, test limits), AD-061, gap §28. Tests: `tests/gm-access-05.test.ts` (33).
