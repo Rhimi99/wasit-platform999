@@ -100,7 +100,7 @@ jobs:
       - name: Install voiceover engine
         run: |
           ./scripts/install-tts.sh
-          test -x ./packages/server/vendor/piper/piper/piper
+          test -x ./packages/server/vendor/piper/piper
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
@@ -112,7 +112,14 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16
+        # The drill shells out to the pg_dump/pg_restore that ship with the
+        # runner, and the server must be new enough to accept what that client
+        # writes: pg_dump 18 always emits `SET transaction_timeout = 0;`, which
+        # a 16 server rejects, so the restore half of the drill fails. 17 is the
+        # first major that knows the setting and the major this repo documents
+        # for dev/prod. The app-facing jobs stay on 16 — they use the pure-JS
+        # driver, which client/server skew does not affect.
+        image: postgres:17
         env:
           POSTGRES_USER: wasit
           POSTGRES_DB: wasit_dev
@@ -124,19 +131,13 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
-    env:
-      # /usr/bin/pg_dump on Debian/Ubuntu is pg_wrapper, which defaults to the
-      # newest installed major version. Pin it to the service image's version so
-      # the dump and the server always agree.
-      PGVERSION: "16"
     steps:
       - uses: actions/checkout@v4
       # `age` enables the encryption sections of the drill (E3) plus the isolated
       # drop-order/guard sections (F1-F6); without it those sections SKIP, so the
-      # install keeps the encrypted path covered. `postgresql-client-16` supplies
-      # the pg_dump/pg_restore/psql the drill drives, and must match the server
-      # image: a newer client emits `SET transaction_timeout = 0;` into the dump,
-      # which PostgreSQL 16 rejects, so the restore half of the drill fails.
+      # install keeps the encrypted path covered. The pg_dump/pg_restore/psql the
+      # drill drives come from the runner image and already match the server
+      # image's major version.
       #
       # `age` is deliberately not pinned to an exact version: Ubuntu's archive
       # rotates patch releases, and the former pin
@@ -146,7 +147,9 @@ jobs:
         run: |
           sudo add-apt-repository -y universe
           sudo apt-get update
-          sudo apt-get install -y age postgresql-client-16
+          sudo apt-get install -y age
+          pg_dump --version
+          pg_restore --version
       - run: ./scripts/backup-restore.test.sh
 
   # Full E2E (Playwright) against the real API + PostgreSQL, no mocks.
@@ -193,7 +196,7 @@ jobs:
       - name: Install voiceover engine
         run: |
           ./scripts/install-tts.sh
-          test -x ./packages/server/vendor/piper/piper/piper
+          test -x ./packages/server/vendor/piper/piper
       # Prepare the dev database the webServer/globalSetup run against.
       - run: npm run db:migrate
       - run: npm run db:seed
