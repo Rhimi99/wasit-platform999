@@ -5,17 +5,41 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  # Lets a working branch run the gate on demand (the push filter above covers
+  # only the integration branches), so a fix can be proven before it is merged.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 # Cancel superseded runs on the same ref.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Connection strings for the ephemeral PostgreSQL service container.
+#
+# `packages/server/tests/test-db-guard.ts` refuses every target except
+# 127.0.0.1:5434/wasit_test. That guard is what keeps the destructive
+# DROP/CREATE DATABASE path in `tests/setup.ts` away from a real server, so CI
+# adapts to the guard instead of weakening it: each job publishes the throwaway
+# container on host port 5434 and addresses it by that literal host. `localhost`
+# and port 5432 are rejected by design.
+#
+# The container runs with `POSTGRES_HOST_AUTH_METHOD=trust` and no password. It
+# is created per job, bound to 127.0.0.1 and destroyed with the runner, so there
+# is no credential in this file to store, rotate or leak.
+env:
+  DATABASE_URL: postgresql://wasit@127.0.0.1:5434/wasit_dev
+  TEST_DATABASE_URL: postgresql://wasit@127.0.0.1:5434/wasit_test
+  WASIT_TEST_ADMIN_URL: postgresql://wasit@127.0.0.1:5434/postgres
+
 jobs:
   # Fast gate: type-check both packages and build the server bundle.
   static:
     name: Typecheck & build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,23 +56,21 @@ jobs:
   test:
     name: Unit & integration tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: wasit
-          POSTGRES_PASSWORD: wasit_dev_password
           POSTGRES_DB: wasit_dev
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5432:5432
+          - 127.0.0.1:5434:5432
         options: >-
           --health-cmd "pg_isready -U wasit -d wasit_dev"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
-    env:
-      DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev
-      TEST_DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,6 +79,18 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm rebuild argon2
+      # The marketing-video specs render real MP4s and verify them with ffprobe.
+      # They fail — they do not skip — when the renderer is missing, so the
+      # toolchain is installed rather than the assertions relaxed.
+      - name: Install media toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+      - name: Verify media toolchain
+        run: |
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+          ffmpeg -hide_banner -filters | grep -q " ass " && echo "libass: present"
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
@@ -65,49 +99,54 @@ jobs:
   backup-drill:
     name: Backup & restore drill
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: wasit
-          POSTGRES_PASSWORD: wasit_dev_password
           POSTGRES_DB: wasit_dev
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5432:5432
+          - 127.0.0.1:5434:5432
         options: >-
           --health-cmd "pg_isready -U wasit -d wasit_dev"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
-    env:
-      DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev
     steps:
       - uses: actions/checkout@v4
       # `age` enables the encryption sections of the drill (E3) plus the isolated
-      # drop-order/guard sections (F1-F6). Without it those sections SKIP, so the
-      # install keeps the encrypted path covered in CI. The version is pinned to
-      # the one Ubuntu 24.04 (noble) ships in its official archive; that build is
-      # from the universe pocket, so `universe` is added explicitly first.
-      - run: |
+      # drop-order/guard sections (F1-F6); without it those sections SKIP, so the
+      # install keeps the encrypted path covered. `postgresql-client` supplies
+      # the pg_dump/pg_restore/psql the drill drives.
+      #
+      # Deliberately not pinned to an exact version: Ubuntu's archive rotates
+      # patch releases, and the former pin (`age=1.1.1-1ubuntu0.24.04.3`) is
+      # exactly what broke this job with "Version ... was not found". The drill
+      # asserts behaviour, not a package build.
+      - name: Install drill tooling
+        run: |
           sudo add-apt-repository -y universe
           sudo apt-get update
-          sudo apt-get install -y age=1.1.1-1ubuntu0.24.04.3
+          sudo apt-get install -y age postgresql-client
       - run: ./scripts/backup-restore.test.sh
 
   # Full E2E (Playwright) against the real API + PostgreSQL, no mocks.
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: static
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: wasit
-          POSTGRES_PASSWORD: wasit_dev_password
           POSTGRES_DB: wasit_dev
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5432:5432
+          - 127.0.0.1:5434:5432
         options: >-
           --health-cmd "pg_isready -U wasit -d wasit_dev"
           --health-interval 10s
@@ -115,8 +154,6 @@ jobs:
           --health-retries 10
     env:
       CI: "true"
-      DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_dev
-      TEST_DATABASE_URL: postgresql://wasit:wasit_dev_password@localhost:5432/wasit_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -125,6 +162,17 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm rebuild argon2
+      # The video studio spec drives real renders through the API; without
+      # ffmpeg the endpoint answers 502 and the studio specs fail.
+      - name: Install media toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+      - name: Verify media toolchain
+        run: |
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+          ffmpeg -hide_banner -filters | grep -q " ass " && echo "libass: present"
       # Prepare the dev database the webServer/globalSetup run against.
       - run: npm run db:migrate
       - run: npm run db:seed

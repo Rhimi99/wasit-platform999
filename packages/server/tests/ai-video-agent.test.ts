@@ -108,8 +108,20 @@ async function runVideoTask(requestedBy: string, input: Record<string, unknown>)
   return { task: done, advice };
 }
 
-async function mediaAssetCount(): Promise<number> {
-  const rows = await db.select({ n: sql<number>`count(*)::int` }).from(mediaAssets);
+/**
+ * Counts the media rows a given product owns.
+ *
+ * Deliberately scoped: a global `count(*)` raced the other video suites that
+ * vitest runs in parallel (each of which inserts assets), which turned a true
+ * "the agent wrote no row" assertion into a flaky one. The product is created
+ * by this test, so a scoped count is both deterministic and stricter — it
+ * asserts that *nothing at all* was recorded for it.
+ */
+async function mediaAssetCountForProduct(productId: string): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.productId, productId));
   return Number(rows[0]?.n ?? 0);
 }
 
@@ -134,7 +146,7 @@ describe.skipIf(!voiceReady)('AI — Marketing Video Agent (real DB)', () => {
     const supplierUser = await createUser('SUPPLIER');
     const supplierId = await createSupplier(supplierUser);
     const productId = await createProduct(supplierId);
-    const before = await mediaAssetCount();
+    const before = await mediaAssetCountForProduct(productId);
 
     const { advice } = await runVideoTask(supplierUser, { productId, durationSeconds: 60 });
 
@@ -196,7 +208,7 @@ describe.skipIf(!voiceReady)('AI — Marketing Video Agent (real DB)', () => {
 
     // No platform row was written: rendering is a file, not a media_assets or
     // audit_logs write (both are out of reach for an agent).
-    expect(await mediaAssetCount()).toBe(before);
+    expect(await mediaAssetCountForProduct(productId)).toBe(before);
   }, 240_000);
 
   it('can plan without rendering when the caller asks for a plan only', async () => {
@@ -267,7 +279,7 @@ describe.skipIf(!voiceReady)('AI — Marketing Video Agent (real DB)', () => {
     expect(advice.plan.language).toBe('ar');
 
     // Execute the hand-off exactly as the owner would.
-    const before = await mediaAssetCount();
+    const before = await mediaAssetCountForProduct(productId);
     const asset = await generateMarketingVideo(
       db,
       { userId: owner, roles: ['SUPPLIER'] },
@@ -280,6 +292,6 @@ describe.skipIf(!voiceReady)('AI — Marketing Video Agent (real DB)', () => {
     expect(asset.durationSeconds).toBe(35);
     expect(asset.previewable).toBe(true);
     expect(asset.downloadable).toBe(true);
-    expect(await mediaAssetCount()).toBe(before + 1);
+    expect(await mediaAssetCountForProduct(productId)).toBe(before + 1);
   }, 300_000);
 });

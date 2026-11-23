@@ -1287,3 +1287,13 @@ npm run test:e2e          # Playwright، يشغّل server + web تلقائيا�
 - **Health/Ops**: `GET /api/health/channels` يعرض `media.storage` و`media.video` (id/available/reason/async) بلا أسرار. `.wasit-media/` في `.gitignore`.
 - **الاختبارات**: `tests/marketing-video.test.ts` — 13 حالة: 401 غير مصادق، 403 لـCUSTOMER (RBAC)، 403 لمنتج تاجر آخر، 422 لمنتج غير ACTIVE، **MP4 حقيقي** (تحقق ftyp + حفظ DB + ظهور في المكتبة)، تشكيل عربي، عزل بين المستخدمين، توكن غير صالح، حذف ناعم، تعرّض Agent للوسائط الحقيقية، و`/mine` (ملكية/فارغ/401).
 - **التحقق**: الخادم **434/434** (42 ملفاً)، typecheck للخادم والواجهة نظيف، و`vite build` للواجهة ناجح.
+
+## Milestone — CI-01: بوابة الاختبارات تعمل فعلياً (2026-11-23)
+
+- **العطب**: `.github/workflows/ci.yml` كان يضبط `TEST_DATABASE_URL` على `localhost:5432` بينما `packages/server/tests/test-db-guard.ts` يرفض كل هدف غير `127.0.0.1:5434/wasit_test`؛ و`vitest.config.ts` يستدعي `resolveTestDatabaseUrl()` عند التحميل ⇒ **الوظيفة تفشل قبل تشغيل أي اختبار**. إضافةً: لا `ffprobe` على الـrunner، و`age` مثبَّت بإصدار دقيق اختفى من أرشيف Ubuntu.
+- **الإصلاح (بلا إضعاف الحارس)**: نشر خدمة PostgreSQL على `127.0.0.1:5434` في الوظائف الثلاث التي تحتاجها، و`POSTGRES_HOST_AUTH_METHOD=trust` بلا كلمة مرور (حاوية عابرة لكل وظيفة، مربوطة بـloopback) ⇒ **صفر أسرار في ملف CI**. تثبيت `ffmpeg` + `fonts-dejavu-core` في `test` و`e2e` مع خطوة تحقّق تُفشل الوظيفة إن غاب `ffmpeg`/`ffprobe`/`libass`. تثبيت `age`/`postgresql-client` بلا إصدار دقيق. `permissions: contents: read` و`timeout-minutes` لكل وظيفة.
+- **جذر فشل الفيديو**: `ffmpeg-static` يوفّر `ffmpeg` فقط، أما `ffprobe` (التحقّق من البايتات والمدة والجودة) فيُستدعى من PATH ⇒ الرسم ينجح والتحقّق يفشل، فتُرفض الأصول. تثبيت حزمة `ffmpeg` يوفّر الاثنين.
+- **هشاشة حقيقية كُشفت وأُصلحت**: عدّ `media_assets` كان **عالمياً** في `ai-video-agent.test.ts` فيتسابق مع ملفات الفيديو المتوازية (صار مقيداً بالمنتج، وهو **أشدّ** لا أضعف)، ومهلتان 30s على رسم حقيقي (35s+120s) صارتا 180s/240s صراحةً.
+- **التحقق**: `packages/server` **179 ملف / 2335 اختباراً ناجحاً / 0 فاشل / 0 متخطّى** (307s) مع `ffprobe 7.1.5`؛ ملفات الفيديو الأربعة معاً **35/35**؛ `actionlint 1.7.12` = 0؛ Typecheck (server+web) = 0؛ `build` (web) + `build:prod` (server) ناجحان؛ فحص النسخ الاحتياطي محلياً **85 PASS** (قسم E3 يحتاج superuser — يُثبَت في CI).
+- **لم يُخفَ أي اختبار**: لا `skipIf` جديد، ولا تخفيف لأي تأكيد. الاختبارات التي كانت تفشل تفشل الآن **بنجاح** لأن الأداة المفقودة صارت موجودة.
+- **متبقٍ خارج النطاق**: فشلان في `e2e/admin-webhook-failures.spec.ts` (المعالج يعيد 200 مع `DEAD_LETTERED` بينما المواصفة تتوقع 404) — تعارض عقد يحتاج قراراً في **OBS-01**، ولم يُلمس هنا.

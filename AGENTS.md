@@ -50,6 +50,16 @@ commit مدفوع على `origin` معرّض للضياع.**
 | `npm run db:generate` / `db:migrate` | Drizzle migrations |
 | `npm run dev` | tsx watch |
 
+## CI (GitHub Actions) — عقد يجب احترامه (CI-01، 2026-11-23)
+
+- **`tests/test-db-guard.ts` هو المرجع، لا ملف الـCI.** الحارس يرفض أي هدف غير `127.0.0.1:5434/wasit_test` (ولا fallback إلى `DATABASE_URL`/`localhost`/`5432`) لأن `tests/setup.ts` ينفّذ `DROP/CREATE DATABASE`. لذلك CI ينشر خدمة Postgres على **`127.0.0.1:5434:5432`** ويكتب `postgresql://wasit@127.0.0.1:5434/...`.
+- **لا كلمة مرور في الـworkflow**: الحاوية عابرة لكل وظيفة، مربوطة بـloopback، وتعمل بـ`POSTGRES_HOST_AUTH_METHOD: trust`. إن أُضيفت قاعدة مُدارة لاحقاً فالقيمة من `secrets` مع بقاء المضيف/المنفذ مطابقين للحارس.
+- **`ffprobe` ليس من `ffmpeg-static`**: الرسم يستخدم `ffmpeg` (نظام أو `ffmpeg-static`)، لكن التحقّق (`verify.ts`/`video-quality.ts`/`tts.ts`) يستدعي **`ffprobe` من PATH**. وظيفتا `test` و`e2e` تثبّتان `ffmpeg` + `fonts-dejavu-core` وتتحقّقان من `libass` قبل التشغيل.
+- **لا `skipIf` لأدوات مفقودة**: الاختبارات تُفشل عند غياب الأداة (كما في `marketing-video.test.ts` قبلAll). الإصلاح يكون بتثبيت الأداة في البيئة.
+- **مهل الفيديو صريحة**: ملفات الفيديو تُرسم فعلياً وتتنافس على CPU ⇒ مهلة على مستوى الحزمة 180s (و240s لاختبار 35s+120s). لا تعتمد على المهلة العامة 30s.
+- **عدّ الصفوف يجب أن يُقيَّد بالكيان الذي أنشأه الاختبار** (مثل `media_assets WHERE product_id = ...`) لا بـ`count(*)` عالمي — الملفات تعمل متوازية على نفس القاعدة.
+- **`age` في وظيفة النسخ الاحتياطي بلا إصدار دقيق**: أرشيف Ubuntu يبدّل إصدارات patch، وتثبيت `age=1.1.1-1ubuntu0.24.04.3` أوقف الوظيفة سابقاً (exit 100).
+
 ## E2E Testing (Playwright — 2026-09-19، Phase 18)
 
 ```bash
