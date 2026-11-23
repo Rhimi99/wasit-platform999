@@ -59,6 +59,11 @@ commit مدفوع على `origin` معرّض للضياع.**
 - **مهل الفيديو صريحة**: ملفات الفيديو تُرسم فعلياً وتتنافس على CPU ⇒ مهلة على مستوى الحزمة 180s (و240s لاختبار 35s+120s). لا تعتمد على المهلة العامة 30s.
 - **عدّ الصفوف يجب أن يُقيَّد بالكيان الذي أنشأه الاختبار** (مثل `media_assets WHERE product_id = ...`) لا بـ`count(*)` عالمي — الملفات تعمل متوازية على نفس القاعدة.
 - **`age` في وظيفة النسخ الاحتياطي بلا إصدار دقيق**: أرشيف Ubuntu يبدّل إصدارات patch، وتثبيت `age=1.1.1-1ubuntu0.24.04.3` أوقف الوظيفة سابقاً (exit 100).
+- **عميل `pg_dump` يأتي من الـrunner، لا من apt**: `ubuntu-latest` صار Ubuntu 26.04 بعميل PostgreSQL **18**، و`pg_dump` 18 يكتب دائماً `SET transaction_timeout = 0;` — يرفضه أي خادم 16. لذلك خدمة وظيفة النسخ الاحتياطي على `postgres:17` (أول إصدار يعرف الإعداد). لا تُثبّت `postgresql-client-16` (غير موجود في أرشيف 26.04) ولا تُخفّض الخادم إلى 16.
+- **piper يُثبَّت بـ`scripts/install-tts.sh`**: يستخدم `tar --strip-components=1` لينتج `packages/server/vendor/piper/piper` (ملف). لا تُعِد `cp -a piper/. .` — مدخل `piper` في الأرشيف ملف بنفس اسم مجلده فيفشل. `vendor/piper` مستبعد من git، وبدونه `voice-pack.test.ts` يفشل و26 اختباراً صوتياً تُتخطّى.
+- **`npm ci --ignore-scripts` يعني باينري `ffmpeg-static` غائب**: أضف `npm rebuild argon2 ffmpeg-static`، وإلا فشلت `marketing-video.test.ts` عند `beforeAll` رغم وجود ffmpeg النظامي.
+- **تشغيل البوابة على فرع عمل**: `workflow_dispatch` مفعّل؛ استخدم `gh workflow run ci.yml --ref <branch>`. لا تضف الفرع إلى فلتر `push` (الفلتر للفروع التكاملية فقط).
+- **مواصفات E2E قد تتخلّف عن الواجهة**: تفعيل MFA يتطلّب إعادة إدخال كلمة المرور (`mfa-enroll-password`) قبل `mfa-enable`، وإلا فالزر `disabled` وينتهي الاختبار بمهلة. راجع الواجهة قبل تعديل المواصفة.
 
 ## E2E Testing (Playwright — 2026-09-19، Phase 18)
 
