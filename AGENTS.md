@@ -525,6 +525,16 @@ npx playwright install --with-deps chromium
 - **لا أسرار في التدقيق**: صفوف `GM_ACCESS.*` تحمل `ticketId`/السبب/المشغّل فقط. أي إضافة تكتب التذكرة أو هاشها أو كلمة المرور تُفشل `secret-scan` أو اختبار التسريب.
 - **التوثيق**: `docs/GM-ACCESS-01.md` (الإجراء للمالك) + AD-058 + §25 في `docs/GAP_REGISTER.md`.
 
+## GM-ACCESS-02 — تدوير كلمة مرور المدير العام (2026-11-23)
+
+- **الأمر الوحيد**: `npm run gm:access -- set-password --email <..> --reason ".." --confirm [--generate | --password-file <path>]`. لا مسار HTTP، ولا كلمة مرور مشتركة، ولا `Rhimi123`/`Passw0rd!2026` (قائمة رفض في `BANNED_PASSWORDS`).
+- **النطاق**: `users.password_hash` لحساب `SUPER_ADMIN` واحد + `sessions.revoked_at`. **لا تلمس** `email_verified` (البوابة باقية) ولا `mfa_enabled`/`authenticator_apps` (العامل يبقى مطلوبًا) ولا `user_roles` (لا ترقية).
+- **لا سر في argv ولا في المخرجات**: `--password` مرفوض صراحةً؛ المولّد `generateGmPassword()` (٣٢ حرفًا، أربع فئات مضمونة، CSPRNG عبر `randomInt`)؛ `--password-file` يُرفض إن كان مقروءًا للمجموعة/الآخرين؛ الخزانة ملف `0600` داخل مجلد `0700` **خارج أي شجرة Git** (`assertOutsideGitTree`)، تُكتب قبل التغيير وتُحذف إن فشل التطبيق.
+- **السياسة**: ≥ ٢٤ حرفًا + أربع فئات + لا اسم الحساب (`assertStrongGmPassword`) — أقوى من التسجيل (٨) ومن `bootstrap-super-admin` (١٢). لا تُخفّضها.
+- **التدقيق**: `GM_ACCESS.PASSWORD_RESET` (سبب + مشغّل + `sessionsRevoked`) و`GM_ACCESS.PASSWORD_RESET_REFUSED` لغير `SUPER_ADMIN` — **بلا** كلمة المرور أو الهاش. اختبار `tests/gm-access-02.test.ts` (12 حالة) يبحث عن السر والهاش في الصفوف.
+- **لا Migration**: الأداة تستخدم `users.password_hash` و`sessions` القائمين. لا تُضِف جدولًا لهذا الغرض.
+- **التوثيق**: `docs/GM-ACCESS-02.md` (إجراء المالك + الخزانة) · AD-059 · §26 في `docs/GAP_REGISTER.md`. أي تطبيق على حساب فعلي يحتاج موافقة صريحة.
+
 ## Money Path Invariants (2026-09-24)
 
 - **`Payment ≠ Settlement`** (عقد مُنفَّذ في الكود): تأكيد الدفع (`applyPaymentSucceeded`) **لا يكتب** `transaction_ledger.status='SETTLED'` أبداً — القيود تبقى `PENDING`. الكاتب **الوحيد** لـ`SETTLED` هو `applySettlementConfirmed` في `modules/payments/service.ts`، ولا يُستدعى إلا من حدث webhook نوعه `settlement.confirmed` من مزوّد يعلن `capabilities.settlementEvidence`.

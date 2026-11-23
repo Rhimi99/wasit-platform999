@@ -49,3 +49,7 @@ packages/server/artifacts/
 
 # Pidfiles and logs from scripts/demo-up.sh
 .demo-run/
+
+# Git bundles are hand-off artifacts, not source
+*.bundle
+*.bundle.sha256

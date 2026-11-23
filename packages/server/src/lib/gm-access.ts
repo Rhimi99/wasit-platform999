@@ -1,12 +1,13 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../db/client';
 import { authenticatorApp, users } from '../db/schema/auth';
 import { gmAccessRecoveries, gmAccessTickets } from '../db/schema/gm-access';
 import { newId } from './ids';
-import { hashToken } from './security';
+import { hashPassword, hashToken } from './security';
 import { writeAudit } from './audit';
+import { revokeAllSessionsForUser } from './session-admin';
 
 /**
  * GM-ACCESS-01 — operator-assisted access recovery for the general manager.
@@ -204,4 +205,160 @@ export async function recordGmRecovery(
     ticketId: input.ticketId,
     hadFactor: input.hadFactor,
   });
+}
+
+// ---------------------------------------------------------------------------
+// GM-ACCESS-02 — password rotation for the general manager account
+// ---------------------------------------------------------------------------
+
+/** Floor for this path: well above the 12 the bootstrap accepts. */
+export const GM_PASSWORD_MIN_LENGTH = 24;
+/** Generated length. Every extra character is free for the operator. */
+export const GM_PASSWORD_GENERATED_LENGTH = 32;
+
+// No `l`, `I`, `1`, `O`, `0`: the owner may have to read this off a screen and
+// type it on a phone, and those pairs are where that goes wrong.
+const PASSWORD_LETTERS = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
+const PASSWORD_DIGITS = '23456789';
+const PASSWORD_SYMBOLS = '!@#%^*-_=+?';
+
+/**
+ * Values that must never become the general manager's password again.
+ *
+ * `Rhimi123` is the credential this rotation exists to replace, and
+ * `Passw0rd!2026` is the demo password printed in the repository's own docs —
+ * either one on a live SUPER_ADMIN account is a published key.
+ */
+const BANNED_PASSWORDS = ['rhimi123', 'passw0rd!2026', 'wasit123', 'admin123', 'changeme'];
+
+function pick(alphabet: string): string {
+  // randomInt is rejection-sampled by Node, so the modulo bias a plain
+  // `% alphabet.length` would introduce is not present.
+  return alphabet[randomInt(alphabet.length)];
+}
+
+function shuffle(chars: string[]): string[] {
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars;
+}
+
+/**
+ * Builds a password for the owner to keep.
+ *
+ * One character from each class is placed first and the rest are drawn from the
+ * whole alphabet, so the result always satisfies the policy instead of usually
+ * satisfying it; the shuffle then removes the positional pattern that would
+ * otherwise put a symbol at a fixed index.
+ */
+export function generateGmPassword(length = GM_PASSWORD_GENERATED_LENGTH): string {
+  const size = Math.max(length, GM_PASSWORD_MIN_LENGTH);
+  const all = PASSWORD_LETTERS + PASSWORD_DIGITS + PASSWORD_SYMBOLS;
+  const chars = [
+    pick('abcdefghijkmnopqrstuvwxyz'),
+    pick('ABCDEFGHJKLMNPQRSTUVWXYZ'),
+    pick(PASSWORD_DIGITS),
+    pick(PASSWORD_SYMBOLS),
+  ];
+  while (chars.length < size) chars.push(pick(all));
+  return shuffle(chars).join('');
+}
+
+/**
+ * Password policy for the recovery path.
+ *
+ * Stricter than registration (8) and than the bootstrap (12): this credential is
+ * typed once, kept in a vault, and opens every admin surface, so length is the
+ * cheapest defence available.
+ */
+export function assertStrongGmPassword(password: string, email: string): void {
+  const fail = (message: string): never => {
+    throw ApiError.validation([{ field: 'password', message, code: 'WEAK_PASSWORD' }], message);
+  };
+  if (password.length < GM_PASSWORD_MIN_LENGTH) {
+    fail(`Password must be at least ${GM_PASSWORD_MIN_LENGTH} characters`);
+  }
+  if (password.length > 200) fail('Password is too long (200 characters maximum)');
+  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((re) => re.test(password));
+  if (classes.length < 4) fail('Password must mix lowercase, uppercase, digits and symbols');
+  const normalized = password.toLowerCase();
+  if (BANNED_PASSWORDS.includes(normalized)) fail('That password is on the refused list; choose another');
+  const localPart = email.split('@')[0]?.toLowerCase() ?? '';
+  if (localPart.length >= 4 && normalized.includes(localPart)) {
+    fail('Password must not contain the account name');
+  }
+}
+
+export interface GmPasswordRotation {
+  userId: string;
+  email: string;
+  sessionsRevoked: number;
+}
+
+/**
+ * Replaces the password of one SUPER_ADMIN account.
+ *
+ * Scope is deliberately one row: `users.password_hash` for the account whose
+ * address was named. Roles, `email_verified`, `mfa_enabled` and the authenticator
+ * record are untouched, so the email gate and the second factor keep working for
+ * this account and every other one.
+ *
+ * Sessions are revoked because they were authorised by the old credential. The
+ * caller is the operator CLI, which holds no session, so all of them go.
+ */
+export async function setSuperAdminPassword(
+  db: DB,
+  input: { email: string; password: string; reason: string; changedBy: string },
+): Promise<GmPasswordRotation> {
+  const email = input.email.trim().toLowerCase();
+  const reason = input.reason.trim();
+  if (reason.length < 10) {
+    throw ApiError.validation(
+      [{ field: 'reason', message: 'Give a reason of at least 10 characters (it is audited)', code: 'REQUIRED' }],
+      'A password change reason of at least 10 characters is required',
+    );
+  }
+
+  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (rows.length === 0) throw ApiError.notFound('Account');
+  const user = rows[0];
+  if (!user.isActive) {
+    throw ApiError.validation([{ field: 'email', message: 'Account is disabled', code: 'INACTIVE' }], 'Account is disabled');
+  }
+
+  const roleRows = await db.execute(sql`
+    select r.name from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = ${user.id}
+  `);
+  const roles = ((roleRows as unknown as { rows?: { name: string }[] }).rows ?? (roleRows as unknown as { name: string }[])).map((r) => r.name);
+  if (!roles.includes('SUPER_ADMIN')) {
+    await writeAudit(db, { actorId: null, ipAddress: null, userAgent: null }, {
+      action: 'GM_ACCESS.PASSWORD_RESET_REFUSED',
+      entityType: 'USER',
+      entityId: user.id,
+      metadata: { reason: 'NOT_SUPER_ADMIN', changedBy: input.changedBy },
+    });
+    throw ApiError.forbidden('Password rotation is limited to SUPER_ADMIN accounts');
+  }
+
+  assertStrongGmPassword(input.password, user.email);
+
+  await db
+    .update(users)
+    .set({ passwordHash: await hashPassword(input.password), updatedAt: new Date() })
+    .where(eq(users.id, user.id));
+
+  const sessionsRevoked = await revokeAllSessionsForUser(db, user.id);
+
+  // The row records who, why and what was invalidated — never the credential,
+  // its hash, or anything derived from it.
+  await writeAudit(db, { actorId: null, ipAddress: null, userAgent: null }, {
+    action: 'GM_ACCESS.PASSWORD_RESET',
+    entityType: 'USER',
+    entityId: user.id,
+    metadata: { reason, changedBy: input.changedBy, sessionsRevoked },
+  });
+
+  return { userId: user.id, email: user.email, sessionsRevoked };
 }
