@@ -5,6 +5,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().optional(),
+  /**
+   * The database name this deployment declares as production. The operator CLI
+   * compares it with what the server reports before any credential change, so a
+   * connection string alone can never unlock a sensitive action.
+   */
+  WASIT_PRODUCTION_DB_NAME: z.string().optional(),
+  /** Optional pin: when set, the reported server host must match it too. */
+  WASIT_PRODUCTION_DB_HOST: z.string().optional(),
   JWT_SECRET: z.string().min(32).default('dev-only-secret-not-for-production-please-change-me-1234567890'),
   SESSION_TTL_DAYS: z.coerce.number().default(30),
   MAX_LOGIN_ATTEMPTS: z.coerce.number().default(5),

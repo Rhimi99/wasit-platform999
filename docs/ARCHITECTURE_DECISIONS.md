@@ -463,3 +463,14 @@
 - **سياسة أقوى من التسجيل والبوتستراب**: ≥ ٢٤ حرفًا وأربع فئات (التسجيل ٨، `bootstrap-super-admin` ١٢)، مع قائمة رفض تشمل `Rhimi123` و`Passw0rd!2026` (كلمة الـDemo المنشورة) وعدم احتواء اسم الحساب.
 - **`DECISION REQUIRED`**: (1) هل تُتاح الأداة لـ`ADMIN`؟ (2) تنبيه خارجي بعد كل تدوير؟ (3) انتهاء صلاحية دوري لكلمة مرور `SUPER_ADMIN`؟
 - **العواقب**: `lib/gm-access.ts` (+`generateGmPassword`/`assertStrongGmPassword`/`setSuperAdminPassword`)، `scripts/gm-access.ts` (`set-password` + خزانة `0600`)، `docs/GM-ACCESS-02.md`، `tests/gm-access-02.test.ts` (12 حالة). **لا Migration**، لا صلاحية جديدة، لا مسار HTTP جديد.
+
+## AD-060 — العمليات الحساسة في `gm:access` لا تعمل إلا على بيئة إنتاج مُعلَنة ومُتحقَّقة
+
+- **السياق**: GM-ACCESS-02 منحت `set-password` القدرة على تغيير كلمة مرور `SUPER_ADMIN`، لكنها تنفّذ على أي `DATABASE_URL`. كشف التحقق من GM-ACCESS-03 أن المتغير في الصدفة كان يشير إلى `wasit_test` — أي أن أمرًا واحدًا بالخطأ كان سيغيّر كلمة مرور حساب على قاعدة اختبار أو على `wasit_demo` المنشورة علنًا.
+- **الخيارات**: (أ) الاعتماد على اسم القاعدة (`wasit_prod`)؛ (ب) تأكيد تفاعلي من المشغّل؛ (ج) إشارة بيئة صريحة + تطابق مع ما يبلّغ عنه الخادم + قائمة أسماء محمية.
+- **القرار**: (ج). (أ) مرفوض: من يضبط `DATABASE_URL` يضبط الاسم أيضًا، فالاسم ليس دليلًا. (ب) مرفوض: `--confirm` موجود أصلًا، والتأكيد الإضافي لا يحمي من خطأ صامت في سكربت آلي. (ج) يجعل البوابة تحتاج شرطين مستقلين: إعلان النشر (`NODE_ENV=production` + `WASIT_PRODUCTION_DB_NAME`) وتطابقًا مع `current_database()` المقروء من الخادم.
+- **الترتيب مقصود**: فحص الاسم المحمي يأتي **بعد** التطابق، حتى لا يُشرّع إعلانٌ مثل `WASIT_PRODUCTION_DB_NAME=wasit_demo` نفسه؛ والفحص كله يسبق البحث عن الحساب، فلا يُكتب أي صفّ تدقيق أو تحديث عند الرفض.
+- **الهوية من الخادم لا من السلسلة**: `readDatabaseIdentity` يستعلم `current_database()`/`host(inet_server_addr())`/`inet_server_port()`/`current_user`، و`host()` تُسقط netmask كي يطابق تثبيت المضيف `10.0.0.12` لا `10.0.0.12/32`.
+- **النطاق**: `set-password` و`reset-factor` فقط (تغيير دليل ثقة). `status` يبقى غير محروس لأنه قراءة، و`issue` خارج نطاق هذا القرار (`DECISION REQUIRED`).
+- **إشارة إضافية مجانية**: `lib/env.ts` يرفض أصلًا الإقلاع في `production` بـ`JWT_SECRET` افتراضي أو بـ`ALLOW_DEV_TOOLING`/`DEMO_PAYMENT_MODE` مُفعّل، فلا يمكن تزييف بيئة إنتاج على خادم إعداداته اختبارية.
+- **العواقب**: `lib/db-target-guard.ts` (جديد)، ربطه في `scripts/gm-access.ts`، `WASIT_PRODUCTION_DB_NAME`/`WASIT_PRODUCTION_DB_HOST` في `lib/env.ts` و`.env.example`، `docs/GM-ACCESS-04.md`، `tests/gm-access-04.test.ts` (18 حالة، منها 4 عبر الـCLI الحقيقي كعمليّة فرعية). لا Migration، لا مسار HTTP، لا صلاحية جديدة.

@@ -525,6 +525,17 @@ npx playwright install --with-deps chromium
 - **لا أسرار في التدقيق**: صفوف `GM_ACCESS.*` تحمل `ticketId`/السبب/المشغّل فقط. أي إضافة تكتب التذكرة أو هاشها أو كلمة المرور تُفشل `secret-scan` أو اختبار التسريب.
 - **التوثيق**: `docs/GM-ACCESS-01.md` (الإجراء للمالك) + AD-058 + §25 في `docs/GAP_REGISTER.md`.
 
+## GM-ACCESS-04 — حارس بيئة قاعدة البيانات (2026-11-23)
+
+- **البوابة** `lib/db-target-guard.ts`: `set-password` و`reset-factor` يرفضان ما لم يتحقّق **ثلاثة شروط مستقلة**: `NODE_ENV=production`، و`WASIT_PRODUCTION_DB_NAME` مساوٍ لِـ`current_database()` المقروء من الخادم، والاسم غير محمي. `WASIT_PRODUCTION_DB_HOST` تثبيت اختياري (يقارن بـ`host(inet_server_addr())` بلا netmask).
+- **ترتيب مقصود**: فحص الاسم المحمي **بعد** التطابق (فإعلان `wasit_demo` لا يُشرّع نفسه)، والبوابة كلها **قبل** البحث عن الحساب ⇒ الرفض لا يكتب صف تدقيق ولا يبطل جلسة ولا يقرأ ملف السر. رمز الخروج `2`.
+- **الأسماء المحمية**: `postgres`, `template*`, `wasit_dev`, `wasit_staging`, `wasit_test`, `wasit_demo`, `*_test`, `*_demo`, `*_dev`, `*_staging`, `_restore*`, `_drill*`. لا تُخفّف القائمة ولا تُضاف استثناءات.
+- **الهوية من الخادم لا من السلسلة**: `current_database()`/`host(inet_server_addr())`/`inet_server_port()`/`current_user` — `DATABASE_URL` ليس دليلًا أبدًا.
+- **غير محروس بقصد**: `status` (قراءة) و`issue` (خارج النطاق — `DECISION REQUIRED` في AD-060).
+- **`lib/env.ts`** يعطي إشارة ثانية مجانية: الإقلاع في `production` يُرفض بـ`JWT_SECRET` افتراضي أو بـ`ALLOW_DEV_TOOLING`/`DEMO_PAYMENT_MODE`، فلا يمكن تزييف بيئة إنتاج على خادم اختباري.
+- **الاختبارات** `tests/gm-access-04.test.ts` (18): مصفوفة قبول/رفض على دالّة القرار + 4 حالات تشغّل الـCLI الحقيقي كعمليّة فرعية (برفض `wasit_test` حتى مع `NODE_ENV=production`). أي تعديل على `main()` يجب أن يُبقي هذه الأربع ناجحة.
+- **التوثيق**: `docs/GM-ACCESS-04.md` (إجراء الإنتاج + الفحوص قبل الكتابة) · AD-060 · §27. لا Migration، لا مسار HTTP، لا صلاحية.
+
 ## GM-ACCESS-02 — تدوير كلمة مرور المدير العام (2026-11-23)
 
 - **الأمر الوحيد**: `npm run gm:access -- set-password --email <..> --reason ".." --confirm [--generate | --password-file <path>]`. لا مسار HTTP، ولا كلمة مرور مشتركة، ولا `Rhimi123`/`Passw0rd!2026` (قائمة رفض في `BANNED_PASSWORDS`).

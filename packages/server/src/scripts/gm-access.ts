@@ -21,6 +21,12 @@
  * it would do. The ticket is printed once, to this terminal, and is valid for 15
  * minutes and one use. It is never written to a file, a log or the audit trail.
  *
+ * `set-password` and `reset-factor` are gated: they refuse to run unless the
+ * deployment declares itself production (`NODE_ENV=production` +
+ * `WASIT_PRODUCTION_DB_NAME`) and the live server reports that same database.
+ * Test, demo, development, staging and system databases are refused outright.
+ * See docs/GM-ACCESS-04.md.
+ *
  * `set-password` never accepts a password on the command line (argv is visible
  * in `ps` and in shell history) and never prints one. It either generates a
  * 32-character password and writes it to a 0600 file outside the repository, or
@@ -43,6 +49,7 @@ import {
   GM_PASSWORD_GENERATED_LENGTH,
 } from '../lib/gm-access';
 import { revokeAllSessionsForUser } from '../lib/session-admin';
+import { describeIdentity, evaluateProductionGate, readDatabaseIdentity } from '../lib/db-target-guard';
 import { writeAudit } from '../lib/audit';
 import { ApiError } from '@wasit/shared';
 
@@ -197,8 +204,36 @@ function readSecretFile(target: string): string {
   return readFileSync(path, 'utf8').replace(/\r?\n$/, '');
 }
 
+/** Actions that change a credential, and therefore require a proven target. */
+const SENSITIVE_ACTIONS: ReadonlySet<Action> = new Set<Action>(['set-password', 'reset-factor']);
+
+/**
+ * Refuses to touch a database this deployment cannot prove is production.
+ *
+ * Runs before the account is even looked up, so a refusal leaves no trace in the
+ * database at all — no audit row, no update, no session change.
+ */
+async function assertProductionTarget(): Promise<void> {
+  const identity = await readDatabaseIdentity(db);
+  const decision = evaluateProductionGate({
+    identity,
+    nodeEnv: process.env.NODE_ENV,
+    declaredName: process.env.WASIT_PRODUCTION_DB_NAME,
+    declaredHost: process.env.WASIT_PRODUCTION_DB_HOST,
+  });
+  if (!decision.allowed) {
+    console.error(decision.message);
+    console.error('');
+    console.error(`Connected to ${describeIdentity(identity)}. Nothing was changed.`);
+    process.exitCode = 2;
+    throw new Error('__guarded__');
+  }
+  console.log(`target: ${describeIdentity(identity)} (declared production)`);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (SENSITIVE_ACTIONS.has(args.action)) await assertProductionTarget();
   const user = await loadSuperAdmin(args.email);
   const hasFactor = await hasConfirmedSecondFactor(db, user.id);
 
@@ -337,6 +372,8 @@ async function main(): Promise<void> {
 
 main()
   .catch((err: unknown) => {
+    // The guard already explained itself and set the exit code.
+    if (err instanceof Error && err.message === '__guarded__') return;
     if (err instanceof ApiError) {
       console.error(`Refused [${err.code}]: ${err.message}`);
       process.exitCode = 2;

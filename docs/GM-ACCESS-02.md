@@ -96,6 +96,19 @@ npm run gm:access -- status --email <بريد المدير العام>
 يجب أن يظهر `active: true` و`second factor:` بحالته الحقيقية. إن كان الحساب غير موجود
 أو ليس `SUPER_ADMIN` فالأمر سيرفض قبل أي تعديل.
 
+### 3.1.1 إعلان الإنتاج (شرط إلزامي منذ GM-ACCESS-04)
+
+`set-password` و`reset-factor` يرفضان العمل ما لم يعلن النشر نفسه إنتاجًا ويطابق
+الخادم ذلك الإعلان. على مضيف الإنتاج فقط:
+
+```env
+NODE_ENV=production
+WASIT_PRODUCTION_DB_NAME=wasit_prod
+# اختياري: WASIT_PRODUCTION_DB_HOST=<مضيف القاعدة>
+```
+
+بدون ذلك يخرج الأمر بالرمز `2` بلا أي كتابة. التفاصيل في `docs/GM-ACCESS-04.md`.
+
 ### 3.2 تطبيق كلمة المرور المُولَّدة مسبقًا
 
 ```bash
