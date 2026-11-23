@@ -78,7 +78,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm rebuild argon2
+      # `--ignore-scripts` skips the postinstall that downloads ffmpeg-static's
+      # binary; the video specs assert that bundled binary exists, so restore it
+      # explicitly instead of dropping the assertion.
+      - run: npm rebuild argon2 ffmpeg-static
       # The marketing-video specs render real MP4s and verify them with ffprobe.
       # They fail — they do not skip — when the renderer is missing, so the
       # toolchain is installed rather than the assertions relaxed.
@@ -91,6 +94,13 @@ jobs:
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
           ffmpeg -hide_banner -filters | grep -q " ass " && echo "libass: present"
+      # Piper is the offline voiceover engine. The voice specs assert it resolves
+      # for every supported language; without it they skip, which would quietly
+      # drop the audio half of the pipeline from the gate.
+      - name: Install voiceover engine
+        run: |
+          ./scripts/install-tts.sh
+          test -x ./packages/server/vendor/piper/piper/piper
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
@@ -114,22 +124,29 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+    env:
+      # /usr/bin/pg_dump on Debian/Ubuntu is pg_wrapper, which defaults to the
+      # newest installed major version. Pin it to the service image's version so
+      # the dump and the server always agree.
+      PGVERSION: "16"
     steps:
       - uses: actions/checkout@v4
       # `age` enables the encryption sections of the drill (E3) plus the isolated
       # drop-order/guard sections (F1-F6); without it those sections SKIP, so the
-      # install keeps the encrypted path covered. `postgresql-client` supplies
-      # the pg_dump/pg_restore/psql the drill drives.
+      # install keeps the encrypted path covered. `postgresql-client-16` supplies
+      # the pg_dump/pg_restore/psql the drill drives, and must match the server
+      # image: a newer client emits `SET transaction_timeout = 0;` into the dump,
+      # which PostgreSQL 16 rejects, so the restore half of the drill fails.
       #
-      # Deliberately not pinned to an exact version: Ubuntu's archive rotates
-      # patch releases, and the former pin (`age=1.1.1-1ubuntu0.24.04.3`) is
-      # exactly what broke this job with "Version ... was not found". The drill
-      # asserts behaviour, not a package build.
+      # `age` is deliberately not pinned to an exact version: Ubuntu's archive
+      # rotates patch releases, and the former pin
+      # (`age=1.1.1-1ubuntu0.24.04.3`) is exactly what broke this job with
+      # "Version ... was not found". The drill asserts behaviour, not a build.
       - name: Install drill tooling
         run: |
           sudo add-apt-repository -y universe
           sudo apt-get update
-          sudo apt-get install -y age postgresql-client
+          sudo apt-get install -y age postgresql-client-16
       - run: ./scripts/backup-restore.test.sh
 
   # Full E2E (Playwright) against the real API + PostgreSQL, no mocks.
@@ -161,7 +178,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm rebuild argon2
+      - run: npm rebuild argon2 ffmpeg-static
       # The video studio spec drives real renders through the API; without
       # ffmpeg the endpoint answers 502 and the studio specs fail.
       - name: Install media toolchain
@@ -173,6 +190,10 @@ jobs:
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
           ffmpeg -hide_banner -filters | grep -q " ass " && echo "libass: present"
+      - name: Install voiceover engine
+        run: |
+          ./scripts/install-tts.sh
+          test -x ./packages/server/vendor/piper/piper/piper
       # Prepare the dev database the webServer/globalSetup run against.
       - run: npm run db:migrate
       - run: npm run db:seed
