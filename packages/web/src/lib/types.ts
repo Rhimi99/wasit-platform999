@@ -83,6 +83,21 @@ export interface ProductSummary {
   image: string | null;
 }
 
+/** One uploaded product photo, as returned by the media API. */
+export interface ProductImageRow {
+  id: string;
+  productId: string;
+  url: string;
+  altText: string | null;
+  isPrimary: boolean;
+  sortOrder: number;
+  width: number | null;
+  height: number | null;
+  sizeBytes: number;
+  mimeType: string;
+  createdAt: string;
+}
+
 export interface MediaAsset {
   id: string;
   kind: string;

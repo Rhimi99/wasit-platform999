@@ -20,9 +20,11 @@ export function ProductDetailsPage() {
   const [isSaved, setIsSaved] = useState(false);
   const [libBusy, setLibBusy] = useState(false);
   const [jsonLd, setJsonLd] = useState<JsonLd | null>(null);
+  const [activeImageId, setActiveImageId] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
+    setActiveImageId(null);
     apiCall(() => api.getProduct(id)).then((res) => {
       if (!mounted) return;
       setProduct(res.data);
@@ -83,6 +85,7 @@ export function ProductDetailsPage() {
   if (!product) return <Spinner />;
 
   const primaryImage = product.images.find((i) => i.isPrimary) ?? product.images[0];
+  const activeImage = product.images.find((i) => i.id === activeImageId) ?? primaryImage;
   const orderUrl = `/checkout?productId=${product.id}`;
 
   return (
@@ -97,8 +100,15 @@ export function ProductDetailsPage() {
         <div className="grid gap-8 lg:grid-cols-2">
           {/* Images */}
           <div>
-            {primaryImage ? (
-              <img src={primaryImage.url} alt={product.name} className="aspect-square w-full rounded-lg object-cover" />
+            {activeImage ? (
+              <img
+                src={activeImage.url}
+                alt={activeImage.altText ?? product.name}
+                loading="eager"
+                decoding="async"
+                className="aspect-square w-full rounded-lg object-cover"
+                data-testid="product-primary-image"
+              />
             ) : (
               <div className="flex aspect-square w-full items-center justify-center rounded-lg bg-slate-100 text-slate-400">
                 {t('product.noImage')}
@@ -107,7 +117,25 @@ export function ProductDetailsPage() {
             {product.images.length > 1 && (
               <div className="mt-3 flex gap-2 overflow-x-auto">
                 {product.images.map((img) => (
-                  <img key={img.id} src={img.url} alt={img.altText ?? product.name} className="h-16 w-16 rounded object-cover" />
+                  <button
+                    key={img.id}
+                    type="button"
+                    onClick={() => setActiveImageId(img.id)}
+                    aria-label={img.altText ?? product.name}
+                    aria-pressed={activeImage?.id === img.id}
+                    className={`shrink-0 rounded ring-offset-2 ${
+                      activeImage?.id === img.id ? 'ring-2 ring-wasit-500' : 'ring-1 ring-slate-200'
+                    }`}
+                    data-testid={`product-image-thumb-${img.id}`}
+                  >
+                    <img
+                      src={img.url}
+                      alt={img.altText ?? product.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-16 w-16 rounded object-cover"
+                    />
+                  </button>
                 ))}
               </div>
             )}

@@ -254,9 +254,9 @@ const envSchema = z.object({
   /**
    * Application-level request body cap (011.4). A request whose body exceeds
    * this is rejected with HTTP 413 before any handler reads it, so a large
-   * payload cannot be buffered into memory by an expensive route. Sized well
-   * above the largest legitimate JSON body (long AI prompts); media assets are
-   * generated server-side, not uploaded, so no route needs a larger cap.
+   * payload cannot be buffered into memory by an expensive route. Sized above
+   * the largest legitimate JSON body (long AI prompts); the one upload route
+   * (product images) declares its own larger cap in `app.ts`, still bounded.
    */
   MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1_048_576),
   /**
@@ -514,6 +514,15 @@ const envSchema = z.object({
   /** Lifetime of a signed media download link, in seconds. */
   MEDIA_DOWNLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   MEDIA_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(52_428_800),
+  /** Ceiling for one uploaded product image (bytes). */
+  MEDIA_MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(5_242_880),
+  /** How many images one product may carry. */
+  MEDIA_MAX_IMAGES_PER_PRODUCT: z.coerce.number().int().positive().default(8),
+  /**
+   * Longest side of the display copy produced at upload. `0` stores the
+   * validated original untouched (useful for debugging or a slim build).
+   */
+  MEDIA_IMAGE_MAX_DIMENSION: z.coerce.number().int().nonnegative().default(1600),
   /**
    * Retention for agent-rendered videos (AFC-05). Retention is per class:
    * temporary test renders (7d) and drafts (30d) expire; approved videos are

@@ -1567,3 +1567,12 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 6. `vite` 5→8 + `vitest` 2→5 + `esbuild`/`drizzle-kit` — حزمة أدوات واحدة، بعد استقرار ما سبق.
 
 > **قاعدة معلنة:** لا تُدمج أي من هذه الترقيات مع إصلاح أمني آخر، ولا بلا حزمة كاملة خضراء + CI أخضر.
+
+## 32. MEDIA-01 — صور المنتجات: رفع البائع ← عرض المتجر (2026-11-23)
+
+> **العدّ:** معرّف واحد **مغلق** (`MEDIA-01`) ⇒ «المغلقة» +1 و«المفتوحة» بلا تغيير.
+> الحالة `COMPLETE_VERIFIED`: كود + اختبارات خادم حقيقية + E2E على متصفح + توثيق. **بلا Migration** (الجداول قائمة، وكانت بلا كاتب).
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **MEDIA-01** | **المنتج يُنشَر بلا صورة**: `product_images`/`media_assets` موجودان لكن لا مسار رفع ولا ربط بمنتج ولا واجهة، فكل بطاقة في المتجر بلا صورة. | HIGH | P1 | — | **COMPLETE_VERIFIED** | بائع يرفع صورة من اللوحة · تُربط بالمنتج وتظهر في `/products/:id` وفي البطاقة · رفض غير الصور (SVG/HTML) بالبايتات لا بالاسم · سقف حجم/عدد من env · ملكية مفروضة (تاجر لا يرفع على منتج غيره) · منتج غير منشور لا يُسرّب صوره · الغلاف يُرقّى عند الحذف · Audit لكل تغيير · i18n ar/fr/en/zh · الهاتف قابل للاستخدام | `modules/media/images.ts` + `lib/media/image-probe.ts` + `lib/media/image-derivative.ts` + `modules/media/routes.ts` (`POST/GET/PATCH/DELETE /api/media/product-images` + `GET /api/media/products/:id/images/:assetId/content`) · `middleware/body-limit.ts` (`resolveMax(path)`) · `components/ProductImageManager.tsx` + `DashboardProductsPage` + `ProductDetailsPage` + `ProductCard` · `AppLayout`/`AppSidebar` (دُرج الهاتف) · `tests/product-images.test.ts` **18/18** · `e2e/product-images.spec.ts` **4/4** · الخادم **2349/2353** (الفشلان الأربعة سابقان ومُثبَتان على `b64394c`) · Typecheck (server+web) = 0 · Build ناجح |

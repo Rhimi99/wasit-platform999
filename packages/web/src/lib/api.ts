@@ -12,6 +12,7 @@ import type {
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
   PriceComparisonResponse,
+  ProductImageRow,
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
@@ -65,9 +66,12 @@ export function apiErrorMessage(e: unknown): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  // A FormData body must keep the browser-generated multipart boundary: setting
+  // `Content-Type: application/json` here would make the upload unparseable.
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const res = await fetch(path, {
     headers: {
-      'Content-Type': 'application/json',
+      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
       ...options.headers,
     },
     credentials: 'include',
@@ -279,6 +283,31 @@ export const api = {
   },
   async deleteMediaAsset(id: string) {
     return request<{ id: string }>(`/api/media/assets/${id}`, { method: 'DELETE' });
+  },
+
+  // ---- Product images ----
+  async listProductImages(productId: string) {
+    return request<{ items: ProductImageRow[] }>(
+      `/api/media/product-images?productId=${encodeURIComponent(productId)}`,
+    );
+  },
+  async uploadProductImage(
+    productId: string,
+    file: File,
+    opts: { altText?: string; isPrimary?: boolean } = {},
+  ) {
+    const form = new FormData();
+    form.set('productId', productId);
+    form.set('file', file);
+    if (opts.altText) form.set('altText', opts.altText);
+    if (opts.isPrimary) form.set('isPrimary', 'true');
+    return request<ProductImageRow>('/api/media/product-images', { method: 'POST', body: form });
+  },
+  async setPrimaryProductImage(id: string) {
+    return request<ProductImageRow>(`/api/media/product-images/${id}/primary`, { method: 'PATCH' });
+  },
+  async deleteProductImage(id: string) {
+    return request<{ deleted: boolean }>(`/api/media/product-images/${id}`, { method: 'DELETE' });
   },
   async getStructuredData(type: LibraryEntityType | 'CATEGORY' | 'COUNTRY', id: string) {
     return request<JsonLd>(`/api/seo/structured-data/${type}/${id}`);

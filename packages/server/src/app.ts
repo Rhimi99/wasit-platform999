@@ -40,6 +40,7 @@ import { adminCountryRoutes } from './modules/admin/country-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import { aiRoutes } from './modules/ai/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
+import { PRODUCT_IMAGE_UPLOAD_ENVELOPE_BYTES } from './modules/media/images.js';
 import { analyticsRoutes } from './modules/analytics/routes.js';
 import { revenueRoutes } from './modules/revenue/routes.js';
 import { geoRoutes } from './modules/geo/routes.js';
@@ -63,7 +64,17 @@ export function createApp(): Hono {
   app.use('*', securityHeaders);
   // Reject an oversized request body before any handler (or the JSON parse)
   // reads it, so a large payload cannot be buffered by an expensive route.
-  app.use('*', requestBodyLimit());
+  // The product-image upload is the only route that carries a binary, so it
+  // gets its own ceiling (image limit + multipart envelope) rather than a
+  // blanket raise that would also widen every JSON endpoint.
+  app.use(
+    '*',
+    requestBodyLimit((path) =>
+      path === '/api/media/product-images'
+        ? env.MEDIA_MAX_IMAGE_BYTES + PRODUCT_IMAGE_UPLOAD_ENVELOPE_BYTES
+        : env.MAX_REQUEST_BODY_BYTES,
+    ),
+  );
   // Structured request logging + metrics, tagged with the trace id. Replaces
   // Hono's `logger()` so there is exactly one log line per request.
   app.use('*', observabilityMiddleware());

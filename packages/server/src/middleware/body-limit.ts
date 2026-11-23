@@ -13,17 +13,21 @@ import { env } from '../lib/env';
  *
  * The cap is read per request from live config so an operator can tune
  * `MAX_REQUEST_BODY_BYTES` without a rebuild. It is sized well above the largest
- * legitimate JSON body (long AI prompts); media assets are generated
- * server-side rather than uploaded, so no route needs a larger limit. The
- * rejection carries the same error envelope as every other error and never
- * echoes the size or any internal detail.
+ * legitimate JSON body (long AI prompts). The one wider allowance is the
+ * product-image upload, which carries a real binary; `resolveMax` lets the app
+ * grant that route exactly its own ceiling (image bytes + multipart envelope)
+ * while every other route keeps the JSON cap. The rejection carries the same
+ * error envelope as every other error and never echoes the size or any internal
+ * detail.
  */
-export function requestBodyLimit(maxBytes: () => number = () => env.MAX_REQUEST_BODY_BYTES) {
+export function requestBodyLimit(
+  resolveMax: (path: string) => number = () => env.MAX_REQUEST_BODY_BYTES,
+) {
   return async (c: Context, next: Next): Promise<Response | void> => {
     const raw = c.req.raw;
     if (!raw.body) return next();
 
-    const max = maxBytes();
+    const max = resolveMax(c.req.path);
     const contentLength = raw.headers.get('content-length');
     if (contentLength !== null && !raw.headers.has('transfer-encoding')) {
       if (Number.parseInt(contentLength, 10) > max) return tooLarge();

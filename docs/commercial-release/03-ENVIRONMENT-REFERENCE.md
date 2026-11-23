@@ -132,6 +132,9 @@ Only **one** provider is active, selected by `PAYMENT_PROVIDER`.
 | `MEDIA_MAX_VIDEO_BYTES` | `52428800` | 50 MiB output ceiling. |
 | `MEDIA_VIDEO_MAX_CONCURRENCY` | `2` | Concurrent marketing-video renders per process; a request that cannot get a slot within the queue timeout is shed with 503 (011.4). |
 | `MEDIA_VIDEO_QUEUE_TIMEOUT_MS` | `15000` | How long a video request waits for a render slot before being shed (011.4). |
+| `MEDIA_MAX_IMAGE_BYTES` | `5242880` | Ceiling for one uploaded product image (MEDIA-01); a larger file is refused with 413. |
+| `MEDIA_MAX_IMAGES_PER_PRODUCT` | `8` | Images one product may carry; the next upload is refused with 422. |
+| `MEDIA_IMAGE_MAX_DIMENSION` | `1600` | Longest side of the stored display copy; a bigger photo is downscaled at upload (`0` stores the validated original). |
 
 > The **35–120 second** duration window is a business rule held in
 > `@wasit/shared` (`MARKETING_VIDEO_DURATION`), not an env var — the UI and the
