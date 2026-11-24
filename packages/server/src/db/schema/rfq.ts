@@ -148,6 +148,11 @@ export const rfqRecipients = pgTable(
     invitedAt: timestamp('invited_at', { withTimezone: true }).notNull().defaultNow(),
     viewedAt: timestamp('viewed_at', { withTimezone: true }),
     respondedAt: timestamp('responded_at', { withTimezone: true }),
+    /** Seller declined the invitation; the reason is the seller's own words. */
+    declinedAt: timestamp('declined_at', { withTimezone: true }),
+    declineReason: text('decline_reason'),
+    /** Seller pulled its offer back; the invitation stays visible to the buyer. */
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
     /** Written at send: the seller's RFQ_PARTICIPATION consent was verified. */
     consentVerifiedAt: timestamp('consent_verified_at', { withTimezone: true }),
   },
@@ -180,6 +185,14 @@ export const rfqQuotes = pgTable(
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     decidedAt: timestamp('decided_at', { withTimezone: true }),
+    /** Who decided (rejection is the only decision in this phase). */
+    decidedByUserId: varchar('decided_by_user_id', { length: 36 }),
+    /** Mandatory on rejection: a decision without a recorded reason is not one. */
+    decisionReason: text('decision_reason'),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+    withdrawalReason: text('withdrawal_reason'),
+    /** Set when the validity window lapsed and the status became EXPIRED. */
+    expiredAt: timestamp('expired_at', { withTimezone: true }),
   },
   (t) => ({
     revisionIdx: uniqueIndex('rfq_quotes_rfq_seller_revision_idx').on(t.rfqId, t.sellerId, t.revision),
@@ -229,10 +242,18 @@ export const rfqEvents = pgTable(
     visibleToBuyer: boolean('visible_to_buyer').notNull().default(true),
     visibleToSeller: boolean('visible_to_seller').notNull().default(false),
     sellerId: varchar('seller_id', { length: 36 }),
+    /**
+     * The quote revision the entry describes, when it describes one. Stored as
+     * columns rather than inside `payload` so the history is filterable and the
+     * revision number cannot be edited by rewriting a JSON blob.
+     */
+    quoteId: varchar('quote_id', { length: 36 }),
+    quoteRevision: integer('quote_revision'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     rfqIdx: index('rfq_events_rfq_idx').on(t.rfqId, t.createdAt),
     sellerIdx: index('rfq_events_seller_idx').on(t.sellerId),
+    quoteIdx: index('rfq_events_quote_idx').on(t.quoteId),
   }),
 );

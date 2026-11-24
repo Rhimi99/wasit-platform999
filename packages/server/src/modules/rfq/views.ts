@@ -33,7 +33,11 @@ export interface RecipientView {
   sellerName: string;
   status: string;
   invitedAt: string;
+  viewedAt: string | null;
   respondedAt: string | null;
+  /** Why the seller declined — the seller's own words, never a contact detail. */
+  declinedAt: string | null;
+  declineReason: string | null;
 }
 
 export interface QuoteView {
@@ -50,6 +54,11 @@ export interface QuoteView {
   validUntil: string;
   submittedAt: string;
   decidedAt: string | null;
+  /** Buyer's recorded reason, when this revision was rejected. */
+  decisionReason: string | null;
+  withdrawnAt: string | null;
+  withdrawalReason: string | null;
+  expiredAt: string | null;
   lines: Array<{
     rfqItemId: string;
     unitPrice: string;
@@ -94,7 +103,10 @@ export interface SellerRfqView {
     sellerId: string;
     status: string;
     invitedAt: string;
+    viewedAt: string | null;
     respondedAt: string | null;
+    declinedAt: string | null;
+    declineReason: string | null;
   };
 }
 
@@ -142,6 +154,10 @@ export function toQuoteView(
     validUntil: row.validUntil.toISOString(),
     submittedAt: row.submittedAt.toISOString(),
     decidedAt: iso(row.decidedAt),
+    decisionReason: row.decisionReason,
+    withdrawnAt: iso(row.withdrawnAt),
+    withdrawalReason: row.withdrawalReason,
+    expiredAt: iso(row.expiredAt),
     lines: lines.map((l) => ({
       rfqItemId: l.rfqItemId,
       unitPrice: l.unitPrice,
@@ -180,7 +196,10 @@ export function toBuyerRfqView(input: {
       sellerName: seller?.name ?? recipient.sellerId,
       status: recipient.recipientStatus,
       invitedAt: recipient.invitedAt.toISOString(),
+      viewedAt: iso(recipient.viewedAt),
       respondedAt: iso(recipient.respondedAt),
+      declinedAt: iso(recipient.declinedAt),
+      declineReason: recipient.declineReason,
     })),
     quoteCount: input.quoteCount,
   };
@@ -209,7 +228,10 @@ export function toSellerRfqView(input: {
       sellerId: input.recipient.sellerId,
       status: input.recipient.recipientStatus,
       invitedAt: input.recipient.invitedAt.toISOString(),
+      viewedAt: iso(input.recipient.viewedAt),
       respondedAt: iso(input.recipient.respondedAt),
+      declinedAt: iso(input.recipient.declinedAt),
+      declineReason: input.recipient.declineReason,
     },
   };
 }

@@ -8,13 +8,17 @@ import { rateLimit } from '../../middleware/rate-limit';
 import {
   cancelRfq,
   createRfq,
+  declineInvitation,
   getRfq,
   getTimeline,
   listMyRfqs,
+  listQuoteRevisions,
   listQuotes,
   listSellerInbox,
+  rejectQuote,
   sendRfq,
   submitQuote,
+  withdrawQuote,
 } from './service';
 
 const money = z.string().regex(/^\d{1,13}(\.\d{1,4})?$/, 'Must be a positive decimal with at most 4 places');
@@ -37,12 +41,12 @@ const createSchema = z.object({
     )
     .min(1)
     .max(200),
-});
+}).strict();
 
 const sendSchema = z.object({
   sellerIds: z.array(z.string().min(1).max(36)).min(1).max(50),
   acknowledgeDisclosure: z.boolean(),
-});
+}).strict();
 
 const quoteSchema = z.object({
   currencyCode: z.string().trim().length(3).transform((v) => v.toUpperCase()),
@@ -59,9 +63,12 @@ const quoteSchema = z.object({
     )
     .min(1)
     .max(200),
-});
+}).strict();
 
-const cancelSchema = z.object({ reason: z.string().max(1000).nullable().optional() });
+const cancelSchema = z.object({ reason: z.string().max(1000).nullable().optional() }).strict();
+const declineSchema = z.object({ reason: z.string().max(1000).nullable().optional() }).strict();
+const withdrawSchema = z.object({ reason: z.string().max(1000).nullable().optional() }).strict();
+const rejectSchema = z.object({ reason: z.string().trim().min(3).max(1000) }).strict();
 
 export const rfqRoutes = new Hono();
 
@@ -166,3 +173,60 @@ rfqRoutes.post(
     return c.json({ success: true, data }, 201);
   },
 );
+
+rfqRoutes.post(
+  '/:id/decline',
+  requirePermission(PERMISSIONS.RFQ_QUOTE),
+  rateLimit({ windowSeconds: 60, max: 20, keyPrefix: 'rfq-decline' }),
+  validateBody(declineSchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<z.infer<typeof declineSchema>>(c);
+    const data = await declineInvitation(ctx.db, ctx.user!.id, c.req.param('id')!, body, {
+      actorId: ctx.user!.id,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return c.json({ success: true, data });
+  },
+);
+
+rfqRoutes.post(
+  '/:id/quotes/:quoteId/withdraw',
+  requirePermission(PERMISSIONS.RFQ_QUOTE),
+  rateLimit({ windowSeconds: 60, max: 20, keyPrefix: 'rfq-quote-withdraw' }),
+  validateBody(withdrawSchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<z.infer<typeof withdrawSchema>>(c);
+    const data = await withdrawQuote(ctx.db, ctx.user!.id, c.req.param('id')!, c.req.param('quoteId')!, body, {
+      actorId: ctx.user!.id,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return c.json({ success: true, data });
+  },
+);
+
+rfqRoutes.post(
+  '/:id/quotes/:quoteId/reject',
+  requirePermission(PERMISSIONS.RFQ_DECIDE),
+  rateLimit({ windowSeconds: 60, max: 30, keyPrefix: 'rfq-quote-reject' }),
+  validateBody(rejectSchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const body = getValidatedBody<z.infer<typeof rejectSchema>>(c);
+    const data = await rejectQuote(ctx.db, ctx.user!.id, c.req.param('id')!, c.req.param('quoteId')!, body, {
+      actorId: ctx.user!.id,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return c.json({ success: true, data });
+  },
+);
+
+rfqRoutes.get('/:id/quotes/:quoteId/revisions', requirePermission(PERMISSIONS.RFQ_READ_OWN), async (c) => {
+  const ctx = getContext(c);
+  const data = await listQuoteRevisions(ctx.db, ctx.user!.id, c.req.param('id')!, c.req.param('quoteId')!);
+  return c.json({ success: true, data });
+});

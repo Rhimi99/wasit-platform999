@@ -20,6 +20,7 @@ import { resolveOwnedSellerIds } from '../../lib/seller-ownership';
 import {
   assertRfqAccess,
   hasRfqParticipation,
+  type RfqRecipientRow,
   requireBuyer,
   requireOwnedCompany,
   requireSeller,
@@ -27,6 +28,12 @@ import {
   resolveSellerEntities,
 } from './access';
 import { resolveRfqPolicy } from './policy';
+import {
+  assertQuoteTransition,
+  assertRecipientTransition,
+  quoteIsLive,
+  rfqAcceptsQuotes,
+} from './lifecycle';
 import {
   toBuyerRfqView,
   toItemView,
@@ -101,6 +108,8 @@ async function recordEvent(
     visibleToBuyer?: boolean;
     visibleToSeller?: boolean;
     sellerId?: string | null;
+    quoteId?: string | null;
+    quoteRevision?: number | null;
   },
 ): Promise<void> {
   await db.insert(rfqEvents).values({
@@ -113,6 +122,8 @@ async function recordEvent(
     visibleToBuyer: input.visibleToBuyer ?? true,
     visibleToSeller: input.visibleToSeller ?? false,
     sellerId: input.sellerId ?? null,
+    quoteId: input.quoteId ?? null,
+    quoteRevision: input.quoteRevision ?? null,
   });
 }
 
@@ -147,6 +158,138 @@ async function buyerCard(db: DB, companyId: string): Promise<CompanyCardView> {
   // A company row cannot be deleted through the API; if it is gone the RFQ is
   // still readable, but it must not crash the projection.
   return row ?? { id: companyId, legalName: companyId, slug: companyId, verified: false };
+}
+
+/* ------------------------------------------------------------------ */
+/* Lazy expiry                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * There is no scheduler in this phase, so expiry is evaluated on access.
+ *
+ * The update is a single guarded statement (`... where status = 'OPEN' and
+ * expires_at <= now()`), which makes it atomic: under concurrent reads exactly
+ * one caller gets a row back and therefore exactly one `EXPIRED` event is
+ * written. A read never resurrects an expired RFQ, and no caller can push the
+ * window forward because `expires_at` is not writable through the API.
+ */
+async function expireIfDue(db: DB, rfq: (typeof rfqs.$inferSelect)): Promise<(typeof rfqs.$inferSelect)> {
+  if (rfq.status !== 'OPEN' || !rfq.expiresAt || rfq.expiresAt.getTime() > Date.now()) return rfq;
+
+  const result = await db.execute<{ id: string }>(sql`
+    update rfqs set status = 'EXPIRED', updated_at = now()
+    where id = ${rfq.id} and status = 'OPEN' and expires_at is not null and expires_at <= now()
+    returning id
+  `);
+  const won = (result as unknown as { rows: { id: string }[] }).rows.length > 0;
+
+  const [fresh] = await db.select().from(rfqs).where(eq(rfqs.id, rfq.id)).limit(1);
+  const current = fresh ?? rfq;
+  if (!won) return current;
+
+  await recordEvent(db, {
+    rfqId: rfq.id,
+    eventType: 'EXPIRED',
+    actorUserId: null,
+    actorType: 'SYSTEM',
+    payload: { scope: 'RFQ', expiresAt: rfq.expiresAt.toISOString() },
+    visibleToBuyer: true,
+    visibleToSeller: true,
+  });
+
+  await createNotification(db, {
+    userId: rfq.buyerUserId,
+    type: 'RFQ_EXPIRED',
+    title: 'Request for quotation expired',
+    body: `${rfq.rfqNumber} passed its response window without being closed.`,
+    data: { rfqId: rfq.id },
+  });
+  const invited = await db
+    .select({ sellerUserId: rfqRecipients.sellerUserId })
+    .from(rfqRecipients)
+    .where(eq(rfqRecipients.rfqId, rfq.id));
+  for (const row of invited) {
+    await createNotification(db, {
+      userId: row.sellerUserId,
+      type: 'RFQ_EXPIRED',
+      title: 'Request for quotation expired',
+      body: `${rfq.rfqNumber} is no longer accepting quotes.`,
+      data: { rfqId: rfq.id },
+    });
+  }
+
+  await writeAudit(
+    db,
+    { actorId: null, actorType: 'SYSTEM' },
+    { action: 'RFQ.EXPIRED', entityType: 'RFQ', entityId: rfq.id, before: { status: 'OPEN' }, after: { status: 'EXPIRED' } },
+  );
+  return current;
+}
+
+/** Marks lapsed submissions EXPIRED; only the newest revision can be live. */
+async function expireQuotesIfDue(db: DB, rfqId: string): Promise<void> {
+  const result = await db.execute<{
+    id: string;
+    seller_id: string;
+    seller_user_id: string;
+    revision: number;
+  }>(sql`
+    update rfq_quotes set quote_status = 'EXPIRED', expired_at = now(), updated_at = now()
+    where rfq_id = ${rfqId} and quote_status = 'SUBMITTED' and valid_until <= now()
+    returning id, seller_id, seller_user_id, revision
+  `);
+  const rows = (result as unknown as {
+    rows: { id: string; seller_id: string; seller_user_id: string; revision: number }[];
+  }).rows;
+
+  for (const row of rows) {
+    await recordEvent(db, {
+      rfqId,
+      eventType: 'EXPIRED',
+      actorUserId: null,
+      actorType: 'SYSTEM',
+      payload: { scope: 'QUOTE', revision: row.revision },
+      visibleToBuyer: true,
+      visibleToSeller: true,
+      sellerId: row.seller_id,
+      quoteId: row.id,
+      quoteRevision: row.revision,
+    });
+    await createNotification(db, {
+      userId: row.seller_user_id,
+      type: 'RFQ_QUOTE_EXPIRED',
+      title: 'Your quote expired',
+      body: `Revision ${row.revision} of your quote is no longer valid.`,
+      data: { rfqId, quoteId: row.id },
+    });
+  }
+}
+
+/**
+ * First read by an invited seller is the moment the invitation was seen. The
+ * update is guarded on `INVITED` so re-reads are silent and only one `VIEWED`
+ * event can ever be written.
+ */
+async function markViewed(db: DB, rfqId: string, recipient: RfqRecipientRow): Promise<RfqRecipientRow> {
+  if (recipient.recipientStatus !== 'INVITED') return recipient;
+  const now = new Date();
+  const result = await db.execute<{ id: string }>(sql`
+    update rfq_recipients set recipient_status = 'VIEWED', viewed_at = ${now}
+    where id = ${recipient.id} and recipient_status = 'INVITED'
+    returning id
+  `);
+  if ((result as unknown as { rows: { id: string }[] }).rows.length === 0) return recipient;
+
+  await recordEvent(db, {
+    rfqId,
+    eventType: 'VIEWED',
+    actorUserId: recipient.sellerUserId,
+    payload: { sellerType: recipient.sellerType },
+    visibleToBuyer: true,
+    visibleToSeller: true,
+    sellerId: recipient.sellerId,
+  });
+  return { ...recipient, recipientStatus: 'VIEWED', viewedAt: now };
 }
 
 /* ------------------------------------------------------------------ */
@@ -459,29 +602,32 @@ export async function listMyRfqs(db: DB, userId: string): Promise<BuyerRfqView[]
     .orderBy(desc(rfqs.createdAt));
 
   const views: BuyerRfqView[] = [];
-  for (const rfq of rows) {
-    views.push(await buildBuyerView(db, rfq, company));
+  for (const row of rows) {
+    views.push(await buildBuyerView(db, await expireIfDue(db, row), company));
   }
   return views;
 }
 
 export async function getRfq(db: DB, userId: string, rfqId: string): Promise<RfqView> {
   const access = await assertRfqAccess(db, rfqId, userId);
+  const rfq = await expireIfDue(db, access.rfq);
+  await expireQuotesIfDue(db, rfq.id);
+
   if (access.role === 'BUYER') {
     const company = await resolveOwnedCompany(db, userId);
-    if (!company || company.id !== access.rfq.buyerCompanyId) {
+    if (!company || company.id !== rfq.buyerCompanyId) {
       // `assertRfqAccess` already proved the user id matches; this guards against
       // a company row that changed hands, where participation must not follow.
       throw ApiError.notFound('RFQ');
     }
-    return buildBuyerView(db, access.rfq, company);
+    return buildBuyerView(db, rfq, company);
   }
-  const items = (await loadItems(db, rfqId)).map(toItemView);
+  const items = (await loadItems(db, rfq.id)).map(toItemView);
   return toSellerRfqView({
-    rfq: access.rfq,
-    buyer: await buyerCard(db, access.rfq.buyerCompanyId),
+    rfq,
+    buyer: await buyerCard(db, rfq.buyerCompanyId),
     items,
-    recipient: access.recipient!,
+    recipient: await markViewed(db, rfq.id, access.recipient!),
   });
 }
 
@@ -532,8 +678,10 @@ export async function listSellerInbox(db: DB, userId: string): Promise<SellerRfq
   for (const row of invitations) {
     if (seen.has(row.rfqId)) continue;
     seen.add(row.rfqId);
-    const [rfq] = await db.select().from(rfqs).where(eq(rfqs.id, row.rfqId)).limit(1);
-    if (!rfq) continue;
+    const [found] = await db.select().from(rfqs).where(eq(rfqs.id, row.rfqId)).limit(1);
+    if (!found) continue;
+    const rfq = await expireIfDue(db, found);
+    await expireQuotesIfDue(db, rfq.id);
     views.push(
       toSellerRfqView({
         rfq,
@@ -555,15 +703,18 @@ export async function submitQuote(
 ): Promise<{ quoteId: string; revision: number; itemsTotal: string }> {
   const access = requireSeller(await assertRfqAccess(db, rfqId, userId));
   const sellerId = access.sellerId!;
+  const recipient = access.recipient!;
 
-  if (access.rfq.status !== 'OPEN') {
-    throw ApiError.conflict(`An RFQ in ${access.rfq.status} state does not accept quotes`);
+  // Expiry is evaluated before any decision: a lapsed window must refuse the
+  // quote even if nobody opened the RFQ since it lapsed.
+  const rfq = await expireIfDue(db, access.rfq);
+  await expireQuotesIfDue(db, rfq.id);
+  if (!rfqAcceptsQuotes(rfq)) {
+    throw ApiError.conflict(`An RFQ in ${rfq.status} state does not accept quotes`);
   }
-  if (access.rfq.expiresAt && access.rfq.expiresAt.getTime() <= Date.now()) {
-    throw ApiError.conflict('This RFQ has expired');
-  }
-  if (input.currencyCode.toUpperCase() !== access.rfq.currencyCode) {
-    throw ApiError.conflict(`Quotes must be in ${access.rfq.currencyCode}`);
+  assertRecipientTransition(recipient.recipientStatus, 'QUOTED');
+  if (input.currencyCode.toUpperCase() !== rfq.currencyCode) {
+    throw ApiError.conflict(`Quotes must be in ${rfq.currencyCode}`);
   }
 
   const items = await loadItems(db, rfqId);
@@ -610,9 +761,14 @@ export async function submitQuote(
     .orderBy(desc(rfqQuotes.revision))
     .limit(1);
 
+  // Once a quote's own validity window has lapsed, that negotiation is over: the
+  // seller cannot revive it by submitting "revision N+1" against a dead offer.
+  if (previous[0]?.quoteStatus === 'EXPIRED') {
+    throw ApiError.conflict('The previous quote expired; the negotiation is closed for this seller');
+  }
   const nextRevision = (previous[0]?.revision ?? 0) + 1;
-  if (nextRevision > access.rfq.maxRounds) {
-    throw ApiError.conflict(`The negotiation is limited to ${access.rfq.maxRounds} rounds`);
+  if (nextRevision > rfq.maxRounds) {
+    throw ApiError.conflict(`The negotiation is limited to ${rfq.maxRounds} rounds`);
   }
 
   // Totals are computed here and never taken from the request body.
@@ -630,26 +786,29 @@ export async function submitQuote(
 
   const quoteId = newId();
   const now = new Date();
-  const validUntil = new Date(now.getTime() + access.rfq.quoteValidityDays * 24 * 60 * 60 * 1000);
+  const validUntil = new Date(now.getTime() + rfq.quoteValidityDays * 24 * 60 * 60 * 1000);
 
   await db.transaction(async (tx) => {
     const db2 = tx as unknown as DB;
     if (previous[0]) {
+      // Guarded: only a still-live revision becomes SUPERSEDED. A rejected,
+      // withdrawn or expired revision keeps its status — the decision recorded on
+      // it is a fact — and the new revision links back through `supersedesId`.
       await db2
         .update(rfqQuotes)
         .set({ quoteStatus: 'SUPERSEDED', updatedAt: now })
-        .where(eq(rfqQuotes.id, previous[0].id));
+        .where(and(eq(rfqQuotes.id, previous[0].id), eq(rfqQuotes.quoteStatus, 'SUBMITTED')));
     }
     await db2.insert(rfqQuotes).values({
       id: quoteId,
       rfqId,
-      recipientId: access.recipient!.id,
+      recipientId: recipient.id,
       sellerId,
-      sellerType: access.recipient!.sellerType,
+      sellerType: recipient.sellerType,
       sellerUserId: userId,
       revision: nextRevision,
       quoteStatus: 'SUBMITTED',
-      currencyCode: access.rfq.currencyCode,
+      currencyCode: rfq.currencyCode,
       itemsTotal,
       leadTimeDays: input.leadTimeDays ?? null,
       paymentTerms: input.paymentTerms ?? null,
@@ -662,24 +821,32 @@ export async function submitQuote(
     await db2.insert(rfqQuoteLines).values(lines.map((l) => ({ ...l, quoteId })));
     await db2
       .update(rfqRecipients)
-      .set({ recipientStatus: 'QUOTED', respondedAt: now })
-      .where(eq(rfqRecipients.id, access.recipient!.id));
+      .set({
+        recipientStatus: 'QUOTED',
+        respondedAt: now,
+        withdrawnAt: null,
+        declinedAt: null,
+        declineReason: null,
+      })
+      .where(eq(rfqRecipients.id, recipient.id));
     await recordEvent(db2, {
       rfqId,
       eventType: nextRevision === 1 ? 'QUOTE_SUBMITTED' : 'QUOTE_REVISED',
       actorUserId: userId,
-      payload: { revision: nextRevision, itemsTotal, currencyCode: access.rfq.currencyCode },
+      payload: { revision: nextRevision, itemsTotal, currencyCode: rfq.currencyCode },
       visibleToBuyer: true,
       visibleToSeller: true,
       sellerId,
+      quoteId,
+      quoteRevision: nextRevision,
     });
   });
 
   await createNotification(db, {
-    userId: access.rfq.buyerUserId,
+    userId: rfq.buyerUserId,
     type: 'RFQ_QUOTE_RECEIVED',
     title: nextRevision === 1 ? 'New quote received' : 'Quote revised',
-    body: `A seller ${nextRevision === 1 ? 'quoted' : 'revised a quote'} on ${access.rfq.rfqNumber}.`,
+    body: `A seller ${nextRevision === 1 ? 'quoted' : 'revised a quote'} on ${rfq.rfqNumber}.`,
     data: { rfqId, quoteId },
   });
 
@@ -687,7 +854,7 @@ export async function submitQuote(
     action: nextRevision === 1 ? 'RFQ.QUOTE_SUBMITTED' : 'RFQ.QUOTE_REVISED',
     entityType: 'RFQ_QUOTE',
     entityId: quoteId,
-    after: { rfqId, sellerId, revision: nextRevision, itemsTotal, currencyCode: access.rfq.currencyCode },
+    after: { rfqId, sellerId, revision: nextRevision, itemsTotal, currencyCode: rfq.currencyCode },
   });
 
   return { quoteId, revision: nextRevision, itemsTotal };
@@ -703,6 +870,7 @@ export async function submitQuote(
  */
 export async function listQuotes(db: DB, userId: string, rfqId: string): Promise<QuoteView[]> {
   const access = await assertRfqAccess(db, rfqId, userId);
+  await expireQuotesIfDue(db, rfqId);
   const where =
     access.role === 'BUYER'
       ? and(eq(rfqQuotes.rfqId, rfqId), ne(rfqQuotes.quoteStatus, 'SUPERSEDED'))
@@ -740,6 +908,9 @@ export interface TimelineEntry {
   id: string;
   eventType: string;
   actorType: string;
+  /** The quote revision this entry describes, when it describes one. */
+  quoteId: string | null;
+  quoteRevision: number | null;
   payload: Record<string, unknown> | null;
   createdAt: string;
 }
@@ -747,6 +918,7 @@ export interface TimelineEntry {
 /** Timeline entries filtered by who may see them, not by who asked. */
 export async function getTimeline(db: DB, userId: string, rfqId: string): Promise<TimelineEntry[]> {
   const access = await assertRfqAccess(db, rfqId, userId);
+  await expireQuotesIfDue(db, rfqId);
   const where =
     access.role === 'BUYER'
       ? and(eq(rfqEvents.rfqId, rfqId), eq(rfqEvents.visibleToBuyer, true))
@@ -761,7 +933,303 @@ export async function getTimeline(db: DB, userId: string, rfqId: string): Promis
     id: row.id,
     eventType: row.eventType,
     actorType: row.actorType,
+    quoteId: row.quoteId,
+    quoteRevision: row.quoteRevision,
     payload: (row.payload as Record<string, unknown> | null) ?? null,
     createdAt: row.createdAt.toISOString(),
   }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Recipient and quote decisions                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolves a quote only through its seller. A quote id is not a capability: the
+ * lookup is `id AND rfq AND seller`, so seller A presenting seller B's quote id
+ * gets a 404, exactly as if it did not exist.
+ */
+async function requireOwnQuote(db: DB, rfqId: string, quoteId: string, sellerId: string) {
+  const [quote] = await db
+    .select()
+    .from(rfqQuotes)
+    .where(and(eq(rfqQuotes.id, quoteId), eq(rfqQuotes.rfqId, rfqId), eq(rfqQuotes.sellerId, sellerId)))
+    .limit(1);
+  if (!quote) throw ApiError.notFound('Quote');
+  return quote;
+}
+
+/**
+ * Seller declines the invitation. Only an unanswered invitation can be
+ * declined: a seller that already has a live offer must withdraw it instead, so
+ * the buyer is never left with a "declined" seller whose quote is still pending.
+ */
+export async function declineInvitation(
+  db: DB,
+  userId: string,
+  rfqId: string,
+  input: { reason?: string | null },
+  ctx: AuditContext,
+): Promise<{ status: string }> {
+  const access = requireSeller(await assertRfqAccess(db, rfqId, userId));
+  const rfq = await expireIfDue(db, access.rfq);
+  if (!rfqAcceptsQuotes(rfq)) {
+    throw ApiError.conflict(`An RFQ in ${rfq.status} state does not accept responses`);
+  }
+
+  const recipient = access.recipient!;
+  const [live] = await db
+    .select({ id: rfqQuotes.id })
+    .from(rfqQuotes)
+    .where(
+      and(
+        eq(rfqQuotes.rfqId, rfqId),
+        eq(rfqQuotes.sellerId, recipient.sellerId),
+        eq(rfqQuotes.quoteStatus, 'SUBMITTED'),
+      ),
+    )
+    .limit(1);
+  if (live) {
+    throw ApiError.conflict('Withdraw your quote before declining this invitation');
+  }
+  assertRecipientTransition(recipient.recipientStatus, 'DECLINED');
+
+  const now = new Date();
+  const reason = input.reason?.trim() || null;
+  await db.transaction(async (tx) => {
+    const db2 = tx as unknown as DB;
+    await db2
+      .update(rfqRecipients)
+      .set({ recipientStatus: 'DECLINED', declinedAt: now, declineReason: reason, respondedAt: now })
+      .where(and(eq(rfqRecipients.id, recipient.id), eq(rfqRecipients.recipientStatus, recipient.recipientStatus)));
+    await recordEvent(db2, {
+      rfqId,
+      eventType: 'RECIPIENT_DECLINED',
+      actorUserId: userId,
+      payload: reason ? { sellerType: recipient.sellerType, reason } : { sellerType: recipient.sellerType },
+      visibleToBuyer: true,
+      visibleToSeller: true,
+      sellerId: recipient.sellerId,
+    });
+  });
+
+  await createNotification(db, {
+    userId: rfq.buyerUserId,
+    type: 'RFQ_INVITATION_DECLINED',
+    title: 'An invited seller declined',
+    body: `${recipient.sellerType} declined to quote on ${rfq.rfqNumber}.`,
+    data: { rfqId },
+  });
+
+  await writeAudit(db, ctx, {
+    action: 'RFQ.INVITATION_DECLINED',
+    entityType: 'RFQ_RECIPIENT',
+    entityId: recipient.id,
+    before: { status: recipient.recipientStatus },
+    after: { status: 'DECLINED', reason },
+  });
+
+  return { status: 'DECLINED' };
+}
+
+/**
+ * Seller withdraws its live offer. Withdrawal is allowed even after the RFQ was
+ * cancelled or expired — it only removes an offer, it never creates one — but a
+ * terminal revision (superseded, rejected, expired) can never be withdrawn.
+ */
+export async function withdrawQuote(
+  db: DB,
+  userId: string,
+  rfqId: string,
+  quoteId: string,
+  input: { reason?: string | null },
+  ctx: AuditContext,
+): Promise<{ status: string }> {
+  const access = requireSeller(await assertRfqAccess(db, rfqId, userId));
+  const sellerId = access.sellerId!;
+  await requireOwnQuote(db, rfqId, quoteId, sellerId);
+  await expireQuotesIfDue(db, rfqId);
+
+  const [quote] = await db.select().from(rfqQuotes).where(eq(rfqQuotes.id, quoteId)).limit(1);
+  if (!quote) throw ApiError.notFound('Quote');
+  assertQuoteTransition(quote.quoteStatus, 'WITHDRAWN');
+  if (!quoteIsLive(quote)) {
+    throw ApiError.conflict('The quote is no longer live and cannot be withdrawn');
+  }
+
+  const now = new Date();
+  const reason = input.reason?.trim() || null;
+  await db.transaction(async (tx) => {
+    const db2 = tx as unknown as DB;
+    await db2
+      .update(rfqQuotes)
+      .set({ quoteStatus: 'WITHDRAWN', withdrawnAt: now, withdrawalReason: reason, updatedAt: now })
+      .where(and(eq(rfqQuotes.id, quoteId), eq(rfqQuotes.quoteStatus, 'SUBMITTED')));
+    await db2
+      .update(rfqRecipients)
+      .set({ recipientStatus: 'WITHDRAWN', withdrawnAt: now })
+      .where(and(eq(rfqRecipients.id, quote.recipientId), eq(rfqRecipients.recipientStatus, 'QUOTED')));
+    await recordEvent(db2, {
+      rfqId,
+      eventType: 'QUOTE_WITHDRAWN',
+      actorUserId: userId,
+      payload: reason ? { revision: quote.revision, reason } : { revision: quote.revision },
+      visibleToBuyer: true,
+      visibleToSeller: true,
+      sellerId,
+      quoteId,
+      quoteRevision: quote.revision,
+    });
+  });
+
+  const [rfqRow] = await db.select({ buyerUserId: rfqs.buyerUserId, rfqNumber: rfqs.rfqNumber }).from(rfqs).where(eq(rfqs.id, rfqId)).limit(1);
+  if (rfqRow) {
+    await createNotification(db, {
+      userId: rfqRow.buyerUserId,
+      type: 'RFQ_QUOTE_WITHDRAWN',
+      title: 'A quote was withdrawn',
+      body: `Revision ${quote.revision} of a quote on ${rfqRow.rfqNumber} was withdrawn.`,
+      data: { rfqId, quoteId },
+    });
+  }
+
+  await writeAudit(db, ctx, {
+    action: 'RFQ.QUOTE_WITHDRAWN',
+    entityType: 'RFQ_QUOTE',
+    entityId: quoteId,
+    before: { status: quote.quoteStatus, revision: quote.revision },
+    after: { status: 'WITHDRAWN', reason },
+  });
+
+  return { status: 'WITHDRAWN' };
+}
+
+/**
+ * Buyer rejects one quote, with a mandatory reason.
+ *
+ * Rejection is deliberately *not* an award and creates no order: it closes that
+ * revision and lets the seller submit a new one while the RFQ is open. The
+ * decision is recorded on the quote (who, when, why) and in the timeline.
+ */
+export async function rejectQuote(
+  db: DB,
+  userId: string,
+  rfqId: string,
+  quoteId: string,
+  input: { reason: string },
+  ctx: AuditContext,
+): Promise<{ status: string; revision: number }> {
+  const access = requireBuyer(await assertRfqAccess(db, rfqId, userId));
+  const rfq = await expireIfDue(db, access.rfq);
+  await expireQuotesIfDue(db, rfq.id);
+  if (rfq.status !== 'OPEN') {
+    throw ApiError.conflict(`An RFQ in ${rfq.status} state cannot reject quotes`);
+  }
+
+  const reason = input.reason.trim();
+  if (reason.length < 3) {
+    throw ApiError.validation([
+      { field: 'reason', message: 'A reason is required when rejecting a quote', code: 'REASON_REQUIRED' },
+    ]);
+  }
+
+  const [quote] = await db
+    .select()
+    .from(rfqQuotes)
+    .where(and(eq(rfqQuotes.id, quoteId), eq(rfqQuotes.rfqId, rfqId)))
+    .limit(1);
+  if (!quote) throw ApiError.notFound('Quote');
+  assertQuoteTransition(quote.quoteStatus, 'REJECTED');
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    const db2 = tx as unknown as DB;
+    await db2
+      .update(rfqQuotes)
+      .set({
+        quoteStatus: 'REJECTED',
+        decidedAt: now,
+        decidedByUserId: userId,
+        decisionReason: reason,
+        updatedAt: now,
+      })
+      .where(and(eq(rfqQuotes.id, quoteId), eq(rfqQuotes.quoteStatus, 'SUBMITTED')));
+    await recordEvent(db2, {
+      rfqId,
+      eventType: 'QUOTE_REJECTED',
+      actorUserId: userId,
+      payload: { revision: quote.revision, reason },
+      visibleToBuyer: true,
+      visibleToSeller: true,
+      sellerId: quote.sellerId,
+      quoteId,
+      quoteRevision: quote.revision,
+    });
+  });
+
+  await createNotification(db, {
+    userId: quote.sellerUserId,
+    type: 'RFQ_QUOTE_REJECTED',
+    title: 'Your quote was rejected',
+    body: `Revision ${quote.revision} of your quote on ${rfq.rfqNumber} was rejected.`,
+    data: { rfqId, quoteId },
+  });
+
+  await writeAudit(db, ctx, {
+    action: 'RFQ.QUOTE_REJECTED',
+    entityType: 'RFQ_QUOTE',
+    entityId: quoteId,
+    before: { status: quote.quoteStatus, revision: quote.revision },
+    after: { status: 'REJECTED', reason },
+  });
+
+  return { status: 'REJECTED', revision: quote.revision };
+}
+
+/**
+ * The full revision history of one seller's quote.
+ *
+ * Visible to the buyer and to that seller only. Superseded revisions are read
+ * from the same rows that were written when they were submitted — nothing is
+ * reconstructed — which is what makes "an old revision never changes" checkable
+ * rather than merely asserted.
+ */
+export async function listQuoteRevisions(
+  db: DB,
+  userId: string,
+  rfqId: string,
+  quoteId: string,
+): Promise<QuoteView[]> {
+  const access = await assertRfqAccess(db, rfqId, userId);
+  const [anchor] = await db
+    .select()
+    .from(rfqQuotes)
+    .where(and(eq(rfqQuotes.id, quoteId), eq(rfqQuotes.rfqId, rfqId)))
+    .limit(1);
+  if (!anchor) throw ApiError.notFound('Quote');
+  // A seller cannot walk another seller's revision chain by guessing an id.
+  if (access.role === 'SELLER' && anchor.sellerId !== access.sellerId) {
+    throw ApiError.notFound('Quote');
+  }
+
+  const rows = await db
+    .select()
+    .from(rfqQuotes)
+    .where(and(eq(rfqQuotes.rfqId, rfqId), eq(rfqQuotes.sellerId, anchor.sellerId)))
+    .orderBy(rfqQuotes.revision);
+
+  const views: QuoteView[] = [];
+  for (const row of rows) {
+    const lines = await db
+      .select({
+        rfqItemId: rfqQuoteLines.rfqItemId,
+        unitPrice: rfqQuoteLines.unitPrice,
+        quantity: rfqQuoteLines.quantity,
+        lineTotal: rfqQuoteLines.lineTotal,
+      })
+      .from(rfqQuoteLines)
+      .where(eq(rfqQuoteLines.quoteId, row.id));
+    views.push(toQuoteView(row, lines));
+  }
+  return views;
 }

@@ -2,6 +2,52 @@
 
 آخر تحديث: **2026-11-24**
 
+## B2B-01 phase 2 — دورة حياة RFQ والعروض والتفاوض (COMPLETE_VERIFIED — 2026-11-24)
+
+### ما وجدناه قبل التنفيذ (لا افتراض)
+المرحلة 1 (commit `6fa1c3e`) أنشأت الكيانات والمسارات الأساسية: `create` (DRAFT) · `send` (بإقرار إفصاح + موافقة بائع) · `submitQuote` (بإصدارات) · `cancel` · قراءة معزولة للمشاركين، مع **24 اختبارًا أخضر**. لكن دورة الحياة بعد الإرسال كانت ناقصة فعليًا:
+
+| الفجوة | الأثر الحقيقي |
+| --- | --- |
+| لا حالة `VIEWED` | البائع لا يُسجَّل اطلاعه، والمشتري لا يعرف من رأى الطلب |
+| لا رفض دعوة | البائع الصامت والممتنع متطابقان |
+| لا سحب عرض | البائع لا يستطيع التراجع؛ والمشتري يرى عرضًا ميتًا كأنه حيّ |
+| لا رفض عرض | المشتري لا يوثّق سبب استبعاد عرض، والبائع لا يعرف |
+| `EXPIRED`/`validUntil` غير مفعّلين | `expiresAt` و`valid_until` يُكتبان ولا يُقيَّمان أبدًا: طلب منتهٍ يبقى `OPEN` ويقبل عروضًا |
+| لا حالة نهائية للعرض القديم | الإصدار السابق `SUPERSEDED` قابل للسحب/الرفض، ولا شيء يمنع إعادة فتحه في القاعدة |
+| `zod` بلا `.strict()` | `buyerCompanyId`/`sellerId` في الجسم تُهمَل بصمت بدل رفضها |
+
+### ما بُني
+- **`modules/rfq/lifecycle.ts`** (جديد): ثلاث آلات حالات صريحة (`RFQ_TRANSITIONS`, `RECIPIENT_TRANSITIONS`, `QUOTE_TRANSITIONS`) + `assert*Transition` (409 يسمّي الحالتين) + `rfqAcceptsQuotes`/`quoteIsLive`. كل حالة على العرض غير `SUBMITTED` **نهائية**.
+- **`service.ts`**: `expireIfDue` و`expireQuotesIfDue` (تحديث SQL واحد محروس ⇒ حدث `EXPIRED` واحد بـ`actorType='SYSTEM'` و`actorUserId=null` حتى تحت 5 قراءات متزامنة) · `markViewed` (مرة واحدة، محروس على `INVITED`) · `declineInvitation` · `withdrawQuote` · `rejectQuote` (سبب إلزامي، `decidedByUserId`) · `listQuoteRevisions` · إعادة الربط: الإصدار السابق **الحيّ فقط** يصبح `SUPERSEDED`، أما `REJECTED`/`WITHDRAWN` فيبقى على حاله (القرار حقيقة) ويُربط الجديد بـ`supersedes_id`.
+- **`db/schema/rfq.ts` + migration `0046_rfq_lifecycle`**: `rfq_quotes.{decided_by_user_id, decision_reason, withdrawn_at, withdrawal_reason, expired_at}` · `rfq_recipients.{declined_at, decline_reason, withdrawn_at}` · `rfq_events.{quote_id, quote_revision}` + فهرس.
+- **حُرّاس في القاعدة** (لأن قاعدة الخدمة قد ينساها مسار لاحق): `rfq_events` و`rfq_quote_lines` append-only (UPDATE/DELETE ⇒ استثناء) · تجميد أعمدة المال/الهوية/`valid_until`/`revision` في `rfq_quotes` · حالة نهائية لا تُعاد فتحها · منع حذف أي عرض.
+- **`routes.ts`**: `POST /:id/decline` · `POST /:id/quotes/:quoteId/withdraw` · `POST /:id/quotes/:quoteId/reject` (صلاحية `rfq:decide`) · `GET /:id/quotes/:quoteId/revisions`، و**`.strict()`** على كل جسم ⇒ `buyerCompanyId`/`sellerId`/`recipientStatus` تُرفض 422. الهوية تُشتق من الجلسة فقط.
+- **`views.ts`**: إسقاطات صريحة حقلاً حقلاً لـ`decisionReason`/`withdrawnAt`/`expiredAt`/`declinedAt`/`viewedAt`، و`TimelineEntry` يحمل `quoteId`+`quoteRevision`.
+- **إشعارات داخلية**: `RFQ_QUOTE_WITHDRAWN`, `RFQ_QUOTE_REJECTED`, `RFQ_INVITATION_DECLINED`, `RFQ_QUOTE_EXPIRED`, `RFQ_EXPIRED` — `data` يحمل `{rfqId, quoteId?}` فقط، بلا بريد/هاتف/`userId`.
+
+### الإثبات
+- `tests/b2b01b-lifecycle-unit.test.ts` — **8/8**: اكتمال الجداول، شكل انتقالات RFQ، نهائية `CANCELLED/EXPIRED/CLOSED`، عدم إعادة فتح دعوة مرفوضة، نهائية كل حالة عرض، رسائل 409، حدود `rfqAcceptsQuotes`/`quoteIsLive` عند اللحظة نفسها.
+- `tests/b2b01b-rfq-lifecycle.test.ts` — **22/22** على HTTP حقيقي + PostgreSQL حقيقي (بلا mocks): `INVITED→VIEWED` مرة واحدة · رفض دعوة + سبب يظهر للمشتري + منع الاقتباس بعده · منع رفض الدعوة مع عرض حيّ · سحب عرض ثم إعادة دخول بإصدار جديد · حفظ الإصدار القديم حرفيًا (المبالغ/البنود/`submittedAt`) وقراءة السلسلة · 409 على سحب/رفض إصدار `SUPERSEDED` و404 على كل مسار كتابة غير موجود · رفض بائع آخر (404) ورفض المشتري (403) · رفض بسبب إلزامي + `decidedByUserId` + إعادة عرض بعد الرفض · `maxRounds` من السياسة + تعارض العملة · `quoteValidityDays` من السياسة (72 ساعة مضبوطة) · انتهاء العرض يغلق الجولة · انتهاء الطلب ذرّيًا (5 قراءات ⇒ حدث واحد) ويغلق كل المسارات · الإلغاء يغلق كل شيء والسحب يبقى مسموحًا · `B2B_PARTNER_DISCOVERY` ليست بديلًا · الإفصاح · تزوير الهوية 422 · الأحداث تحمل الفاعل/التوقيت/الإصدار · الإشعارات بلا اتصال · **صفر تغيّر في `orders`/`transaction_ledger`/`payment_intents`** · اتساق جدول الدعوات مع حالات العروض.
+- **التراجع**: `tests/b2b01-rfq-isolation.test.ts` **24/24** كما هي.
+- **الحزمة الكاملة للخادم**: **2474/2474** (187 ملفًا) على PostgreSQL 17 — والاختبارات الأربعة التي ظهرت حمراء (`ai-video-agent` 1 و`agent-video-download` 3) كانت **بيئية** (غياب `ffmpeg` في الحاوية)؛ بعد `apt-get install ffmpeg` تمرّ **12/12**، فلا فشل منطقي. Typecheck (server) = 0، Typecheck (web) = 0، Web build = PASS.
+- **توثيق**: `docs/B2B-01_RFQ_LIFECYCLE.md` (آلات الحالات + جدول المسارات + جدول الرفض + الأحداث + الإشعارات + السياسة).
+
+### واجهة الويب (نفس المرحلة)
+- `packages/web/src/pages/DashboardRfqPages.tsx`: ثلاث صفحات — `/dashboard/rfqs` (قائمة + إنشاء ببنود ديناميكية)، `/dashboard/rfqs/:id` (لوحة مشتري **أو** بائع حسب إسقاط الخادم)، `/dashboard/rfq-inbox` (دعوات البائع).
+- المشتري: إرسال دعوات (بحث في الدليل + إقرار الإفصاح)، جدول دعوات مع أسباب الاعتذار، عروض مع الإجمالي/`rev`/المدة/الصلاحية، **الإصدارات**، رفض بسبب إلزامي، إلغاء. البائع: نموذج عرض لكل بند، إعادة إرسال كإصدار، سحب، اعتذار.
+- `lib/types.ts` + `lib/api.ts` (13 عميلًا) + `lib/rbac.ts` (`rfq.buy`/`rfq.sell`) + `AppSidebar` (COMPANY يرى الاثنين، MERCHANT/SUPPLIER صندوق الوارد فقط، CUSTOMER لا شيء) + `App.tsx` (3 مسارات).
+- i18n: **102 مفتاحًا × 4 لغات** (`rfq.*`, `rfq.status.*`, `rfq.event.*`) + `common.saving`، مع RTL.
+- الواجهة **لا تحسب أي سعر** (تقرأ `lineTotal` من الخادم) ولا ترسل هوية.
+- **الإثبات**: `scripts/ui-rfq-check.mjs` — **33/33 فحصًا** في متصفح حقيقي (Chromium) ضد API حقيقي وPostgres حقيقي: إنشاء من النموذج · إرسال · صندوق · عرض · إعادة إصدار · رفض بسبب وقراءته · إصدارات · اعتذار · إلغاء · قفل بعد الإلغاء · اللغات الأربع · صفر أخطاء صفحة. `tsc --noEmit` (web) = 0، `npm run build -w @wasit/web` = PASS.
+- تشغيل السكربت موثّق في رأسه (DB مؤقت `wasit_ui` + migrate/seed + خادم على 3100 برفع حد تسجيل الدخول + vite على 5199).
+
+### حدود متعمّدة
+- **المرحلة 3 لم تبدأ**: لا مسار يكتب `ACCEPTED` أو `AWARDED`، ولا تحويل إلى طلب. معلن في السجل كبند **مفتوح**.
+- **الانتهاء كسول بلا Scheduler**: يُقيَّم عند الوصول. لا وظيفة مجدولة جديدة في هذه المرحلة.
+- **`.strict()` رفض الجسم لا تجاهله**: العميل القديم الذي يرسل حقولًا إضافية سيُرفض 422 بدل أن يُتجاهل — تغيير مقصود ومُختبَر.
+- **لم يُلمس**: `master`، لا Demo/Production DB (استُخدمت قاعدة مؤقتة `wasit_ui` ثم حُذفت)، لا تغيير في النموذج التجاري أو الدفع/Webhooks أو `ROLE_PERMISSIONS`، لا محفظة ولا دفتر قيود.
+
 ## ENTITY-01 — تحرير بيانات الكيان من مالكه (COMPLETE_VERIFIED — 2026-11-24)
 
 ### ما وجدناه قبل التنفيذ (لا افتراض)

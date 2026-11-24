@@ -2024,3 +2024,147 @@ export interface QuoteResult {
   sellers: QuoteSeller[];
   issues: QuoteIssue[];
 }
+
+// ---------------------------------------------------------------------------
+// B2B-01 — requests for quotation (RFQ), offers and negotiation.
+// Mirrors the server projections in `modules/rfq/views.ts`: no user ids, no
+// contact data, no payment fields — because the server never sends them.
+// ---------------------------------------------------------------------------
+
+export type RfqStatus = 'DRAFT' | 'OPEN' | 'AWARDED' | 'CANCELLED' | 'EXPIRED' | 'CLOSED';
+export type RfqRecipientStatus = 'INVITED' | 'VIEWED' | 'QUOTED' | 'DECLINED' | 'WITHDRAWN';
+export type RfqQuoteStatus = 'SUBMITTED' | 'SUPERSEDED' | 'ACCEPTED' | 'REJECTED' | 'WITHDRAWN' | 'EXPIRED';
+
+export interface RfqItem {
+  id: string;
+  productId: string | null;
+  freeTextName: string | null;
+  quantity: string;
+  unit: string | null;
+  targetPrice: string | null;
+  position: number;
+}
+
+export interface RfqCompanyCard {
+  id: string;
+  legalName: string;
+  slug: string;
+  verified: boolean;
+}
+
+export interface RfqRecipient {
+  sellerId: string;
+  sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+  sellerName: string;
+  status: RfqRecipientStatus;
+  invitedAt: string;
+  viewedAt: string | null;
+  respondedAt: string | null;
+  declinedAt: string | null;
+  declineReason: string | null;
+}
+
+export interface RfqQuoteLine {
+  rfqItemId: string;
+  unitPrice: string;
+  quantity: string;
+  lineTotal: string;
+}
+
+export interface RfqQuote {
+  id: string;
+  sellerId: string;
+  sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+  revision: number;
+  status: RfqQuoteStatus;
+  currencyCode: string;
+  itemsTotal: string;
+  leadTimeDays: number | null;
+  paymentTerms: string | null;
+  notes: string | null;
+  validUntil: string;
+  submittedAt: string;
+  decidedAt: string | null;
+  decisionReason: string | null;
+  withdrawnAt: string | null;
+  withdrawalReason: string | null;
+  expiredAt: string | null;
+  lines: RfqQuoteLine[];
+}
+
+export interface RfqTimelineEntry {
+  id: string;
+  eventType: string;
+  actorType: 'USER' | 'SYSTEM';
+  quoteId: string | null;
+  quoteRevision: number | null;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface BuyerRfq {
+  id: string;
+  rfqNumber: string;
+  title: string;
+  description: string | null;
+  currencyCode: string;
+  status: RfqStatus;
+  neededBy: string | null;
+  expiresAt: string | null;
+  sentAt: string | null;
+  awardedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  company: RfqCompanyCard;
+  items: RfqItem[];
+  recipients: RfqRecipient[];
+  quoteCount: number;
+}
+
+export interface SellerRfq {
+  id: string;
+  rfqNumber: string;
+  title: string;
+  description: string | null;
+  currencyCode: string;
+  status: RfqStatus;
+  neededBy: string | null;
+  expiresAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  buyer: RfqCompanyCard;
+  items: RfqItem[];
+  myInvitation: {
+    sellerId: string;
+    status: RfqRecipientStatus;
+    invitedAt: string;
+    viewedAt: string | null;
+    respondedAt: string | null;
+    declinedAt: string | null;
+    declineReason: string | null;
+  };
+}
+
+export type RfqView = BuyerRfq | SellerRfq;
+
+export interface CreateRfqPayload {
+  title: string;
+  description?: string | null;
+  currencyCode: string;
+  neededBy?: string | null;
+  items: Array<{
+    productId?: string | null;
+    freeTextName?: string | null;
+    quantity: string;
+    unit?: string | null;
+    targetPrice?: string | null;
+  }>;
+}
+
+export interface SubmitRfqQuotePayload {
+  currencyCode: string;
+  leadTimeDays?: number | null;
+  paymentTerms?: string | null;
+  notes?: string | null;
+  lines: Array<{ rfqItemId: string; unitPrice: string; quantity: string }>;
+}

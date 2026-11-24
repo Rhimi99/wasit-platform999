@@ -23,6 +23,7 @@ import { DashboardOrdersPage, DashboardOrderDetailPage } from './pages/Dashboard
 import { DashboardProductsPage, DashboardCreateProductPage } from './pages/DashboardProductsPage';
 import { DashboardProfilePage, DashboardSecurityPage, DashboardSettingsPage } from './pages/DashboardSimplePages';
 import { DashboardEntityPage } from './pages/DashboardEntityPage';
+import { DashboardRfqListPage, DashboardRfqInboxPage, DashboardRfqDetailPage } from './pages/DashboardRfqPages';
 import { DashboardMessagesPage } from './pages/DashboardMessagesPage';
 import { DashboardTrustPage, DashboardVerificationPage, DashboardDisputesPage } from './pages/DashboardEnginesPages';
 import { DashboardAdsPage, DashboardAnalyticsPage, DashboardAIPage, DashboardSubscriptionsPage } from './pages/DashboardBusinessPages';
@@ -125,6 +126,9 @@ export default function App() {
       <Route path="/dashboard/employees" element={<RequireAuth><DashboardListPage kind="employees" /></RequireAuth>} />
       <Route path="/dashboard/trust" element={<RequireAuth><DashboardTrustPage /></RequireAuth>} />
       <Route path="/dashboard/entity" element={<RequireAuth><DashboardEntityPage /></RequireAuth>} />
+      <Route path="/dashboard/rfqs" element={<RequireAuth><DashboardRfqListPage /></RequireAuth>} />
+      <Route path="/dashboard/rfqs/:id" element={<RequireAuth><DashboardRfqDetailPage /></RequireAuth>} />
+      <Route path="/dashboard/rfq-inbox" element={<RequireAuth><DashboardRfqInboxPage /></RequireAuth>} />
       <Route path="/dashboard/verification" element={<RequireAuth><DashboardVerificationPage /></RequireAuth>} />
       <Route path="/dashboard/disputes" element={<RequireAuth><DashboardDisputesPage /></RequireAuth>} />
       <Route path="/dashboard/ads" element={<RequireAuth><DashboardAdsPage /></RequireAuth>} />

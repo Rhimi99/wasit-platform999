@@ -32,6 +32,7 @@ function baseNav(roleKey: string): NavItem[] {
     case 'MERCHANT':
       return [
         { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
+        { to: '/dashboard/rfq-inbox', key: 'dashboard.rfqInbox', icon: '📨', feature: 'rfq.sell' },
         { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
         { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
         { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
@@ -59,6 +60,8 @@ function baseNav(roleKey: string): NavItem[] {
     case 'COMPANY':
       return [
         { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
+        { to: '/dashboard/rfqs', key: 'dashboard.rfqs', icon: '📋', feature: 'rfq.buy' },
+        { to: '/dashboard/rfq-inbox', key: 'dashboard.rfqInbox', icon: '📨', feature: 'rfq.sell' },
         { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
         { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
         { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
@@ -99,6 +102,7 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/agent-video', key: 'agentVideo.nav', icon: '🎥', feature: 'ai.use' },
         { to: '/dashboard/partners', key: 'partners.nav', icon: '🤝', feature: 'ai.use' },
         { to: '/dashboard/buyers', key: 'dashboard.buyers', icon: '🤝' },
+        { to: '/dashboard/rfq-inbox', key: 'dashboard.rfqInbox', icon: '📨', feature: 'rfq.sell' },
         { to: '/dashboard/my-merchants', key: 'directory.myMerchantsTitle', icon: '🛒' },
         { to: '/dashboard/merchants-list', key: 'dashboard.merchants', icon: '🏪' },
         { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },

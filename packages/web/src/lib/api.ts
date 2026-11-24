@@ -44,6 +44,7 @@ import type {
   PublicRefundPolicy,
   LegalAcceptanceState,
   LegalAcceptanceHistoryEntry,
+  BuyerRfq, CreateRfqPayload, RfqQuote, RfqTimelineEntry, RfqView, SellerRfq, SubmitRfqQuotePayload,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -1504,6 +1505,72 @@ export const api = {
   },
   async directoryMerchants(params: { q?: string; page?: number; pageSize?: number } = {}) {
     return request<DirectoryListResponse<DirectoryMerchantRow>>(`/api/directory/merchants?${directoryQuery(params)}`);
+  },
+
+  // ---- B2B-01: requests for quotation -------------------------------------
+  // The server derives the caller's side (buyer or invited seller) from the
+  // session; none of these calls take a company or seller id from the client.
+  async rfqs() {
+    return request<BuyerRfq[]>('/api/rfqs');
+  },
+  async rfqInbox() {
+    return request<SellerRfq[]>('/api/rfqs/inbox');
+  },
+  async rfq(id: string) {
+    return request<RfqView>(`/api/rfqs/${encodeURIComponent(id)}`);
+  },
+  async createRfq(payload: CreateRfqPayload) {
+    return request<{ id: string; rfqNumber: string; status: string }>('/api/rfqs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  async sendRfq(id: string, sellerIds: string[], acknowledgeDisclosure: boolean) {
+    return request<{ status: string; recipientCount: number; expiresAt: string }>(
+      `/api/rfqs/${encodeURIComponent(id)}/send`,
+      { method: 'POST', body: JSON.stringify({ sellerIds, acknowledgeDisclosure }) },
+    );
+  },
+  async cancelRfq(id: string, reason?: string | null) {
+    return request<{ status: string }>(`/api/rfqs/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason?.trim() || null }),
+    });
+  },
+  async rfqQuotes(id: string) {
+    return request<RfqQuote[]>(`/api/rfqs/${encodeURIComponent(id)}/quotes`);
+  },
+  async rfqQuoteRevisions(id: string, quoteId: string) {
+    return request<RfqQuote[]>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/revisions`,
+    );
+  },
+  async rfqTimeline(id: string) {
+    return request<RfqTimelineEntry[]>(`/api/rfqs/${encodeURIComponent(id)}/timeline`);
+  },
+  async submitRfqQuote(id: string, payload: SubmitRfqQuotePayload) {
+    return request<{ quoteId: string; revision: number; itemsTotal: string }>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  },
+  async declineRfq(id: string, reason?: string | null) {
+    return request<{ status: string }>(`/api/rfqs/${encodeURIComponent(id)}/decline`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason?.trim() || null }),
+    });
+  },
+  async withdrawRfqQuote(id: string, quoteId: string, reason?: string | null) {
+    return request<{ status: string }>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/withdraw`,
+      { method: 'POST', body: JSON.stringify({ reason: reason?.trim() || null }) },
+    );
+  },
+  async rejectRfqQuote(id: string, quoteId: string, reason: string) {
+    return request<{ status: string; revision: number }>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/reject`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
   },
 };
 
