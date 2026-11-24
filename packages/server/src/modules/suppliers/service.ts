@@ -5,6 +5,7 @@ import { supplierContacts, suppliers } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
 import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+import { updateEntityById } from '../entities/service.js';
 
 /**
  * The supplier columns a public profile may expose. `userId`, `isActive` and the
@@ -153,4 +154,15 @@ export async function addSupplierContact(db: DB, input: CreateSupplierContactInp
     isPrimary: input.isPrimary ?? false,
   });
   return { id };
+}
+
+/** Addressed update kept symmetric with merchants/companies; ownership lives in `modules/entities`. */
+export async function updateSupplier(
+  db: DB,
+  id: string,
+  input: Record<string, unknown>,
+  actorId: string,
+) {
+  const { entity } = await updateEntityById(db, 'supplier', id, input, { actorId });
+  return entity;
 }

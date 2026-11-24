@@ -50,6 +50,9 @@ packages/server/artifacts/
 # Pidfiles and logs from scripts/demo-up.sh
 .demo-run/
 
+# Local E2E harness runs (API/web logs, screenshots)
+.entity-run/
+
 # Git bundles are hand-off artifacts, not source
 *.bundle
 *.bundle.sha256

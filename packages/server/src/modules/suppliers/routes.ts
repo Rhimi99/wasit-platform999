@@ -4,7 +4,8 @@ import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '@wasit/shared';
-import { createSupplier, listSuppliers, getSupplier, addSupplierContact } from './service.js';
+import { createSupplier, listSuppliers, getSupplier, addSupplierContact, updateSupplier } from './service.js';
+import { supplierUpdateSchema } from '../entities/schemas.js';
 
 const createSupplierSchema = z.object({
   companyName: z.string().min(2).max(200),
@@ -82,5 +83,20 @@ suppliersRoutes.post(
     const ctx = getContext(c);
     const result = await addSupplierContact(ctx.db, body, { actorId: ctx.user!.id });
     return c.json({ success: true, data: result }, 201 as never);
+  },
+);
+
+// Ownership is enforced in the service: holding supplier:update is not enough
+// to edit another supplier's profile.
+suppliersRoutes.patch(
+  '/:id',
+  requireAuth,
+  requirePermission(PERMISSIONS.SUPPLIER_UPDATE),
+  validateBody(supplierUpdateSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof supplierUpdateSchema>>(c);
+    const ctx = getContext(c);
+    const supplier = await updateSupplier(ctx.db, c.req.param('id')!, body, ctx.user!.id);
+    return c.json({ success: true, data: supplier });
   },
 );

@@ -2,6 +2,38 @@
 
 آخر تحديث: **2026-11-24**
 
+## ENTITY-01 — تحرير بيانات الكيان من مالكه (COMPLETE_VERIFIED — 2026-11-24)
+
+### ما وجدناه قبل التنفيذ (لا افتراض)
+- **`ENTITY-01` لم يكن مُسجَّلاً** في `GAP_REGISTER` ولا في `CHECKPOINT` تحت هذا المعرّف؛ أقرب بند قائم هو `PERM-01C` (حماية المسارات) و`SEC-04B` (حماية القراءة). سُجِّل الآن في `GAP_REGISTER` §21 كبند **جديد** أُغلق بأدلّته.
+- **الجداول الثلاثة لا تتطابق**: `merchants.store_name` / `suppliers.company_name` / `companies.legal_name`، والصناعة والرقم القانوني والرقم الجبائي للشركة فقط.
+- الحالة الفعلية قبل العمل:
+  | النوع | قراءة | تحديث | المشكلة |
+  | --- | --- | --- | --- |
+  | MERCHANT | `GET /api/merchants/:id` (إسقاط عام) | `PATCH /:id` (ملكية) | يكتب 3 حقول فقط (`storeName/description/logoUrl`) — **بلا `countryId`/`cityId`**، و**بلا Audit** |
+  | SUPPLIER | `GET /api/suppliers/:id` | **لا يوجد PATCH إطلاقاً** | المورد لا يستطيع تعديل ملفه |
+  | COMPANY | `GET /api/companies/:id` + `/mine` | `PATCH /:id` (ملكية) | يكتب 4 حقول، ويقبل `registrationNumber`/`taxId` في التحقق ثم **يتجاهلهما بصمت** (يُوهم العميل بالنجاح) — و**بلا Audit** |
+
+### ما بُني
+- **`modules/entities/`** (جديد):
+  - `fields.ts` — قائمة سماح صريحة لكل نوع (`storeName/companyName/legalName` + `countryId/cityId/description/logoUrl` + `industry` للشركة) وقائمة **`PROTECTED_ENTITY_FIELDS`**: `id`, `userId`, `slug`, `verified`, `isActive`, `createdAt`, `updatedAt`, `registrationNumber`, `taxId`.
+  - `schemas.ts` — zod `.strict()` لكل نوع: الحقل المحمي يُرفض **422** مع تسمية المفتاح، لا يُسقَط بصمت.
+  - `service.ts` — `getMyEntities` + `updateMyEntity` (الصف يُحلّ من `userId` في الجلسة، لا من الـpayload) + `updateEntityById` (للعقد القديم `/:id`، بمقارنة مالك صريحة → 403)، مع `diffPatch` (فقط الحقول المتغيّرة) و`writeAudit('ENTITY.UPDATE', before/after للحقول المتغيّرة فقط, metadata.source='self-service')`.
+  - `routes.ts` — `GET /api/entities/me`، و`PATCH /api/entities/{merchant|supplier|company}/me`، كل واحد بصلاحيته الحقيقية (`merchant:update` / `supplier:update` / `company:update`).
+- **إعادة توصيل** `modules/{merchants,companies}/service.ts` بالخدمة المشتركة (فتكسب Audit + `countryId/cityId` + رفض الحقول المحمية بدل تجاهلها)، و**إضافة `PATCH /api/suppliers/:id`** لأول مرة (بصلاحية `supplier:update` + ملكية) — بلا كسر أي تدفق إنشاء.
+- **الواجهة**: `DashboardEntityPage` على `/dashboard/entity` (رابط في شريط MERCHANT/SUPPLIER/COMPANY)، نموذج يتبدّل حسب نوع الكيان (صناعة للشركة فقط)، بطاقة حالة للقراءة فقط (نوع/توثيق/حالة/المعرّف العام)، ملاحظة صريحة بأن حقول التوثيق والحالة والرقم القانوني/الجبائي لا تُعدَّل من هنا. مفاتيح i18n `entity.*` + `dashboard.entity` في **ar/fr/en/zh**، RTL/LTR من تخطيط الصفحة، وتخطيط عمودين على الشاشات الكبيرة وعمود واحد على الهاتف.
+- **لا migration، لا seed، لا تغيير RBAC**: الأعمدة كلها موجودة، وكل دور يملك `*:update` الخاصة به أصلاً.
+
+### الإثبات
+- `tests/entity-profile.test.ts` — **21/21**: قراءة `/api/entities/me` (401 للمجهول، `null` لمن لا يملك كياناً، حقول النوع الصحيحة، بلا `userId`)؛ تحديث كل نوع بواسطة مالكه؛ المسار القديم `/:id` للمورد والتاجر والشركة؛ `changed:false` بلا كتابة Audit عند عدم التغيير؛ **رفض `verified`/`isActive`/`slug`/`userId`/`registrationNumber`/`taxId` بـ422 مع بقاء الصف كما هو**؛ اسم فارغ 422؛ **عزل**: تاجر لا يعدّل تاجراً آخر (403) وشركة لا تعدّل شركة أخرى (403)؛ كل حساب يرى كيانه فقط؛ دور لا يكتب نوعاً لا يملكه (403)؛ عميل بلا صلاحية 403؛ تاجر بلا ملف 404 بلا إنشاء صف؛ Audit يحمل الفاعل والكيان والحقول المتغيّرة فقط.
+- **التراجعات**: `perm01c-rbac-cleanup` (23/23)، `sec04b-entity-read-access` (12/12)، `order-buyer-identity` (10/10) — 45/45.
+- **E2E حقيقي على الويب** (`.entity-run/entity-check.mjs`، Chromium، بلا mocks): **17/17** — تاجر على الهاتف (390×844) وسطح المكتب (1280×900): تحميل الملف، حفظ الوصف، ظهور تأكيد، **ثبات القيمة بعد إعادة التحميل**، رفض الحقول المحمية من داخل الصفحة (422)، **رفض تعديل ملف تاجر آخر (403)** بوجود تاجر ثانٍ حقيقي، وبلا تجاوز أفقي؛ المورد: الملف يُحمَّل وبلا حقل صناعة؛ الشركة: حقل الصناعة يظهر ويُحفظ ويُستعاد. اللقطات: `/tmp/entity-{mobile,desktop,supplier,company}.png`.
+- **الحزمة الكاملة للخادم**: **2380 ناجحًا / 4 فاشلة (من 2384)** — الأربعة هي أعطال مُولِّد الفيديو المعروفة مسبقًا (`ai-video-agent` 1، `agent-video-download` 3) ولا علاقة لها بالكيانات؛ لا تراجع جديد.
+- Typecheck (server + web) = 0 أخطاء، وبناء الخادم والواجهة ناجح.
+
+### ملاحظة تشغيلية
+- الاختبارات/E2E جرت على قاعدة **`wasit_test`** (تُعاد بناؤها بالـharness) و**`wasit_dev`** المحلية فقط. **لم تُلمس** قاعدة الـDemo أو الإنتاج، ولم تُضَف أي migration.
+
 ## ORDER-01 — هوية المشتري من الواجهة إلى قاعدة البيانات (COMPLETE_VERIFIED — 2026-11-24)
 
 ### العطل الحقيقي

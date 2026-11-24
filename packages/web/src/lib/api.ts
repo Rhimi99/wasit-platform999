@@ -14,6 +14,11 @@ import type {
   PriceComparisonResponse,
   ProductImageRow,
   MyCompany,
+  MyEntities,
+  EntityProfileType,
+  MerchantProfile,
+  SupplierProfile,
+  CompanyProfile,
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
@@ -399,6 +404,19 @@ export const api = {
   },
   async createCompany(data: { legalName: string; registrationNumber?: string; taxId?: string; countryId?: string; cityId?: string; industry?: string; description?: string; logoUrl?: string }) {
     return request<{ id: string }>('/api/companies', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  // ---- Entity profiles (ENTITY-01) ----
+  /** The caller's own merchant/supplier/company profile; each may be `null`. */
+  async myEntityProfiles() {
+    return request<MyEntities>('/api/entities/me');
+  },
+  /** Self-service update: the server resolves the row from the session, never from the body. */
+  async updateMyEntity(type: EntityProfileType, data: Record<string, unknown>) {
+    return request<{ entity: MerchantProfile | SupplierProfile | CompanyProfile; changed: boolean }>(
+      `/api/entities/${type}/me`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+    );
   },
 
   // ---- Orders ----

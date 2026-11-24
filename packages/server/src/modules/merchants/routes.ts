@@ -5,6 +5,7 @@ import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '@wasit/shared';
 import { createMerchant, listMerchants, getMerchant, updateMerchant } from './service.js';
+import { merchantUpdateSchema } from '../entities/schemas.js';
 
 const createMerchantSchema = z.object({
   storeName: z.string().min(2).max(200),
@@ -13,8 +14,6 @@ const createMerchantSchema = z.object({
   description: z.string().max(5000).optional(),
   logoUrl: z.string().url().max(2000).optional(),
 });
-
-const updateMerchantSchema = createMerchantSchema.partial();
 
 export const merchantRoutes = new Hono();
 
@@ -56,9 +55,9 @@ merchantRoutes.patch(
   '/:id',
   requireAuth,
   requirePermission(PERMISSIONS.MERCHANT_UPDATE),
-  validateBody(updateMerchantSchema),
+  validateBody(merchantUpdateSchema),
   async (c) => {
-    const body = getValidatedBody<z.infer<typeof updateMerchantSchema>>(c);
+    const body = getValidatedBody<z.infer<typeof merchantUpdateSchema>>(c);
     const ctx = getContext(c);
     const merchant = await updateMerchant(ctx.db, c.req.param('id')!, body, ctx.user!.id);
     return c.json({ success: true, data: merchant });

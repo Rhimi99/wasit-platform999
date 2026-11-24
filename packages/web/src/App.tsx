@@ -21,6 +21,7 @@ import { DashboardOverviewPage } from './pages/DashboardOverviewPage';
 import { DashboardOrdersPage, DashboardOrderDetailPage } from './pages/DashboardOrdersPage';
 import { DashboardProductsPage, DashboardCreateProductPage } from './pages/DashboardProductsPage';
 import { DashboardProfilePage, DashboardSecurityPage, DashboardSettingsPage } from './pages/DashboardSimplePages';
+import { DashboardEntityPage } from './pages/DashboardEntityPage';
 import { DashboardMessagesPage } from './pages/DashboardMessagesPage';
 import { DashboardTrustPage, DashboardVerificationPage, DashboardDisputesPage } from './pages/DashboardEnginesPages';
 import { DashboardAdsPage, DashboardAnalyticsPage, DashboardAIPage, DashboardSubscriptionsPage } from './pages/DashboardBusinessPages';
@@ -120,6 +121,7 @@ export default function App() {
       <Route path="/dashboard/branches" element={<RequireAuth><DashboardListPage kind="branches" /></RequireAuth>} />
       <Route path="/dashboard/employees" element={<RequireAuth><DashboardListPage kind="employees" /></RequireAuth>} />
       <Route path="/dashboard/trust" element={<RequireAuth><DashboardTrustPage /></RequireAuth>} />
+      <Route path="/dashboard/entity" element={<RequireAuth><DashboardEntityPage /></RequireAuth>} />
       <Route path="/dashboard/verification" element={<RequireAuth><DashboardVerificationPage /></RequireAuth>} />
       <Route path="/dashboard/disputes" element={<RequireAuth><DashboardDisputesPage /></RequireAuth>} />
       <Route path="/dashboard/ads" element={<RequireAuth><DashboardAdsPage /></RequireAuth>} />

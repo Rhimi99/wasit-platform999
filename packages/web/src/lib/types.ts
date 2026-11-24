@@ -99,6 +99,44 @@ export interface MyCompany {
   taxId?: string | null;
 }
 
+/** ENTITY-01 — the caller's own entity profiles, as returned by `/api/entities/me`. */
+export type EntityProfileType = 'merchant' | 'supplier' | 'company';
+
+interface EntityProfileBase {
+  id: string;
+  slug: string;
+  countryId: string | null;
+  cityId: string | null;
+  description: string | null;
+  logoUrl: string | null;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MerchantProfile extends EntityProfileBase {
+  type: 'merchant';
+  storeName: string;
+}
+
+export interface SupplierProfile extends EntityProfileBase {
+  type: 'supplier';
+  companyName: string;
+}
+
+export interface CompanyProfile extends EntityProfileBase {
+  type: 'company';
+  legalName: string;
+  industry: string | null;
+}
+
+export interface MyEntities {
+  merchant: MerchantProfile | null;
+  supplier: SupplierProfile | null;
+  company: CompanyProfile | null;
+}
+
 /** How the buyer acts in this order; the server proves it before it is stored. */
 export type BuyerType = 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
 

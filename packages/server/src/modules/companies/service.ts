@@ -5,6 +5,7 @@ import { companies } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
 import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+import { updateEntityById } from '../entities/service.js';
 
 /**
  * The company columns a public profile may expose. The legal identifiers
@@ -152,23 +153,9 @@ export async function getMyCompany(db: DB, userId: string) {
 export async function updateCompany(
   db: DB,
   id: string,
-  input: Partial<CreateCompanyInput>,
+  input: Record<string, unknown>,
   actorId: string,
 ) {
-  const row = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
-  if (row.length === 0) throw ApiError.notFound('Company not found');
-  if (row[0].userId !== actorId) throw ApiError.forbidden();
-  const before = row[0];
-  await db
-    .update(companies)
-    .set({
-      legalName: input.legalName ?? before.legalName,
-      description: input.description ?? before.description,
-      logoUrl: input.logoUrl ?? before.logoUrl,
-      industry: input.industry ?? before.industry,
-      updatedAt: new Date(),
-    })
-    .where(eq(companies.id, id));
-  // The owner just wrote the row, so the private/owner view is the right response.
-  return getCompany(db, id, { userId: actorId });
+  const { entity } = await updateEntityById(db, 'company', id, input, { actorId });
+  return entity;
 }

@@ -18,6 +18,7 @@ import { ordersRoutes } from './modules/orders/routes.js';
 import { suppliersRoutes } from './modules/suppliers/routes.js';
 import { merchantRoutes } from './modules/merchants/routes.js';
 import { companyRoutes } from './modules/companies/routes.js';
+import { entityRoutes } from './modules/entities/routes.js';
 import { searchRoutes } from './modules/search/routes.js';
 import { comparisonRoutes } from './modules/comparison/routes.js';
 import { directoryRoutes } from './modules/directory/routes.js';
@@ -193,6 +194,7 @@ export function createApp(): Hono {
   app.route('/api/suppliers', suppliersRoutes);
   app.route('/api/merchants', merchantRoutes);
   app.route('/api/companies', companyRoutes);
+  app.route('/api/entities', entityRoutes);
   app.route('/api/search', searchRoutes);
   app.route('/api/price-comparison', comparisonRoutes);
   app.route('/api/directory', directoryRoutes);

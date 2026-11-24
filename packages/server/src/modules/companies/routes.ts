@@ -5,6 +5,7 @@ import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '@wasit/shared';
 import { createCompany, listCompanies, getCompany, getMyCompany, updateCompany } from './service.js';
+import { companyUpdateSchema } from '../entities/schemas.js';
 
 const createCompanySchema = z.object({
   legalName: z.string().min(2).max(250),
@@ -16,8 +17,6 @@ const createCompanySchema = z.object({
   description: z.string().max(5000).optional(),
   logoUrl: z.string().url().max(2000).optional(),
 });
-
-const updateCompanySchema = createCompanySchema.partial();
 
 export const companyRoutes = new Hono();
 
@@ -67,9 +66,9 @@ companyRoutes.patch(
   '/:id',
   requireAuth,
   requirePermission(PERMISSIONS.COMPANY_UPDATE),
-  validateBody(updateCompanySchema),
+  validateBody(companyUpdateSchema),
   async (c) => {
-    const body = getValidatedBody<z.infer<typeof updateCompanySchema>>(c);
+    const body = getValidatedBody<z.infer<typeof companyUpdateSchema>>(c);
     const ctx = getContext(c);
     const company = await updateCompany(ctx.db, c.req.param('id')!, body, ctx.user!.id);
     return c.json({ success: true, data: company });
