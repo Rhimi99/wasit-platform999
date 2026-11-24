@@ -99,6 +99,53 @@ export interface MyCompany {
   taxId?: string | null;
 }
 
+/** RBAC-02 — staff accounts and the role catalogue of the staff desk. */
+export type StaffRoleName = 'SUPPORT' | 'RISK' | 'DISPUTE' | 'ADMIN' | 'SUPER_ADMIN';
+export type AssignableStaffRole = 'SUPPORT' | 'RISK' | 'DISPUTE' | 'ADMIN';
+
+export interface StaffMember {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  roles: UserRole[];
+  isActive: boolean;
+  isLocked: boolean;
+  emailVerified: boolean;
+  mfaEnabled: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface StaffListResponse {
+  items: StaffMember[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface StaffRoleEntry {
+  role: AssignableStaffRole;
+  permissions: string[];
+}
+
+export interface StaffRoleCatalog {
+  assignable: StaffRoleEntry[];
+  allStaffRoles: StaffRoleName[];
+  protectedRole: 'SUPER_ADMIN';
+}
+
+export interface StaffActivityRow {
+  id: string;
+  action: string;
+  actorId: string | null;
+  actorEmail: string | null;
+  before: unknown;
+  after: unknown;
+  metadata: unknown;
+  createdAt: string;
+}
+
 /** ENTITY-01 — the caller's own entity profiles, as returned by `/api/entities/me`. */
 export type EntityProfileType = 'merchant' | 'supplier' | 'company';
 

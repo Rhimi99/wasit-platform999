@@ -31,6 +31,7 @@ import { trustRoutes } from './modules/trust/routes.js';
 import { riskRoutes } from './modules/risk/routes.js';
 import { disputeRoutes, publicDisputeRoutes } from './modules/disputes/routes.js';
 import { adminRoutes } from './modules/admin/routes.js';
+import { staffRoutes } from './modules/staff/routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
 import { adminAiProviderRoutes } from './modules/admin/ai-provider-routes.js';
@@ -233,6 +234,7 @@ export function createApp(): Hono {
   // first mount that matches, so a later one would answer 404 for these paths.
   app.route('/api/admin/ai/providers', adminAiProviderRoutes);
   app.route('/api/admin/ai/spend', adminAiSpendRoutes);
+  app.route('/api/admin/staff', staffRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);

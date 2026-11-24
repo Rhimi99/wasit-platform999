@@ -18,6 +18,9 @@ export type Feature =
   | 'order.manage'
   | 'admin'
   | 'admin.buildDashboard'
+  // RBAC-02: staff/role administration. Held by SUPER_ADMIN only — ADMIN keeps
+  // the business-account surfaces (`admin`) and never sees this desk.
+  | 'admin.staff'
   | 'billing.payments'
   | 'billing.commissions'
   | 'inventory.read'
@@ -78,7 +81,7 @@ const ROLE_FEATURES: Record<UserRole, ReadonlySet<Feature>> = {
     'risk.manage', 'subscriptions.manage', 'inventory.read',
   ]),
   SUPER_ADMIN: new Set<Feature>([
-    'admin', 'admin.buildDashboard', 'billing.payments', 'billing.commissions',
+    'admin', 'admin.buildDashboard', 'admin.staff', 'billing.payments', 'billing.commissions',
     'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.all', 'disputes.manage',
     'risk.manage', 'subscriptions.manage', 'inventory.read',
   ]),

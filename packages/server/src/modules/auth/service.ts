@@ -1163,6 +1163,22 @@ export async function listSessions(db: DB, userId: string, currentTokenHash?: st
 }
 
 /**
+ * Revokes every live session of a user and reports how many were live.
+ *
+ * Used when an operator changes a staff member's role or disables the account:
+ * the auth middleware re-reads roles on every request, so the demotion is already
+ * effective, but revoking closes the window on tokens minted under the old role.
+ */
+export async function revokeAllSessionsForUser(db: DB, userId: string): Promise<number> {
+  const rows = await db
+    .update(sessions)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+    .returning({ id: sessions.id });
+  return rows.length;
+}
+
+/**
  * Revokes one of the caller's own sessions. Returns the revoked session's token
  * hash so the route can tell whether the caller just revoked the session it is
  * authenticated with (and clear its cookie); `null` means no such session.

@@ -1294,3 +1294,13 @@ npx playwright install --with-deps chromium
 - `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` lives in `SERVER_ENV` for that reason: the webhook failure desk spec drives an event to `DEAD_LETTERED` by re-delivering it, and the production 30s gate would answer `200` (`retryScheduled`) after the first attempt so the budget is never spent. Only that spec posts failing events, and no spec asserts `retryScheduled`/`nextAttemptAt`.
 - Keep `WEBHOOK_RETRY_MAX_ATTEMPTS` at the production value (5): changing the budget changes what the spec proves. The real 30s → doubling backoff and the not-due refusal stay asserted against the default in `packages/server/tests/obs01-webhook-recovery.test.ts`.
 - Provider-facing webhook status contract (`404` on first failure, `200` on not-due) is **not** settled for a real acquirer: see `OBS-01-CONTRACT` in `docs/GAP_REGISTER.md` §5.
+
+## RBAC-02 — Staff desk (2026-11-24)
+
+- **`/api/admin/staff` is SUPER_ADMIN-only by role, not by permission**: `staffRoutes.use('*', requireAuth, requireRole('SUPER_ADMIN'))`. No `staff:*` permission exists and `ROLE_PERMISSIONS` was not touched, so `ADMIN`'s `user:*` stays scoped to business accounts.
+- **Staff population only**: every read/write goes through `modules/staff/service.ts`, which resolves roles via `STAFF_ROLES`; a business account id is a **404** (not 403) so the desk cannot probe accounts.
+- **SUPER_ADMIN is provisioned out of band** (`npm run bootstrap:super-admin`). It is never creatable, never re-roled and — via `staffStatusRefusal()` — never the last one disabled. The decision is a pure function on purpose: the test suite runs in parallel against one DB, so no test may deactivate the environment's owners.
+- **No password ever crosses the wire**: `POST /api/admin/staff` generates a random password server-side (never returned, never audited) and sends the existing password-reset token as the invite. `devResetToken` appears only under `devToolingActive()`.
+- **Role/status changes revoke every live session** (`revokeAllSessionsForUser` in `modules/auth/service.ts`). Roles are re-read per request anyway, so the revocation closes the token window rather than enabling the demotion.
+- **The legacy `PATCH /api/admin/users/:id/status` refuses staff targets** (403 + `RBAC.ESCALATION_REJECTED` audit) and refuses self-deactivation; business accounts behave exactly as before. Do not relax this to "fix" an admin workflow.
+- E2E: `e2e/rbac02-staff.spec.ts` uses the seeded `admin@wasit.tn` (SUPER_ADMIN) vs `admin2@wasit.tn` (ADMIN). It creates throwaway `e2e-staff-*` accounts in `wasit_dev`; delete them after a run (user_roles + sessions + users) so they never appear in the demo staff list.

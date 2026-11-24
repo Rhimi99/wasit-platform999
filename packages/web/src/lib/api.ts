@@ -14,6 +14,11 @@ import type {
   PriceComparisonResponse,
   ProductImageRow,
   MyCompany,
+  AssignableStaffRole,
+  StaffActivityRow,
+  StaffListResponse,
+  StaffMember,
+  StaffRoleCatalog,
   MyEntities,
   EntityProfileType,
   MerchantProfile,
@@ -623,6 +628,51 @@ export const api = {
   },
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
+  },
+
+  // ---- RBAC-02: staff desk (SUPER_ADMIN only; the server is the gate) ----
+  async adminStaffList(params: { q?: string; role?: string; status?: string; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.role) qs.set('role', params.role);
+    if (params.status && params.status !== 'all') qs.set('status', params.status);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString();
+    return request<StaffListResponse>(`/api/admin/staff${suffix ? `?${suffix}` : ''}`);
+  },
+  async adminStaffRoles() {
+    return request<StaffRoleCatalog>('/api/admin/staff/roles');
+  },
+  async adminStaffMember(id: string) {
+    return request<{ member: StaffMember }>(`/api/admin/staff/${id}`);
+  },
+  async adminStaffActivity(id: string) {
+    return request<{ items: StaffActivityRow[] }>(`/api/admin/staff/${id}/activity`);
+  },
+  async adminStaffCreate(data: {
+    email: string;
+    firstName?: string;
+    lastName?: string;
+    role: AssignableStaffRole;
+    sendInvite?: boolean;
+  }) {
+    return request<{ member: StaffMember; inviteSent: boolean; devResetToken?: string }>('/api/admin/staff', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminStaffSetRole(id: string, role: AssignableStaffRole) {
+    return request<{ member: StaffMember }>(`/api/admin/staff/${id}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    });
+  },
+  async adminStaffSetStatus(id: string, isActive: boolean) {
+    return request<{ member: StaffMember }>(`/api/admin/staff/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    });
   },
 
   // ---- Phase 9: Verification ----

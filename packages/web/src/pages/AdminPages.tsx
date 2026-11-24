@@ -33,6 +33,24 @@ export function AdminOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * RBAC-02 — the staff desk is SUPER_ADMIN-only on the server
+ * (`requireRole('SUPER_ADMIN')` on `/api/admin/staff`). This mirror keeps an
+ * ADMIN from opening a page whose every request would 403.
+ */
+export function SuperAdminOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.roles.includes('SUPER_ADMIN') ?? false;
+  if (user && !isSuperAdmin) {
+    return (
+      <AppLayout>
+        <ErrorState message="Forbidden: SUPER_ADMIN only" />
+      </AppLayout>
+    );
+  }
+  return <>{children}</>;
+}
+
 // Wrapper for the specialised staff desks (verification/trust/risk/disputes).
 // The server enforces granular permissions per endpoint (requirePermission), and
 // this mirror keeps the UI from offering a desk a role cannot actually use — so
