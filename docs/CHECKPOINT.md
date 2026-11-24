@@ -1,6 +1,31 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-23**
+آخر تحديث: **2026-11-24**
+
+## ORDER-01 — هوية المشتري من الواجهة إلى قاعدة البيانات (COMPLETE_VERIFIED — 2026-11-24)
+
+### العطل الحقيقي
+1. **الواجهة لم تكن ترسل `buyerType` أصلًا**: `api.createOrder` في `packages/web/src/lib/api.ts` كان يرسل `{ buyerId, items, currencyCode, notes }` فقط، فيأخذ الخادم القيمة الافتراضية `CUSTOMER` لكل طلب من الويب. النتيجة: **لا يوجد طلب شركة واحد** من الواجهة، مهما كان الحساب شركة.
+2. **الخادم كان يثق بالقيمة القادمة من العميل**: `createOrderSchema` يقبل `buyerType` كما هو ويكتبه في `orders.buyer_type`؛ ولا تحقّق أن المستخدم يملك شركة، ولا أن `companyId` (لو أُرسل) تخصّه. أي حساب مصادَق كان يستطيع كتابة صف بصفة `COMPANY` بلا أي شركة.
+
+### الإصلاح
+- **`modules/orders/buyer-identity.ts` (جديد)** — `resolveBuyerIdentity(db, { userId, buyerType, companyId })` تحسم الهوية من سجلات المستخدم نفسه **قبل** أي حجز مخزون أو كتابة صف:
+  - `CUSTOMER` — فرد، بلا كيانات (المسار القديم كما هو).
+  - `MERCHANT` — يتطلّب كيان تاجر **أو** مورد نشطًا يملكه المستدعي (المشتري التجاري).
+  - `COMPANY` — يتطلّب شركة نشطة يملكها المستدعي؛ `companyId` إن أُرسل **يجب أن يطابقها** وإلا `403` (منع انتحال شركة أخرى بتعديل الـpayload)، ويُرفض `companyId` مع أي نوع آخر (`422`).
+- **`createOrder`** يفرض `input.buyerId === ctx.actorId` داخل الخدمة (لا في المسار فقط)، ويكتب `identity.buyerType`، ويحفظ لقطة الشركة في `orders.metadata.buyer = { type, companyId, companyName }` (ربط الطلب بالشركة بلا migration).
+- **`GET /api/companies/mine`** (جديد، `requireAuth`، مسجّل قبل `/:id`): سياق الشركة الخاص بالمستدعي أو `null` — تقرأه الواجهة لتعرض خيار الشركة.
+- **`CheckoutPage`**: عند وجود شركة نشطة يظهر اختيار «أشتري باسم الشركة» (مُحدَّد افتراضيًا) و«أشتري كفرد»، ويُرسل `buyerType` (+`companyId` للشركة). اختيار المشتري لا يُلغى بوصول استجابة الشركة المتأخرة (`useRef`).
+- **i18n**: `checkout.buyerType/asCompany/asIndividual/companyInactive/buyerTypeHint` في ar/en/fr/zh.
+
+### الإثبات
+- `tests/order-buyer-identity.test.ts` — **10/10**: فرد بلا `buyerType` ⇒ `CUSTOMER` بلا شركة؛ شركة ⇒ `COMPANY` + `metadata.buyer.companyId`؛ حساب بلا شركة يطلب `COMPANY` ⇒ `403` ولا يُكتب صف؛ **انتحال شركة أخرى** ⇒ `403`، و`companyId` مع `CUSTOMER` ⇒ `422`، وشركة المهاجم نفسه تعمل؛ `MERCHANT` بلا كيان ⇒ `403`؛ مورد يشتري ⇒ `MERCHANT`؛ عزل القراءة (`403` للغريب)؛ سلة متعدّدة البائعين ⇒ `COMPANY` + شركة واحدة + فرعيتان؛ `buyerId` لغير المستدعي ⇒ `403`؛ `/api/companies/mine` (شركة / `null` / `401`).
+- **التراجعات**: `orders`/`directory`/`m2`/`m21`/`m22`/`m23`/`payments`/`settlement-ledger`/`payment-fee-policy`/`commission-rate` — **96/96** + **24/24** بعد تنظيف المسار. **الحزمة الكاملة للخادم: 2359 ناجحًا / 4 فاشلة** — الأربعة هي أعطال مُولِّد الفيديو المعروفة مسبقًا (`ai-video-agent`، `agent-video-download`؛ لا تلمس الطلبات ولا الشركات).
+- **E2E حقيقي** (`e2e/order-buyer-identity.spec.ts` — **3/3**): شركة تشتري من `/checkout` ⇒ الصف `COMPANY` + شركتها؛ نفس الحساب يبدّل إلى «فرد» ⇒ `CUSTOMER`؛ عميل بلا شركة لا يرى الخيار إطلاقًا. **تراجعات الدفع/الطلبات: 10/10** (`marketplace`، `order-lifecycle`، `functional-audit`).
+- Typecheck (server+web) = 0 أخطاء. **لا migration ولا seed جديد**، ولا تغيير في RBAC (الشراء كان `requireAuth` ويبقى كذلك؛ التحقق أُضيف ولم يُحذف شيء).
+
+### ملاحظة معمارية (فجوة متابعة موثّقة)
+ربط الطلب بالشركة يتم الآن داخل `orders.metadata.buyer` لأن إضافة عمود `buyer_company_id` مع FK تتطلّب migration. البيانات محفوظة وموثّقة، والتحقق الخادمي قائم، لكن تقارير SQL المباشرة على الشركة تحتاج قراءة JSONB. مقترح `ORDER-01-FU` في `GAP_REGISTER`.
 
 ## Milestone M8 — Role-scoped Customer/Partner Directories (6 أسطح) + إصلاح أعطال الواجهة الحقيقية
 

@@ -4,7 +4,7 @@ import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '@wasit/shared';
-import { createCompany, listCompanies, getCompany, updateCompany } from './service.js';
+import { createCompany, listCompanies, getCompany, getMyCompany, updateCompany } from './service.js';
 
 const createCompanySchema = z.object({
   legalName: z.string().min(2).max(250),
@@ -28,6 +28,14 @@ companyRoutes.get('/', optionalAuth, async (c) => {
   const ctx = getContext(c);
   const result = await listCompanies(ctx.db, { q: qs.q, countryId: qs.countryId });
   return c.json({ success: true, data: result });
+});
+
+// The caller's own company (or `null`). Registered before `/:id` so the literal
+// path is never read as a company id.
+companyRoutes.get('/mine', requireAuth, async (c) => {
+  const ctx = getContext(c);
+  const company = await getMyCompany(ctx.db, ctx.user!.id);
+  return c.json({ success: true, data: { company } });
 });
 
 // A company profile: public projection for everyone; the owner and internal staff

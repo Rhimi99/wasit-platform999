@@ -83,6 +83,25 @@ export interface ProductSummary {
   image: string | null;
 }
 
+/** The caller's own company, or `null` when the account has none. */
+export interface MyCompany {
+  id: string;
+  legalName: string;
+  slug: string;
+  countryId: string | null;
+  cityId: string | null;
+  industry: string | null;
+  description: string | null;
+  logoUrl: string | null;
+  verified: boolean;
+  isActive: boolean;
+  registrationNumber?: string | null;
+  taxId?: string | null;
+}
+
+/** How the buyer acts in this order; the server proves it before it is stored. */
+export type BuyerType = 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
+
 /** One uploaded product photo, as returned by the media API. */
 export interface ProductImageRow {
   id: string;

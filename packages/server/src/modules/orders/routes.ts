@@ -8,6 +8,8 @@ import { createOrder, getOrder, listMyOrders, updateOrderStatus } from './servic
 const createOrderSchema = z.object({
   buyerId: z.string().min(1),
   buyerType: z.enum(['CUSTOMER', 'MERCHANT', 'COMPANY']).default('CUSTOMER'),
+  // An assertion only: the service checks it against the caller's own company.
+  companyId: z.string().min(1).max(36).optional(),
   items: z.array(
     z.object({
       productId: z.string().min(1),
@@ -32,9 +34,8 @@ ordersRoutes.use('*', requireAuth);
 ordersRoutes.post('/', validateBody(createOrderSchema), async (c) => {
   const body = getValidatedBody<z.infer<typeof createOrderSchema>>(c);
   const ctx = getContext(c);
-  if (body.buyerId !== ctx.user!.id) {
-    throw new (await import('@wasit/shared')).ApiError(403, 'FORBIDDEN', 'You can only create orders for yourself');
-  }
+  // `createOrder` refuses a buyerId that is not the caller, so the invariant holds
+  // for every caller of the service, not only this route.
   const result = await createOrder(ctx.db, body, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress });
   return c.json({ success: true, data: result }, 201 as never);
 });

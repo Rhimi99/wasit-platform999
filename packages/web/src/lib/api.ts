@@ -13,6 +13,7 @@ import type {
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
   PriceComparisonResponse,
   ProductImageRow,
+  MyCompany,
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
@@ -401,8 +402,21 @@ export const api = {
   },
 
   // ---- Orders ----
-  async createOrder(data: { buyerId: string; items: { productId: string; quantity: number }[]; currencyCode?: string; notes?: string }) {
+  async createOrder(data: {
+    buyerId: string;
+    items: { productId: string; quantity: number }[];
+    currencyCode?: string;
+    notes?: string;
+    /** Identity the buyer claims; the server verifies it against their entities. */
+    buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
+    /** Only for a COMPANY order, and only ever the caller's own company. */
+    companyId?: string;
+  }) {
     return request<{ orderId: string; orderNumber: string; itemsTotal: string; commission: string; commissionSeller: string; commissionBuyer: string; paymentFee: string; grandTotal: string; currencyCode: string; transactionId: string }>('/api/orders', { method: 'POST', body: JSON.stringify(data) });
+  },
+  /** The caller's own company, or `null`. Drives the company option in checkout. */
+  async myCompany() {
+    return request<{ company: MyCompany | null }>('/api/companies/mine');
   },
   // ---- Payments ----
   async getPaymentMethods() {

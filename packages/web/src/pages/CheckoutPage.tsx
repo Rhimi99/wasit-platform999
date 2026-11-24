@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, apiCall, ApiClientError, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { Card, ErrorState, Spinner } from '@/components/ui';
 import { PublicLayout } from '@/components/layouts/PublicLayout';
+import type { BuyerType, MyCompany } from '@/lib/types';
 
 export function CheckoutPage() {
   const { t } = useI18n();
@@ -34,6 +35,20 @@ export function CheckoutPage() {
   // unavailable. Without this the payer sees a payment box with a "start" button
   // and no method selector, and only learns why after the server refuses.
   const [providerUnavailable, setProviderUnavailable] = useState(false);
+  // The buyer's company context. `null` = individual buyer. When the account owns
+  // an active company the order defaults to it; the buyer may still order as an
+  // individual. The server re-proves the claim, so this only decides what we ask
+  // for — never what gets stored.
+  const [company, setCompany] = useState<MyCompany | null>(null);
+  const [buyerType, setBuyerType] = useState<BuyerType>('CUSTOMER');
+  // The company context arrives asynchronously; once the buyer has chosen an
+  // identity that choice wins, so a late response cannot silently switch the
+  // order back to the company.
+  const buyerTypeChosen = useRef(false);
+  const chooseBuyerType = (next: BuyerType) => {
+    buyerTypeChosen.current = true;
+    setBuyerType(next);
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -65,6 +80,15 @@ export function CheckoutPage() {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    apiCall(() => api.myCompany()).then((res) => {
+      const own = res.data?.company ?? null;
+      setCompany(own);
+      if (!buyerTypeChosen.current) setBuyerType(own?.isActive ? 'COMPANY' : 'CUSTOMER');
+    });
   }, [user]);
 
   useEffect(() => {
@@ -104,6 +128,8 @@ export function CheckoutPage() {
     try {
       const res = await api.createOrder({
         buyerId: user.id,
+        buyerType,
+        ...(buyerType === 'COMPANY' && company ? { companyId: company.id } : {}),
         items: [{ productId: product.id, quantity: qty }],
         currencyCode: product.currencyCode,
         notes: `Order from web for product ${product.name}`,
@@ -164,6 +190,38 @@ export function CheckoutPage() {
             <div className="flex justify-between font-semibold text-slate-800"><span>{t('common.total')}</span><span>{formatMoney(lineTotal, product.currencyCode)}</span></div>
             <div className="flex justify-between text-xs text-slate-400" data-testid="commission-pending"><span>{t('order.commission')}</span><span>{t('order.commissionPending')}</span></div>
           </div>
+          {company && !successId && (
+            <fieldset className="mt-4 rounded border border-slate-200 p-3" data-testid="buyer-identity">
+              <legend className="px-1 text-xs font-medium text-slate-500">{t('checkout.buyerType')}</legend>
+              <label className="flex items-center gap-2 py-1 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  name="buyerType"
+                  value="COMPANY"
+                  checked={buyerType === 'COMPANY'}
+                  disabled={!company.isActive}
+                  onChange={() => chooseBuyerType('COMPANY')}
+                  data-testid="buyer-type-company"
+                />
+                <span>{t('checkout.asCompany')} · {company.legalName}</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  name="buyerType"
+                  value="CUSTOMER"
+                  checked={buyerType === 'CUSTOMER'}
+                  onChange={() => chooseBuyerType('CUSTOMER')}
+                  data-testid="buyer-type-customer"
+                />
+                <span>{t('checkout.asIndividual')}</span>
+              </label>
+              {!company.isActive && (
+                <p className="mt-1 text-xs text-amber-700">{t('checkout.companyInactive')}</p>
+              )}
+              <p className="mt-2 text-xs text-slate-400">{t('checkout.buyerTypeHint')}</p>
+            </fieldset>
+          )}
           {error && (
             <p className="mt-4 rounded bg-red-50 p-2 text-sm text-red-600" role="alert">{error}</p>
           )}

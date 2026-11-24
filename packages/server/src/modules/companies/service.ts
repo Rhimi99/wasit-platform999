@@ -132,6 +132,23 @@ export async function getCompany(db: DB, id: string, viewer: EntityViewer = {}) 
   return publicFields;
 }
 
+/**
+ * The caller's own company, or `null`. One company per user, so this is the
+ * company context a buyer may order for; the checkout UI reads it to offer a
+ * company purchase, and the order service proves the same ownership again on
+ * write. Returns the owner projection (the caller owns the row).
+ */
+export async function getMyCompany(db: DB, userId: string) {
+  const rows = await db.select(COMPANY_ROW_FIELDS).from(companies).where(eq(companies.userId, userId)).limit(1);
+  if (rows.length === 0) return null;
+  return {
+    ...toPublicCompany(rows[0] as unknown as Record<string, unknown>),
+    registrationNumber: rows[0].registrationNumber,
+    taxId: rows[0].taxId,
+    isActive: rows[0].isActive,
+  };
+}
+
 export async function updateCompany(
   db: DB,
   id: string,

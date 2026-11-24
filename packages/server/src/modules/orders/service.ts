@@ -23,6 +23,7 @@ import { createNotification } from '../../lib/notifications-service.js';
 import { reserveStock, commitReservationToSale, restoreStockForCancelledOrder, releaseReservation } from '../../lib/inventory-engine.js';
 import { resolveCommission } from '../../lib/commission.js';
 import { settleSellerSuborder } from '../settlements/service.js';
+import { resolveBuyerIdentity, type BuyerType } from './buyer-identity.js';
 
 export interface OrderItemInput {
   productId: string;
@@ -31,7 +32,12 @@ export interface OrderItemInput {
 
 export interface CreateOrderInput {
   buyerId: string;
-  buyerType: 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
+  buyerType: BuyerType;
+  /**
+   * Optional assertion of which company the order is for. When present it must
+   * be the caller's own company; it never selects a company on its own.
+   */
+  companyId?: string;
   items: OrderItemInput[];
   currencyCode?: string;
   notes?: string;
@@ -137,6 +143,18 @@ export async function createOrder(
   if (input.items.length === 0) {
     throw ApiError.validation([{ field: 'items', message: 'At least one item required', code: 'VALIDATION_FAILED' }]);
   }
+  if (input.buyerId !== ctx.actorId) {
+    throw ApiError.forbidden('You can only create orders for yourself');
+  }
+
+  // The declared buyer identity is proven against the caller's own entities
+  // before anything is reserved or written, so an order can never be recorded in
+  // a company's name by editing the payload.
+  const identity = await resolveBuyerIdentity(db, {
+    userId: ctx.actorId,
+    buyerType: input.buyerType,
+    companyId: input.companyId,
+  });
 
   // Load product details
   const loaded = new Map<string, typeof products.$inferSelect>();
@@ -310,7 +328,7 @@ export async function createOrder(
       id: orderId,
       orderNumber,
       buyerId: input.buyerId,
-      buyerType: input.buyerType,
+      buyerType: identity.buyerType,
       sellerId: soleSeller,
       sellerType: soleSellerType as never,
       currencyCode,
@@ -322,7 +340,15 @@ export async function createOrder(
       status: 'PENDING',
       paymentStatus: 'UNPAID',
       notes: input.notes ?? null,
-      metadata: { sellerCount: sellerGroups.length } as never,
+      metadata: {
+        sellerCount: sellerGroups.length,
+        buyer: {
+          type: identity.buyerType,
+          ...(identity.company
+            ? { companyId: identity.company.id, companyName: identity.company.legalName }
+            : {}),
+        },
+      } as never,
     });
 
     // Seller suborders + their line items.
