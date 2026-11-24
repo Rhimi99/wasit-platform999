@@ -31,3 +31,4 @@ export * from './receipts';
 export * from './tax';
 export * from './ai-spend';
 export * from './gm-access';
+export * from './rfq';

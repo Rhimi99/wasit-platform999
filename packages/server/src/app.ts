@@ -15,6 +15,7 @@ import { authRoutes } from './modules/auth/routes.js';
 import { healthRoutes } from './modules/health/routes.js';
 import { productsRoutes } from './modules/products/routes.js';
 import { ordersRoutes } from './modules/orders/routes.js';
+import { rfqRoutes } from './modules/rfq/routes.js';
 import { suppliersRoutes } from './modules/suppliers/routes.js';
 import { merchantRoutes } from './modules/merchants/routes.js';
 import { companyRoutes } from './modules/companies/routes.js';
@@ -192,6 +193,7 @@ export function createApp(): Hono {
   });
   app.route('/api/products', productsRoutes);
   app.route('/api/orders', ordersRoutes);
+  app.route('/api/rfqs', rfqRoutes);
   app.route('/api/suppliers', suppliersRoutes);
   app.route('/api/merchants', merchantRoutes);
   app.route('/api/companies', companyRoutes);

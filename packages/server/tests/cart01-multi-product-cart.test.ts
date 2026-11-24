@@ -128,7 +128,9 @@ async function createProduct(
 }
 
 /** A merchant with its own product catalogue, ready to be bought from. */
-async function seedSeller(products_: { price?: string; stock?: number; currency?: string }[] = [{}]) {
+async function seedSeller(
+  products_: { price?: string; stock?: number; currency?: string; moq?: number }[] = [{}],
+) {
   const seller = makeClient();
   await register(seller, 'MERCHANT');
   const sellerId = await createEntity(seller, 'merchants', `Cart Store ${uniqueSku('S')}`);

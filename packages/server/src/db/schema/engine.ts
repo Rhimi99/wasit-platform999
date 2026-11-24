@@ -113,6 +113,8 @@ export const policyScopeEnum = pgEnum('policy_scope', [
   'TRADE',
   'PRIVACY',
   'TAX',
+  // B2B-01 — commercial negotiation terms (quote validity, negotiation rounds).
+  'B2B',
 ]);
 
 export const policies = pgTable(

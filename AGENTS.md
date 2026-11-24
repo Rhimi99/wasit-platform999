@@ -502,6 +502,17 @@ npx playwright install --with-deps chromium
 - ✅ **Geo API** `modules/geo/routes.ts` مبني على `geo/service.ts`: countries / regions / cities / currencies / languages / exchange-rates — كلها GET عامة (بيانات مرجعية) مع zod query validation وpagination.
 - ✅ **`geo/service.ts`** (304 سطرًا) في commit `01b1959`؛ 16 استيرادًا في الـ routes كلها مصدَّرة — تطابق 1:1، tsc=0.
 
+## B2B-01 — RFQ / Offers / Negotiation (المرحلة 1 فقط — 2026-11-24)
+
+- ✅ **النطاق المُنجز**: مخطط + migration `0045` (6 جداول: `rfqs`, `rfq_items`, `rfq_recipients`, `rfq_quotes`, `rfq_quote_lines`, `rfq_events`)، صلاحيات `RFQ_CREATE/READ_OWN/QUOTE/DECIDE`، `assertRfqAccess`، عزل الأطراف، 24 اختبار HTTP حقيقي.
+- ⛔ **لم يُبنَ بعد (المرحلة 2)**: قبول/رفض العروض، تحويل العرض المقبول إلى طلب (PENDING_PAYMENT)، الشرح/التفاوض المضاد، إشعارات بريدية، Scheduler لانتهاء الصلاحية (الحقل `expiresAt` يُحسب ويُحترم، لكن لا مهمة دورية)، واجهة المستخدم.
+- **حدود الوصول**: `modules/rfq/access.ts` هو المالك الوحيد للقرار. غير المشارك يحصل على **404** (لا 403) كي لا يُكشف وجود الطلب. البائع يجب أن يملك الكيان المدعو **و** أن يملك موافقة `RFQ_PARTICIPATION` **الشخصية** (سحبها يُلغي الوصول فوراً ويُفرغ الـinbox).
+- **الصلاحيات**: `COMPANY` = إنشاء/قرار/اقتباس/قراءة؛ `MERCHANT`/`SUPPLIER` = اقتباس/قراءة فقط؛ `CUSTOMER` وبقية الأدوار بلا شيء. **`ADMIN` لا يملك أي صلاحية RFQ**. `SUPER_ADMIN` يرث كل الصلاحيات بحكم تصميم المنصة (اختبارات `lc03`/`perm01` تفرض ذلك) لذا الحاجز الفعلي هو الملكية: staff لا يملك شركة/كيان ⇒ 403 من الخدمة (مُثبت في الاختبار).
+- **الموافقة**: `RFQ_PARTICIPATION` نوع موافقة مستقل في `CONSENT_TYPES` (لا يُعاد استخدام `B2B_PARTNER_DISCOVERY`). مسار `PUT /api/privacy/consents` صار يتحقق بـ`z.enum(CONSENT_TYPES)` — أي نوع غير معروف يُرفض 422 بدل تخزينه `CUSTOM`.
+- **السياسة**: `B2B/RFQ_TERMS` عبر Policy Engine (seed idempotent + قيم افتراضية آمنة في `modules/rfq/policy.ts` تُقصّ إلى حدود معقولة). `quoteValidityDays`/`maxRounds` تُنسخ snapshot على الـRFQ عند الإنشاء/الإرسال.
+- **مالياً**: لا كتابة في `transaction_ledger` ولا Wallet. الإجماليات تُحسب على الخادم بـ`decimal.js` (`fmt` 4dp)، ولا تُقبل من العميل.
+- **اختبار**: `tests/b2b01-rfq-isolation.test.ts` (24 حالة) — يعتمد `TEST_DATABASE_URL` على `127.0.0.1:5434`/`wasit_test`. لا mocks ولا route interception.
+
 ## الحالة الحالية للاختبارات
 
 - **TypeScript (Server)**: `npx tsc --noEmit` = **exit 0 — صفر أخطاء** (بعد إصلاحات Geo/Revenue/Subscriptions — انظر قسم TypeScript Clean أعلاه).

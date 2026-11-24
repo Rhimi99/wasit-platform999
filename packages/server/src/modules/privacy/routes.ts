@@ -11,6 +11,7 @@ import {
   getValidatedQuery,
 } from '../../middleware/validate.js';
 import {
+  CONSENT_TYPE_VALUES,
   getConsentState,
   setConsent,
   createExportRequest,
@@ -31,7 +32,7 @@ import {
 export const privacyRoutes = new Hono();
 
 const consentSchema = z.object({
-  consentType: z.string().min(1).max(100),
+  consentType: z.enum(CONSENT_TYPE_VALUES),
   granted: z.boolean(),
 });
 const rectificationSchema = z.object({
