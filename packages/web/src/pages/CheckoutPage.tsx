@@ -3,9 +3,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, apiCall, ApiClientError, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
+import { useCart } from '@/lib/cart';
 import { Card, ErrorState, Spinner } from '@/components/ui';
 import { PublicLayout } from '@/components/layouts/PublicLayout';
-import type { BuyerType, MyCompany } from '@/lib/types';
+import type { BuyerType, MyCompany, QuoteResult } from '@/lib/types';
 
 export function CheckoutPage() {
   const { t } = useI18n();
@@ -13,6 +14,10 @@ export function CheckoutPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const productId = params.get('productId') ?? '';
+  // Two entry points share this page: one product (`?productId=`) and the cart
+  // (`?cart=1`). The single-product flow is untouched by the cart path.
+  const cartMode = params.get('cart') === '1';
+  const cart = useCart();
   const [product, setProduct] = useState<Awaited<ReturnType<typeof api.getProduct>> | null>(null);
   const [qty, setQty] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +46,14 @@ export function CheckoutPage() {
   // for — never what gets stored.
   const [company, setCompany] = useState<MyCompany | null>(null);
   const [buyerType, setBuyerType] = useState<BuyerType>('CUSTOMER');
+  const [quote, setQuote] = useState<QuoteResult | null>(null);
+  const [quoting, setQuoting] = useState(false);
+  // Stable for a given basket: a retried submit replays the same order instead
+  // of creating a second one.
+  const idempotencyKey = useRef<string>('');
+  const cartSignature = cartMode
+    ? cart.items.map((i) => `${i.productId}:${i.quantity}`).join(',')
+    : `${productId}:${qty}`;
   // The company context arrives asynchronously; once the buyer has chosen an
   // identity that choice wins, so a late response cannot silently switch the
   // order back to the company.
@@ -92,6 +105,22 @@ export function CheckoutPage() {
   }, [user]);
 
   useEffect(() => {
+    if (!cartMode || !user || cart.items.length === 0) return;
+    setQuoting(true);
+    apiCall(() => api.quoteOrder(cart.items)).then((res) => {
+      setQuote(res.data);
+      if (res.error) setError(res.error);
+      setQuoting(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cartMode, user, cartSignature]);
+
+  useEffect(() => {
+    // A new basket is a new order; only an unchanged basket keeps its key.
+    idempotencyKey.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }, [cartSignature]);
+
+  useEffect(() => {
     if (!productId) return;
     apiCall(() => api.getProduct(productId)).then((res) => {
       setProduct(res.data);
@@ -100,7 +129,7 @@ export function CheckoutPage() {
     });
   }, [productId]);
 
-  if (!productId) {
+  if (!productId && !cartMode) {
     return (
       <PublicLayout>
         <div className="mx-auto max-w-md px-4 py-12 text-center">
@@ -109,14 +138,16 @@ export function CheckoutPage() {
       </PublicLayout>
     );
   }
-  if (error) {
+  if (error && !cartMode) {
     return (
       <PublicLayout><div className="mx-auto max-w-3xl px-4 py-10"><ErrorState message={error} /></div></PublicLayout>
     );
   }
-  if (!product) return <Spinner />;
+  if (!product && !cartMode) return <Spinner />;
 
-  const lineTotal = Number(product.basePrice) * qty;
+  const lineTotal = cartMode ? 0 : Number(product!.basePrice) * qty;
+  const quoteBlocked = cartMode && ((quote?.issues.length ?? 0) > 0 || !quote);
+  const orderCurrency = cartMode ? quote?.currencyCode ?? '' : product!.currencyCode;
 
   const placeOrder = async () => {
     if (!user) {
@@ -130,10 +161,13 @@ export function CheckoutPage() {
         buyerId: user.id,
         buyerType,
         ...(buyerType === 'COMPANY' && company ? { companyId: company.id } : {}),
-        items: [{ productId: product.id, quantity: qty }],
-        currencyCode: product.currencyCode,
-        notes: `Order from web for product ${product.name}`,
+        items: cartMode ? cart.items : [{ productId: product!.id, quantity: qty }],
+        currencyCode: orderCurrency || undefined,
+        notes: cartMode ? 'Order from web cart' : `Order from web for product ${product!.name}`,
+        idempotencyKey: idempotencyKey.current,
       });
+      // The basket became an order; the cart must not be re-orderable.
+      if (cartMode) cart.clear();
       setSuccessId(res.orderId);
       setPlaced({
         itemsTotal: res.itemsTotal,
@@ -171,25 +205,78 @@ export function CheckoutPage() {
     <PublicLayout>
       <div className="mx-auto max-w-xl px-4 py-10">
         <Card className="p-6">
-          <h1 className="text-xl font-bold text-slate-900">{t('order.items')}</h1>
-          <div className="mt-4 flex items-center justify-between border-b border-slate-100 pb-3">
-            <div>
-              <p className="font-medium text-slate-800">{product.name}</p>
-              <p className="text-xs text-slate-400">{product.sku}</p>
+          <h1 className="text-xl font-bold text-slate-900">
+            {cartMode ? t('checkout.cartTitle') : t('order.items')}
+          </h1>
+          {cartMode ? (
+            <div className="mt-4 space-y-3" data-testid="checkout-cart">
+              {quoting && !quote && <Spinner />}
+              {quote?.sellers.map((seller) => (
+                <div key={seller.sellerId} className="rounded-lg border border-slate-200 p-3" data-testid="checkout-seller-group">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    {t('cart.sellerGroup')} · {seller.sellerType}
+                  </p>
+                  {seller.lines.map((line) => (
+                    <div key={line.productId} className="flex items-start justify-between gap-3 border-b border-slate-100 py-2 last:border-0">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-slate-800">{line.name}</p>
+                        <p className="text-xs text-slate-400">
+                          {formatMoney(line.unitPrice, quote.currencyCode ?? '')} × {line.quantity}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm text-slate-700">{formatMoney(line.lineTotal, quote.currencyCode ?? '')}</span>
+                    </div>
+                  ))}
+                  <p className="mt-2 flex justify-between text-xs text-slate-500">
+                    <span>{t('cart.sellerSubtotal')}</span>
+                    <span>{formatMoney(seller.itemsTotal, quote.currencyCode ?? '')}</span>
+                  </p>
+                </div>
+              ))}
+              {quote && (
+                <div className="space-y-1 text-sm text-slate-600" data-testid="checkout-quote-totals" data-items-total={quote.itemsTotal} data-grand-total={quote.grandTotal}>
+                  <div className="flex justify-between"><span>{t('cart.itemsTotal')}</span><span>{formatMoney(quote.itemsTotal, quote.currencyCode ?? '')}</span></div>
+                  <div className="flex justify-between text-xs text-slate-500"><span>{t('order.buyerCommission')}</span><span>{formatMoney(quote.commissionBuyer, quote.currencyCode ?? '')}</span></div>
+                  {Number(quote.paymentFee) > 0 && (
+                    <div className="flex justify-between text-xs text-slate-500"><span>{t('order.fee')}</span><span>{formatMoney(quote.paymentFee, quote.currencyCode ?? '')}</span></div>
+                  )}
+                  <div className="flex justify-between border-t border-slate-100 pt-2 font-semibold text-slate-900"><span>{t('order.grandTotal')}</span><span>{formatMoney(quote.grandTotal, quote.currencyCode ?? '')}</span></div>
+                  <p className="pt-1 text-xs text-slate-400" data-testid="checkout-seller-count">
+                    {t('cart.sellers')}: {quote.sellerCount}
+                  </p>
+                </div>
+              )}
+              {quote && quote.issues.length > 0 && (
+                <p className="rounded bg-amber-50 p-2 text-xs text-amber-700" role="alert" data-testid="checkout-issues">
+                  {t('cart.fixIssues')}
+                </p>
+              )}
+              {!quote && !quoting && (
+                <p className="text-sm text-slate-500">{t('cart.empty')}</p>
+              )}
             </div>
-            <input
-              type="number"
-              min={product.moq ?? 1}
-              value={qty}
-              onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))}
-              className="input w-24"
-            />
-          </div>
-          <div className="mt-3 space-y-1 text-sm text-slate-600">
-            <div className="flex justify-between"><span>{t('common.quantity')} × {qty}</span><span>{formatMoney(product.basePrice, product.currencyCode)}</span></div>
-            <div className="flex justify-between font-semibold text-slate-800"><span>{t('common.total')}</span><span>{formatMoney(lineTotal, product.currencyCode)}</span></div>
-            <div className="flex justify-between text-xs text-slate-400" data-testid="commission-pending"><span>{t('order.commission')}</span><span>{t('order.commissionPending')}</span></div>
-          </div>
+          ) : (
+            <>
+              <div className="mt-4 flex items-center justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <p className="font-medium text-slate-800">{product!.name}</p>
+                  <p className="text-xs text-slate-400">{product!.sku}</p>
+                </div>
+                <input
+                  type="number"
+                  min={product!.moq ?? 1}
+                  value={qty}
+                  onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))}
+                  className="input w-24"
+                />
+              </div>
+              <div className="mt-3 space-y-1 text-sm text-slate-600">
+                <div className="flex justify-between"><span>{t('common.quantity')} × {qty}</span><span>{formatMoney(product!.basePrice, product!.currencyCode)}</span></div>
+                <div className="flex justify-between font-semibold text-slate-800"><span>{t('common.total')}</span><span>{formatMoney(lineTotal, product!.currencyCode)}</span></div>
+                <div className="flex justify-between text-xs text-slate-400" data-testid="commission-pending"><span>{t('order.commission')}</span><span>{t('order.commissionPending')}</span></div>
+              </div>
+            </>
+          )}
           {company && !successId && (
             <fieldset className="mt-4 rounded border border-slate-200 p-3" data-testid="buyer-identity">
               <legend className="px-1 text-xs font-medium text-slate-500">{t('checkout.buyerType')}</legend>
@@ -299,7 +386,7 @@ export function CheckoutPage() {
               </div>
             </div>
           ) : (
-            <button onClick={placeOrder} disabled={submitting} className="btn-primary mt-4 w-full">
+            <button onClick={placeOrder} disabled={submitting || quoteBlocked} className="btn-primary mt-4 w-full" data-testid="place-order">
               {submitting ? t('common.loading') : t('order.place')}
             </button>
           )}

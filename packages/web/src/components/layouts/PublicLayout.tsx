@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
+import { useCart } from '@/lib/cart';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { CookieSettingsLink } from '@/components/CookieConsent';
 import { Brand } from '@/components/brand/Brand';
@@ -26,6 +27,7 @@ const NAV_LINKS: Array<{ key: string; to: string }> = [
 export function PublicHeader({ dark = false }: { dark?: boolean }) {
   const { t } = useI18n();
   const { user, isAuthenticated, logout } = useAuth();
+  const { count: cartCount } = useCart();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -103,6 +105,24 @@ export function PublicHeader({ dark = false }: { dark?: boolean }) {
         </nav>
 
         <div className="ms-auto flex shrink-0 items-center gap-2 sm:gap-3 xl:ms-0">
+          <Link
+            to="/cart"
+            className={`relative inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors ${
+              dark ? 'text-white/85 hover:text-white' : 'text-slate-700 hover:text-brand-700'
+            }`}
+            aria-label={t('cart.title')}
+            data-testid="cart-link"
+          >
+            <span aria-hidden className="text-lg">🛒</span>
+            {cartCount > 0 && (
+              <span
+                className="absolute -top-0.5 end-0 min-w-[18px] rounded-full bg-brand-600 px-1 text-center text-[10px] font-bold leading-[18px] text-white"
+                data-testid="cart-badge"
+              >
+                {cartCount}
+              </span>
+            )}
+          </Link>
           <LanguageSwitcher dark={dark} />
           {isAuthenticated ? (
             <>

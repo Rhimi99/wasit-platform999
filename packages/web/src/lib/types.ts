@@ -1980,3 +1980,47 @@ export interface ManualCompletionResult {
   currencyCode: string;
   alreadyPaid: boolean;
 }
+
+// ---- CART-01 — server-priced basket (POST /api/orders/quote) ----
+export interface QuoteIssue {
+  productId: string;
+  code: 'PRODUCT_NOT_FOUND' | 'PRODUCT_UNAVAILABLE' | 'MOQ_VIOLATION' | 'INSUFFICIENT_STOCK' | 'CURRENCY_MISMATCH';
+  message: string;
+  available?: number;
+  moq?: number;
+}
+
+export interface QuoteLine {
+  productId: string;
+  name: string;
+  sku: string;
+  image: string | null;
+  unitPrice: string;
+  quantity: number;
+  lineTotal: string;
+  moq: number;
+  available: number;
+}
+
+export interface QuoteSeller {
+  sellerId: string;
+  sellerType: string;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  lines: QuoteLine[];
+}
+
+export interface QuoteResult {
+  currencyCode: string | null;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  paymentFee: string;
+  grandTotal: string;
+  sellerCount: number;
+  sellers: QuoteSeller[];
+  issues: QuoteIssue[];
+}

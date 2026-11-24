@@ -12,6 +12,7 @@ import type {
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
   PriceComparisonResponse,
+  QuoteResult,
   ProductImageRow,
   MyCompany,
   AssignableStaffRole,
@@ -434,8 +435,14 @@ export const api = {
     buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
     /** Only for a COMPANY order, and only ever the caller's own company. */
     companyId?: string;
+    /** A retried submit with the same key returns the original order. */
+    idempotencyKey?: string;
   }) {
-    return request<{ orderId: string; orderNumber: string; itemsTotal: string; commission: string; commissionSeller: string; commissionBuyer: string; paymentFee: string; grandTotal: string; currencyCode: string; transactionId: string }>('/api/orders', { method: 'POST', body: JSON.stringify(data) });
+    return request<{ orderId: string; orderNumber: string; itemsTotal: string; commission: string; commissionSeller: string; commissionBuyer: string; paymentFee: string; grandTotal: string; currencyCode: string; transactionId: string; sellerCount?: number; replayed?: boolean }>('/api/orders', { method: 'POST', body: JSON.stringify(data) });
+  },
+  /** Server-priced basket for the cart and checkout. Writes nothing. */
+  async quoteOrder(items: { productId: string; quantity: number }[]) {
+    return request<QuoteResult>('/api/orders/quote', { method: 'POST', body: JSON.stringify({ items }) });
   },
   /** The caller's own company, or `null`. Drives the company option in checkout. */
   async myCompany() {
@@ -1513,7 +1520,9 @@ export function formatMoney(value: string | number | undefined | null, currencyC
   if (value === undefined || value === null || value === '') return '—';
   const num = Number(value);
   if (Number.isNaN(num)) return String(value);
-  return new Intl.NumberFormat('fr-TN', { style: 'currency', currency: currencyCode }).format(num);
+  // An empty code would make Intl throw and blank the page; a quote with no
+  // priceable line legitimately has none.
+  return new Intl.NumberFormat('fr-TN', { style: 'currency', currency: currencyCode || 'TND' }).format(num);
 }
 
 export function formatDate(value: string | Date | undefined | null): string {

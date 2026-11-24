@@ -1304,3 +1304,12 @@ npx playwright install --with-deps chromium
 - **Role/status changes revoke every live session** (`revokeAllSessionsForUser` in `modules/auth/service.ts`). Roles are re-read per request anyway, so the revocation closes the token window rather than enabling the demotion.
 - **The legacy `PATCH /api/admin/users/:id/status` refuses staff targets** (403 + `RBAC.ESCALATION_REJECTED` audit) and refuses self-deactivation; business accounts behave exactly as before. Do not relax this to "fix" an admin workflow.
 - E2E: `e2e/rbac02-staff.spec.ts` uses the seeded `admin@wasit.tn` (SUPER_ADMIN) vs `admin2@wasit.tn` (ADMIN). It creates throwaway `e2e-staff-*` accounts in `wasit_dev`; delete them after a run (user_roles + sessions + users) so they never appear in the demo staff list.
+
+## CART-01 — Multi-product cart (2026-11-24)
+
+- **Server contract**: `POST /api/orders/quote` (`quoteBasket`) prices a basket **without writing**; `POST /api/orders` accepts the same `items[]` and returns `sellerCount`/`replayed`. Both share `priceBasket()` in `modules/orders/service.ts` — never price a basket anywhere else.
+- **No price from the browser**: the cart stores `productId + quantity` only. `createOrder` ignores any client price; out-of-stock lines are excluded from totals instead of being priced.
+- **Idempotency**: pass `idempotencyKey` (stable per basket); stored under `orders.metadata.idempotencyKey` with a per-(buyer,key) advisory lock, replay returns the original response with `replayed: true`.
+- **Web**: `lib/cart.tsx` (localStorage `wasit.cart.v1`, sanitized, 50-line cap, cross-tab sync), `pages/CartPage.tsx` (`/cart`, public), `CheckoutPage?cart=1`. `Card` takes `testId`, not `data-testid`.
+- **`formatMoney(v, '')` used to throw** (`Intl` rejects an empty currency) and blank the whole page — quotes with no priceable line return `currencyCode: null`. Keep the `|| 'TND'` guard.
+- **Tests**: `packages/server/tests/cart01-multi-product-cart.test.ts` (17) + `e2e/cart01.spec.ts` (10, desktop + 390×844 phone).

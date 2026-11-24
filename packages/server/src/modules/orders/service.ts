@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client.js';
 import {
@@ -10,7 +10,8 @@ import {
   transactions,
 } from '../../db/schema/commerce.js';
 import { paymentIntents } from '../../db/schema/payments_extras.js';
-import { products } from '../../db/schema/products.js';
+import { productImages, products } from '../../db/schema/products.js';
+import { inventoryItems } from '../../db/schema/commerce_extras.js';
 import { paymentFeePolicies } from '../../db/schema/engine.js';
 import { newId } from '../../lib/ids.js';
 import {
@@ -30,6 +31,28 @@ export interface OrderItemInput {
   quantity: number;
 }
 
+export interface CreatedOrder {
+  orderId: string;
+  orderNumber: string;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  commissionRate: string;
+  commissionSellerRate: string;
+  commissionBuyerRate: string;
+  policyId: string | null;
+  paymentFee: string;
+  paymentFeePolicyId: string | null;
+  grandTotal: string;
+  currencyCode: string;
+  transactionId: string;
+  sellerOrderIds: string[];
+  sellerCount: number;
+  /** True when this answer replays an order already created for the same key. */
+  replayed?: boolean;
+}
+
 export interface CreateOrderInput {
   buyerId: string;
   buyerType: BuyerType;
@@ -41,6 +64,16 @@ export interface CreateOrderInput {
   items: OrderItemInput[];
   currencyCode?: string;
   notes?: string;
+  /**
+   * Client-generated key that makes a retried submit return the original order
+   * instead of creating a second one. Optional so existing callers are unaffected.
+   */
+  idempotencyKey?: string;
+}
+
+export interface SellerGroupInput {
+  sellerType: string;
+  products: { productId: string; quantity: number }[];
 }
 
 /**
@@ -134,12 +167,337 @@ async function getPaymentFeeRate(db: DB, opts: { currencyCode: string }): Promis
   return { percentRate: '0', flatFee: '0', policyId: null };
 }
 
+interface PricedSeller {
+  id: string;
+  sellerId: string;
+  sellerType: string;
+  itemsTotal: ReturnType<typeof toDecimal>;
+  commission: Awaited<ReturnType<typeof resolveCommission>>;
+  sellerOrderNumber: string;
+  items: (typeof orderItems.$inferInsert)[];
+}
+
+/**
+ * Prices a basket from its seller groupings: line totals, per-seller commission
+ * (Policy Engine) and the one payment fee for the whole basket.
+ *
+ * Order creation and the cart quote both call this, so a cart can never show one
+ * total and then charge another. Nothing here writes; the ids it stamps on the
+ * line rows are only used by the caller that inserts them.
+ */
+async function priceBasket(
+  db: DB,
+  opts: {
+    groups: Map<string, SellerGroupInput>;
+    loaded: Map<string, typeof products.$inferSelect>;
+    currencyCode: string;
+    orderId: string;
+    orderNumber: string;
+  },
+) {
+  const { groups, loaded, currencyCode, orderId, orderNumber } = opts;
+
+  const sellerGroups: PricedSeller[] = [];
+  let itemsTotal = toDecimal('0');
+  let commissionAmount = toDecimal('0');
+  let buyerCommissionAmount = toDecimal('0');
+  let sellerCommissionAmount = toDecimal('0');
+  let commissionTotalRate = '0';
+  let commissionSellerRate = '0';
+  let commissionBuyerRate = '0';
+  let commissionPolicyId: string | null = null;
+
+  let sellerIndex = 0;
+  for (const [sellerId, group] of groups) {
+    sellerIndex += 1;
+    const sellerOrderId = newId();
+    const sellerOrderNumber = `${orderNumber}-S${sellerIndex}`;
+
+    let groupItemsTotal = toDecimal('0');
+    const groupItemRows: (typeof orderItems.$inferInsert)[] = [];
+    for (const { productId, quantity } of group.products) {
+      const prod = loaded.get(productId)!;
+      const price = toDecimal(prod.basePrice);
+      const lineTotal = price.mul(quantity);
+      groupItemsTotal = groupItemsTotal.add(lineTotal);
+      groupItemRows.push({
+        id: newId(),
+        orderId,
+        sellerOrderId,
+        sellerId,
+        productId,
+        unitPrice: price.toFixed(4),
+        quantity,
+        lineTotal: lineTotal.toFixed(4),
+      });
+    }
+
+    // Commission via Policy Engine, resolved per seller on that seller's own
+    // subtotal. The engine throws COMMISSION_POLICY_MISSING (422) when no
+    // active policy matches — there is no fallback rate in code.
+    const commission = await resolveCommission(db, {
+      accountType: 'seller',
+      b2bB2c: 'B2B',
+      transactionValue: groupItemsTotal.toFixed(4),
+      currencyCode,
+    });
+
+    sellerGroups.push({
+      id: sellerOrderId,
+      sellerId,
+      sellerType: group.sellerType,
+      itemsTotal: groupItemsTotal,
+      commission,
+      sellerOrderNumber,
+      items: groupItemRows,
+    });
+
+    itemsTotal = itemsTotal.add(groupItemsTotal);
+    commissionAmount = commissionAmount.add(commission.totalAmount);
+    buyerCommissionAmount = buyerCommissionAmount.add(commission.buyerAmount);
+    sellerCommissionAmount = sellerCommissionAmount.add(commission.sellerAmount);
+    commissionTotalRate = commission.totalRate;
+    commissionSellerRate = commission.sellerRate;
+    commissionBuyerRate = commission.buyerRate;
+    commissionPolicyId = commission.policyId;
+  }
+
+  // Payment processing fee via Policy Engine (separate from WASIT commission;
+  // never hardcoded). One payment, so one fee, computed on the whole basket.
+  const { percentRate, flatFee, policyId: feePolicyId } = await getPaymentFeeRate(db, { currencyCode });
+  const paymentFee = roundMoney(itemsTotal.mul(percentRate).add(toDecimal(flatFee))).toFixed(4);
+
+  return {
+    sellerGroups,
+    itemsTotal,
+    commissionAmount,
+    buyerCommissionAmount,
+    sellerCommissionAmount,
+    commissionTotalRate,
+    commissionSellerRate,
+    commissionBuyerRate,
+    commissionPolicyId,
+    paymentFee,
+    feePolicyId,
+  };
+}
+
+export interface QuoteIssue {
+  productId: string;
+  code: 'PRODUCT_NOT_FOUND' | 'PRODUCT_UNAVAILABLE' | 'MOQ_VIOLATION' | 'INSUFFICIENT_STOCK' | 'CURRENCY_MISMATCH';
+  message: string;
+  /** Stock currently free to reserve, when the issue is INSUFFICIENT_STOCK. */
+  available?: number;
+  moq?: number;
+}
+
+export interface QuoteLine {
+  productId: string;
+  name: string;
+  sku: string;
+  image: string | null;
+  unitPrice: string;
+  quantity: number;
+  lineTotal: string;
+  moq: number;
+  available: number;
+}
+
+export interface QuoteSeller {
+  sellerId: string;
+  sellerType: string;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  lines: QuoteLine[];
+}
+
+export interface QuoteResult {
+  currencyCode: string | null;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  paymentFee: string;
+  grandTotal: string;
+  sellerCount: number;
+  sellers: QuoteSeller[];
+  issues: QuoteIssue[];
+}
+
+/**
+ * Prices a cart without writing anything, for the cart/checkout screens.
+ *
+ * Unlike order creation this is lenient: a deleted or unpublished product, a
+ * broken MOQ or a short stock line is reported in `issues` and excluded from the
+ * totals, so the buyer can see exactly which line to fix instead of getting one
+ * opaque error. Order creation stays authoritative and refuses the basket.
+ */
+export async function quoteBasket(db: DB, items: OrderItemInput[]): Promise<QuoteResult> {
+  const issues: QuoteIssue[] = [];
+
+  const lineByProduct = new Map<string, number>();
+  for (const item of items) {
+    lineByProduct.set(item.productId, (lineByProduct.get(item.productId) ?? 0) + item.quantity);
+  }
+
+  const loaded = new Map<string, typeof products.$inferSelect>();
+  for (const [productId, quantity] of lineByProduct) {
+    const found = await db.select().from(products).where(eq(products.id, productId)).limit(1);
+    if (found.length === 0) {
+      issues.push({ productId, code: 'PRODUCT_NOT_FOUND', message: 'This product no longer exists' });
+      continue;
+    }
+    const prod = found[0];
+    if (prod.status !== 'ACTIVE' || !prod.isPublished) {
+      issues.push({ productId, code: 'PRODUCT_UNAVAILABLE', message: 'This product is no longer on sale' });
+      continue;
+    }
+    const moq = prod.moq ?? 1;
+    if (quantity < moq) {
+      issues.push({ productId, code: 'MOQ_VIOLATION', message: `Minimum order quantity is ${moq}`, moq });
+      continue;
+    }
+    loaded.set(productId, prod);
+  }
+
+  // One order is paid in one currency; lines in any other currency are reported
+  // rather than silently priced in the first line's currency.
+  const firstLoaded = loaded.values().next().value as (typeof products.$inferSelect) | undefined;
+  const currencyCode = firstLoaded?.currencyCode ?? null;
+  if (currencyCode) {
+    for (const [productId, prod] of [...loaded]) {
+      if (prod.currencyCode !== currencyCode) {
+        issues.push({
+          productId,
+          code: 'CURRENCY_MISMATCH',
+          message: `This cart is priced in ${currencyCode}; remove this line or buy it separately`,
+        });
+        loaded.delete(productId);
+      }
+    }
+  }
+
+  // Free-to-reserve stock per line, read from the seller's own inventory row.
+  // A line that cannot be fulfilled is reported and left out of the totals, so
+  // the buyer never sees a payable amount for goods that cannot ship.
+  const available = new Map<string, number>();
+  const outOfStock: string[] = [];
+  for (const [productId, prod] of loaded) {
+    const rows = await db
+      .select({ quantity: inventoryItems.quantity, reserved: inventoryItems.reservedQuantity })
+      .from(inventoryItems)
+      .where(and(
+        eq(inventoryItems.productId, productId),
+        eq(inventoryItems.merchantId, prod.sellerId),
+        isNull(inventoryItems.productVariantId),
+      ))
+      .limit(1);
+    const free = rows.length > 0 ? Math.max(0, rows[0].quantity - rows[0].reserved) : 0;
+    available.set(productId, free);
+    const requested = lineByProduct.get(productId) ?? 0;
+    if (free < requested) {
+      issues.push({
+        productId,
+        code: 'INSUFFICIENT_STOCK',
+        message: free === 0 ? 'Out of stock' : `Only ${free} left`,
+        available: free,
+      });
+      outOfStock.push(productId);
+    }
+  }
+  for (const productId of outOfStock) loaded.delete(productId);
+
+  if (loaded.size === 0) {
+    return {
+      currencyCode: null,
+      itemsTotal: '0.0000',
+      commission: '0.0000',
+      commissionSeller: '0.0000',
+      commissionBuyer: '0.0000',
+      paymentFee: '0.0000',
+      grandTotal: '0.0000',
+      sellerCount: 0,
+      sellers: [],
+      issues,
+    };
+  }
+
+  const groups = new Map<string, SellerGroupInput>();
+  for (const [productId, quantity] of lineByProduct) {
+    const prod = loaded.get(productId);
+    if (!prod) continue;
+    const group = groups.get(prod.sellerId) ?? { sellerType: prod.sellerType, products: [] };
+    group.products.push({ productId, quantity });
+    groups.set(prod.sellerId, group);
+  }
+
+  const pricing = await priceBasket(db, {
+    groups,
+    loaded,
+    currencyCode: currencyCode!,
+    orderId: '',
+    orderNumber: 'QUOTE',
+  });
+
+  const images = new Map<string, string>();
+  const ids = [...loaded.keys()];
+  if (ids.length > 0) {
+    const rows = await db
+      .select({ productId: productImages.productId, url: productImages.url, isPrimary: productImages.isPrimary, sortOrder: productImages.sortOrder })
+      .from(productImages)
+      .where(inArray(productImages.productId, ids));
+    for (const row of rows) {
+      const current = images.get(row.productId);
+      if (!current) images.set(row.productId, row.url);
+      else if (row.isPrimary) images.set(row.productId, row.url);
+    }
+  }
+
+  const sellers: QuoteSeller[] = pricing.sellerGroups.map((group) => ({
+    sellerId: group.sellerId,
+    sellerType: group.sellerType,
+    itemsTotal: group.itemsTotal.toFixed(4),
+    commission: group.commission.totalAmount,
+    commissionSeller: group.commission.sellerAmount,
+    commissionBuyer: group.commission.buyerAmount,
+    lines: group.items.map((line) => {
+      const prod = loaded.get(line.productId)!;
+      return {
+        productId: line.productId,
+        name: prod.name,
+        sku: prod.sku,
+        image: images.get(line.productId) ?? null,
+        unitPrice: line.unitPrice!,
+        quantity: line.quantity!,
+        lineTotal: line.lineTotal!,
+        moq: prod.moq ?? 1,
+        available: available.get(line.productId) ?? 0,
+      };
+    }),
+  }));
+
+  return {
+    currencyCode,
+    itemsTotal: pricing.itemsTotal.toFixed(4),
+    commission: pricing.commissionAmount.toFixed(4),
+    commissionSeller: pricing.sellerCommissionAmount.toFixed(4),
+    commissionBuyer: pricing.buyerCommissionAmount.toFixed(4),
+    paymentFee: pricing.paymentFee,
+    grandTotal: roundMoney(pricing.itemsTotal.add(pricing.buyerCommissionAmount)).toFixed(4),
+    sellerCount: pricing.sellerGroups.length,
+    sellers,
+    issues,
+  };
+}
+
 /** Creates an order, calculates commission and payment fees via the Policy Engine, and records the transaction + ledger. */
 export async function createOrder(
   db: DB,
   input: CreateOrderInput,
   ctx: { actorId: string; ipAddress?: string | null },
-) {
+): Promise<CreatedOrder> {
   if (input.items.length === 0) {
     throw ApiError.validation([{ field: 'items', message: 'At least one item required', code: 'VALIDATION_FAILED' }]);
   }
@@ -221,6 +579,27 @@ export async function createOrder(
   return db.transaction(async (tx) => {
     const tdb = tx as unknown as DB;
 
+    // A double click or a retried request must not create a second order or a
+    // second stock reservation. The advisory lock serialises concurrent requests
+    // that carry the same key; the stored answer makes the replay identical.
+    if (input.idempotencyKey) {
+      await tdb.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`wasit:order:${input.buyerId}:${input.idempotencyKey}`}))`,
+      );
+      const prior = await tdb
+        .select({ metadata: orders.metadata })
+        .from(orders)
+        .where(and(
+          eq(orders.buyerId, input.buyerId),
+          sql`${orders.metadata}->>'idempotencyKey' = ${input.idempotencyKey}`,
+        ))
+        .limit(1);
+      const stored = (prior[0]?.metadata as
+        | { idempotency?: { response?: CreatedOrder } }
+        | undefined)?.idempotency?.response;
+      if (stored) return { ...stored, replayed: true };
+    }
+
     // Reserve stock for every line atomically, before any order row is written,
     // so we never persist an order that cannot be fulfilled.
     for (const item of input.items) {
@@ -228,95 +607,28 @@ export async function createOrder(
       await reserveStock(tdb, prod.id, prod.sellerId, item.quantity, undefined, input.buyerId);
     }
 
-    // Build the seller suborders, their line items, and the per-seller money,
-    // each from its own seller grouping.
-    const sellerGroups: {
-      id: string;
-      sellerId: string;
-      sellerType: string;
-      itemsTotal: ReturnType<typeof toDecimal>;
-      commission: Awaited<ReturnType<typeof resolveCommission>>;
-      sellerOrderNumber: string;
-      items: (typeof orderItems.$inferInsert)[];
-    }[] = [];
-
-    let itemsTotal = toDecimal('0');
-    let commissionAmount = toDecimal('0');
-    let buyerCommissionAmount = toDecimal('0');
-    let sellerCommissionAmount = toDecimal('0');
-    let commissionTotalRate = '0';
-    let commissionSellerRate = '0';
-    let commissionBuyerRate = '0';
-    let commissionPolicyId: string | null = null;
-
-    let sellerIndex = 0;
-    for (const [sellerId, group] of groups) {
-      sellerIndex += 1;
-      const sellerOrderId = newId();
-      const sellerOrderNumber = `${orderNumber}-S${sellerIndex}`;
-
-      let groupItemsTotal = toDecimal('0');
-      const groupItemRows: (typeof orderItems.$inferInsert)[] = [];
-      for (const { productId, quantity } of group.products) {
-        const prod = loaded.get(productId)!;
-        const price = toDecimal(prod.basePrice);
-        const lineTotal = price.mul(quantity);
-        groupItemsTotal = groupItemsTotal.add(lineTotal);
-        groupItemRows.push({
-          id: newId(),
-          orderId,
-          sellerOrderId,
-          sellerId,
-          productId,
-          unitPrice: price.toFixed(4),
-          quantity,
-          lineTotal: lineTotal.toFixed(4),
-        });
-      }
-
-      // Commission via Policy Engine, resolved per seller on that seller's own
-      // subtotal. The engine throws COMMISSION_POLICY_MISSING (422) when no
-      // active policy matches — there is no fallback rate in code.
-      const commission = await resolveCommission(tdb, {
-        accountType: 'seller',
-        b2bB2c: 'B2B',
-        transactionValue: groupItemsTotal.toFixed(4),
-        currencyCode,
-      });
-
-      sellerGroups.push({
-        id: sellerOrderId,
-        sellerId,
-        sellerType: group.sellerType,
-        itemsTotal: groupItemsTotal,
-        commission,
-        sellerOrderNumber,
-        items: groupItemRows,
-      });
-
-      itemsTotal = itemsTotal.add(groupItemsTotal);
-      commissionAmount = commissionAmount.add(commission.totalAmount);
-      buyerCommissionAmount = buyerCommissionAmount.add(commission.buyerAmount);
-      sellerCommissionAmount = sellerCommissionAmount.add(commission.sellerAmount);
-      commissionTotalRate = commission.totalRate;
-      commissionSellerRate = commission.sellerRate;
-      commissionBuyerRate = commission.buyerRate;
-      commissionPolicyId = commission.policyId;
-    }
+    // Prices — line totals, per-seller commission and the basket payment fee —
+    // come from the same function the cart quote uses, so the two cannot drift.
+    const pricing = await priceBasket(tdb, { groups, loaded, currencyCode, orderId, orderNumber });
+    const {
+      sellerGroups,
+      itemsTotal,
+      commissionAmount,
+      buyerCommissionAmount,
+      sellerCommissionAmount,
+      commissionTotalRate,
+      commissionSellerRate,
+      commissionBuyerRate,
+      commissionPolicyId,
+      paymentFee,
+      feePolicyId,
+    } = pricing;
 
     // Parent order. When the basket has a single seller the parent keeps that
     // seller (matching the pre-M2 shape); a multi-seller parent has no single
     // seller and leaves `sellerId`/`sellerType` null.
     const soleSeller = groups.size === 1 ? [...groups.keys()][0] : null;
     const soleSellerType = soleSeller ? groups.get(soleSeller)!.sellerType : null;
-
-    // Payment processing fee via Policy Engine (separate from WASIT commission;
-    // never hardcoded). One payment, so one fee, computed on the whole basket.
-    const { percentRate, flatFee, policyId: feePolicyId } = await getPaymentFeeRate(tdb, {
-      currencyCode,
-    });
-    const feeAmount = roundMoney(itemsTotal.mul(percentRate).add(toDecimal(flatFee))).toFixed(4);
-    const paymentFee = feeAmount;
 
     // The buyer pays the items total plus their share of the commission; the
     // seller is charged their share when the transaction settles. Amounts are
@@ -342,6 +654,7 @@ export async function createOrder(
       notes: input.notes ?? null,
       metadata: {
         sellerCount: sellerGroups.length,
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
         buyer: {
           type: identity.buyerType,
           ...(identity.company
@@ -490,10 +803,10 @@ export async function createOrder(
       });
     }
 
-    return {
+    const response: CreatedOrder = {
       orderId,
       orderNumber,
-      itemsTotal,
+      itemsTotal: itemsTotal.toFixed(4),
       // Strings, matching the pre-M2 response shape the callers/tests rely on.
       commission: commissionAmount.toFixed(4),
       commissionSeller: sellerCommissionAmount.toFixed(4),
@@ -510,6 +823,20 @@ export async function createOrder(
       sellerOrderIds: sellerGroups.map((g) => g.id),
       sellerCount: sellerGroups.length,
     };
+
+    // Keep the answer with the order so a retried submit can return exactly it.
+    if (input.idempotencyKey) {
+      await tdb
+        .update(orders)
+        .set({
+          metadata: sql`coalesce(${orders.metadata}, '{}'::jsonb) || ${JSON.stringify({
+            idempotency: { key: input.idempotencyKey, response },
+          })}::jsonb`,
+        })
+        .where(eq(orders.id, orderId));
+    }
+
+    return response;
   });
 }
 

@@ -16,6 +16,7 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/AuthPages';
 import { CheckoutPage } from './pages/CheckoutPage';
+import { CartPage } from './pages/CartPage';
 import { RequireAuth } from './components/layouts/AppLayout';
 import { DashboardOverviewPage } from './pages/DashboardOverviewPage';
 import { DashboardOrdersPage, DashboardOrderDetailPage } from './pages/DashboardOrdersPage';
@@ -66,6 +67,7 @@ export default function App() {
       <Route path="/search" element={<SearchPage />} />
       <Route path="/price-comparison" element={<PriceComparisonPage />} />
       <Route path="/products/:id" element={<ProductDetailsPage />} />
+      <Route path="/cart" element={<CartPage />} />
       <Route path="/suppliers" element={<SuppliersPage />} />
       <Route path="/suppliers/:id" element={<SuppliersDetailPage />} />
       <Route path="/merchants" element={<MerchantsPage />} />

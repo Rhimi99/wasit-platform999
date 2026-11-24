@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
+import { useCart } from '@/lib/cart';
 import { Badge, Card, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import { AdSlot } from '@/components/AdSlot';
 import { SeoHead } from '@/components/SeoHead';
@@ -13,6 +14,8 @@ export function ProductDetailsPage() {
   const { t } = useI18n();
   const { id = '' } = useParams();
   const { user } = useAuth();
+  const cart = useCart();
+  const [added, setAdded] = useState(false);
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [qty, setQty] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -178,10 +181,35 @@ export function ProductDetailsPage() {
             )}
 
             <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                type="button"
+                className="btn-primary"
+                data-testid="add-to-cart"
+                onClick={() => {
+                  const primary = product.images.find((i) => i.isPrimary) ?? product.images[0];
+                  cart.add({
+                    productId: product.id,
+                    quantity: Math.max(qty, product.moq ?? 1),
+                    name: product.name,
+                    price: product.basePrice,
+                    currencyCode: product.currencyCode,
+                    sellerId: product.sellerId,
+                    sellerType: product.sellerType,
+                    moq: product.moq ?? 1,
+                    image: primary?.url ?? product.image ?? null,
+                  });
+                  setAdded(true);
+                }}
+              >
+                {t('cart.addToCart')}
+              </button>
+              <a href="/cart" className="btn-secondary" data-testid="go-to-cart">
+                {t('cart.viewCart')}{cart.count > 0 ? ` (${cart.count})` : ''}
+              </a>
               {user ? (
-                <a href={orderUrl} className="btn-primary">{t('product.addToOrder')}</a>
+                <a href={orderUrl} className="btn-secondary">{t('product.addToOrder')}</a>
               ) : (
-                <a href="/login" className="btn-primary">{t('auth.login')} {t('product.addToOrder')}</a>
+                <a href="/login" className="btn-secondary">{t('auth.login')} {t('product.addToOrder')}</a>
               )}
               {user && (
                 <>
@@ -194,6 +222,13 @@ export function ProductDetailsPage() {
                 </>
               )}
             </div>
+
+            {added && (
+              <p className="mt-3 rounded bg-green-50 p-2 text-xs text-green-800" role="status" data-testid="cart-added">
+                {t('cart.added')}{' '}
+                <a href="/cart" className="font-semibold underline">{t('cart.viewCart')}</a>
+              </p>
+            )}
 
             {/* Trust placeholder (trust engine is separate; score rendered when backend available) */}
             <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">

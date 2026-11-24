@@ -5,6 +5,7 @@ import App from './App';
 import { I18nProvider } from './lib/i18n-context';
 import { AuthProvider } from './lib/auth-context';
 import { ConsentProvider } from './lib/consent-context';
+import { CartProvider } from './lib/cart';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -13,7 +14,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <I18nProvider>
         <ConsentProvider>
           <AuthProvider>
-            <App />
+            <CartProvider>
+              <App />
+            </CartProvider>
           </AuthProvider>
         </ConsentProvider>
       </I18nProvider>

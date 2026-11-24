@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
+import { useCart } from '@/lib/cart';
 import type { Feature } from '@/lib/rbac';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { Brand } from '@/components/brand/Brand';
@@ -197,6 +198,7 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
 export function TopHeader({ onOpenNav }: { onOpenNav?: () => void } = {}) {
   const { user } = useAuth();
   const { t } = useI18n();
+  const { count: cartCount } = useCart();
   return (
     <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
       <div className="flex min-w-0 items-center gap-3">
@@ -216,6 +218,22 @@ export function TopHeader({ onOpenNav }: { onOpenNav?: () => void } = {}) {
         <span className="truncate text-sm font-semibold text-slate-700">{user?.email}</span>
       </div>
       <div className="flex items-center gap-3">
+        <Link
+          to="/cart"
+          className="relative flex h-9 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-slate-600 hover:text-wasit-700"
+          aria-label={t('cart.title')}
+          data-testid="cart-link"
+        >
+          <span aria-hidden className="text-lg">🛒</span>
+          {cartCount > 0 && (
+            <span
+              className="absolute -top-1 end-0 min-w-[18px] rounded-full bg-wasit-600 px-1 text-center text-[10px] font-bold leading-[18px] text-white"
+              data-testid="cart-badge"
+            >
+              {cartCount}
+            </span>
+          )}
+        </Link>
         <NotificationsBell />
         <LanguageSwitcher />
       </div>
