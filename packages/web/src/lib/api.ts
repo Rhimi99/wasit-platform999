@@ -44,7 +44,7 @@ import type {
   PublicRefundPolicy,
   LegalAcceptanceState,
   LegalAcceptanceHistoryEntry,
-  BuyerRfq, CreateRfqPayload, RfqQuote, RfqTimelineEntry, RfqView, SellerRfq, SubmitRfqQuotePayload,
+  BuyerRfq, CreateRfqPayload, RfqComparison, RfqQuote, RfqTimelineEntry, RfqView, SellerRfq, SubmitRfqQuotePayload,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -1544,6 +1544,9 @@ export const api = {
     return request<RfqQuote[]>(
       `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/revisions`,
     );
+  },
+  async rfqComparison(id: string) {
+    return request<RfqComparison>(`/api/rfqs/${encodeURIComponent(id)}/comparison`);
   },
   async rfqTimeline(id: string) {
     return request<RfqTimelineEntry[]>(`/api/rfqs/${encodeURIComponent(id)}/timeline`);

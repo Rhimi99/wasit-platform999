@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { sellerTypeEnum } from './products';
 
 /**
@@ -107,6 +108,14 @@ export const rfqs = pgTable(
     buyerUserIdx: index('rfqs_buyer_user_idx').on(t.buyerUserId),
     statusIdx: index('rfqs_status_idx').on(t.status),
     expiresIdx: index('rfqs_expires_idx').on(t.expiresAt),
+    /**
+     * The expiry sweep asks one question only — "which OPEN rows are past their
+     * deadline" — so the index is partial: it stays small (finished RFQs leave
+     * it) and answers the sweep without scanning the table.
+     */
+    openExpiresIdx: index('rfqs_open_expires_idx')
+      .on(t.expiresAt)
+      .where(sql`status = 'OPEN'`),
   }),
 );
 
@@ -199,6 +208,10 @@ export const rfqQuotes = pgTable(
     rfqIdx: index('rfq_quotes_rfq_idx').on(t.rfqId),
     sellerIdx: index('rfq_quotes_seller_idx').on(t.sellerId),
     statusIdx: index('rfq_quotes_status_idx').on(t.quoteStatus),
+    /** Same idea for quote validity: only live submissions can lapse. */
+    liveExpiryIdx: index('rfq_quotes_live_expiry_idx')
+      .on(t.validUntil)
+      .where(sql`quote_status = 'SUBMITTED'`),
   }),
 );
 

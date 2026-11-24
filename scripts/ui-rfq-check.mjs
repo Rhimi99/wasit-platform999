@@ -212,6 +212,17 @@ try {
   const finalQuote = await buyerPage.locator('[data-testid^="rfq-quote-"]').first().innerText();
   check('buyer sees exactly the live revision', finalQuote.includes('rev 2') && /525[.,\s]?000/.test(finalQuote), finalQuote);
 
+  console.log('Buyer — compares the offers');
+  await buyerPage.getByTestId('rfq-comparison').getByRole('button').click();
+  await buyerPage.getByTestId('rfq-comparison-table').waitFor({ timeout: 20000 });
+  const comparisonText = await buyerPage.getByTestId('rfq-comparison').innerText();
+  check('comparison lists the seller and the live total',
+    comparisonText.includes('Verre du Sud') && /525[.,\s]?000/.test(comparisonText), comparisonText);
+  check('comparison marks the best price', comparisonText.includes('الأفضل سعراً'), comparisonText);
+  check('comparison shows unit prices per line', (await buyerPage.getByTestId('rfq-comparison-lines').count()) === 1);
+  const excludedText = await buyerPage.getByTestId('rfq-comparison-excluded').innerText();
+  check('comparison excludes the superseded revision', excludedText.includes('مراجعة قديمة'), excludedText);
+
   const timelineText = await buyerPage.getByTestId('rfq-timeline').innerText();
   check('timeline records creation, sending, quoting and the rejection',
     ['إرسال', 'عرض جديد', 'رفض عرض', 'إصدار جديد'].every((label) => timelineText.includes(label)), timelineText);

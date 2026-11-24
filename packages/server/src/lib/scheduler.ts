@@ -7,6 +7,7 @@ import { recoverStuckSteps } from '../modules/ai/dispatcher';
 import { runSupervisorCycle, createSupervisorCycleGuard } from '../modules/ai/supervisor';
 import { scanEscalations } from '../modules/ai/escalations';
 import { escalateOverdueDisputes } from '../modules/disputes/service';
+import { runRfqExpirySweep } from '../modules/rfq/expiry';
 import { resolveRateLimitStore } from './rate-limit/resolve';
 import { evaluateAlerts } from './observability/alerts';
 import { logger } from './observability/logger';
@@ -20,8 +21,9 @@ export interface SchedulerHandle {
  * Minimal in-process scheduler for period-based jobs.
  *
  * Jobs today: subscription auto-renew rollover/expiry, privacy data-retention
- * window sweep, rate-limit bucket purge, alert rule evaluation, and (AI-01)
- * due agent-schedule execution. It is deliberately not a general cron
+ * window sweep, rate-limit bucket purge, alert rule evaluation, (AI-01) due
+ * agent-schedule execution, dispute escalation, and the B2B-01 RFQ expiry
+ * sweep. It is deliberately not a general cron
  * framework: a further job should be added as a named entry here, or the work
  * should move to the deployment platform's scheduler hitting the authenticated
  * admin route. Rollover and the retention sweep are idempotent, so a duplicate
@@ -66,6 +68,9 @@ export function startScheduler(options: {
   escalationsIntervalMinutes?: number;
   disputeEscalationEnabled?: boolean;
   disputeEscalationIntervalMinutes?: number;
+  rfqExpiryEnabled?: boolean;
+  rfqExpiryIntervalMinutes?: number;
+  rfqExpiryBatchSize?: number;
 }): SchedulerHandle {
   const intervalMs = options.rolloverIntervalMinutes * 60 * 1000;
   const purgeIntervalMs = (options.rateLimitPurgeIntervalMinutes ?? 15) * 60 * 1000;
@@ -77,6 +82,8 @@ export function startScheduler(options: {
   const supervisorIntervalMs = (options.agentRunsSupervisorIntervalMinutes ?? 5) * 60 * 1000;
   const escalationsIntervalMs = (options.escalationsIntervalMinutes ?? 15) * 60 * 1000;
   const disputeEscalationIntervalMs = (options.disputeEscalationIntervalMinutes ?? 30) * 60 * 1000;
+  const rfqExpiryIntervalMs = (options.rfqExpiryIntervalMinutes ?? 5) * 60 * 1000;
+  const rfqExpiryBatchSize = options.rfqExpiryBatchSize ?? 100;
   // Stable per-process worker id; the DB lease (not this string) is what keeps
   // two instances from running the same schedule.
   const workerId = `sched-${newId()}`;
@@ -180,6 +187,17 @@ export function startScheduler(options: {
     } catch (err) {
       // A failed background job must never take the process down; the next tick retries.
       logger.error('dispute escalation sweep failed', { error: (err as Error).message });
+    }
+  };
+
+  const runRfqExpiry = async (): Promise<void> => {
+    try {
+      // Idempotent and concurrent-safe by construction (guarded UPDATEs), so no
+      // in-process guard is needed: overlapping ticks simply find nothing to do.
+      await runRfqExpirySweep(db, { batchSize: rfqExpiryBatchSize });
+    } catch (err) {
+      // A failed background job must never take the process down; the next tick retries.
+      logger.error('rfq expiry sweep failed', { error: (err as Error).message });
     }
   };
 
@@ -317,6 +335,10 @@ export function startScheduler(options: {
   const disputeTimer = options.disputeEscalationEnabled ? setInterval(runDisputeEscalation, disputeEscalationIntervalMs) : null;
   disputeTimer?.unref();
 
+  // RFQ expiry sweep on its own cadence. Off unless explicitly enabled.
+  const rfqExpiryTimer = options.rfqExpiryEnabled ? setInterval(runRfqExpiry, rfqExpiryIntervalMs) : null;
+  rfqExpiryTimer?.unref();
+
   return {
     stop: () => {
       clearInterval(timer);
@@ -326,6 +348,7 @@ export function startScheduler(options: {
       if (supervisorTimer) clearInterval(supervisorTimer);
       if (escalationsTimer) clearInterval(escalationsTimer);
       if (disputeTimer) clearInterval(disputeTimer);
+      if (rfqExpiryTimer) clearInterval(rfqExpiryTimer);
     },
   };
 }

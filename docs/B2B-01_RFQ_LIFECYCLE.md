@@ -1,7 +1,7 @@
 # B2B-01 — دورة حياة طلب عرض السعر (RFQ) والعروض والتفاوض
 
-> حالة: **المرحلة 1 + المرحلة 2 مكتملتان ومتحققتان** (كود + اختبارات حقيقية على PostgreSQL + توثيق).
-> المرحلة 3 (قبول عرض ← طلب حقيقي) **لم تبدأ** ولم تُلمس عمدًا.
+> حالة: **المرحلة 1 + المرحلة 2 + المرحلة 3 مكتملة ومتحققة** (كود + اختبارات حقيقية على PostgreSQL + متصفح حقيقي + توثيق).
+> المرحلة 3 هنا = **مقارنة العروض + انتهاء الصلاحية الموثوق**. أما «قبول عرض ← طلب حقيقي» فهي المرحلة 4 **ولم تبدأ** ولم تُلمس عمدًا.
 
 ## 1. النموذج
 
@@ -69,11 +69,34 @@ SUBMITTED ──revise──▶ SUPERSEDED (نهائي)
 
 السبب: قاعدة في الخدمة يمكن أن ينساها مسار لاحق؛ التريغر لا يُنسى.
 
-## 5. الانتهاء (بلا Scheduler)
+## 5. الانتهاء (مسار طلب + مهمة دورية)
 
-- `expires_at` للطلب و`valid_until` للعرض يُقيَّمان **عند كل وصول** (`expireIfDue`, `expireQuotesIfDue`).
+المنطق كله في وحدة واحدة: `modules/rfq/expiry.ts`. مسار الطلب والمهمة الدورية يستدعيان نفس الدالتين، فلا يمكن أن تختلف دلالة «انتهى» بين القراءة والخلفية.
+
+**أ. تقييم عند كل وصول (Lazy)** — `expireRfqIfDue` و`expireLapsedQuotes`:
+
+- `expires_at` للطلب و`valid_until` للعرض يُقيَّمان قبل أي قرار أو إسقاط.
 - التحديث عبارة SQL واحدة محروسة (`where status='OPEN' and expires_at <= now() returning id`)، لذا تحت قراءات متزامنة **واحد فقط** يفوز ويكتب حدث `EXPIRED` واحد بـ`actorType='SYSTEM'` و`actorUserId=null`.
+- `expireRfqIfDue` يعيد `{ rfq, transitioned }`: `transitioned=true` للفائز وحده. هذا ما يجعل عدّادات المهمة الدورية صادقة (الخاسر في السباق يرى `EXPIRED` لكنه لا يعُدّها Transition ولا يكتب حدثًا).
 - بعد الانتهاء: لا اقتباس، لا إصدار جديد، لا رفض، لا رفض دعوة. **السحب يبقى مسموحًا** لأنه إزالة عرض لا إنشاء التزام.
+
+**ب. مهمة دورية (Sweep)** — `runRfqExpirySweep(db, { batchSize, maxBatches })`:
+
+| الخاصية | كيف تُنفَّذ (لا تُفترض) |
+| --- | --- |
+| تكرار آمن | الفحص شرطي (`status='OPEN'`) فالجولة الثانية تجد صفرًا وتعيد `{0,0}` |
+| تزامن آمن | كل انتقال هو الـUPDATE المحروس أعلاه؛ لا يستطيع إلا واحد أن يكتبه |
+| لا أحداث مكررة | الحدث يُكتب **داخل نفس المعاملة** وللفائز فقط (`transitioned`) |
+| لا تغيير لسجل محسوم | المسند `status='OPEN'` و`quote_status='SUBMITTED'` يستثني `AWARDED`/`CANCELLED`/`EXPIRED` و`REJECTED`/`WITHDRAWN`/`SUPERSEDED` من العبارة نفسها |
+| بلا حذف | لا `DELETE` في الوحدة إطلاقًا |
+| بلا إشعار خارجي | `notifications` صفوف داخلية فقط؛ لا بريد/SMS/Webhook |
+| محدود | `batchSize` (افتراضي 100) و`maxBatches` (افتراضي 20) ويعيد `truncated` عند بلوغ السقف |
+| مسجَّل | `payload = { scope, expiresAt\|validUntil, reason, fromStatus }` — `RESPONSE_WINDOW_LAPSED` للطلب و`QUOTE_VALIDITY_LAPSED` للعرض |
+
+- الترتيب `order by expires_at` ودفعاته: عاملان يأخذان الصفوف بالترتيب نفسه ⇒ لا تعارض أقفال.
+- **التوصيل**: `RFQ_EXPIRY_SWEEP_ENABLED` (افتراضي `false`)، `RFQ_EXPIRY_SWEEP_INTERVAL_MINUTES` (5)، `RFQ_EXPIRY_SWEEP_BATCH_SIZE` (100) في `lib/env.ts` ← `startScheduler()` (`lib/scheduler.ts`) ← `src/index.ts`. الوظيفة نفسها قابلة للاستدعاء من cron خارجي.
+- **الفهارس** (migration `0047`، إضافية فقط): `rfqs_open_expires_idx (expires_at) where status='OPEN'` و`rfq_quotes_live_expiry_idx (valid_until) where quote_status='SUBMITTED'`.
+- `expireIfDue` الخاص بالمرحلة 2 أُزيل و`recordEvent` نُقل إلى `modules/rfq/events.ts` — لا نسختين من القاعدة نفسها.
 
 ## 6. واجهة الـAPI
 
@@ -93,6 +116,7 @@ SUBMITTED ──revise──▶ SUPERSEDED (نهائي)
 | POST | `/api/rfqs/:id/quotes/:quoteId/withdraw` | `rfq:quote` | عرض حيّ للبائع نفسه فقط |
 | POST | `/api/rfqs/:id/quotes/:quoteId/reject` | `rfq:decide` | المشتري، `reason` إلزامي (≥3) |
 | GET | `/api/rfqs/:id/quotes/:quoteId/revisions` | `rfq:read:own` | سلسلة الإصدارات كاملة (المشتري أو صاحبها) |
+| GET | `/api/rfqs/:id/comparison` | `rfq:read:own` | **مقارنة للقراءة فقط**؛ المشتري: كل البائعين · البائع: عرضه وحده (`scope: OWN`) |
 | GET | `/api/rfqs/:id/timeline` | `rfq:read:own` | مُرشَّح بالرؤية لكل طرف |
 
 ### عقد الاستجابات
@@ -100,6 +124,7 @@ SUBMITTED ──revise──▶ SUPERSEDED (نهائي)
 - `quote`: `{ id, sellerId, sellerType, revision, status, currencyCode, itemsTotal, leadTimeDays, paymentTerms, notes, validUntil, submittedAt, decidedAt, decisionReason, withdrawnAt, withdrawalReason, expiredAt, lines[] }`.
 - `recipient`: `{ sellerId, sellerType, sellerName, status, invitedAt, viewedAt, respondedAt, declinedAt, declineReason }`.
 - `timeline entry`: `{ id, eventType, actorType, quoteId, quoteRevision, payload, createdAt }`.
+- `comparison`: `{ rfq:{id,rfqNumber,title,currencyCode,status,neededBy,expiresAt,acceptsQuotes}, scope:'ALL'|'OWN', items[], rows[], excluded[], summary, generatedAt }` — `rows[]` بأحدث مراجعة صالحة فقط، وكل سطر يحمل `requestedQuantity` و`quotedQuantity` و`unitPrice` و`lineTotal` و`targetDelta`؛ `excluded[]` بسبب صريح.
 - لا `userId`، لا `email`، لا `phone`، ولا أي حقل دفع في أي إسقاط (الإسقاطات تُبنى حقلاً حقلاً، لا بـ`spread`).
 
 ## 7. ما يرفضه الخادم صراحةً
@@ -147,7 +172,7 @@ SUBMITTED ──revise──▶ SUPERSEDED (نهائي)
 | `QUOTE_WITHDRAWN` | البائع | الطرفان + البائع المعني | `revision`، السبب |
 | `QUOTE_REJECTED` | المشتري | الطرفان + البائع المعني | `revision`، السبب |
 | `CANCELLED` | المشتري | الطرفان | السبب |
-| `EXPIRED` | `SYSTEM` | الطرفان | `payload.scope = RFQ \| QUOTE` |
+| `EXPIRED` | `SYSTEM` | الطرفان | `scope` + `expiresAt`/`validUntil` + `reason` + `fromStatus` (+ `revision` للعرض) |
 
 وفي `audit_logs`: `RFQ.CREATED`, `RFQ.SENT`, `RFQ.CANCELLED`, `RFQ.EXPIRED`, `RFQ.QUOTE_SUBMITTED`, `RFQ.QUOTE_REVISED`, `RFQ.QUOTE_WITHDRAWN`, `RFQ.QUOTE_REJECTED`, `RFQ.INVITATION_DECLINED` — مع الفاعل وIP/UA و`before/after`.
 
@@ -164,9 +189,10 @@ SUBMITTED ──revise──▶ SUPERSEDED (نهائي)
 | `/dashboard/rfqs/:id` | `DashboardRfqDetailPage` — لوحة المشتري أو لوحة البائع حسب ما يعيده الخادم | المشاركون |
 | `/dashboard/rfq-inbox` | `DashboardRfqInboxPage` — الدعوات الواردة | MERCHANT · SUPPLIER · COMPANY (`rfq.sell`) |
 
-- **الملف**: `packages/web/src/pages/DashboardRfqPages.tsx` · الأنواع في `lib/types.ts` · العملاء في `lib/api.ts` · المفاتيح في `lib/i18n.ts` (ar/fr/en/zh، 102 مفتاحًا لكل لغة).
+- **الملف**: `packages/web/src/pages/DashboardRfqPages.tsx` · الأنواع في `lib/types.ts` · العملاء في `lib/api.ts` · المفاتيح في `lib/i18n.ts` (ar/fr/en/zh، 131 مفتاحًا لكل لغة).
 - **لوحة المشتري**: إرسال الدعوات (بحث في دليل المورّدين + إقرار الإفصاح)، جدول الدعوات وحالتها مع سبب الاعتذار، العروض مع الإجمالي و`rev` والمدة وصلاحية العرض، **الإصدارات**، الرفض بسبب إلزامي، الإلغاء بسبب اختياري.
 - **لوحة البائع**: حالة دعوتي، نموذج عرض (سعر وحدة لكل بند + مدة + شروط دفع + ملاحظات)، إعادة الإرسال كإصدار جديد، السحب (للعرض الحيّ فقط)، الاعتذار بسبب.
+- **لوحة المقارنة** (`ComparisonPanel` داخل لوحة المشتري): زر «مقارنة العروض» يجلب `GET /:id/comparison` ويعرض ترتيبًا جاهزًا من الخادم — الإجمالي، مدة التوريد، صلاحية العرض، الشروط والملاحظات، ومصفوفة سعر الوحدة لكل بند، وقائمة **العروض المستبعدة بسببها**. الواجهة **لا تفرز ولا تجمع** أي رقم بنفسها.
 - **السجل الزمني** ظاهر للطرفين مع نوع الحدث والإصدار.
 - **ممنوعات في الواجهة**: لا تحسب أي إجمالي (تقرأ `lineTotal` من الخادم)، ولا ترسل `buyerCompanyId`/`sellerId`، ولا تعرض البريد/الهاتف. زر لا يظهر ≠ صلاحية: كل مسار محمي في الخادم.
 - **i18n**: `rfq.*` + `rfq.status.*` + `rfq.event.*` في الأربع لغات، مع RTL للعربية (اختُبر في متصفح حقيقي بالعربية والفرنسية والإنجليزية والصينية).
@@ -178,10 +204,13 @@ SUBMITTED ──revise──▶ SUPERSEDED (نهائي)
 | `tests/b2b01b-lifecycle-unit.test.ts` | 8 |
 | `tests/b2b01b-rfq-lifecycle.test.ts` | 22 |
 | `tests/b2b01-rfq-isolation.test.ts` (المرحلة 1) | 24 |
+| `tests/b2b01c-comparison-expiry.test.ts` (المرحلة 3) | 21 |
 
-وبالمتصفح (`scripts/ui-rfq-check.mjs` — 33 فحصًا ضد API حقيقي وPostgres حقيقي، بلا أي mock): إنشاء طلب من النموذج · ظهور البنود · لوحة الإرسال في `DRAFT` واختفاؤها بعد الإرسال · صندوق البائع · تقديم عرض ثم إعادة إرساله كإصدار جديد · رفض المشتري بسبب وقراءة البائع له · الإصدارات · الاعتذار عن الدعوة · الإلغاء · قفل التفاوض بعد الإلغاء · عرض النصوص بالعربية والفرنسية والإنجليزية والصينية · صفر أخطاء JavaScript في الصفحة.
+فحوص المرحلة 3 تحديدًا: مقارنة ثلاثة عروض (إجمالي/وحدة/كمية/عملة/مدة/صلاحية/شروط/حالة/إصدار) · اختلاف مدد التوريد · استبعاد المراجعات القديمة كـ`SUPERSEDED` · استبعاد المنتهي/المسحوب/المرفوض بأسبابها · منع خلط العملات وعدم دخولها في أي إحصاء · عزل المورّد (`scope: OWN`، ولا يظهر إجمالي منافسه في الـpayload) · 404 لغير المشارك ولشركة أخرى و401 للمجهول · `RFQ_NOT_OPEN` بعد الإلغاء · رفض كمية مختلفة (422) · «المقارنة لا تكتب» (طلبات/ledger/payments/settlements/عروض) · الانتهاء مرة واحدة مع `reason` و`expiresAt` · الجولة الثانية صفر · خمس جولات متزامنة ⇒ 3 طلبات/3 عروض بلا تكرار · الاحتفاظ بـ`AWARDED`/`CANCELLED`/`EXPIRED` وبالعروض المحسومة · عدم إحياء طلب منتهٍ · دفعات محدودة بـ`maxBatches` · عدم تغيير أي بيانات مالية.
 
-## 13. المرحلة 3 (غير مبدوءة)
+وبالمتصفح (`scripts/ui-rfq-check.mjs` — 38 فحصًا ضد API حقيقي وPostgres حقيقي، بلا أي mock): إنشاء طلب من النموذج · ظهور البنود · لوحة الإرسال في `DRAFT` واختفاؤها بعد الإرسال · صندوق البائع · تقديم عرض ثم إعادة إرساله كإصدار جديد · رفض المشتري بسبب وقراءة البائع له · الإصدارات · الاعتذار عن الدعوة · الإلغاء · قفل التفاوض بعد الإلغاء · لوحة المقارنة (الترتيب، أفضل سعر، مصفوفة أسعار الوحدة، استبعاد المراجعة القديمة) · عرض النصوص بالعربية والفرنسية والإنجليزية والصينية · صفر أخطاء JavaScript في الصفحة.
+
+## 13. المرحلة 4 (غير مبدوءة)
 
 قبول عرض (`ACCEPTED` + `rfq.status='AWARDED'`) ← إنشاء طلب عبر `createOrder` (عمولة من السياسة، هوية COMPANY) ← `CLOSED`.
-لا يوجد اليوم أي مسار يكتب `ACCEPTED` أو `AWARDED`؛ الحالة معلنة في آلة الحالات فقط لتكون المرحلة 3 امتدادًا لا إعادة كتابة.
+لا يوجد اليوم أي مسار يكتب `ACCEPTED` أو `AWARDED`؛ الحالة معلنة في آلة الحالات فقط لتكون المرحلة 4 امتدادًا لا إعادة كتابة. المرحلة 3 أضافت **قراءة** فقط: لا قبول ولا تحويل ولا كتابة مالية.

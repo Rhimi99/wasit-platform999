@@ -2145,6 +2145,92 @@ export interface SellerRfq {
   };
 }
 
+export type RfqComparisonReason =
+  | 'SUPERSEDED'
+  | 'EXPIRED'
+  | 'WITHDRAWN'
+  | 'REJECTED'
+  | 'ACCEPTED'
+  | 'CURRENCY_MISMATCH'
+  | 'RFQ_NOT_OPEN';
+
+export interface RfqComparisonLine {
+  rfqItemId: string;
+  itemName: string | null;
+  requestedQuantity: string;
+  quotedQuantity: string;
+  unit: string | null;
+  unitPrice: string;
+  lineTotal: string;
+  targetPrice: string | null;
+  targetDelta: string | null;
+}
+
+export interface RfqComparisonRow {
+  quoteId: string;
+  sellerId: string;
+  sellerName: string;
+  sellerType: string;
+  revision: number;
+  status: RfqQuoteStatus;
+  currencyCode: string;
+  itemsTotal: string;
+  leadTimeDays: number | null;
+  paymentTerms: string | null;
+  notes: string | null;
+  validUntil: string;
+  submittedAt: string;
+  comparable: boolean;
+  priceRank: number | null;
+  lines: RfqComparisonLine[];
+}
+
+export interface RfqComparisonExcluded {
+  quoteId: string;
+  sellerId: string;
+  sellerName: string;
+  revision: number;
+  status: RfqQuoteStatus;
+  reason: RfqComparisonReason;
+}
+
+export interface RfqComparison {
+  rfq: {
+    id: string;
+    rfqNumber: string;
+    title: string;
+    currencyCode: string;
+    status: RfqStatus;
+    neededBy: string | null;
+    expiresAt: string | null;
+    acceptsQuotes: boolean;
+  };
+  scope: 'ALL' | 'OWN';
+  items: RfqItem[];
+  rows: RfqComparisonRow[];
+  excluded: RfqComparisonExcluded[];
+  summary: {
+    comparableQuotes: number;
+    lowestTotal: string | null;
+    highestTotal: string | null;
+    averageTotal: string | null;
+    bestPriceQuoteId: string | null;
+    fastestLeadTimeDays: number | null;
+    fastestLeadTimeQuoteId: string | null;
+    currencyMixed: boolean;
+    perItem: Array<{
+      rfqItemId: string;
+      itemName: string | null;
+      requestedQuantity: string;
+      lowestUnitPrice: string | null;
+      lowestQuoteId: string | null;
+      highestUnitPrice: string | null;
+      averageUnitPrice: string | null;
+    }>;
+  };
+  generatedAt: string;
+}
+
 export type RfqView = BuyerRfq | SellerRfq;
 
 export interface CreateRfqPayload {

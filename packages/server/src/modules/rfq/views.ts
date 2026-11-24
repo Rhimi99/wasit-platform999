@@ -110,6 +110,101 @@ export interface SellerRfqView {
   };
 }
 
+export type ComparisonExclusionReason =
+  /** An older revision of the same seller's offer. */
+  | 'SUPERSEDED'
+  | 'EXPIRED'
+  | 'WITHDRAWN'
+  | 'REJECTED'
+  | 'ACCEPTED'
+  /** Quoted in another currency; never compared against this RFQ's prices. */
+  | 'CURRENCY_MISMATCH'
+  /** The RFQ itself is cancelled or expired, so none of its quotes is live. */
+  | 'RFQ_NOT_OPEN';
+
+export interface ComparisonLineView {
+  rfqItemId: string;
+  /** Free-text name, or null when the line points at a catalogue product only. */
+  itemName: string | null;
+  requestedQuantity: string;
+  quotedQuantity: string;
+  unit: string | null;
+  unitPrice: string;
+  lineTotal: string;
+  targetPrice: string | null;
+  /** `unitPrice - targetPrice`; negative means below the buyer's target. */
+  targetDelta: string | null;
+}
+
+export interface ComparisonRowView {
+  quoteId: string;
+  sellerId: string;
+  sellerName: string;
+  sellerType: string;
+  revision: number;
+  status: string;
+  currencyCode: string;
+  itemsTotal: string;
+  leadTimeDays: number | null;
+  paymentTerms: string | null;
+  notes: string | null;
+  validUntil: string;
+  submittedAt: string;
+  /** Always true for a row in `rows`; present so a client never guesses. */
+  comparable: boolean;
+  /** 1 = cheapest of the comparable rows. */
+  priceRank: number | null;
+  lines: ComparisonLineView[];
+}
+
+export interface ComparisonExcludedView {
+  quoteId: string;
+  sellerId: string;
+  sellerName: string;
+  revision: number;
+  status: string;
+  reason: ComparisonExclusionReason;
+}
+
+export interface QuoteComparisonView {
+  rfq: {
+    id: string;
+    rfqNumber: string;
+    title: string;
+    currencyCode: string;
+    status: string;
+    neededBy: string | null;
+    expiresAt: string | null;
+    acceptsQuotes: boolean;
+  };
+  /** `ALL` for the buying company, `OWN` for a seller (it sees only its offer). */
+  scope: 'ALL' | 'OWN';
+  items: RfqItemView[];
+  rows: ComparisonRowView[];
+  excluded: ComparisonExcludedView[];
+  summary: {
+    comparableQuotes: number;
+    lowestTotal: string | null;
+    highestTotal: string | null;
+    averageTotal: string | null;
+    bestPriceQuoteId: string | null;
+    fastestLeadTimeDays: number | null;
+    fastestLeadTimeQuoteId: string | null;
+    /** True when at least one quote was excluded for a currency mismatch. */
+    currencyMixed: boolean;
+    perItem: Array<{
+      rfqItemId: string;
+      itemName: string | null;
+      requestedQuantity: string;
+      lowestUnitPrice: string | null;
+      lowestQuoteId: string | null;
+      highestUnitPrice: string | null;
+      averageUnitPrice: string | null;
+    }>;
+  };
+  generatedAt: string;
+}
+
 export type RfqView = BuyerRfqView | SellerRfqView;
 
 function iso(value: Date | null | undefined): string | null {

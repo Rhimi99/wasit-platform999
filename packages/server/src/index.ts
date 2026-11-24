@@ -39,6 +39,9 @@ if (env.SCHEDULER_ENABLED) {
     escalationsIntervalMinutes: env.AI_ESCALATION_INTERVAL_MINUTES,
     disputeEscalationEnabled: env.DISPUTE_ESCALATION_ENABLED,
     disputeEscalationIntervalMinutes: env.DISPUTE_ESCALATION_INTERVAL_MINUTES,
+    rfqExpiryEnabled: env.RFQ_EXPIRY_SWEEP_ENABLED,
+    rfqExpiryIntervalMinutes: env.RFQ_EXPIRY_SWEEP_INTERVAL_MINUTES,
+    rfqExpiryBatchSize: env.RFQ_EXPIRY_SWEEP_BATCH_SIZE,
   });
   const shutdown = (): void => {
     handle.stop();

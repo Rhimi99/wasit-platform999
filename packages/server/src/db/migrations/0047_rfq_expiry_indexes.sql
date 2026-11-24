@@ -1,0 +1,2 @@
+CREATE INDEX IF NOT EXISTS "rfq_quotes_live_expiry_idx" ON "rfq_quotes" USING btree ("valid_until") WHERE quote_status = 'SUBMITTED';--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "rfqs_open_expires_idx" ON "rfqs" USING btree ("expires_at") WHERE status = 'OPEN';

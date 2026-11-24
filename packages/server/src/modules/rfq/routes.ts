@@ -5,6 +5,7 @@ import { getContext } from '../../lib/request-context';
 import { validateBody, getValidatedBody } from '../../middleware/validate';
 import { requireAuth, requirePermission } from '../../middleware/auth';
 import { rateLimit } from '../../middleware/rate-limit';
+import { compareQuotes } from './comparison';
 import {
   cancelRfq,
   createRfq,
@@ -115,6 +116,17 @@ rfqRoutes.get('/:id', requirePermission(PERMISSIONS.RFQ_READ_OWN), async (c) => 
 rfqRoutes.get('/:id/quotes', requirePermission(PERMISSIONS.RFQ_READ_OWN), async (c) => {
   const ctx = getContext(c);
   const data = await listQuotes(ctx.db, ctx.user!.id, c.req.param('id')!);
+  return c.json({ success: true, data });
+});
+
+/**
+ * Offer comparison. Read-only by design: no accept, no award, no order.
+ * A seller calls the same route and gets only its own offer back (`scope: OWN`),
+ * so the endpoint can never be used to read a competitor's price.
+ */
+rfqRoutes.get('/:id/comparison', requirePermission(PERMISSIONS.RFQ_READ_OWN), async (c) => {
+  const ctx = getContext(c);
+  const data = await compareQuotes(ctx.db, ctx.user!.id, c.req.param('id')!);
   return c.json({ success: true, data });
 });
 

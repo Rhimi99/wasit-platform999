@@ -430,6 +430,16 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   DISPUTE_ESCALATION_INTERVAL_MINUTES: z.coerce.number().int().positive().default(30),
+  // RFQ expiry sweep (B2B-01 phase 3). Off by default so tests and one-off
+  // commands never start background work. The sweep only moves rows whose
+  // deadline has already passed and every transition is a guarded UPDATE, so a
+  // duplicate run — another instance or a manual cron — writes nothing twice.
+  RFQ_EXPIRY_SWEEP_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  RFQ_EXPIRY_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  RFQ_EXPIRY_SWEEP_BATCH_SIZE: z.coerce.number().int().positive().default(100),
   // Observability. Structured logs go to stdout (single JSON line per record)
   // and a bounded in-process buffer is exposed to admins. `pretty` is for
   // reading along in a terminal; JSON is what a log pipeline should ingest.

@@ -7,6 +7,7 @@ import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/c
 import type {
   BuyerRfq,
   CreateRfqPayload,
+  RfqComparison,
   RfqQuote,
   RfqQuoteStatus,
   RfqRecipientStatus,
@@ -534,6 +535,190 @@ interface PanelProps {
 
 /* -------------------------------- buyer ---------------------------------- */
 
+/**
+ * Offer comparison. Read-only, and rendered only from the server's ranking: the
+ * component never sorts or sums prices itself, so what the buyer sees is exactly
+ * what the API decided was comparable.
+ */
+function ComparisonPanel({ rfqId, currencyCode }: { rfqId: string; currencyCode: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<RfqComparison | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const res = await apiCall(() => api.rfqComparison(rfqId));
+    setLoading(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setData(res.data ?? null);
+  }, [rfqId]);
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && !data) void load();
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-2" data-testid="rfq-comparison">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-semibold uppercase text-slate-400">{t('rfq.compare.title')}</h4>
+        <button type="button" className="text-[11px] text-wasit-700 underline" onClick={toggle}>
+          {open ? t('rfq.compare.hide') : t('rfq.compare.show')}
+        </button>
+      </div>
+
+      {open && loading && <Spinner />}
+      {open && error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+
+      {open && data && (
+        <div className="mt-2 space-y-2">
+          <p className="text-[11px] text-slate-500">{t('rfq.compare.subtitle')}</p>
+
+          {data.rows.length === 0 ? (
+            <p className="text-xs text-slate-500">{t('rfq.compare.empty')}</p>
+          ) : (
+            <>
+              <p className="text-[11px] text-slate-600" data-testid="rfq-comparison-summary">
+                {t('rfq.compare.summary').replace('{count}', String(data.summary.comparableQuotes))}
+                {' · '}
+                {t('rfq.compare.lowest')}:{' '}
+                <span dir="ltr">{formatMoney(data.summary.lowestTotal ?? '0', currencyCode)}</span>
+                {' · '}
+                {t('rfq.compare.average')}:{' '}
+                <span dir="ltr">{formatMoney(data.summary.averageTotal ?? '0', currencyCode)}</span>
+                {data.summary.fastestLeadTimeDays !== null && (
+                  <>
+                    {' · '}
+                    {t('rfq.compare.fastest')}: {data.summary.fastestLeadTimeDays} {t('rfq.compare.days')}
+                  </>
+                )}
+              </p>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]" data-testid="rfq-comparison-table">
+                  <thead className="text-slate-400">
+                    <tr>
+                      <th className="text-start font-medium">{t('rfq.compare.rank')}</th>
+                      <th className="text-start font-medium">{t('rfq.compare.seller')}</th>
+                      <th className="text-start font-medium">{t('rfq.compare.total')}</th>
+                      <th className="text-start font-medium">{t('rfq.compare.lead')}</th>
+                      <th className="text-start font-medium">{t('rfq.compare.validity')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.rows.map((row) => (
+                      <tr key={row.quoteId} className="border-t border-slate-100 align-top">
+                        <td className="py-1" dir="ltr">
+                          {row.priceRank}
+                          {row.priceRank === 1 && (
+                            <span className="ms-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-700">
+                              {t('rfq.compare.best')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-1">
+                          {row.sellerName}
+                          <span className="ms-1 text-[10px] uppercase text-slate-400">{row.sellerType}</span>
+                          <span className="ms-1 text-[10px] text-slate-400" dir="ltr">rev {row.revision}</span>
+                        </td>
+                        <td className="py-1 font-semibold" dir="ltr">
+                          {formatMoney(row.itemsTotal, row.currencyCode)}
+                        </td>
+                        <td className="py-1" dir="ltr">
+                          {row.leadTimeDays === null ? '—' : `${row.leadTimeDays} ${t('rfq.compare.days')}`}
+                        </td>
+                        <td className="py-1" dir="ltr">{formatDate(row.validUntil)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {(data.rows.some((r) => r.paymentTerms || r.notes)) && (
+                <ul className="space-y-1">
+                  {data.rows
+                    .filter((r) => r.paymentTerms || r.notes)
+                    .map((r) => (
+                      <li key={r.quoteId} className="text-[11px] text-slate-600">
+                        <span className="font-medium">{r.sellerName}</span>
+                        {r.paymentTerms && <span> — {r.paymentTerms}</span>}
+                        {r.notes && <span> — {r.notes}</span>}
+                      </li>
+                    ))}
+                </ul>
+              )}
+
+              <div>
+                <h5 className="mb-1 text-[11px] font-semibold text-slate-500">{t('rfq.compare.unitPrices')}</h5>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]" data-testid="rfq-comparison-lines">
+                    <thead className="text-slate-400">
+                      <tr>
+                        <th className="text-start font-medium">{t('rfq.compare.item')}</th>
+                        {data.rows.map((row) => (
+                          <th key={row.quoteId} className="text-start font-medium">{row.sellerName}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.items.map((item) => (
+                        <tr key={item.id} className="border-t border-slate-100">
+                          <td className="py-1">
+                            {item.freeTextName ?? item.id}
+                            <span className="ms-1 text-[10px] text-slate-400" dir="ltr">
+                              × {item.quantity}
+                            </span>
+                          </td>
+                          {data.rows.map((row) => {
+                            const line = row.lines.find((l) => l.rfqItemId === item.id);
+                            return (
+                              <td key={`${row.quoteId}-${item.id}`} className="py-1" dir="ltr">
+                                {line ? formatMoney(line.unitPrice, row.currencyCode) : '—'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {data.summary.currencyMixed && (
+                <p className="text-[11px] text-amber-700">{t('rfq.compare.currencyMixed')}</p>
+              )}
+            </>
+          )}
+
+          {data.excluded.length > 0 && (
+            <div>
+              <h5 className="mb-1 text-[11px] font-semibold text-slate-500">{t('rfq.compare.excluded')}</h5>
+              <ul className="space-y-1" data-testid="rfq-comparison-excluded">
+                {data.excluded.map((entry) => (
+                  <li key={entry.quoteId} className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                    <span>{entry.sellerName}</span>
+                    <span className="text-slate-400" dir="ltr">rev {entry.revision}</span>
+                    <Badge color="slate">
+                      {t(`rfq.compare.reason.${entry.reason}`)}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BuyerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: PanelProps) {
   const { t } = useI18n();
   const buyerView = view as BuyerRfq;
@@ -636,6 +821,8 @@ function BuyerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: Panel
           ))}
         </ul>
       </div>
+
+      <ComparisonPanel rfqId={view.id} currencyCode={view.currencyCode} />
 
       {revisionsFor && (
         <div className="rounded-lg bg-slate-50 p-2 text-xs" data-testid="rfq-revisions">
