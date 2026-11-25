@@ -99,10 +99,25 @@ async function requireCurrency(db: DB, code: string): Promise<string> {
   return row.code;
 }
 
-async function loadItems(db: DB, rfqId: string) {
+/**
+ * Loads the requested lines with the catalogue product name attached, so a
+ * product-linked line reads as "Olive oil 5L" instead of its uuid. The join is
+ * a left join: a free-text line has no product and keeps `productName: null`.
+ */
+export async function loadRfqItems(db: DB, rfqId: string) {
   const rows = await db
-    .select()
+    .select({
+      id: rfqItems.id,
+      productId: rfqItems.productId,
+      freeTextName: rfqItems.freeTextName,
+      quantity: rfqItems.quantity,
+      unit: rfqItems.unit,
+      targetPrice: rfqItems.targetPrice,
+      position: rfqItems.position,
+      productName: products.name,
+    })
     .from(rfqItems)
+    .leftJoin(products, eq(products.id, rfqItems.productId))
     .where(eq(rfqItems.rfqId, rfqId))
     .orderBy(rfqItems.position);
   return rows;
@@ -493,7 +508,7 @@ export async function getRfq(db: DB, userId: string, rfqId: string): Promise<Rfq
     }
     return buildBuyerView(db, rfq, company);
   }
-  const items = (await loadItems(db, rfq.id)).map(toItemView);
+  const items = (await loadRfqItems(db, rfq.id)).map(toItemView);
   return toSellerRfqView({
     rfq,
     buyer: await buyerCard(db, rfq.buyerCompanyId),
@@ -507,7 +522,7 @@ async function buildBuyerView(
   rfq: (typeof rfqs.$inferSelect),
   company: CompanyCardView,
 ): Promise<BuyerRfqView> {
-  const items = (await loadItems(db, rfq.id)).map(toItemView);
+  const items = (await loadRfqItems(db, rfq.id)).map(toItemView);
   const recipients = await db
     .select()
     .from(rfqRecipients)
@@ -557,7 +572,7 @@ export async function listSellerInbox(db: DB, userId: string): Promise<SellerRfq
       toSellerRfqView({
         rfq,
         buyer: await buyerCard(db, rfq.buyerCompanyId),
-        items: (await loadItems(db, rfq.id)).map(toItemView),
+        items: (await loadRfqItems(db, rfq.id)).map(toItemView),
         recipient: row.recipient,
       }),
     );
@@ -588,7 +603,7 @@ export async function submitQuote(
     throw ApiError.conflict(`Quotes must be in ${rfq.currencyCode}`);
   }
 
-  const items = await loadItems(db, rfqId);
+  const items = await loadRfqItems(db, rfqId);
   const itemById = new Map(items.map((i) => [i.id, i]));
 
   // Every requested line must be quoted exactly once; a partial quote would make

@@ -37,7 +37,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <TopHeader onOpenNav={() => setNavOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 pb-[calc(1rem+var(--cookie-banner-h,0px))] sm:p-6 sm:pb-[calc(1.5rem+var(--cookie-banner-h,0px))]">
+          {children}
+        </main>
       </div>
     </div>
   );

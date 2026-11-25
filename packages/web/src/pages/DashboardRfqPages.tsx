@@ -7,6 +7,7 @@ import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/c
 import type {
   BuyerRfq,
   CreateRfqPayload,
+  RfqItem,
   RfqComparison,
   RfqQuote,
   RfqQuoteStatus,
@@ -26,6 +27,14 @@ import type {
  * When the server refuses an action the message is shown as-is, so a 409 (state
  * machine) or 422 (validation) reaches the user with its real reason.
  */
+
+/**
+ * What a requested line is called: the buyer's own words for a free-text line,
+ * the catalogue name for a product-linked one, and only as a last resort the id.
+ */
+function itemLabel(item: Pick<RfqItem, 'freeTextName' | 'productName' | 'productId' | 'id'>): string {
+  return item.freeTextName ?? item.productName ?? item.productId ?? item.id;
+}
 
 const RFQ_STATUS_COLOR: Record<RfqStatus, 'slate' | 'green' | 'red' | 'amber' | 'teal' | 'indigo'> = {
   DRAFT: 'slate',
@@ -480,7 +489,7 @@ export function DashboardRfqDetailPage() {
               <tbody>
                 {view.items.map((item) => (
                   <tr key={item.id} className="border-t border-slate-100">
-                    <td className="py-1">{item.freeTextName ?? item.productId}</td>
+                    <td className="py-1">{itemLabel(item)}</td>
                     <td className="py-1" dir="ltr">{item.quantity}</td>
                     <td className="py-1">{item.unit ?? '—'}</td>
                     <td className="py-1" dir="ltr">{item.targetPrice ?? '—'}</td>
@@ -671,7 +680,7 @@ function ComparisonPanel({ rfqId, currencyCode }: { rfqId: string; currencyCode:
                       {data.items.map((item) => (
                         <tr key={item.id} className="border-t border-slate-100">
                           <td className="py-1">
-                            {item.freeTextName ?? item.id}
+                            {itemLabel(item)}
                             <span className="ms-1 text-[10px] text-slate-400" dir="ltr">
                               × {item.quantity}
                             </span>
@@ -1156,14 +1165,14 @@ function SellerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: Pane
           {items.map((item) => (
             <div key={item.id} className="flex items-center gap-2">
               <span className="flex-1 text-xs text-slate-600">
-                {item.freeTextName ?? item.productId}
+                {itemLabel(item)}
                 <span className="ms-1 text-slate-400" dir="ltr">× {item.quantity}</span>
               </span>
               <input
                 className="input w-28"
                 inputMode="decimal"
                 placeholder={t('rfq.quote.unitPrice')}
-                aria-label={`${t('rfq.quote.unitPrice')} ${item.freeTextName ?? item.id}`}
+                aria-label={`${t('rfq.quote.unitPrice')} ${itemLabel(item)}`}
                 value={prices[item.id] ?? ''}
                 onChange={(e) => setPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
               />

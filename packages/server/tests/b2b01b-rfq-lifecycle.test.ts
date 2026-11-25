@@ -175,10 +175,24 @@ async function notificationsFor(userIds: string[]) {
     .orderBy(notifications.createdAt);
 }
 
-async function financialCounts() {
-  const [o] = await db.select({ n: sql<number>`count(*)::int` }).from(orders);
-  const [l] = await db.select({ n: sql<number>`count(*)::int` }).from(transactionLedger);
-  const [p] = await db.select({ n: sql<number>`count(*)::int` }).from(paymentIntents);
+/**
+ * Money rows this buyer owns. The database is shared with the other suites, so a
+ * global count would move whenever another file creates an order mid-test; this
+ * answers the same question — "did the RFQ write money?" — without that race.
+ */
+async function financialCounts(buyerId: string) {
+  const [o] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(orders)
+    .where(eq(orders.buyerId, buyerId));
+  const [l] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(transactionLedger)
+    .where(sql`${transactionLedger.payerId} = ${buyerId} or ${transactionLedger.beneficiaryId} = ${buyerId}`);
+  const [p] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(paymentIntents)
+    .where(sql`${paymentIntents.orderId} in (select id from orders where buyer_id = ${buyerId})`);
   return { orders: o.n, ledger: l.n, payments: p.n };
 }
 
@@ -831,7 +845,7 @@ describe('B2B-01 phase 2 — RFQ and quote lifecycles (real HTTP + real Postgres
   });
 
   it('never writes to the ledger, an order or a payment intent', async () => {
-    const before = await financialCounts();
+    const before = await financialCounts(buyer.userId);
 
     const rfqId = await openRfq([sellerAId, sellerBId]);
     const a = await quote(sellerA.client, rfqId, ['10.0000', '20.0000']);
@@ -847,7 +861,7 @@ describe('B2B-01 phase 2 — RFQ and quote lifecycles (real HTTP + real Postgres
     });
     await buyer.client.req(`/api/rfqs/${rfqId}/cancel`, { method: 'POST', body: { reason: 'test' } });
 
-    const after = await financialCounts();
+    const after = await financialCounts(buyer.userId);
     expect(after).toEqual(before);
 
     // A quote is priced but never paid: no payment fields exist on the projection.

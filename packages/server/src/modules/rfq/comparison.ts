@@ -1,6 +1,6 @@
 import type { DB } from '../../db/client';
 import { and, eq, inArray } from 'drizzle-orm';
-import { rfqItems, rfqQuoteLines, rfqQuotes, rfqs } from '../../db/schema/rfq';
+import { rfqQuoteLines, rfqQuotes, rfqs } from '../../db/schema/rfq';
 import { toDecimal } from '../../lib/money';
 import { assertRfqAccess, resolveSellerEntities, type SellerEntity } from './access';
 import { expireLapsedQuotes, expireRfqIfDue } from './expiry';
@@ -13,6 +13,7 @@ import type {
   QuoteComparisonView,
   RfqItemView,
 } from './views';
+import { loadRfqItems } from './service';
 import { toItemView } from './views';
 
 /**
@@ -59,9 +60,7 @@ export async function compareQuotes(db: DB, userId: string, rfqId: string): Prom
   const { rfq } = await expireRfqIfDue(db, access.rfq);
   await expireLapsedQuotes(db, rfq.id);
 
-  const items = (
-    await db.select().from(rfqItems).where(eq(rfqItems.rfqId, rfq.id)).orderBy(rfqItems.position)
-  ).map((row) => toItemView(row));
+  const items = (await loadRfqItems(db, rfq.id)).map((row) => toItemView(row));
 
   // Buyer: every seller's newest revision. Seller: only its own — the filter is
   // in the query, so no later code path has to remember to apply it.
@@ -227,7 +226,7 @@ function buildLines(
       const target = item?.targetPrice ?? null;
       return {
         rfqItemId: line.rfqItemId,
-        itemName: item?.freeTextName ?? null,
+        itemName: item?.freeTextName ?? item?.productName ?? null,
         requestedQuantity: item?.quantity ?? line.quantity,
         quotedQuantity: line.quantity,
         unit: item?.unit ?? null,
@@ -267,7 +266,7 @@ function buildSummary(
     if (priced.length === 0) {
       return {
         rfqItemId: item.id,
-        itemName: item.freeTextName,
+        itemName: item.freeTextName ?? item.productName,
         requestedQuantity: item.quantity,
         lowestUnitPrice: null,
         lowestQuoteId: null,
@@ -282,7 +281,7 @@ function buildSummary(
     const lowEntry = priced.find((entry) => toDecimal(entry.line.unitPrice).equals(low))!;
     return {
       rfqItemId: item.id,
-      itemName: item.freeTextName,
+      itemName: item.freeTextName ?? item.productName,
       requestedQuantity: item.quantity,
       lowestUnitPrice: low.toFixed(4),
       lowestQuoteId: lowEntry.row.quoteId,

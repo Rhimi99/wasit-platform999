@@ -2039,6 +2039,7 @@ export interface RfqItem {
   id: string;
   productId: string | null;
   freeTextName: string | null;
+  productName: string | null;
   quantity: string;
   unit: string | null;
   targetPrice: string | null;

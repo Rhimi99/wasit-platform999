@@ -355,6 +355,141 @@ try {
   await zhPage.getByText('买方面板').waitFor({ timeout: 20000 });
   check('Chinese panel label rendered', true);
 
+  // ------------------------------------------------- phase 5: UX review pass
+  console.log('Phase 5 — state gating, error paths, four locales, phone layout');
+
+  // A fresh request with one live offer, used for the confirmation dialog and
+  // for the seller's validation error (neither may change its state).
+  const uxRfq = await company.client.req('/api/rfqs', {
+    method: 'POST',
+    body: {
+      title: 'طلب مراجعة الواجهة',
+      currencyCode: 'TND',
+      items: [{ productId, quantity: '20.0000', unit: 'unit' }],
+    },
+  });
+  const uxRfqId = uxRfq.data.data.id;
+  await company.client.req(`/api/rfqs/${uxRfqId}/send`, {
+    method: 'POST',
+    body: { sellerIds: [sellerAId, sellerBId], acknowledgeDisclosure: true },
+  });
+  const uxItems = await sellerB.client.req(`/api/rfqs/${uxRfqId}`);
+  const uxQuote = await sellerB.client.req(`/api/rfqs/${uxRfqId}/quotes`, {
+    method: 'POST',
+    body: {
+      currencyCode: 'TND',
+      lines: [{ rfqItemId: uxItems.data.data.items[0].id, unitPrice: '1.2000', quantity: '20.0000' }],
+    },
+  });
+  check('review fixture: one live offer on an open request', uxQuote.status === 201, String(uxQuote.status));
+  const uxQuoteId = uxQuote.data.data.quoteId;
+
+  const setLocale = async (page, code) => {
+    await page.locator('select[aria-label="Language"]').selectOption(code);
+    await page.waitForTimeout(250);
+  };
+  // A missing translation renders its key; this is what that looks like.
+  const rawKeys = (text) => (text.match(/\b(?:rfq|common|order)\.[a-zA-Z][\w.]*/g) ?? []).slice(0, 5);
+
+  const confirmTitles = {
+    ar: 'قبول هذا العرض؟',
+    fr: 'Accepter cette offre ?',
+    en: 'Accept this offer?',
+    zh: '接受此报价？',
+  };
+  for (const [code, title] of Object.entries(confirmTitles)) {
+    await setLocale(buyerPage, code);
+    await buyerPage.goto(`${WEB}/dashboard/rfqs/${uxRfqId}`);
+    await buyerPage.getByTestId(`rfq-accept-${uxQuoteId}`).click();
+    await buyerPage.getByTestId('rfq-accept-confirm').waitFor({ timeout: 20000 });
+    const panel = await buyerPage.getByTestId('rfq-accept-confirm').innerText();
+    check(`accept confirmation is translated (${code})`, panel.includes(title), panel.slice(0, 120));
+    check(`no untranslated keys in the confirmation (${code})`, rawKeys(panel).length === 0, rawKeys(panel).join(','));
+    // Backing out must leave the request exactly as it was.
+    await buyerPage.locator('[data-testid="rfq-accept-confirm"] button').nth(1).click();
+    check(`cancelling the confirmation closes it (${code})`, (await buyerPage.getByTestId('rfq-accept-confirm').count()) === 0);
+  }
+  const stillOpen = await company.client.req(`/api/rfqs/${uxRfqId}`);
+  check('an abandoned confirmation awards nothing', stillOpen.data.data.status === 'OPEN' && stillOpen.data.data.orderId === null);
+
+  // Awarded state: the actions that would contradict it are gone.
+  await setLocale(buyerPage, 'ar');
+  await buyerPage.goto(`${WEB}/dashboard/rfqs/${awardRfqId}`);
+  await buyerPage.getByTestId('rfq-awarded').waitFor({ timeout: 20000 });
+  check('no accept action on an awarded request', (await buyerPage.locator('[data-testid^="rfq-accept-"]').count()) === 0);
+  check('no rejection action on an awarded request', (await buyerPage.getByTestId('rfq-reject-form').count()) === 0);
+  check('no cancel action on an awarded request', (await buyerPage.getByTestId('rfq-cancel-form').count()) === 0);
+  const awardedText = await buyerPage.locator('body').innerText();
+  check('no untranslated keys on the awarded request', rawKeys(awardedText).length === 0, rawKeys(awardedText).join(','));
+
+  // The seller side of the same request: closed for quoting, decision visible.
+  await sellerPage.goto(`${WEB}/dashboard/rfqs/${awardRfqId}`);
+  await sellerPage.getByText('لوحة البائع').waitFor({ timeout: 20000 });
+  check('seller cannot quote an awarded request', (await sellerPage.getByTestId('rfq-quote-form').count()) === 0);
+  check('seller cannot decline an awarded request', (await sellerPage.getByTestId('rfq-decline-form').count()) === 0);
+  const sellerAwarded = await sellerPage.locator('body').innerText();
+  check('seller sees the decision, not a dead form', /مقبول|مرفوض/.test(sellerAwarded), sellerAwarded.slice(0, 200));
+
+  // Error path: submitting an offer without prices explains itself.
+  await sellerPage.goto(`${WEB}/dashboard/rfqs/${uxRfqId}`);
+  await sellerPage.getByTestId('rfq-quote-form').waitFor({ timeout: 20000 });
+  await sellerPage.getByTestId('rfq-quote-submit').click();
+  const panelError = await sellerPage.getByText('أدخل سعر وحدة لكل بند.').first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
+  check('an unpriced offer is refused with a readable message', panelError);
+  // The first input in the form is the first line's unit price.
+  await sellerPage.locator('[data-testid="rfq-quote-form"] input').first().fill('1.100');
+  await sellerPage.getByTestId('rfq-quote-submit').click();
+  await sellerPage.getByTestId('rfq-my-quote').waitFor({ timeout: 20000 });
+  check('a priced offer then submits and confirms', (await sellerPage.getByTestId('rfq-my-quote').innerText()).includes('مقدَّم'));
+
+  // Phone layout: the same screens at 390×844, nothing spilling sideways.
+  const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'ar-TN' });
+  const phonePage = await phoneCtx.newPage();
+  const phoneErrors = [];
+  phonePage.on('pageerror', (e) => phoneErrors.push(String(e)));
+  await login(phonePage, company.email, company.password);
+  await phonePage.goto(`${WEB}/dashboard/rfqs/${awardRfqId}`);
+  await phonePage.getByTestId('rfq-awarded').waitFor({ timeout: 20000 });
+  check('phone: awarded banner visible', await phonePage.getByTestId('rfq-awarded').isVisible());
+  const phoneOverflow = await phonePage.evaluate(() => document.body.scrollWidth - window.innerWidth);
+  check('phone: request detail does not overflow horizontally', phoneOverflow <= 1, `${phoneOverflow}px`);
+  await phonePage.goto(`${WEB}/dashboard/rfqs/${uxRfqId}`);
+  await phonePage.getByTestId(`rfq-accept-${uxQuoteId}`).click();
+  await phonePage.getByTestId('rfq-accept-confirm').waitFor({ timeout: 20000 });
+  check('phone: confirmation is reachable and readable', await phonePage.getByTestId('rfq-accept-confirm').isVisible());
+  const phoneOverflowConfirm = await phonePage.evaluate(() => document.body.scrollWidth - window.innerWidth);
+  check('phone: confirmation does not overflow', phoneOverflowConfirm <= 1, `${phoneOverflowConfirm}px`);
+  // A first visit shows the cookie banner, which is fixed to the bottom edge:
+  // the confirmation's primary action must not end up underneath it.
+  await phonePage.evaluate(() => {
+    const main = document.querySelector('main');
+    if (main) main.scrollTop = main.scrollHeight;
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  await phonePage.waitForTimeout(200);
+  const bannerBox = await phonePage.getByTestId('cookie-consent-banner').boundingBox();
+  const acceptBox = await phonePage.locator('[data-testid="rfq-accept-confirm"] button').first().boundingBox();
+  check('phone: the cookie banner is shown on a first visit', Boolean(bannerBox));
+  check(
+    'phone: the cookie banner does not cover the accept button',
+    Boolean(acceptBox) && (!bannerBox || acceptBox.y + acceptBox.height <= bannerBox.y + 1),
+    `button bottom ${acceptBox ? Math.round(acceptBox.y + acceptBox.height) : '?'} vs banner top ${bannerBox ? Math.round(bannerBox.y) : '?'}`,
+  );
+  await phonePage.screenshot({ path: '/tmp/rfq-phone-confirm.png', fullPage: true });
+
+  const phoneSellerCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'ar-TN' });
+  const phoneSeller = await phoneSellerCtx.newPage();
+  phoneSeller.on('pageerror', (e) => phoneErrors.push(String(e)));
+  await login(phoneSeller, sellerB.email, sellerB.password);
+  await phoneSeller.goto(`${WEB}/dashboard/rfq-inbox`);
+  await phoneSeller.getByTestId('rfq-inbox').waitFor({ timeout: 20000 });
+  const phoneSellerOverflow = await phoneSeller.evaluate(() => document.body.scrollWidth - window.innerWidth);
+  check('phone: seller inbox does not overflow', phoneSellerOverflow <= 1, `${phoneSellerOverflow}px`);
+  await phoneSeller.screenshot({ path: '/tmp/rfq-phone-inbox.png', fullPage: true });
+  check('phone: no uncaught page errors', phoneErrors.length === 0, phoneErrors.join(' | '));
+  await phoneCtx.close();
+  await phoneSellerCtx.close();
+
   check('no uncaught page errors (buyer)', buyerErrors.length === 0, buyerErrors.join(' | '));
   check('no uncaught page errors (seller)', sellerErrors.length === 0, sellerErrors.join(' | '));
 

@@ -14,6 +14,8 @@ export interface RfqItemView {
   id: string;
   productId: string | null;
   freeTextName: string | null;
+  /** Catalogue name, when the line references a product; null for free text. */
+  productName: string | null;
   quantity: string;
   unit: string | null;
   targetPrice: string | null;
@@ -218,6 +220,7 @@ export function toItemView(row: {
   id: string;
   productId: string | null;
   freeTextName: string | null;
+  productName?: string | null;
   quantity: string;
   unit: string | null;
   targetPrice: string | null;
@@ -227,6 +230,7 @@ export function toItemView(row: {
     id: row.id,
     productId: row.productId,
     freeTextName: row.freeTextName,
+    productName: row.productName ?? null,
     quantity: row.quantity,
     unit: row.unit,
     targetPrice: row.targetPrice,
