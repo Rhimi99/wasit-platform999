@@ -229,14 +229,55 @@ const envSchema = z.object({
   RATE_LIMIT_API_MAX: z.coerce.number().int().positive().default(300),
   RATE_LIMIT_API_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   /**
-   * AI endpoints (`/api/ai/*`) are the most expensive per call. A tighter
-   * per-user limit bounds one account, and a per-IP backstop bounds an attacker
-   * rotating accounts from one host. Auth is still required — these limits are
-   * an addition to RBAC, never a replacement.
+   * AI endpoints (`/api/ai/*`, `/api/admin/ai/*`) are the only surfaces where a
+   * request can cost money, so each is assigned a class in
+   * `lib/rate-limit/ai-policy.ts` with its own ceiling. The knobs below are the
+   * per-class defaults; `RATE_LIMIT_AI_MAX`, when set, overrides every class
+   * (the pre-AI-RATE-LIMIT-01 behaviour, kept for operators and existing tests).
+   *
+   * A per-user limit bounds one account; the per-IP backstop below bounds an
+   * attacker rotating accounts from one host. Auth and RBAC still run — these
+   * limits are an addition, never a replacement.
    */
-  RATE_LIMIT_AI_MAX: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_AI_MAX: z.coerce.number().int().positive().optional(),
   RATE_LIMIT_AI_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_AI_IP_MAX: z.coerce.number().int().positive().default(300),
+  /** Read-only AI surfaces (status, listings, activity). */
+  AI_RATE_LIMIT_READ_MAX: z.coerce.number().int().positive().default(120),
+  /** Vendor-backed feature calls — each may reach a paid provider. */
+  AI_RATE_LIMIT_FEATURE_MAX: z.coerce.number().int().positive().default(30),
+  /** Agent task creation and approval decisions. */
+  AI_RATE_LIMIT_AGENT_MAX: z.coerce.number().int().positive().default(15),
+  /** Local agent-memory writes (DB only). */
+  AI_RATE_LIMIT_MEMORY_MAX: z.coerce.number().int().positive().default(60),
+  /** Admin AI dashboards (reads). */
+  AI_RATE_LIMIT_ADMIN_READ_MAX: z.coerce.number().int().positive().default(120),
+  /** Admin AI writes: budgets, models, spend limits, kill switch, runs. */
+  AI_RATE_LIMIT_ADMIN_CONTROL_MAX: z.coerce.number().int().positive().default(30),
+  /** Provider configuration and live probes — the closest thing to a spend. */
+  AI_RATE_LIMIT_PROVIDER_MAX: z.coerce.number().int().positive().default(10),
+  /**
+   * Bounded staff allowance on admin classes. A multiplier, never an exemption:
+   * a compromised admin account is still rate-limited.
+   */
+  AI_RATE_LIMIT_ADMIN_MULTIPLIER: z.coerce.number().int().positive().default(3),
+  /**
+   * Require a shared counter store for paid AI classes. Unset means "on in
+   * production": with the in-process store each instance allows the full
+   * ceiling, so N instances grant N × max.
+   */
+  AI_RATE_LIMIT_REQUIRE_DURABLE: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
+  /**
+   * Explicit override for single-instance deployments that cannot run the
+   * Postgres store. Documented escape hatch, logged by the limiter.
+   */
+  AI_RATE_LIMIT_ALLOW_MEMORY_STORE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   /**
    * Search (`/api/search`) is public and relatively costly (multi-entity
    * queries), so it is limited per trusted client IP.

@@ -6,6 +6,14 @@ import { securityHeaders } from './middleware/security-headers.js';
 import { csrfProtection } from './middleware/csrf.js';
 import { requestBodyLimit } from './middleware/body-limit.js';
 import { rateLimit } from './middleware/rate-limit.js';
+import {
+  AI_IP_BACKSTOP_PATTERNS,
+  AI_LIMIT_CLASSES,
+  AI_LIMIT_RULES,
+  aiLimitWindowSeconds,
+  aiStaffMultiplier,
+  requireDurableAiStore,
+} from './lib/rate-limit/ai-policy.js';
 import { requireStaffMfa } from './middleware/mfa.js';
 import { requireLegalAcceptance } from './modules/legal/enforcement.js';
 import { observabilityMiddleware } from './middleware/observability.js';
@@ -113,26 +121,39 @@ export function createApp(): Hono {
       exemptPaths: ['/api/auth', '/api/health'],
     }),
   );
-  // AI: a tight per-user limit plus a per-IP backstop (an attacker rotating
-  // accounts from one host still trips the host limit).
-  app.use(
-    '/api/ai/*',
-    rateLimit({
-      windowSeconds: env.RATE_LIMIT_AI_WINDOW_SECONDS,
-      max: () => env.RATE_LIMIT_AI_MAX,
-      keyPrefix: 'ai-user',
-      subject: 'user',
-    }),
-  );
-  app.use(
-    '/api/ai/*',
-    rateLimit({
-      windowSeconds: env.RATE_LIMIT_AI_WINDOW_SECONDS,
-      max: () => env.RATE_LIMIT_AI_IP_MAX,
-      keyPrefix: 'ai-ip',
-      subject: 'ip',
-    }),
-  );
+  // AI-RATE-LIMIT-01: the AI surfaces are the only ones where a request can
+  // spend money, so each route is counted in its own class (money paths tight,
+  // reads roomy) instead of one flat ceiling. The table lives in
+  // `lib/rate-limit/ai-policy.ts`; a per-IP backstop on both AI surfaces bounds
+  // an attacker rotating accounts from one host.
+  for (const rule of AI_LIMIT_RULES) {
+    const cls = AI_LIMIT_CLASSES[rule.id];
+    app.use(
+      rule.pattern,
+      rateLimit({
+        windowSeconds: aiLimitWindowSeconds(),
+        max: cls.max,
+        keyPrefix: rule.id,
+        subject: 'user',
+        methods: rule.methods,
+        exemptPaths: rule.exemptPaths,
+        onStoreError: cls.onStoreError,
+        staffMultiplier: cls.staffMultiplier ? aiStaffMultiplier : undefined,
+        requireDurableStore: cls.paid ? requireDurableAiStore : false,
+      }),
+    );
+  }
+  for (const pattern of AI_IP_BACKSTOP_PATTERNS) {
+    app.use(
+      pattern,
+      rateLimit({
+        windowSeconds: aiLimitWindowSeconds(),
+        max: () => env.RATE_LIMIT_AI_IP_MAX,
+        keyPrefix: 'ai-ip',
+        subject: 'ip',
+      }),
+    );
+  }
   // Search is public and relatively costly → limit per trusted client IP.
   app.use(
     '/api/search/*',

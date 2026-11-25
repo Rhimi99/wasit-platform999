@@ -309,6 +309,7 @@ function init(): void {
   );
   metrics.counter('wasit_http_errors_total', 'HTTP 5xx responses', ['route', 'status']);
   metrics.counter('wasit_rate_limit_rejections_total', 'Requests rejected by the rate limiter', ['prefix']);
+  metrics.counter('wasit_rate_limit_store_errors_total', 'Rate-limit counter store failures', ['prefix', 'mode']);
   metrics.counter('wasit_cache_lookups_total', 'Read-cache lookups', ['result']);
   metrics.counter('wasit_cache_invalidations_total', 'Read-cache entries invalidated by a write');
   metrics.gauge('wasit_cache_entries', 'Live read-cache entries');

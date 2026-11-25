@@ -2,6 +2,18 @@
 
 ذاكرة الوكيل لحالة المشروع وإرشادات البناء.
 
+## AI-RATE-LIMIT-01 — حدود معدل مركزية للـAI (2026-11-25، مكتملة)
+
+- **السياسة كلها في ملف واحد**: `src/lib/rate-limit/ai-policy.ts` — جدول يربط كل مسار بفئة (`ai.read` 120، `ai.feature` 30، `ai.agent` 15، `ai.memory` 60، `ai.admin.read` 120، `ai.admin.control` 30، `ai.provider` 10، نافذة 60ث) + backstop لكل IP. `app.ts` يركّبها بحلقة واحدة؛ **لا تكتب `rateLimit()` يدويًا في أي راوتر AI** — أضف قاعدة في الجدول.
+- **اختبار التغطية** في `tests/ai-rate-limit-01.test.ts` يقرأ `app.routes` ويفشل إذا شحن أي مسار غير-GET تحت `/api/ai` أو`/api/admin/ai` بلا فئة.
+- **Fail-closed** للفئات المدفوعة عند تعطل المخزن أو عند مخزن محلي في production (`AI_RATE_LIMIT_REQUIRE_DURABLE`)؛ **fail-open** للقراءات المحلية فقط.
+- **الهوية**: `user:<id>` من الجلسة أو `ip:<socket>` من `resolveClientIp` — لا header يغيّر الدلو، ولا API يعدّل الحدود (env فقط).
+- **مضاعف الإدارة** `×3` على فئتي الإدارة فقط، أبدًا على `ai.feature`/`ai.agent`/`ai.provider`.
+- **`RATE_LIMIT_AI_MAX` صار اختياريًا**: عند ضبطه يعلو على كل الفئات (تستخدمه `sec0114` و`afc09`). لا تفترض أنه موجود — استخدم `env.RATE_LIMIT_AI_MAX ?? env.AI_RATE_LIMIT_*_MAX`.
+- **فخ اختبارات**: أي suite تُصدر أكثر من 10 عمليات على `/api/admin/ai/providers/*` لمستخدم واحد في الدقيقة سترى 429 — ارفع `RATE_LIMIT_AI_MAX` في `beforeEach` (كما في `afc09`).
+- **البيئة**: الحاوية الجديدة تفقد PostgreSQL. أعِد بناء عنقود اختبار على المنفذ 5434 (`/workspace/pgdata-rl01`، دور `wasit_test_runner`، كلمة المرور في `/workspace/secrets/wasit-test-db.env`) ثم `TEST_DATABASE_URL=... npx vitest run`.
+- التفاصيل: `docs/AI-RATE-LIMIT-01.md` + AD-063.
+
 ## AI-SPEND-GUARD-01 — لا مزوّد مدفوع بلا سقف إنفاق (2026-11-25، مكتملة)
 
 - **القاعدة**: مزوّد `kind: 'vendor'` لا يُفعَّل ولا يُخزَّن له مفتاح ولا يُنادى إلا إذا وُجد سقف `GLOBAL` **يومي** وسقف `GLOBAL` **شهري** فعّالان بقيمة موجبة في بيئة التشغيل نفسها. الرفض `409 SPEND_GUARD_REQUIRED` ويسبق أي كتابة أو نداء (fail-closed: تعذّر قراءة `ai_spend_limits` = لا سقف).

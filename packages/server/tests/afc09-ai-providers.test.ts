@@ -59,6 +59,10 @@ const ENV_KEYS = [
   'AI_PROVIDER_ALLOW_LIVE_TEST',
   'AI_PROVIDER_ALLOWED_HOSTS',
   'AI_CONFIG_ENVIRONMENT',
+  // AI-RATE-LIMIT-01: this suite exercises provider management in bulk (store,
+  // remove, probe, re-configure) for one admin, which is far above the per-user
+  // provider ceiling. The documented master override lifts it for the suite.
+  'RATE_LIMIT_AI_MAX',
 ] as const;
 type EnvKey = (typeof ENV_KEYS)[number];
 let savedEnv: Record<string, unknown>;
@@ -98,6 +102,10 @@ async function ensureGuardFixture() {
 }
 
 beforeEach(ensureGuardFixture);
+
+beforeEach(() => {
+  (env as Record<string, unknown>).RATE_LIMIT_AI_MAX = 1000;
+});
 
 afterEach(() => {
   for (const k of ENV_KEYS) (env as Record<string, unknown>)[k] = savedEnv[k];

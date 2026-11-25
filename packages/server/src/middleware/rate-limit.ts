@@ -2,6 +2,7 @@ import type { Context, Next } from 'hono';
 import { ApiError } from '@wasit/shared';
 import { getDb, getContext } from '../lib/request-context';
 import { resolveRateLimitStore, setRateLimitStore, peekRateLimitStore } from '../lib/rate-limit/resolve';
+import type { StoreErrorMode } from '../lib/rate-limit/ai-policy';
 import { resolveClientIp, UNKNOWN_CLIENT_KEY } from '../lib/net/client-ip';
 import { metrics } from '../lib/observability/metrics';
 import { logger } from '../lib/observability/logger';
@@ -43,6 +44,12 @@ function limitSubject(c: Context, mode: LimitSubject = 'auto'): string {
   return `ip:${ip ?? UNKNOWN_CLIENT_KEY}`;
 }
 
+/** Platform staff, whose admin limits are multiplied (never exempted). */
+function isPlatformStaff(c: Context): boolean {
+  const roles = getContext(c)?.user?.roles ?? [];
+  return roles.includes('ADMIN') || roles.includes('SUPER_ADMIN');
+}
+
 // Limits are persisted (Postgres) or kept in-process (memory); see
 // `lib/rate-limit/resolve.ts`. The window/limit semantics live here.
 export function rateLimit(opts: {
@@ -54,9 +61,29 @@ export function rateLimit(opts: {
   subject?: LimitSubject;
   /** Paths (prefix or exact) exempt from this limit. */
   exemptPaths?: readonly string[];
+  /** Methods this limit applies to; anything else passes straight through. */
+  methods?: readonly string[];
+  /**
+   * What to do when the counter store fails. `closed` (default) refuses the
+   * request with 503 — an outage must not silently disable a limit. `open` lets
+   * the request through, which is only acceptable for surfaces that cost
+   * nothing (a DB outage breaks them anyway).
+   */
+  onStoreError?: StoreErrorMode;
+  /** Multiplier applied for platform staff (ADMIN/SUPER_ADMIN). Never unlimited. */
+  staffMultiplier?: number | (() => number);
+  /**
+   * Refuse when the active store is in-process. On N instances an in-memory
+   * counter grants N × max, so a money path cannot rely on it.
+   */
+  requireDurableStore?: boolean | (() => boolean);
 }) {
+  const onStoreError: StoreErrorMode = opts.onStoreError ?? 'closed';
   return async (c: Context, next: Next): Promise<Response | void> => {
     if (opts.exemptPaths?.some((base) => c.req.path === base || c.req.path.startsWith(`${base}/`))) {
+      return next();
+    }
+    if (opts.methods && !opts.methods.includes(c.req.method.toUpperCase())) {
       return next();
     }
 
@@ -70,8 +97,29 @@ export function rateLimit(opts: {
     const subject = opts.subject ?? 'auto';
     if (subject === 'user') await loadAuthUser(c);
 
-    const max = typeof opts.max === 'function' ? opts.max() : opts.max;
+    const baseMax = typeof opts.max === 'function' ? opts.max() : opts.max;
+    const multiplier =
+      typeof opts.staffMultiplier === 'function' ? opts.staffMultiplier() : opts.staffMultiplier;
+    const max =
+      multiplier && multiplier > 1 && isPlatformStaff(c) ? Math.ceil(baseMax * multiplier) : baseMax;
     const store = resolveRateLimitStore(getDb(c));
+
+    const durableRequired =
+      typeof opts.requireDurableStore === 'function'
+        ? opts.requireDurableStore()
+        : opts.requireDurableStore === true;
+    if (durableRequired && store.id === 'memory') {
+      logger.error('rate-limit store is not shared; refusing a paid route', {
+        prefix: opts.keyPrefix,
+        store: store.id,
+      });
+      metrics.incCounter('wasit_rate_limit_store_errors_total', {
+        prefix: opts.keyPrefix,
+        mode: 'durable-required',
+      });
+      throw ApiError.serviceUnavailable('Rate limiting is not available for this route');
+    }
+
     const key = `${opts.keyPrefix}:${limitSubject(c, subject)}`;
 
     let count: number;
@@ -84,8 +132,14 @@ export function rateLimit(opts: {
       // request was allowed. No internal detail is surfaced.
       logger.error('rate-limit store unavailable', {
         prefix: opts.keyPrefix,
+        mode: onStoreError,
         error: err instanceof Error ? err.message : String(err),
       });
+      metrics.incCounter('wasit_rate_limit_store_errors_total', {
+        prefix: opts.keyPrefix,
+        mode: onStoreError,
+      });
+      if (onStoreError === 'open') return next();
       throw ApiError.serviceUnavailable('Rate limiting temporarily unavailable');
     }
 
