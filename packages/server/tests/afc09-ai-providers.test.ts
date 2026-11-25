@@ -7,6 +7,7 @@ import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { aiProviders } from '../src/db/schema/ai_providers.js';
+import { aiSpendLimits } from '../src/db/schema/ai-spend.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { env } from '../src/lib/env.js';
 import { resolveAiRoute } from '../src/lib/ai/routing.js';
@@ -65,6 +66,38 @@ let savedEnv: Record<string, unknown>;
 beforeEach(() => {
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, env[k as keyof typeof env]]));
 });
+
+/**
+ * AI-SPEND-GUARD-01: enabling or keying a vendor requires an active GLOBAL
+ * daily+monthly cap. Provider management is the subject here, so the ceiling is
+ * a fixture. Inserted idempotently and left in place — another suite shares the
+ * `test` environment and deleting it here would race that suite.
+ */
+const GUARD_FIXTURE_ENVS = [configEnvironment(), 'production'] as const;
+
+async function ensureGuardFixture() {
+  for (const environment of GUARD_FIXTURE_ENVS) {
+    for (const [period, maxCost] of [['DAILY', '1000'], ['MONTHLY', '1000']] as const) {
+      await db
+        .insert(aiSpendLimits)
+        .values({
+          id: randomUUID(),
+          environment,
+          scope: 'GLOBAL',
+          targetKey: '',
+          period,
+          maxCost,
+          maxRequests: null,
+          warnRatio: '0.8000',
+          currencyCode: 'USD',
+          isActive: true,
+        })
+        .onConflictDoNothing();
+    }
+  }
+}
+
+beforeEach(ensureGuardFixture);
 
 afterEach(() => {
   for (const k of ENV_KEYS) (env as Record<string, unknown>)[k] = savedEnv[k];

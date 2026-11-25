@@ -31,7 +31,7 @@ import type {
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
   AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
-  AiSpendOverview, AiSpendLimitList, AiSpendLimitRow,
+  AiSpendOverview, AiSpendLimitList, AiSpendLimitRow, AiSpendGuard,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -1422,6 +1422,21 @@ export const api = {
     isActive?: boolean;
   }) {
     return request<AiSpendLimitRow>('/api/admin/ai/spend/limits', { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async adminAiSpendGuard(environment?: string) {
+    const suffix = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+    return request<AiSpendGuard>(`/api/admin/ai/spend/guard${suffix}`);
+  },
+  async adminSetAiSpendGuard(body: {
+    environment?: string;
+    dailyMaxCost: string;
+    monthlyMaxCost: string;
+    currencyCode?: string;
+  }) {
+    return request<AiSpendGuard>('/api/admin/ai/spend/guard', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
   },
   async adminDeleteAiSpendLimit(id: string) {
     return request<{ deleted: boolean }>(`/api/admin/ai/spend/limits/${encodeURIComponent(id)}`, { method: 'DELETE' });

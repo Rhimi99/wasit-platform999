@@ -49,6 +49,37 @@ let merchantId = '';
 
 let savedEnvironment: typeof env.AI_CONFIG_ENVIRONMENT;
 
+/**
+ * AI-SPEND-GUARD-01: a vendor call needs an active GLOBAL daily+monthly cap.
+ * These cases are about the caps *below* that guard, so a generous pair is a
+ * fixture, not the subject. It is created idempotently and left in place: two
+ * suites share the `test` environment and deleting it here would race them.
+ * A case that needs an unguarded environment uses one of its own.
+ */
+const GUARD_FIXTURE_ENVS = ['test', LIMIT_ENV] as const;
+
+async function ensureGuardFixture() {
+  for (const environment of GUARD_FIXTURE_ENVS) {
+    for (const [period, maxCost] of [['DAILY', '1000'], ['MONTHLY', '1000']] as const) {
+      await db
+        .insert(aiSpendLimits)
+        .values({
+          id: randomUUID(),
+          environment,
+          scope: 'GLOBAL',
+          targetKey: '',
+          period,
+          maxCost,
+          maxRequests: null,
+          warnRatio: '0.8000',
+          currencyCode: 'USD',
+          isActive: true,
+        })
+        .onConflictDoNothing();
+    }
+  }
+}
+
 beforeEach(async () => {
   savedEnvironment = env.AI_CONFIG_ENVIRONMENT;
   env.AI_CONFIG_ENVIRONMENT = 'test';
@@ -58,6 +89,7 @@ beforeEach(async () => {
   await db.delete(aiSpendAlerts).where(eq(aiSpendAlerts.environment, LIMIT_ENV));
   await db.delete(aiSpendCounters).where(eq(aiSpendCounters.environment, LIMIT_ENV));
   await db.delete(aiSpendLimits).where(eq(aiSpendLimits.environment, LIMIT_ENV));
+  await ensureGuardFixture();
 });
 
 afterEach(() => {
@@ -302,6 +334,8 @@ describe('AI-05 usage accounting', () => {
   });
 
   it('separates the free local engine from paid calls', async () => {
+    // Start from an empty counter set so the assertion below is about this call.
+    await db.delete(aiSpendCounters).where(eq(aiSpendCounters.environment, 'test'));
     const local: AIProvider = {
       id: 'local-heuristic',
       isAvailable: () => true,
@@ -471,21 +505,25 @@ describe('AI-05 price integrity', () => {
 });
 
 describe('AI-05 spend limits', () => {
-  it('creates no cap by default: an unconfigured environment spends freely', async () => {
-    env.AI_CONFIG_ENVIRONMENT = 'test';
-    const limits = await listSpendLimits(db, 'test');
-    expect(limits).toHaveLength(0);
+  it('refuses a paid call in an environment with no spend guard, and calls no vendor', async () => {
+    // AI-SPEND-GUARD-01: an environment without an active GLOBAL daily+monthly
+    // cap must not spend. The refusal happens before the provider is touched.
+    const environment = 'afc10-no-guard' as typeof env.AI_CONFIG_ENVIRONMENT & string;
+    env.AI_CONFIG_ENVIRONMENT = environment;
+    await db.delete(aiSpendLimits).where(eq(aiSpendLimits.environment, environment));
+
     const vendor = fakeProvider('openai');
-    const out = await runAIFeature(db, {
-      userId: customerId,
-      roles: ['CUSTOMER'],
-      requestType: 'SMART_SEARCH',
-      user: 'no cap',
-      provider: vendor.provider,
-      modelKey: 'openai-gpt-4o-mini',
-    });
-    expect(out.providerKey).toBe('openai');
-    expect(vendor.hits()).toBe(1);
+    await expect(
+      runAIFeature(db, {
+        userId: customerId,
+        roles: ['CUSTOMER'],
+        requestType: 'SMART_SEARCH',
+        user: 'no cap',
+        provider: vendor.provider,
+        modelKey: 'openai-gpt-4o-mini',
+      }),
+    ).rejects.toMatchObject({ code: 'SPEND_GUARD_REQUIRED' });
+    expect(vendor.hits()).toBe(0);
   });
 
   it('stops the second call once a provider daily cap is reached, and serves it locally', async () => {
@@ -618,7 +656,13 @@ describe('AI-05 spend limits', () => {
     const daily = await db
       .select()
       .from(aiSpendCounters)
-      .where(and(eq(aiSpendCounters.environment, LIMIT_ENV), eq(aiSpendCounters.period, 'DAILY')));
+      .where(
+        and(
+          eq(aiSpendCounters.environment, LIMIT_ENV),
+          eq(aiSpendCounters.scope, 'PROVIDER'),
+          eq(aiSpendCounters.period, 'DAILY'),
+        ),
+      );
     expect(daily.length).toBe(1);
     expect(daily[0].requests).toBe(1);
 
@@ -630,7 +674,13 @@ describe('AI-05 spend limits', () => {
     const monthly = await db
       .select()
       .from(aiSpendCounters)
-      .where(and(eq(aiSpendCounters.environment, LIMIT_ENV), eq(aiSpendCounters.period, 'MONTHLY')));
+      .where(
+        and(
+          eq(aiSpendCounters.environment, LIMIT_ENV),
+          eq(aiSpendCounters.scope, 'PROVIDER'),
+          eq(aiSpendCounters.period, 'MONTHLY'),
+        ),
+      );
     expect(monthly.length).toBe(1);
     expect(monthly[0].requests).toBe(1);
   });

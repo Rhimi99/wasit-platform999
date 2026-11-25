@@ -8,8 +8,9 @@ import { assertAiExecutionEnabled } from './kill-switch';
 import { ApiError } from '@wasit/shared';
 import type { AIFeatureResult, AIProvider } from './types';
 import { estimateTokens, LocalHeuristicProvider, VENDOR_MODEL_NAMES } from './provider';
-import { configEnvironment, primaryProvider } from './provider-config';
+import { configEnvironment, isPaidProvider, primaryProvider } from './provider-config';
 import { isFreeProvider, releaseSpend, reserveSpend, settleSpend, type SpendReservation } from './spend-limits';
+import { assertSpendGuard } from './spend-guard';
 import { logger } from '../observability/logger';
 import {
   getAgentRunBudget,
@@ -257,6 +258,12 @@ export async function runAIFeature(
   const environment = configEnvironment();
   const runCtxForAttribution = getAgentRunContext();
   const agentKey = runCtxForAttribution?.agentKey ?? null;
+
+  // AI-SPEND-GUARD-01. Missing caps are a misconfiguration, not a reached limit,
+  // so they are refused instead of silently falling back: the deployment must not
+  // look like it is running paid AI while nothing bounds the bill. Free providers
+  // never reach the table and keep working.
+  if (isPaidProvider(provider.id)) await assertSpendGuard(db, provider.id, environment);
 
   const period = 'MONTHLY';
   const estimated = estimateBudget({ system: input.system, user: input.user, maxTokens: input.maxTokens }, price);

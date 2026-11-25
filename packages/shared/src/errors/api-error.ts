@@ -42,7 +42,11 @@ export type ErrorCode =
   | 'MEMORY_REVISION_MISMATCH'
   // AI-04 — provider credential storage is unavailable (no master key outside
   // the database). Fail closed instead of storing a secret in plaintext.
-  | 'SECRET_STORAGE_DISABLED';
+  | 'SECRET_STORAGE_DISABLED'
+  // AI-SPEND-GUARD-01 — a paid provider is not callable because the deployment
+  // has no active GLOBAL daily+monthly cost cap. Distinct from a spent limit
+  // (429): this is a missing configuration, fixed by setting the caps.
+  | 'SPEND_GUARD_REQUIRED';
 
 export interface ApiErrorBody {
   error: {

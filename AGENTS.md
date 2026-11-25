@@ -2,6 +2,17 @@
 
 ذاكرة الوكيل لحالة المشروع وإرشادات البناء.
 
+## AI-SPEND-GUARD-01 — لا مزوّد مدفوع بلا سقف إنفاق (2026-11-25، مكتملة)
+
+- **القاعدة**: مزوّد `kind: 'vendor'` لا يُفعَّل ولا يُخزَّن له مفتاح ولا يُنادى إلا إذا وُجد سقف `GLOBAL` **يومي** وسقف `GLOBAL` **شهري** فعّالان بقيمة موجبة في بيئة التشغيل نفسها. الرفض `409 SPEND_GUARD_REQUIRED` ويسبق أي كتابة أو نداء (fail-closed: تعذّر قراءة `ai_spend_limits` = لا سقف).
+- **نقاط الحارس**: `lib/ai/provider-config.ts` (`updateProviderConfig` يشمل `patch.role`، `storeProviderSecret`، `testProviderConnection`) و`lib/ai/runtime.ts` (`runAIFeature` قبل الحجز) — أي مسار جديد ينداء مزوّدًا يجب أن يمرّ بـ`assertSpendGuard`.
+- **«مدفوع»** = `isPaidProvider(key)` (`kind === 'vendor'`) — لا تكتب قائمة أسماء في الحارس. `local-heuristic`/`noop` لا يُحجبان أبدًا.
+- **الإدارة**: `GET/PUT /api/admin/ai/spend/guard` (`AI_MANAGE`، تدقيق `AI_SPEND.GUARD_SET`) + بطاقة «حماية الإنفاق» أعلى `AiSpendPanel`.
+- **الاختبارات**: `tests/ai-spend-guard.test.ts` (17). `afc09`/`afc10` تُنشئ fixture سقف GLOBAL 1000/1000 في بيئتيهما (`test`, `staging`) — لا تحذفه، فهو مشترك بين ملفات متوازية.
+- **فخ**: `env.AI_CONFIG_ENVIRONMENT` مقيّد بنوع اتحاد (`development|test|staging|production`)؛ اختبار يحتاج بيئة معزولة يستخدم `'x' as typeof env.AI_CONFIG_ENVIRONMENT & string`.
+- **فخ بيئي**: 4 اختبارات فيديو (`ai-video-agent`, `agent-video-download`) تفشل على القاعدة نفسها لغياب `ffmpeg` — ليست regressions.
+- **`DECISION REQUIRED`**: منع إقلاع الإنتاج عند مزوّد مفعّل بلا سقفين؛ السماح بتخفيض السقف تحت المصروف الحالي؛ صلاحية الضبط (`AI_MANAGE` أم `SUPER_ADMIN`). التفاصيل: `docs/AI-SPEND-GUARD-01.md` + AD-062.
+
 ## B2B-01 Phase 5 — التكامل وتجربة الاستخدام (2026-11-25، مكتملة)
 
 - **الرحلة الكاملة**: `tests/b2b01e-journey.test.ts` **11/11** — COMPANY من مسودّة إلى طلب عبر HTTP/Postgres حقيقيين، مع عزل البائع، منع غير المشارك (404)، منع دعوة بلا موافقة، عدم إحياء الملغى/المنتهي، تزامن (طلب واحد)، رفض بند النص الحر، `ADMIN`/`SUPPORT` 403، وAI لا يرسّي.

@@ -1025,6 +1025,35 @@ export interface AiSpendOverview {
   alerts: AiSpendAlertRow[];
 }
 
+export interface AiSpendGuardCap {
+  limitId: string;
+  maxCost: string;
+  currencyCode: string;
+  warnRatio: string;
+  updatedAt: string;
+}
+
+export interface AiSpendGuardProvider {
+  key: string;
+  displayName: string;
+  paid: boolean;
+  enabled: boolean;
+  isDefault: boolean;
+  isFallback: boolean;
+  keyPresent: boolean;
+  keySource: string;
+}
+
+export interface AiSpendGuard {
+  environment: string;
+  ready: boolean;
+  unavailable: boolean;
+  missing: Array<'DAILY' | 'MONTHLY'>;
+  caps: { daily: AiSpendGuardCap | null; monthly: AiSpendGuardCap | null };
+  fix: { method: 'PUT'; path: string };
+  providers: AiSpendGuardProvider[];
+}
+
 export interface AiSpendLimitList {
   environment: string;
   limits: Omit<AiSpendLimitRow, 'spent' | 'requests' | 'state'>[];

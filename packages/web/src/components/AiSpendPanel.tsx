@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, apiCall, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { Badge, Card, EmptyState, ErrorState, Spinner } from '@/components/ui';
-import type { AiSpendLimitRow, AiSpendOverview } from '@/lib/types';
+import type { AiSpendGuard, AiSpendLimitRow, AiSpendOverview } from '@/lib/types';
 
 /**
  * AI consumption and spend control (AI-05).
@@ -37,6 +37,11 @@ export function AiSpendPanel({ environment }: { environment?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [guard, setGuard] = useState<AiSpendGuard | null>(null);
+  const [guardBusy, setGuardBusy] = useState(false);
+  const [guardError, setGuardError] = useState<string | null>(null);
+  const [guardNotice, setGuardNotice] = useState<string | null>(null);
+  const [guardDraft, setGuardDraft] = useState({ dailyMaxCost: '', monthlyMaxCost: '', currencyCode: 'USD' });
   const [draft, setDraft] = useState({
     scope: 'PROVIDER' as 'GLOBAL' | 'PROVIDER' | 'AGENT',
     targetKey: '',
@@ -52,6 +57,15 @@ export function AiSpendPanel({ environment }: { environment?: string }) {
     const res = await apiCall(() => api.adminAiSpend({ days, environment }));
     if (res.data) setData(res.data);
     setError(res.error ?? null);
+    const guardRes = await apiCall(() => api.adminAiSpendGuard(environment));
+    if (guardRes.data) {
+      setGuard(guardRes.data);
+      setGuardDraft((d) => ({
+        dailyMaxCost: d.dailyMaxCost || (guardRes.data?.caps.daily?.maxCost ?? ''),
+        monthlyMaxCost: d.monthlyMaxCost || (guardRes.data?.caps.monthly?.maxCost ?? ''),
+        currencyCode: guardRes.data?.caps.daily?.currencyCode ?? d.currencyCode,
+      }));
+    }
     setLoading(false);
   };
 
@@ -83,6 +97,27 @@ export function AiSpendPanel({ environment }: { environment?: string }) {
     setNotice(t('adminAi.spend.limitSaved'));
     setDraft((d) => ({ ...d, targetKey: '', maxCost: '', maxRequests: '' }));
     await load();
+  }
+
+  async function saveGuard() {
+    setGuardBusy(true);
+    setGuardError(null);
+    setGuardNotice(null);
+    const res = await apiCall(() =>
+      api.adminSetAiSpendGuard({
+        environment: environment ?? data?.environment,
+        dailyMaxCost: guardDraft.dailyMaxCost.trim(),
+        monthlyMaxCost: guardDraft.monthlyMaxCost.trim(),
+        currencyCode: guardDraft.currencyCode.trim().toUpperCase(),
+      }),
+    );
+    setGuardBusy(false);
+    if (res.error || !res.data) {
+      setGuardError(res.error ?? t('adminAi.spend.guard.saveFailed'));
+      return;
+    }
+    setGuard(res.data);
+    setGuardNotice(t('adminAi.spend.guard.saved'));
   }
 
   async function removeLimit(row: AiSpendLimitRow) {
@@ -124,6 +159,89 @@ export function AiSpendPanel({ environment }: { environment?: string }) {
 
       {notice && <p className="text-xs text-emerald-700" role="status">{notice}</p>}
       {error && <p className="text-xs text-red-700">{error}</p>}
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold">{t('adminAi.spend.guard.title')}</h3>
+            <p className="max-w-3xl text-xs text-slate-500">{t('adminAi.spend.guard.hint')}</p>
+          </div>
+          <Badge color={guard?.ready ? 'green' : 'red'} testId="ai-spend-guard-state">
+            {guard?.ready ? t('adminAi.spend.guard.ready') : t('adminAi.spend.guard.notReady')}
+          </Badge>
+        </div>
+
+        {guard && (
+          <>
+            <p className="mt-2 text-xs text-slate-600" data-testid="ai-spend-guard-detail">
+              {guard.ready
+                ? `${t('adminAi.spend.guard.daily')}: ${money(guard.caps.daily?.maxCost ?? '0')} ${guard.caps.daily?.currencyCode ?? ''} · ${t('adminAi.spend.guard.monthly')}: ${money(guard.caps.monthly?.maxCost ?? '0')} ${guard.caps.monthly?.currencyCode ?? ''}`
+                : `${t('adminAi.spend.guard.missing')} ${guard.missing
+                    .map((p) => t(`adminAi.spend.guard.period.${p}`))
+                    .join(' + ')}`}
+            </p>
+
+            <ul className="mt-2 space-y-1 text-xs">
+              {guard.providers
+                .filter((p) => p.paid)
+                .map((p) => (
+                  <li key={p.key} className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono">{p.key}</span>
+                    <Badge color={p.enabled ? 'green' : 'slate'}>
+                      {p.enabled ? t('adminAi.spend.guard.providerEnabled') : t('adminAi.spend.guard.providerDisabled')}
+                    </Badge>
+                    {p.isDefault && <Badge color="amber">{t('adminAi.spend.guard.providerDefault')}</Badge>}
+                    <span className="text-slate-500">
+                      {t('adminAi.spend.guard.key')}: {p.keySource}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-4">
+              <input
+                className="input-base"
+                inputMode="decimal"
+                placeholder={t('adminAi.spend.guard.daily')}
+                value={guardDraft.dailyMaxCost}
+                onChange={(e) => setGuardDraft((d) => ({ ...d, dailyMaxCost: e.target.value }))}
+                data-testid="ai-spend-guard-daily"
+              />
+              <input
+                className="input-base"
+                inputMode="decimal"
+                placeholder={t('adminAi.spend.guard.monthly')}
+                value={guardDraft.monthlyMaxCost}
+                onChange={(e) => setGuardDraft((d) => ({ ...d, monthlyMaxCost: e.target.value }))}
+                data-testid="ai-spend-guard-monthly"
+              />
+              <input
+                className="input-base"
+                maxLength={3}
+                placeholder="USD"
+                value={guardDraft.currencyCode}
+                onChange={(e) => setGuardDraft((d) => ({ ...d, currencyCode: e.target.value.toUpperCase() }))}
+                aria-label={t('adminAi.spend.guard.currency')}
+              />
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={guardBusy || !guardDraft.dailyMaxCost.trim() || !guardDraft.monthlyMaxCost.trim()}
+                onClick={() => void saveGuard()}
+                data-testid="ai-spend-guard-save"
+              >
+                {t('adminAi.spend.guard.save')}
+              </button>
+            </div>
+            {guardError && <p className="mt-2 text-xs text-red-700">{guardError}</p>}
+            {guardNotice && (
+              <p className="mt-2 text-xs text-emerald-700" role="status">
+                {guardNotice}
+              </p>
+            )}
+          </>
+        )}
+      </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
