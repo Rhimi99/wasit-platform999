@@ -1,10 +1,11 @@
 # PR-10 — تفضيلات الإشعارات (Notification Preferences)
 
-**الحالة:** `IN_PROGRESS` — السطح (Backend + الواجهة) مُنفَّذ ومُتحقَّق باختبارات تكامل حقيقية؛
-**اختبار E2E في المتصفح مكتوب ولم يُشغَّل بعد** (يحتاج قاعدة `wasit_dev` + تنزيل متصفحات Playwright،
-وكلاهما تغيير بيئي يحتاج موافقة صريحة). لا يُدَّعى إغلاق قبل تشغيله.
+**الحالة:** `COMPLETED` — السطح (Backend + الواجهة) مُنفَّذ ومُتحقَّق باختبارات تكامل حقيقية،
+و**E2E في متصفح حقيقي شُغِّل ونجح 9/9** على قاعدة معزولة (2026-11-25).
+**لا يُعلَن `COMPLETE_VERIFIED`**: سياسة الفئات الإلزامية ما زالت `DECISION REQUIRED` (§3.1)،
+وثلاثة عيوب اكتُشفت أثناء التحقّق وسُجّلت (§6) — اثنان منها خارج نطاق PR-10 ولم يُصلَحا.
 
-**التاريخ:** 2026-11-22 · **الفرع:** `pr-10-notification-preferences`
+**التاريخ:** 2026-11-22 (تنفيذ) · 2026-11-25 (تحقّق E2E) · **الفرع:** `pr-10-notification-preferences`
 
 ---
 
@@ -63,8 +64,15 @@
 ### 2.5 الصلاحيات
 
 لا تغيير في RBAC. المساران تحت نفس حارس الموجّه القائم
-(`requireAuth` + `MESSAGE_READ_OWN`) الذي يملكه كل دور مسجَّل، والمستخدم يقرأ ويكتب **تفضيلاته فقط**
+(`requireAuth` + `MESSAGE_READ_OWN`)، والمستخدم يقرأ ويكتب **تفضيلاته فقط**
 (`ctx.user.id`، لا معرّف من العميل).
+
+**تصحيح (2026-11-25):** العبارة السابقة «الذي يملكه كل دور مسجَّل» **غير صحيحة** وقد أُثبت ذلك بطلب حقيقي:
+`CUSTOMER`/`SUPPLIER`/`MERCHANT`/`COMPANY`/`SUPPORT`/`DISPUTE`/`ADMIN`/`SUPER_ADMIN` ⇒ **200**،
+لكن **`MARKETER` و`RISK` ⇒ 403** لأنهما لا يحملان `MESSAGE_READ_OWN` (لا يحملان أي صلاحية رسائل).
+الأثر: موظّف بهذين الدورين يرى بطاقة خطأ في `/dashboard/settings` ولا يستطيع ضبط تفضيلاته.
+هذا **سلوك قائم قبل PR-10** (نفس الحارس على `/api/notifications` كلها)، ولم يُعدَّل هنا:
+الإصلاح قرار RBAC ⇒ `GAP_REGISTER` البند `RBAC-NOTIF-01`.
 
 ## 3. ما لم يُنفَّذ — صراحةً
 
@@ -79,21 +87,62 @@
 ثم ربط `createNotification`/طبقة التسليم بـ`isEnabled`. حتى ذلك الحين: الواجهة تقول «حُفظت اختياراتك»
 ولا تدّعي تغيير التسليم (نصّ التذييل يوضح ذلك).
 
-### 3.2 E2E
+### 3.2 E2E — شُغِّل ونجح (2026-11-25)
 
-`e2e/notification-preferences.spec.ts` مكتوب (3 حالات: عرض المصفوفة، الحفظ والبقاء بعد إعادة التحميل
-مع استعادة حالة الحساب المشترك، ورفض فئة مجهولة عبر fetch داخل الصفحة بالجلسة الحقيقية).
-**لم يُشغَّل**: يحتاج `wasit_dev` (غير موجودة في هذه البيئة؛ الموجود `wasit_test` فقط على `127.0.0.1:5434`)
-ومتصفحات Playwright غير المنزّلة. إنشاء قاعدة وتشغيل seed تغيير بيئي مقيَّد بموافقة صريحة.
+`e2e/notification-preferences.spec.ts` — **9 حالات، 9/9 ناجحة** في Chromium حقيقي، بلا mock وبلا اعتراض شبكة:
+
+| # | الحالة | ما يُثبته |
+| --- | --- | --- |
+| 1 | عرض المصفوفة | 30 مفتاحاً ظاهرة، وزر الحفظ معطّل بلا تغيير |
+| 2 | الحفظ + إعادة التحميل | الاختيار يبقى بعد `reload`، ثم يُستعاد حساب العرض المشترك |
+| 3 | فئة مجهولة | `422` عبر `fetch` داخل الصفحة بالجلسة الحقيقية |
+| 4 | حساب جديد | 30 مفتاحاً **مفعّلاً** و`explicit:false` للجميع، و`mandatoryCategories` فارغة |
+| 5 | تغيير خلية واحدة | فرق المصفوفة قبل/بعد = **خلية واحدة** فقط، والـ29 الأخرى كما هي |
+| 6 | عزل مستخدمين | إسكات عند المستخدم أ لا يظهر عند المستخدم ب (واجهة + API) |
+| 7 | زائر | `GET` ⇒ 401 و`PUT` ⇒ 401 بلا جلسة |
+| 8 | أربع لغات | `ar/en/fr/zh`: عنوان البطاقة + تسمية صف مترجمة، و`dir=rtl` للعربية و`ltr` لغيرها |
+| 9 | هاتف 390×844 | 30 مفتاحاً، لا تمرير أفقي للصفحة، الوصول لعمود SMS ممكن، الحفظ يبقى بعد التحميل |
+
+**كيف شُغِّل (قاعدة معزولة، لا مساس بـ`wasit_dev` ولا بالديمو):**
+
+```
+# قاعدة E2E مؤقتة على عنقود PostgreSQL منفصل
+DATABASE_URL=postgresql://…@127.0.0.1:5434/wasit_pr10_e2e
+  npx drizzle-kit migrate  &&  npx tsx src/scripts/seed.ts
+DATABASE_URL=<نفسه> E2E_API_URL=http://localhost:3100 E2E_WEB_URL=http://localhost:5199   npx playwright test e2e/notification-preferences.spec.ts
+→ 9 passed (11.1s) · exit 0
+```
+
+`globalSetup` زرع حسابات الديمو عبر `db:seed:demo` **داخل القاعدة المعزولة** (نفس منطق الإنتاج، لا mocks).
+الحسابات الجديدة التي تُنشئها الحالات 4–6 و9 مسماة `pr10-*` وتبقى في قاعدة الاختبار المؤقتة فقط.
+
+**عيوب اكتُشفت في أول تشغيل فعلي للاختبار (لم يكن قد شُغِّل قبل ذلك) وأُصلحت هنا:**
+
+1. محدّد المفاتيح كان `[data-testid^="notif-pref-"] input[type="checkbox"]` — وهو يبحث عن `input`
+   **داخل** عنصر يحمل الـtestid، بينما الـtestid على `<input>` نفسه ⇒ كان يعيد 0 بدل 30.
+2. `request.newContext()` **يرث** `storageState` من `test.use`، فكان «الزائر» في الحالة 7 يُرسل كوكي
+   العميل ويحصل على 200. صُحِّح بتمرير `storageState: { cookies: [], origins: [] }` صراحةً.
+3. تمرير أفقي بـ`scrollLeft` لا يحترم اتجاه RTL، فكان يقيس العمود الأخير خارج الشاشة؛ استُبدل بـ
+   `scrollIntoViewIfNeeded()` الذي يتبع اتجاه الكتابة.
 
 ## 4. الاختبارات المُشغَّلة
 
 ```
 packages/server: npx vitest run tests/pr10-notification-preferences.test.ts
-→ 11/11 passed
+→ 12/12 passed            (11 سابقاً + حالة التزامن الجديدة)
 
-packages/server: npx vitest run   (الحزمة الكاملة على فرع هذه المهمة)
+packages/server: npx vitest run tests/pr10-notification-preferences.test.ts \
+    tests/messaging.test.ts tests/disputes.test.ts tests/verification-trust.test.ts \
+    tests/inventory.test.ts tests/ai-sup02-escalations.test.ts
+→ 6 ملفات · 81/81 ناجحة · exit 0      (لا تراجع في الوحدات التي تُصدر إشعارات)
+
+packages/server: npx vitest run   (الحزمة الكاملة على فرع هذه المهمة — 2026-11-22)
 → 158 ملفاً · 2053/2053 ناجحة · exit 0
+
+e2e: npx playwright test e2e/notification-preferences.spec.ts
+→ 9/9 ناجحة · exit 0
+
+Typecheck: server 0 أخطاء · web 0 أخطاء · npm run build -w @wasit/web ناجح (2026-11-25)
 ```
 
 | # | الحالة |
@@ -109,6 +158,7 @@ packages/server: npx vitest run   (الحزمة الكاملة على فرع ه�
 | 9 | قناة مجهولة ⇒ 422 |
 | 10 | قائمة فارغة ⇒ 422 وزوج مكرّر ⇒ 422 |
 | 11 | عزل المستخدمين: تفضيل مستخدم لا يظهر لمستخدم آخر |
+| 12 | **تزامن:** 4 طلبات `PUT` متزامنة لنفس الزوج ⇒ صف واحد فقط، والقيمة المخزَّنة = القيمة المخدومة |
 
 الحالات كلها عبر `createApp()` الحقيقي: مسارات، middleware، جلسة بكوكي حقيقي، PostgreSQL حقيقي.
 لا mocks ولا حقن مباشر في الخدمة.
@@ -121,11 +171,28 @@ packages/server: npx vitest run   (الحزمة الكاملة على فرع ه�
 | --- | --- |
 | `packages/server/src/modules/notifications/preferences.ts` | **جديد** — المفردات، القراءة، الكتابة الذرّية، التدقيق، `isEnabled` |
 | `packages/server/src/modules/notifications/routes.ts` | `GET/PUT /preferences` + مخطط zod |
-| `packages/server/tests/pr10-notification-preferences.test.ts` | **جديد** — 11 اختباراً |
+| `packages/server/tests/pr10-notification-preferences.test.ts` | **جديد** — 12 اختباراً (منها تزامن الكتابة) |
 | `packages/web/src/lib/types.ts` | `NotificationChannel/Category/PreferenceRow/Matrix/Input` |
 | `packages/web/src/lib/api.ts` | `notificationPreferences()` / `updateNotificationPreferences()` |
 | `packages/web/src/pages/DashboardSimplePages.tsx` | بطاقة التفضيلات في `/dashboard/settings` |
 | `packages/web/src/lib/i18n.ts` | 18 مفتاحاً × 4 لغات |
-| `e2e/notification-preferences.spec.ts` | **جديد** — 3 حالات (لم تُشغَّل) |
+| `e2e/notification-preferences.spec.ts` | **جديد** — 9 حالات، **شُغِّلت 9/9** (2026-11-25) |
 
 **لا ترحيل، لا seed، لا تغيير مخطّط، لا تغيير صلاحيات، لا مساس بمسارات المال.**
+
+---
+
+## 6. نتائج التحقّق — ثلاثة عيوب، واحد منها في PR-10
+
+| # | العيب | النطاق | الحالة |
+| --- | --- | --- | --- |
+| 1 | **محدّد E2E خاطئ** في الاختبار المكتوب سابقاً (`[data-testid^="notif-pref-"] input[type="checkbox"]` يعيد 0 لأن الـtestid على `<input>` نفسه) | PR-10 (اختبار فقط) | **أُصلح** — أول تشغيل فعلي كشفه |
+| 2 | **`MARKETER` و`RISK` ⇒ 403** على `/api/notifications/preferences` (لا يحملان `MESSAGE_READ_OWN`) | RBAC قائم قبل PR-10 | **لم يُصلَح** — قرار RBAC، سُجِّل `RBAC-NOTIF-01` |
+| 3 | **هيكل لوحة التحكّم غير متجاوب على الهاتف**: `AppSidebar` بعرض ثابت `w-60` (240px) بلا نقطة كسر، فعلى شاشة 390px يبقى للمحتوى 150px والبطاقة 68px (الجدول 181px ⇒ نافذة تمرير ضيّقة) | هيكل عام لكل صفحات `/dashboard` | **لم يُصلَح** — تغيير واسع، سُجِّل `UI-MOBILE-01` |
+
+**قياسات الهاتف (390×844، مقاسة في المتصفح لا مقدَّرة):** `aside = 240px` · `main = 150px` ·
+`card = 68px` · `table scrollWidth = 181` مقابل `clientWidth = 68` · `document.scrollWidth = 390` (لا تمرير للصفحة).
+الوظيفة سليمة (كل الخلايا قابلة للوصول والتمرير والحفظ)، لكن **القراءة البصرية غير مقبولة** — لذا الحالة 9
+تسمّى «works at a phone viewport» ولا تدّعي جاهزية تصميم الهاتف.
+
+**لقطة الإثبات:** `test-results/pr10-phone-settings.png` (مُولَّدة عند التشغيل، خارج git).

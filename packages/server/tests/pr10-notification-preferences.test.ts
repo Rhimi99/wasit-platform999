@@ -280,6 +280,42 @@ describe('PUT /api/notifications/preferences', () => {
     expect(duplicated.status).toBe(422);
   });
 
+  it('serialises concurrent writes for the same pair into a single row', async () => {
+    const id = await createUser('CUSTOMER');
+    const [row] = await db.select({ email: users.email }).from(users).where(eq(users.id, id));
+    const cookie = await login(row!.email);
+
+    const write = (enabled: boolean) =>
+      call('/api/notifications/preferences', cookie, {
+        method: 'PUT',
+        body: JSON.stringify({ preferences: [{ channel: 'EMAIL', category: 'REFUND', enabled }] }),
+      });
+
+    // Four overlapping requests for the same (user, channel, category): without
+    // the advisory lock the read-then-insert would race into duplicate rows.
+    const responses = await Promise.all([write(false), write(true), write(false), write(true)]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 200]);
+
+    const stored = await db
+      .select({ enabled: notificationPreferences.enabled })
+      .from(notificationPreferences)
+      .where(
+        and(
+          eq(notificationPreferences.userId, id),
+          eq(notificationPreferences.channel, 'EMAIL'),
+          eq(notificationPreferences.category, 'REFUND'),
+        ),
+      );
+    expect(stored).toHaveLength(1);
+
+    // Whatever won, the stored row and the served matrix agree.
+    const served = await call('/api/notifications/preferences', cookie);
+    const cell = ((await served.json()) as { data: any }).data.rows.find(
+      (r: any) => r.channel === 'EMAIL' && r.category === 'REFUND',
+    );
+    expect(cell).toMatchObject({ enabled: stored[0]!.enabled, explicit: true });
+  });
+
   it('keeps one user’s choices out of another user’s matrix', async () => {
     const otherId = await createUser('CUSTOMER');
     const [other] = await db.select({ email: users.email }).from(users).where(eq(users.id, otherId));

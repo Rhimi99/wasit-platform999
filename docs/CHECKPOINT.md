@@ -1287,3 +1287,16 @@ npm run test:e2e          # Playwright، يشغّل server + web تلقائيا�
 - **Health/Ops**: `GET /api/health/channels` يعرض `media.storage` و`media.video` (id/available/reason/async) بلا أسرار. `.wasit-media/` في `.gitignore`.
 - **الاختبارات**: `tests/marketing-video.test.ts` — 13 حالة: 401 غير مصادق، 403 لـCUSTOMER (RBAC)، 403 لمنتج تاجر آخر، 422 لمنتج غير ACTIVE، **MP4 حقيقي** (تحقق ftyp + حفظ DB + ظهور في المكتبة)، تشكيل عربي، عزل بين المستخدمين، توكن غير صالح، حذف ناعم، تعرّض Agent للوسائط الحقيقية، و`/mine` (ملكية/فارغ/401).
 - **التحقق**: الخادم **434/434** (42 ملفاً)، typecheck للخادم والواجهة نظيف، و`vite build` للواجهة ناجح.
+
+## Milestone — PR-10 Notification Preferences: تحقّق E2E وإغلاق مشروط (2026-11-25)
+
+- **ما كان ناقصاً**: سطح التفضيلات (Backend + `/dashboard/settings`) كان مُنفَّذاً ومُتحقَّقاً باختبارات تكامل **11/11**، لكن **E2E لم يُشغَّل إطلاقاً** — كان مكتوباً فقط. أي أن ادّعاء «يعمل في المتصفح» كان بلا دليل.
+- **ما شُغِّل فعلياً**: قاعدة E2E **معزولة** (`wasit_pr10_e2e` على عنقود PostgreSQL منفصل بمنفذ 5434) عبر `drizzle-kit migrate` + `seed.ts`، ثم `npx playwright test e2e/notification-preferences.spec.ts` مع `E2E_API_URL=:3100` و`E2E_WEB_URL=:5199`. **لم يُلمَس `wasit_dev` ولا `wasit_demo` ولا `master`**، ولم تُستخدم أي mocks أو اعتراض شبكة.
+- **النتيجة**: **9/9 ناجحة** — عرض المصفوفة (30 مفتاحاً، زر حفظ معطّل)، الحفظ + إعادة التحميل + استعادة الحساب المشترك، فئة مجهولة ⇒ 422، حساب جديد كله مفعّل و`explicit:false`، تغيير **خلية واحدة فقط**، عزل مستخدمين، زائر ⇒ 401 للقراءة والكتابة، أربع لغات مع `dir` صحيح، وهاتف 390×844 (وصول لعمود SMS + حفظ يبقى + لا تمرير للصفحة).
+- **ثلاثة عيوب كشفها أول تشغيل حقيقي**:
+  1. محدّد E2E خاطئ (`[data-testid^="notif-pref-"] input[...]` يبحث عن `input` داخل عنصر يحمل الـtestid، والـtestid على `<input>` نفسه) ⇒ 0 بدل 30 — **أُصلح**.
+  2. `request.newContext()` يرث `storageState` من `test.use`، فكان «الزائر» يحمل كوكي العميل ويحصل 200 — **أُصلح** بتمرير `{ cookies: [], origins: [] }`.
+  3. `scrollLeft` لا يحترم RTL ⇒ قياس العمود الأخير خارج الشاشة — **أُصلح** بـ`scrollIntoViewIfNeeded()`.
+- **فجوتان قائمتان قبل PR-10 كشفهما التحقّق (لم تُصلحا — قرار مطلوب)**: `RBAC-NOTIF-01` (`MARKETER`/`RISK` ⇒ **403** على تفضيلات إشعاراتهما؛ أُثبت بطلب حقيقي مقابل `DISPUTE` ⇒ 200) و`UI-MOBILE-01` (شريط لوحة التحكّم `w-60` بلا نقطة كسر ⇒ على 390px: `aside=240` · `main=150` · البطاقة `68` مقابل جدول `181`).
+- **اختبار خادم إضافي**: حالة تزامن (4 `PUT` متزامنة لنفس الزوج ⇒ صف واحد والقيمة المخزَّنة = المخدومة) ⇒ `tests/pr10-notification-preferences.test.ts` **12/12**، والوحدات المجاورة (messaging/disputes/verification/inventory/ai-sup02) **81/81**، `tsc` للخادم والواجهة **0 أخطاء**، `vite build` ناجح.
+- **الحالة**: PR-10 = `COMPLETED` (لا `COMPLETE_VERIFIED`) لأن سياسة الفئات الإلزامية وربط التسليم ما زالت `DECISION REQUIRED` (`PR-10-A`).
