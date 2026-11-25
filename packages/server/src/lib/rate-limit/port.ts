@@ -23,4 +23,10 @@ export interface RateLimitStore {
   reset(): Promise<void>;
   /** Deletes expired buckets. Returns how many rows were removed. */
   purgeExpired(now?: number): Promise<number>;
+  /**
+   * Cheap liveness check used by the boot gate and the readiness endpoint. Must
+   * prove the store can answer (table present, connection usable) without
+   * mutating a bucket, and must throw when it cannot.
+   */
+  probe(): Promise<void>;
 }

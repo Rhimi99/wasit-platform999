@@ -2,6 +2,15 @@
 
 ذاكرة الوكيل لحالة المشروع وإرشادات البناء.
 
+## AI-RATE-LIMIT-HARDENING-01 — لا مخزن محلي في بيئة منشورة (2026-11-25، مكتملة)
+
+- **production وstaging يشترطان `RATE_LIMIT_STORE=postgres`**: أي قيمة أخرى (أو عدم الضبط ⇒ `memory`) ⇒ **رفض إقلاع** عبر `assertRateLimitConfigOrExit()` في `lib/rate-limit/boot.ts` (يستدعيها `src/index.ts` قبل `serve()`؛ **ليست** في `env.ts` كي لا تتعطّل أدوات المشغّل/CLI التي تستورد البيئة). و`AI_RATE_LIMIT_ALLOW_MEMORY_STORE=true` أو `AI_RATE_LIMIT_REQUIRE_DURABLE=false` في بيئة منشورة ⇒ رفض إقلاع أيضًا (لا يمكن إبطال الاشتراط).
+- **بوابة ثانية في `resolve.ts`**: `resolveRateLimitStore`/`setRateLimitStore` يرميان إذا حاول أحد بناء/حقن `MemoryRateLimitStore` في بيئة منشورة — لا تحوّل صامت أبدًا.
+- **جاهزية**: `checkRateLimitStoreReadiness(db)` + `probe()` (قراءة `SELECT 1 ... LIMIT 1` بلا كتابة). `src/index.ts` لا يشغّل `serve()` إن لم يكن المخزن جاهزًا؛ `GET /api/health/ready` ⇒ 503؛ `/api/health/channels` يعرض `{store,durable,required,ready}`.
+- **الاختبارات**: `tests/ai-rate-limit-hardening-01.test.ts` (28) — منها 7 تُقلع العملية فعليًا عبر `tests/fixtures/boot-env-probe.ts` و`src/index.ts` وتقرأ رمز الخروج. أي suite جديدة تعمل بـ`NODE_ENV=production` داخل العملية (عبر `withEnv`) لا تتأثر ما دام المخزن مبنيًا قبل التبديل.
+- **فخ تشغيل**: `.env.demo` (staging) كان `RATE_LIMIT_STORE=memory` — صار `postgres`. أي بيئة staging/إنتاج تُنشر الآن بلا هذا المتغيّر **لن تُقلع**، وهذا مقصود.
+- **الحدود لم تُخفَّض** (30/15/10 ثابتة باختبار)؛ منهج المعايرة في `docs/AI-RATE-LIMIT-HARDENING-01.md §7`. التفاصيل + إغلاق قرارات AD-063 في نفس الملف وفي ذيل AD-063.
+
 ## AI-RATE-LIMIT-01 — حدود معدل مركزية للـAI (2026-11-25، مكتملة)
 
 - **السياسة كلها في ملف واحد**: `src/lib/rate-limit/ai-policy.ts` — جدول يربط كل مسار بفئة (`ai.read` 120، `ai.feature` 30، `ai.agent` 15، `ai.memory` 60، `ai.admin.read` 120، `ai.admin.control` 30، `ai.provider` 10، نافذة 60ث) + backstop لكل IP. `app.ts` يركّبها بحلقة واحدة؛ **لا تكتب `rateLimit()` يدويًا في أي راوتر AI** — أضف قاعدة في الجدول.

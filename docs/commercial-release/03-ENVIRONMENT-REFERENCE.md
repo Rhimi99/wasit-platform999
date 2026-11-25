@@ -43,7 +43,7 @@ directory**, so the file must be at the root the process is started from (see
 | --- | --- | --- |
 | `RATE_LIMIT_REGISTER_MAX` | `10` | Registrations per window. Raise for CI/tests. |
 | `RATE_LIMIT_LOGIN_MAX` | `15` | Logins per window. |
-| `RATE_LIMIT_STORE` | `memory` | `memory` (single instance) or `postgres` (**required when running more than one API instance** — counters must be shared). |
+| `RATE_LIMIT_STORE` | `memory` | `postgres` (**mandatory in production and staging** — the process refuses to boot on `memory`, since N replicas would each enforce their own ceiling). `memory` is a local development/test affordance only. |
 | `RATE_LIMIT_PURGE_INTERVAL_MINUTES` | `15` | Scheduler interval to drop expired buckets. |
 | `RATE_LIMIT_API_MAX` | `300` | General `/api/*` backstop: requests per window per subject (authenticated user, else trusted client IP). Generous by design. `/api/auth` and `/api/health` are exempt (011.4). |
 | `RATE_LIMIT_API_WINDOW_SECONDS` | `60` | Window for the general backstop. |

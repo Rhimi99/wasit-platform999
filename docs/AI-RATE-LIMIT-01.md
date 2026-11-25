@@ -101,8 +101,8 @@ Retry-After: 60
 
 + الحزم المرتبطة: `sec0114-rate-limit-resource` 16/16، `rate-limit` 12/12، `ai-spend-guard` 17/17، `afc09-ai-providers` 23/23، `afc10-ai-spend`، `ai-core`، `admin-ai`، `phase14-agents`.
 
-## 10. `DECISION REQUIRED`
+## 10. القرارات — **مغلقة في AI-RATE-LIMIT-HARDENING-01**
 
-1. هل تُخفَّض افتراضيات `ai.feature` (30/دقيقة) و`ai.agent` (15/دقيقة) بعد قياس استهلاك حقيقي؟ الأرقام الحالية تقدير أمان لا قياس إنتاجي.
-2. هل يُشترط `RATE_LIMIT_STORE=postgres` في **staging** أيضًا (حاليًا production فقط)؟
-3. هل يُسمح بتجاوز `AI_RATE_LIMIT_REQUIRE_DURABLE` عبر env في الإنتاج (الاستثناء موجود حاليًا)، أم يُمنع كليًا هناك؟
+1. ~~هل تُخفَّض افتراضيات `ai.feature`/`ai.agent`؟~~ **لا** — بقيت 30/15/10، ومنهج القياس موثَّق في `docs/AI-RATE-LIMIT-HARDENING-01.md §7`.
+2. ~~هل يُشترط `RATE_LIMIT_STORE=postgres` في staging؟~~ **نعم** — staging يرفض الإقلاع على مخزن محلي.
+3. ~~هل يُسمح بتجاوز `AI_RATE_LIMIT_REQUIRE_DURABLE` في الإنتاج؟~~ **لا** — `ALLOW_MEMORY_STORE` و`REQUIRE_DURABLE=false` يرفضان الإقلاع في production وstaging.

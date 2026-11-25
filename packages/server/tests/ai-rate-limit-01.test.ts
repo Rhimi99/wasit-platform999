@@ -322,6 +322,7 @@ describe('AI-RATE-LIMIT-01 — concurrency and store failure', () => {
       async purgeExpired() {
         return 0;
       },
+      async probe() {},
     };
   }
 

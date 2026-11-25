@@ -1,4 +1,5 @@
 import { env } from '../env';
+import { rateLimitStoreRequired } from './resolve';
 
 /**
  * AI-RATE-LIMIT-01 — one place that decides how hard each AI surface may be hit.
@@ -179,13 +180,13 @@ export function aiLimitWindowSeconds(): number {
 }
 
 /**
- * Whether paid AI classes must run on a shared counter store. Defaults to on in
- * production: with the in-process store, N instances each allow the full
- * ceiling, so the effective limit is N × max and the guarantee is gone.
+ * Whether paid AI classes must run on a shared counter store. True in production
+ * and staging without any way to opt out: with the in-process store, N instances
+ * each allow the full ceiling, so the effective limit is N × max and the
+ * guarantee is gone. Locally it follows `AI_RATE_LIMIT_REQUIRE_DURABLE`.
  */
 export function requireDurableAiStore(): boolean {
-  if (env.AI_RATE_LIMIT_ALLOW_MEMORY_STORE) return false;
-  return env.AI_RATE_LIMIT_REQUIRE_DURABLE ?? env.NODE_ENV === 'production';
+  return rateLimitStoreRequired();
 }
 
 /** Bounded staff allowance — a multiplier, never an exemption. */

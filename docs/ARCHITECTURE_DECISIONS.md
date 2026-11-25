@@ -513,3 +513,20 @@
 - **العلاقة بـAD-062**: الحدّ يحدّ العدد، والحارس يحدّ المال؛ لا يستبدل أحدهما الآخر، والاختبار يثبت بقاء 409 `SPEND_GUARD_REQUIRED` تحت الحدّ.
 - **العواقب**: `lib/rate-limit/ai-policy.ts` (جديد)، توسيع `middleware/rate-limit.ts` (`methods`, `onStoreError`, `staffMultiplier`, `requireDurableStore`)، `RATE_LIMIT_AI_MAX` صار اختياريًا (مفتاح رئيسي)، 9 متغيّرات `AI_RATE_LIMIT_*`، مقياس `wasit_rate_limit_store_errors_total`، `tests/ai-rate-limit-01.test.ts` (19)، وتعديل fixture واحد في `afc09` لرفع السقف أثناء اختبار إدارة المزوّدين. لا Migration، لا صلاحية جديدة، ولا تغيير في RBAC.
 - **`DECISION REQUIRED`**: (1) خفض افتراضيات feature/agent بعد قياس إنتاجي؛ (2) اشتراط المخزن المشترك في staging؛ (3) منع استثناء الذاكرة في الإنتاج كليًا.
+
+### AD-063 — إنفاذ وإغلاق القرارات (AI-RATE-LIMIT-HARDENING-01، 2026-11-25)
+
+القرارات الثلاثة التي كانت `DECISION REQUIRED` **مغلقة الآن** بالكود والاختبار:
+
+1. **حدود `ai.feature`/`ai.agent`/`ai.provider`**: لا تخفيض. بقيت 30/15/10 وثُبِّتت باختبار يقرأ `AI_LIMIT_CLASSES`. منهج المعايرة (مصدر البيانات، المدة، المؤشرات، عتبة القرار) موثَّق في `docs/AI-RATE-LIMIT-HARDENING-01.md §7` — لا أرقام إنتاجية مُختلقة.
+2. **staging يشترط المخزن المشترك**: نُفِّذ بالكامل. `RATE_LIMIT_STORE` يجب أن يكون `postgres` في staging كما في production.
+3. **استثناء الذاكرة في الإنتاج**: مُنع نهائيًا. `AI_RATE_LIMIT_ALLOW_MEMORY_STORE=true` أو `AI_RATE_LIMIT_REQUIRE_DURABLE=false` في بيئة منشورة ⇒ **رفض إقلاع** (`process.exit(1)`), وليس تحذيرًا.
+
+**آلية الإنفاذ (بوّابتان + جاهزية)**:
+- `lib/rate-limit/policy.ts` قاعدة نقية (`deploymentTier`, `durableStoreRequired`, `rateLimitConfigViolations`).
+- البوابة الأولى `lib/rate-limit/boot.ts` (`assertRateLimitConfigOrExit`) يستدعيها `src/index.ts` قبل `serve()` — لا في `env.ts`، لأن أدوات المشغّل تستورد البيئة دون أن تخدم حركة مرور.
+- البوابة الثانية في `resolve.ts`: لا يُبنى `MemoryRateLimitStore` ولا يُحقن في بيئة منشورة، حتى لو تغيّر كائن `env` بعد الإقلاع ⇒ لا تحوّل صامت.
+- `readiness.ts` + `probe()` على عقد المخزن (قراءة فقط): `src/index.ts` يرفض `serve()` إذا لم يكن المخزن جاهزًا، و`GET /api/health/ready` يعيد 503، و`/api/health/channels` يعرض `{store,durable,required,ready}`. التفاصيل عبارات ثابتة بلا رسائل سائق.
+- **بلا Migration**: `rate_limit_counters` قائم من `0016`، والفحص قراءة.
+
+**العواقب**: `docker-compose.yml` افتراضيه `postgres`؛ `.env.demo` (مستثنى من Git) صار `postgres`؛ تحديث `docs/DEPLOYMENT.md` و`03-ENVIRONMENT-REFERENCE.md`؛ 28 اختبارًا جديدًا منها 7 تُقلع العملية فعليًا وتقرأ رمز الخروج. لا تغيير في RBAC أو المدفوعات أو سقوف AI أو الحارس.

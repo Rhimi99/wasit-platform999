@@ -262,17 +262,17 @@ const envSchema = z.object({
    */
   AI_RATE_LIMIT_ADMIN_MULTIPLIER: z.coerce.number().int().positive().default(3),
   /**
-   * Require a shared counter store for paid AI classes. Unset means "on in
-   * production": with the in-process store each instance allows the full
-   * ceiling, so N instances grant N × max.
+   * Require a shared counter store for paid AI classes. Only meaningful locally:
+   * production and staging always require one, and setting this to `false` there
+   * is refused at boot (AI-RATE-LIMIT-HARDENING-01).
    */
   AI_RATE_LIMIT_REQUIRE_DURABLE: z
     .enum(['true', 'false'])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === 'true')),
   /**
-   * Explicit override for single-instance deployments that cannot run the
-   * Postgres store. Documented escape hatch, logged by the limiter.
+   * Local-development escape hatch for single-process runs. Refused at boot in
+   * production and staging — it cannot be used to relax a deployment.
    */
   AI_RATE_LIMIT_ALLOW_MEMORY_STORE: z
     .enum(['true', 'false'])
@@ -592,6 +592,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
 
 /**
  * Dev-only convenience routes (surfacing verification links, phone codes and
