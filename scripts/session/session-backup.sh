@@ -127,6 +127,14 @@ SHA="$(sha256sum "$FINAL" | awk '{print $1}')"
 SIZE="$(stat -c %s "$FINAL")"
 REFS="$(git bundle list-heads "$FINAL" | wc -l)"
 
+# Per-bundle sidecar so `sha256sum -c <bundle>.sha256` works on its own, long
+# after the manifest is gone. The name is derived from $FINAL: a glob left in a
+# redirect target is not expanded when nothing matches, and the file ends up
+# named literally "wasit-....*.bundle.sha256".
+SIDECAR="$FINAL.sha256"
+printf '%s  %s\n' "$SHA" "$(basename "$FINAL")" > "$SIDECAR"
+chmod 0600 "$SIDECAR"
+
 sok "bundle written: $FINAL"
 slog "  size   : $SIZE bytes"
 slog "  sha256 : $SHA"
