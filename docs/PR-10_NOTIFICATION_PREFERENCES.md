@@ -139,6 +139,9 @@ packages/server: npx vitest run tests/pr10-notification-preferences.test.ts \
 packages/server: npx vitest run   (الحزمة الكاملة على فرع هذه المهمة — 2026-11-22)
 → 158 ملفاً · 2053/2053 ناجحة · exit 0
 
+packages/server: npx vitest run   (الحزمة الكاملة بعد إضافة حالة التزامن — 2026-11-25)
+→ 158 ملفاً · 2054/2054 ناجحة · exit 0   (+1 = الحالة 12)
+
 e2e: npx playwright test e2e/notification-preferences.spec.ts
 → 9/9 ناجحة · exit 0
 
