@@ -2113,6 +2113,8 @@ export interface BuyerRfq {
   expiresAt: string | null;
   sentAt: string | null;
   awardedAt: string | null;
+  awardedQuoteId: string | null;
+  orderId: string | null;
   cancelledAt: string | null;
   createdAt: string;
   company: RfqCompanyCard;
@@ -2143,6 +2145,39 @@ export interface SellerRfq {
     declinedAt: string | null;
     declineReason: string | null;
   };
+}
+
+export interface RfqAcceptedOrder {
+  rfqId: string;
+  rfqNumber: string;
+  status: 'AWARDED';
+  quoteId: string;
+  revision: number;
+  sellerId: string;
+  sellerName: string;
+  order: {
+    orderId: string;
+    orderNumber: string;
+    itemsTotal: string;
+    commission: string;
+    commissionSeller: string;
+    commissionBuyer: string;
+    commissionRate: string;
+    commissionSellerRate: string;
+    commissionBuyerRate: string;
+    policyId: string | null;
+    paymentFee: string;
+    paymentFeePolicyId: string | null;
+    grandTotal: string;
+    currencyCode: string;
+    transactionId: string;
+    sellerOrderIds: string[];
+    sellerCount: number;
+    replayed?: boolean;
+  };
+  /** True when the award had already been made and this is the same answer. */
+  replayed: boolean;
+  rejectedQuoteIds: string[];
 }
 
 export type RfqComparisonReason =

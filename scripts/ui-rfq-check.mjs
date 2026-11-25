@@ -259,6 +259,75 @@ try {
   await sellerPage.getByText('لوحة البائع').waitFor({ timeout: 20000 });
   check('seller can no longer quote a cancelled request', (await sellerPage.getByTestId('rfq-quote-form').count()) === 0);
 
+  // ---------------------------------------------------- phase 4: award + order
+  console.log('Buyer — accepts an offer and gets a real order');
+  const cats = await sellerA.client.req('/api/categories');
+  const categoryId = cats.data.data[0].id;
+  const product = await sellerA.client.req('/api/products', {
+    method: 'POST',
+    body: {
+      sellerId: sellerAId,
+      sellerType: 'SUPPLIER',
+      categoryId,
+      name: 'زجاجات 75 سل — دفعة الترسية',
+      sku: `UI-AWARD-${stamp}`,
+      basePrice: '1.2500',
+      currencyCode: 'TND',
+      moq: 1,
+      initialQuantity: 1000,
+      lowStockThreshold: 5,
+    },
+  });
+  check('catalogue product created for the award', product.status === 201, `${product.status} ${JSON.stringify(product.data)}`);
+  const productId = product.data.data.id;
+  await sellerA.client.req(`/api/products/${productId}/status`, { method: 'PATCH', body: { status: 'ACTIVE' } });
+
+  const awardRfq = await company.client.req('/api/rfqs', {
+    method: 'POST',
+    body: {
+      title: 'ترسية زجاجات الموسم',
+      currencyCode: 'TND',
+      items: [{ productId, quantity: '200.0000', unit: 'unit' }],
+    },
+  });
+  const awardRfqId = awardRfq.data.data.id;
+  await company.client.req(`/api/rfqs/${awardRfqId}/send`, {
+    method: 'POST',
+    body: { sellerIds: [sellerAId], acknowledgeDisclosure: true },
+  });
+  const awardItems = await sellerA.client.req(`/api/rfqs/${awardRfqId}`);
+  const quoteRes = await sellerA.client.req(`/api/rfqs/${awardRfqId}/quotes`, {
+    method: 'POST',
+    body: {
+      currencyCode: 'TND',
+      lines: [{ rfqItemId: awardItems.data.data.items[0].id, unitPrice: '1.1000', quantity: '200.0000' }],
+    },
+  });
+  check('offer submitted on the award request', quoteRes.status === 201, `${quoteRes.status} ${JSON.stringify(quoteRes.data)}`);
+  const awardQuoteId = quoteRes.data.data.quoteId;
+
+  await buyerPage.goto(`${WEB}/dashboard/rfqs/${awardRfqId}`);
+  await buyerPage.getByTestId(`rfq-accept-${awardQuoteId}`).click();
+  check('accepting asks for confirmation first', await buyerPage.getByTestId('rfq-accept-confirm').isVisible());
+  await buyerPage.getByTestId('rfq-accept-confirm-button').click();
+  await buyerPage.getByText('تم قبول العرض وإنشاء الطلب.').waitFor({ timeout: 20000 });
+  check('award confirmed in the UI', true);
+
+  await buyerPage.reload();
+  await buyerPage.getByTestId('rfq-awarded').waitFor({ timeout: 20000 });
+  check('awarded banner survives a reload', (await buyerPage.getByTestId('rfq-awarded').innerText()).includes('تمت الترسية'));
+  check('accept action is gone once awarded', (await buyerPage.getByTestId(`rfq-accept-${awardQuoteId}`).count()) === 0);
+
+  await buyerPage.getByRole('link', { name: 'عرض الطلب' }).click();
+  await buyerPage.waitForURL(/\/dashboard\/orders\/[0-9a-f-]{36}$/, { timeout: 20000 });
+  // The detail page loads its own data after the route changes.
+  await buyerPage
+    .waitForFunction(() => /220[.,\s]?000/.test(document.body.innerText), null, { timeout: 20000 })
+    .catch(() => {});
+  const orderText = await buyerPage.locator('body').innerText();
+  check('the order opens from the award', true);
+  check('order total uses the agreed price (200 × 1.100 = 220)', /220[.,\s]?000/.test(orderText), orderText.slice(0, 400));
+
   // ----------------------------------------------------------------- i18n
   console.log('i18n — French and English render the same flow');
   const ctx = await browser.newContext();

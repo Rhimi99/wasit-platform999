@@ -44,7 +44,7 @@ import type {
   PublicRefundPolicy,
   LegalAcceptanceState,
   LegalAcceptanceHistoryEntry,
-  BuyerRfq, CreateRfqPayload, RfqComparison, RfqQuote, RfqTimelineEntry, RfqView, SellerRfq, SubmitRfqQuotePayload,
+  BuyerRfq, CreateRfqPayload, RfqAcceptedOrder, RfqComparison, RfqQuote, RfqTimelineEntry, RfqView, SellerRfq, SubmitRfqQuotePayload,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -1543,6 +1543,16 @@ export const api = {
   async rfqQuoteRevisions(id: string, quoteId: string) {
     return request<RfqQuote[]>(
       `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/revisions`,
+    );
+  },
+  /**
+   * Accepting an offer sends nothing: the server derives the company, the seller,
+   * the prices and the idempotency key from the session and the stored quote.
+   */
+  async rfqAcceptQuote(rfqId: string, quoteId: string) {
+    return request<RfqAcceptedOrder>(
+      `/api/rfqs/${encodeURIComponent(rfqId)}/quotes/${encodeURIComponent(quoteId)}/accept`,
+      { method: 'POST', body: JSON.stringify({}) },
     );
   },
   async rfqComparison(id: string) {

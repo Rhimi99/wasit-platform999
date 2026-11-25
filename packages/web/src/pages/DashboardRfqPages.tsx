@@ -725,6 +725,7 @@ function BuyerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: Panel
   const [cancelling, setCancelling] = useState(false);
   const [reason, setReason] = useState('');
   const [rejectTarget, setRejectTarget] = useState<RfqQuote | null>(null);
+  const [acceptTarget, setAcceptTarget] = useState<RfqQuote | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [revisionsFor, setRevisionsFor] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<RfqQuote[]>([]);
@@ -783,6 +784,15 @@ function BuyerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: Panel
         </ul>
       </div>
 
+      {buyerView.status === 'AWARDED' && buyerView.orderId && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs" data-testid="rfq-awarded">
+          <p className="font-semibold text-emerald-900">{t('rfq.accept.awarded')}</p>
+          <Link to={`/dashboard/orders/${buyerView.orderId}`} className="mt-1 inline-block text-emerald-800 underline">
+            {t('rfq.accept.viewOrder')}
+          </Link>
+        </div>
+      )}
+
       <div>
         <h4 className="mb-1 text-xs font-semibold uppercase text-slate-400">{t('rfq.detail.quotes')}</h4>
         {quotes.length === 0 && <p className="text-xs text-slate-500">{t('rfq.detail.noQuotes')}</p>}
@@ -808,13 +818,23 @@ function BuyerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: Panel
                   {t('rfq.quote.history')}
                 </button>
                 {isOpen && quote.status === 'SUBMITTED' && (
-                  <button
-                    type="button"
-                    className="text-[11px] text-red-600 underline"
-                    onClick={() => { setRejectTarget(quote); setRejectReason(''); }}
-                  >
-                    {t('rfq.quote.reject')}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="text-[11px] font-semibold text-emerald-700 underline"
+                      data-testid={`rfq-accept-${quote.id}`}
+                      onClick={() => setAcceptTarget(quote)}
+                    >
+                      {t('rfq.quote.accept')}
+                    </button>
+                    <button
+                      type="button"
+                      className="text-[11px] text-red-600 underline"
+                      onClick={() => { setRejectTarget(quote); setRejectReason(''); }}
+                    >
+                      {t('rfq.quote.reject')}
+                    </button>
+                  </>
                 )}
               </div>
             </li>
@@ -840,6 +860,37 @@ function BuyerPanel({ view, quotes, onChanged, busy, setBusy, setNotice }: Panel
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {acceptTarget && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs" data-testid="rfq-accept-confirm">
+          <p className="font-semibold text-emerald-900">{t('rfq.accept.title')}</p>
+          <p className="mt-1 text-emerald-800">{t('rfq.accept.warning')}</p>
+          <ul className="mt-1 space-y-1 text-emerald-900" dir="ltr">
+            <li>{sellerName(acceptTarget.sellerId)}</li>
+            <li>
+              {formatMoney(acceptTarget.itemsTotal, acceptTarget.currencyCode)} · rev {acceptTarget.revision}
+            </li>
+          </ul>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              data-testid="rfq-accept-confirm-button"
+              onClick={() => {
+                const target = acceptTarget;
+                setAcceptTarget(null);
+                void run(() => api.rfqAcceptQuote(view.id, target.id), t('rfq.accept.done'));
+              }}
+            >
+              {t('rfq.accept.confirm')}
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => setAcceptTarget(null)}>
+              {t('common.cancel')}
+            </button>
+          </div>
         </div>
       )}
 

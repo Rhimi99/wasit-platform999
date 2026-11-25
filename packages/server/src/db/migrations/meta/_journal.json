@@ -337,6 +337,13 @@
       "when": 1795556486801,
       "tag": "0047_rfq_expiry_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795581075340,
+      "tag": "0048_rfq_award",
+      "breakpoints": true
     }
   ]
 }

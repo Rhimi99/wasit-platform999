@@ -6,6 +6,7 @@ import { validateBody, getValidatedBody } from '../../middleware/validate';
 import { requireAuth, requirePermission } from '../../middleware/auth';
 import { rateLimit } from '../../middleware/rate-limit';
 import { compareQuotes } from './comparison';
+import { acceptQuote } from './acceptance';
 import {
   cancelRfq,
   createRfq,
@@ -70,6 +71,13 @@ const cancelSchema = z.object({ reason: z.string().max(1000).nullable().optional
 const declineSchema = z.object({ reason: z.string().max(1000).nullable().optional() }).strict();
 const withdrawSchema = z.object({ reason: z.string().max(1000).nullable().optional() }).strict();
 const rejectSchema = z.object({ reason: z.string().trim().min(3).max(1000) }).strict();
+/**
+ * Accepting an offer takes no input at all. Identity, company, seller, prices,
+ * quantities and the idempotency key are all derived from the session and the
+ * stored quote; `.strict()` makes that refusal explicit instead of ignoring a
+ * payload that looks like it might influence the order.
+ */
+const acceptSchema = z.object({}).strict();
 
 export const rfqRoutes = new Hono();
 
@@ -229,6 +237,23 @@ rfqRoutes.post(
     const ctx = getContext(c);
     const body = getValidatedBody<z.infer<typeof rejectSchema>>(c);
     const data = await rejectQuote(ctx.db, ctx.user!.id, c.req.param('id')!, c.req.param('quoteId')!, body, {
+      actorId: ctx.user!.id,
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return c.json({ success: true, data });
+  },
+);
+
+rfqRoutes.post(
+  '/:id/quotes/:quoteId/accept',
+  requirePermission(PERMISSIONS.RFQ_DECIDE),
+  // Money path: tighter than rejection, and the service is idempotent by design.
+  rateLimit({ windowSeconds: 60, max: 20, keyPrefix: 'rfq-quote-accept' }),
+  validateBody(acceptSchema),
+  async (c) => {
+    const ctx = getContext(c);
+    const data = await acceptQuote(ctx.db, ctx.user!.id, c.req.param('id')!, c.req.param('quoteId')!, {
       actorId: ctx.user!.id,
       ipAddress: ctx.ipAddress,
       userAgent: ctx.userAgent,

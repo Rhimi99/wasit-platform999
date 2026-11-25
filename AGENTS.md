@@ -2,6 +2,17 @@
 
 ذاكرة الوكيل لحالة المشروع وإرشادات البناء.
 
+## B2B-01 Phase 4 — قبول عرض ← طلب (2026-11-25، مكتملة)
+
+- **المسار**: `POST /api/rfqs/:id/quotes/:quoteId/accept` — جسم `{}` فقط؛ أي حقل (`buyerCompanyId`/`supplierId`/`unitPrice`/`commissionRate`/`idempotencyKey`) يُرفض 422 لأن الهوية والسعر والمفتاح تُشتق من الجلسة والعرض المخزّن.
+- **كل شيء في معاملة واحدة** (`modules/rfq/acceptance.ts`): قفل `rfqs … FOR UPDATE` ← تحقق العرض ← `createOrder(tx, …)` ← `ACCEPTED` ← رفض بقية العروض ← `AWARDED` + `order_id`. أي فشل يلغي الطلب أيضًا (مُثبت بتريغر اختباري).
+- **`createOrder` تُستدعى بمعاملة الأب** فتُنشئ SAVEPOINT داخليًا؛ لا تستدعِها في معاملة منفصلة وإلا فقدت ذرّية «الطلب والترسية معًا».
+- **Idempotency**: مفتاح مشتق `sha256(buyerUserId:rfqId:quoteId:revision)`؛ لا مفتاح من العميل. الإعادة تُرجع نفس `orderId` من `orders.metadata.idempotency.response`.
+- **حارس القاعدة**: فهرس فريد جزئي `rfq_quotes_one_accepted_idx` على `rfq_id WHERE quote_status='ACCEPTED'` (migration `0048`) — لا تعتمد على فحص الخدمة وحده.
+- **قيد معلن**: بند الطلب مرجع لمنتج؛ لا ترسية لبائع لا يملك المنتجات (409). مسجَّل `B2B-01-P4-A` كـ`DECISION REQUIRED`.
+- **اختبارات**: `tests/b2b01d-award-order.test.ts` **21/21**؛ الحزمة **2516/2516** (189 ملفًا)؛ المتصفح `scripts/ui-rfq-check.mjs` **47/47**.
+- **بيئة**: الحاوية الجديدة تحتاج `postgresql-17` (منفذ 5434، دور `wasit_test_runner`) و`ffmpeg` (اختبارات الفيديو) و`npx playwright install chromium` (فحوص المتصفح).
+
 ## ⛔ إلزامي قبل أي عمل — سياسة حفظ العمل (2026-11-20)
 
 **GitHub هو النسخة الدائمة. الحاوية والمساحة المحلية مؤقتتان. أي عمل ليس في

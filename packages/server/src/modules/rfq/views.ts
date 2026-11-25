@@ -78,6 +78,9 @@ export interface BuyerRfqView {
   expiresAt: string | null;
   sentAt: string | null;
   awardedAt: string | null;
+  /** The accepted revision and the order it produced; null until awarded. */
+  awardedQuoteId: string | null;
+  orderId: string | null;
   cancelledAt: string | null;
   createdAt: string;
   company: CompanyCardView;
@@ -280,6 +283,8 @@ export function toBuyerRfqView(input: {
     expiresAt: iso(input.rfq.expiresAt),
     sentAt: iso(input.rfq.sentAt),
     awardedAt: iso(input.rfq.awardedAt),
+    awardedQuoteId: input.rfq.awardedQuoteId ?? null,
+    orderId: input.rfq.orderId ?? null,
     cancelledAt: iso(input.rfq.cancelledAt),
     createdAt: input.rfq.createdAt.toISOString(),
     company: input.company,

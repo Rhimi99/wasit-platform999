@@ -69,6 +69,22 @@ export interface CreateOrderInput {
    * instead of creating a second one. Optional so existing callers are unaffected.
    */
   idempotencyKey?: string;
+  /**
+   * Internal only. Never populated from an HTTP body — the orders route strips
+   * unknown keys and the RFQ acceptance path builds this from the stored quote
+   * lines it already validated. It carries the agreed unit prices so an awarded
+   * RFQ is billed at the negotiated price instead of the catalog price, without
+   * a second pricing implementation: `priceBasket` stays the only place where an
+   * order total is computed.
+   */
+  negotiated?: {
+    rfqId: string;
+    quoteId: string;
+    revision: number;
+    sellerId: string;
+    /** productId -> unit price, as stored on the accepted quote revision. */
+    unitPrices: Record<string, string>;
+  };
 }
 
 export interface SellerGroupInput {
@@ -193,9 +209,11 @@ async function priceBasket(
     currencyCode: string;
     orderId: string;
     orderNumber: string;
+    /** Agreed unit prices; absent for a normal catalog-priced basket. */
+    unitPrices?: Record<string, string>;
   },
 ) {
-  const { groups, loaded, currencyCode, orderId, orderNumber } = opts;
+  const { groups, loaded, currencyCode, orderId, orderNumber, unitPrices } = opts;
 
   const sellerGroups: PricedSeller[] = [];
   let itemsTotal = toDecimal('0');
@@ -217,7 +235,11 @@ async function priceBasket(
     const groupItemRows: (typeof orderItems.$inferInsert)[] = [];
     for (const { productId, quantity } of group.products) {
       const prod = loaded.get(productId)!;
-      const price = toDecimal(prod.basePrice);
+      const agreed = unitPrices?.[productId];
+      if (unitPrices && !agreed) {
+        throw ApiError.conflict(`No agreed price for product ${productId}`);
+      }
+      const price = toDecimal(agreed ?? prod.basePrice);
       const lineTotal = price.mul(quantity);
       groupItemsTotal = groupItemsTotal.add(lineTotal);
       groupItemRows.push({
@@ -514,6 +536,14 @@ export async function createOrder(
     companyId: input.companyId,
   });
 
+  if (input.negotiated && input.buyerType !== 'COMPANY') {
+    throw ApiError.validation([{
+      field: 'buyerType',
+      message: 'A negotiated order must be placed as a company',
+      code: 'BUYER_TYPE_CONFLICT',
+    }]);
+  }
+
   // Load product details
   const loaded = new Map<string, typeof products.$inferSelect>();
   for (const item of input.items) {
@@ -609,7 +639,14 @@ export async function createOrder(
 
     // Prices — line totals, per-seller commission and the basket payment fee —
     // come from the same function the cart quote uses, so the two cannot drift.
-    const pricing = await priceBasket(tdb, { groups, loaded, currencyCode, orderId, orderNumber });
+    const pricing = await priceBasket(tdb, {
+      groups,
+      loaded,
+      currencyCode,
+      orderId,
+      orderNumber,
+      unitPrices: input.negotiated?.unitPrices,
+    });
     const {
       sellerGroups,
       itemsTotal,
@@ -654,6 +691,16 @@ export async function createOrder(
       notes: input.notes ?? null,
       metadata: {
         sellerCount: sellerGroups.length,
+        ...(input.negotiated
+          ? {
+              rfq: {
+                id: input.negotiated.rfqId,
+                quoteId: input.negotiated.quoteId,
+                revision: input.negotiated.revision,
+                sellerId: input.negotiated.sellerId,
+              },
+            }
+          : {}),
         ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
         buyer: {
           type: identity.buyerType,
@@ -701,7 +748,7 @@ export async function createOrder(
       sellerId: soleSeller ?? firstProduct.sellerId,
       productId: firstProduct.id,
       quantity: [...lineByProduct.values()].reduce((acc, q) => acc + q, 0),
-      unitPrice: firstProduct.basePrice,
+      unitPrice: input.negotiated?.unitPrices[firstProduct.id] ?? firstProduct.basePrice,
       totalValue: grandTotal,
       currencyCode,
       commission: commissionAmount.toFixed(4),

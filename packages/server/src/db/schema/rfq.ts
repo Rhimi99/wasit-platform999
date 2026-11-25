@@ -98,6 +98,16 @@ export const rfqs = pgTable(
     disclosureAcknowledgedAt: timestamp('disclosure_acknowledged_at', { withTimezone: true }),
     sentAt: timestamp('sent_at', { withTimezone: true }),
     awardedAt: timestamp('awarded_at', { withTimezone: true }),
+    /**
+     * The quote revision the buyer accepted, and the order it produced. Both are
+     * written in the same transaction as the order itself, which is what makes
+     * "awarded" and "has an order" the same fact rather than two that can drift.
+     * `awarded_quote_id` also makes a retried acceptance replayable: the retry
+     * finds the RFQ awarded to *this* quote and returns that order instead of
+     * refusing with "already awarded".
+     */
+    awardedQuoteId: varchar('awarded_quote_id', { length: 36 }),
+    orderId: varchar('order_id', { length: 36 }),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -113,6 +123,7 @@ export const rfqs = pgTable(
      * deadline" — so the index is partial: it stays small (finished RFQs leave
      * it) and answers the sweep without scanning the table.
      */
+    orderIdx: index('rfqs_order_idx').on(t.orderId),
     openExpiresIdx: index('rfqs_open_expires_idx')
       .on(t.expiresAt)
       .where(sql`status = 'OPEN'`),
@@ -208,6 +219,14 @@ export const rfqQuotes = pgTable(
     rfqIdx: index('rfq_quotes_rfq_idx').on(t.rfqId),
     sellerIdx: index('rfq_quotes_seller_idx').on(t.sellerId),
     statusIdx: index('rfq_quotes_status_idx').on(t.quoteStatus),
+    /**
+     * One accepted revision per RFQ, enforced by the database. Two buyers' tabs
+     * (or two app instances) can pass every service-level check at the same
+     * instant; only this index can guarantee a second acceptance is impossible.
+     */
+    oneAcceptedIdx: uniqueIndex('rfq_quotes_one_accepted_idx')
+      .on(t.rfqId)
+      .where(sql`quote_status = 'ACCEPTED'`),
     /** Same idea for quote validity: only live submissions can lapse. */
     liveExpiryIdx: index('rfq_quotes_live_expiry_idx')
       .on(t.validUntil)
