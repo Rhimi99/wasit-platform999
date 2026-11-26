@@ -10,7 +10,18 @@ import { z } from 'zod';
  * `prompts.ts`, both server-owned.
  */
 
-export const LLM_CAPABILITIES = ['SUPPORT_REPLY', 'SALES_INSIGHT', 'PRODUCT_ANALYSIS'] as const;
+export const LLM_CAPABILITIES = [
+  'SUPPORT_REPLY',
+  'SALES_INSIGHT',
+  'PRODUCT_ANALYSIS',
+  /**
+   * The coordinator capability (WASIT-COPILOT-01). Its facts are the server-owned
+   * agent catalogue — never a tenant's rows — and its output is a PLAN, which is
+   * validated against that same catalogue and then against the live registry
+   * before anything is dispatched.
+   */
+  'COPILOT_PLAN',
+] as const;
 export type LlmCapability = (typeof LLM_CAPABILITIES)[number];
 
 export function isLlmCapability(value: unknown): value is LlmCapability {
@@ -63,6 +74,33 @@ export const llmDraftOutputSchema = z.object({
 });
 
 export type LlmDraftOutput = z.infer<typeof llmDraftOutputSchema>;
+
+/**
+ * The only accepted plan output. A step names an agent key and a reason — never
+ * an input payload: what a delegated agent receives is built by server code, so
+ * model text cannot craft another agent's task input.
+ */
+export const copilotPlanOutputSchema = z.object({
+  goal: z.string().min(1).max(300),
+  constraints: z.array(z.string().min(1).max(200)).max(10).default([]),
+  expectedOutputs: z.array(z.string().min(1).max(200)).max(10).default([]),
+  needsClarification: z.boolean().default(false),
+  clarificationQuestion: z.string().max(400).nullish(),
+  steps: z
+    .array(
+      z.object({
+        stepKey: z.string().min(1).max(64),
+        agentKey: z.string().min(1).max(64),
+        reason: z.string().max(300).default(''),
+        dependsOn: z.array(z.string().min(1).max(64)).max(10).optional(),
+      }),
+    )
+    .min(1)
+    .max(10),
+  injectionSuspected: z.boolean().optional(),
+});
+
+export type CopilotPlanOutput = z.infer<typeof copilotPlanOutputSchema>;
 
 /** Why a draft could not be produced. Every value degrades to the deterministic engine. */
 export type LlmFailureReason =
@@ -122,4 +160,22 @@ export interface LlmDraftFallback {
   meta: LlmCallMeta;
 }
 
-export type LlmDraftResult = LlmDraftSuccess | LlmDraftFallback;
+/**
+ * A coordinator plan. It is a PROPOSAL: `requiresReview` is always true and the
+ * caller must validate and persist it through the planning service before any
+ * step can run.
+ */
+export interface LlmPlanSuccess {
+  status: 'plan';
+  goal: string;
+  constraints: string[];
+  expectedOutputs: string[];
+  needsClarification: boolean;
+  clarificationQuestion: string | null;
+  steps: { stepKey: string; agentKey: string; reason: string; dependsOn: string[] }[];
+  injectionSuspected: boolean;
+  requiresReview: true;
+  meta: LlmCallMeta;
+}
+
+export type LlmDraftResult = LlmDraftSuccess | LlmPlanSuccess | LlmDraftFallback;

@@ -116,6 +116,11 @@ async function draftFor(
         cost: res.meta.cost,
       };
     }
+    // These executors never request COPILOT_PLAN, so anything that is not a
+    // draft is a refusal carrying a reason.
+    if (res.status !== 'fallback') {
+      throw new Error('Unexpected plan result from a draft-only capability');
+    }
     return {
       block: { status: 'fallback', reason: res.reason, detail: res.detail, meta },
       tokensInput: res.meta.tokensInput,

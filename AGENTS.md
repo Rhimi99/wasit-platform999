@@ -1408,3 +1408,19 @@ npx playwright install --with-deps chromium
 - **seam للاختبار**: `setLlmProviderOverride` (يُرفض في production) يستبدل **النقل** فقط؛ هوية مزوّد مدفوعة تُبقي سعر الكتالوج كي يعمل الحارس والسقوف والتكلفة كالإنتاج.
 - **التغطية**: `tests/ai-llm-01.test.ts` (23) — توليد من صفوف حقيقية، تعليمات غير قابلة للاستبدال، مهلة، schema، استناد، حقن (بما فيه نموذج مطيع للتعليمات)، عزل مستأجرين، هوية/نطاق 403، سقوف، سجل بلا نصوص، قراءة فقط، حدّ المعدل 429.
 - **`DECISION REQUIRED`**: بوابة موافقة بشرية قبل إرسال مسودّة دعم، أول قدرة تُشغَّل بمفتاح حقيقي وسقفها اليومي، فرض اللغة. التفاصيل: `docs/AI-LLM-01.md` + AD-064.
+
+## WASIT-COPILOT-01 — طبقة التنسيق (2026-11-26)
+
+- **الـCopilot ليس وكيلاً**: لا منفّذ، لا صف في `agent_registry`، و`agentRunRefusal(COPILOT_CATALOGUE)` يعيد `COPILOT_NOT_RUNNABLE`. لا تُضِفه إلى `AGENT_CATALOGUE` ولا إلى `AGENT_SCOPE_CONTRACTS` ولا تمنحه `input` قابل للتنفيذ.
+- **لا مسار تنفيذ خاص**: كل خطوة تُفوَّض عبر `dispatchStep` → `createAgentTask`. أي «تسريع» بتنفيذ منفّذ مباشرة من `copilot/service.ts` يُسقط RBAC/Kill Switch/الموافقة/الميزانية/التدقيق دفعة واحدة.
+- **هوية الطالب فقط**: `planAgentRun` و`dispatchStep` يعملان بـ`run.requestedBy`. لا تستخدم حساباً إدارياً بديلاً لتجاوز رفض صلاحية — الاختبار يثبت 403 بلا أي صف مكتوب.
+- **النموذج يختار الوكيل، لا الـpayload**: `domains.ts` يحمل `defaultInput` لكل وكيل؛ الخطة من النموذج تُترجم إلى `input` من هذا الجدول حصراً. الوكلاء الذين يحتاجون كياناً (`supplier-agent`/`merchant-agent`) في `NON_PLANNABLE_AGENTS` — لا يُخطَّط لهم.
+- **قدرة `COPILOT_PLAN`**: عبر `runLlmDraft` نفسه، بعقد `generationScopeFor()` الذي يعطي المنسّق `allowedTables=['agent_catalogue']` فقط. `finalizePlan` يرفض أي وكيل غير موجود في الحقائق (`ungrounded_output`) وأي `stepKey` مكرر أو اعتمادية مجهولة. مفاتيح الحقائق بصيغة `agent.<key_with_underscores>` لأن `FACT_KEY` لا يقبل `-` ولا `:`.
+- **لا اعتماد على المزوّد**: أي رفض يعود إلى `heuristicPlan` ويُسجَّل في `report.plan.fallbackReason`. لا تجعل التخطيط يفشل لأن المزوّد غير متاح.
+- **توضيح فقط عند نقص مؤثر**: `parseIntent` يطلب توضيحاً فقط عندما لا يُعرَف أي مجال (`signals.length === 0`)؛ وإلا ينفّذ. لا تجعل طلباً مفهوماً ينتظر إجابة.
+- **الصدق في التقرير**: الحالة من `agent_run_steps`، و`refused` من حمولة المنفّذ (`refused:true`/`error`) ⇒ تُصنَّف `partial` لا `completed`. `outcomes.completed/partial/stalled` منفصلة. `cost.complete=false` إن وُجدت مهمة بلا تكلفة مسجّلة.
+- **الموافقة**: الخطوات الحسّاسة تبقى `PENDING` بـ`approvedBy=null`، والـCopilot لا يوافق أبداً (`governance.selfApproval=false`). الموافقة عبر `POST /api/admin/ai/agent-runs/:runId/steps/:stepKey/approve` بمخوَّل آخر غير الطالب.
+- **المسارات**: `POST/GET /api/admin/ai/copilot/requests`, `GET /requests/:runId`, `POST /requests/:runId/advance` — ترث `AI_MANAGE|ADMIN_AI` وفئتي `ai.admin.control`/`ai.admin.read`.
+- **منع التكرار**: `requestId` اختياري ⇒ `runKey='copilot:<id>'`؛ إعادة الإرسال تعيد نفس التشغيل. `advance` لا يضيف مهمة لخطوة لها مهمة (`dispatchStep` يرفض) — لا حاجة لحارس إضافي.
+- **التغطية**: `tests/copilot-01.test.ts` (15) — تفويض متعدد الوكلاء، فهم ar/fr/en، توضيح، 403 خارج النطاق، رفض copilot/supervisor/مجهول، منع تكرار، تزامن، تقرير مختلط نجاح/فشل، تصعيد موافقة، heuristic بلا مزوّد، خطة LLM صحيحة ومُختلقة، حارس إنفاق، حدّ معدل، Kill Switch + Supervisor، بقاء 20 وكيلاً.
+- **`DECISION REQUIRED`**: من يوافق إن كان GM هو الطالب، سقف الوكلاء لكل طلب، ملخّص لغوي للتقرير. التفاصيل: `docs/WASIT-COPILOT-01.md` + AD-065.

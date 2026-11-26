@@ -4,7 +4,7 @@
 import { shouldRedirectToLegalAcceptance, redirectToLegalAcceptance } from './legal-gate';
 import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
-  AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
+  AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap, CopilotReport, CopilotRequestView,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeAssistantView, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
@@ -1300,6 +1300,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ enabled, reason: reason ?? null }),
     });
+  },
+  // ---- Copilot (WASIT-COPILOT-01): the General Manager's coordinator ----
+  async copilotCreate(body: { request: string; locale?: 'ar' | 'fr' | 'en'; requestId?: string; autoAdvance?: boolean }) {
+    return request<CopilotRequestView>('/api/admin/ai/copilot/requests', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  async copilotList() {
+    return request<{ items: CopilotReport[] }>('/api/admin/ai/copilot/requests');
+  },
+  async copilotGet(runId: string) {
+    return request<CopilotReport>(`/api/admin/ai/copilot/requests/${runId}`);
+  },
+  async copilotAdvance(runId: string) {
+    return request<{ dispatched: string[]; blocked: string[]; status: string; report: CopilotReport }>(
+      `/api/admin/ai/copilot/requests/${runId}/advance`,
+      { method: 'POST' },
+    );
   },
   async adminAiRequests(limit = 50) {
     return request<{ items: AiAdminRequestRow[] }>(`/api/admin/ai/requests?limit=${limit}`);

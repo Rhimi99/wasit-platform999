@@ -5,6 +5,7 @@ import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import { AiProvidersPanel } from '@/components/AiProvidersPanel';
 import { AiSpendPanel } from '@/components/AiSpendPanel';
+import { CopilotPanel } from '@/components/CopilotPanel';
 import type {
   AgentRegistryRow,
   AgentLayerCounts,
@@ -18,7 +19,16 @@ import type {
   AgentHealth,
 } from '@/lib/types';
 
-type Tab = 'overview' | 'requests' | 'models' | 'providers' | 'spend' | 'budgets' | 'agents' | 'tasks';
+type Tab =
+  | 'overview'
+  | 'copilot'
+  | 'requests'
+  | 'models'
+  | 'providers'
+  | 'spend'
+  | 'budgets'
+  | 'agents'
+  | 'tasks';
 
 const STATUS_COLOR: Record<string, 'green' | 'amber' | 'red' | 'teal' | 'slate' | 'indigo'> = {
   SUCCESS: 'green',
@@ -258,6 +268,7 @@ export function AdminAiPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: t('adminAi.tab.overview') },
+    { id: 'copilot', label: t('adminAi.tab.copilot') },
     { id: 'requests', label: t('adminAi.tab.requests') },
     { id: 'models', label: t('adminAi.tab.models') },
     { id: 'providers', label: t('adminAi.tab.providers') },
@@ -851,6 +862,8 @@ export function AdminAiPage() {
               )}
             </div>
           )}
+
+          {tab === 'copilot' && <CopilotPanel />}
 
           {tab === 'agents' && (
             agents.length === 0 ? <EmptyState title={t('common.noData')} hint={t('adminAi.tab.agents')} /> : (

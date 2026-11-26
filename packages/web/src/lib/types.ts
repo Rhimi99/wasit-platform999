@@ -1154,6 +1154,82 @@ export interface AgentTaskRow {
   createdAt: string;
 }
 
+/** WASIT-COPILOT-01 — the coordinator's report, as the API returns it. */
+export interface CopilotReportStep {
+  stepKey: string;
+  agentKey: string;
+  agentName: string;
+  reason: string;
+  status: string;
+  requiresApproval: boolean;
+  approvedBy: string | null;
+  taskId: string | null;
+  taskStatus: string | null;
+  attempts: number;
+  outcome: string | null;
+  refused: boolean;
+  costUsd: string | null;
+  error: string | null;
+}
+
+export interface CopilotEscalation {
+  kind: 'approval' | 'failure' | 'stalled';
+  stepKey: string;
+  agentKey: string;
+  message: string;
+}
+
+export interface CopilotReport {
+  runId: string;
+  goal: string;
+  request: string | null;
+  status: string;
+  requestedBy: string;
+  createdAt: string;
+  completedAt: string | null;
+  plan: {
+    source: 'llm' | 'heuristic';
+    fallbackReason: string | null;
+    promptVersion: string | null;
+    injectionSuspected: boolean;
+    constraints: string[];
+    expectedOutputs: string[];
+    model: string | null;
+    costUsd: string;
+  };
+  steps: CopilotReportStep[];
+  progress: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    skipped: number;
+    awaitingApproval: number;
+    pending: number;
+    running: number;
+  };
+  outcomes: { completed: string[]; partial: string[]; stalled: string[] };
+  escalations: CopilotEscalation[];
+  cost: { totalUsd: string; planningUsd: string; executionUsd: string; complete: boolean };
+  governance: { approvalsRequired: number; selfApproval: false; dispatchable: boolean };
+}
+
+export interface CopilotIntentView {
+  goal: string;
+  constraints: string[];
+  expectedOutputs: string[];
+  locale: 'ar' | 'fr' | 'en';
+  needsClarification: boolean;
+  clarificationQuestion: string | null;
+  signals: string[];
+}
+
+export interface CopilotRequestView {
+  needsClarification: boolean;
+  clarificationQuestion: string | null;
+  intent: CopilotIntentView;
+  report: CopilotReport | null;
+}
+
 export interface AgentTaskDecision {
   id: string;
   status: AgentTaskStatus;

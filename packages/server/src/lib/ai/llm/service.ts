@@ -5,13 +5,14 @@ import { env } from '../../env';
 import { logger } from '../../observability/logger';
 import { metrics } from '../../observability/metrics';
 import { getAgentRunContext } from '../agent-run-context';
-import { getAgentScopeContract, PLATFORM_INFRA_TABLES } from '../../../modules/ai/agent-scope';
+import { PLATFORM_INFRA_TABLES } from '../../../modules/ai/agent-scope';
 import { estimateBudget, resolveModelPrice, runAIFeature } from '../runtime';
 import { resolveAiRoute } from '../routing';
 import type { ModelPrice } from '../runtime';
 import type { AIProvider } from '../types';
 import type { UserRole } from '@wasit/shared';
 import {
+  copilotPlanOutputSchema,
   llmDraftOutputSchema,
   type LlmCallMeta,
   type LlmDraftOutput,
@@ -24,6 +25,80 @@ import { LLM_PROMPT_VERSION, systemPromptFor } from './prompts';
 import { fenceUntrusted, sanitizeFacts } from './sanitize';
 import { checkAmounts, checkEvidence, renderFacts } from './grounding';
 import { getLlmProviderOverride } from './provider-seam';
+import { generationScopeFor } from './coordinator';
+
+/**
+ * Turns a model's plan into an accepted plan, or refuses it.
+ *
+ * Grounding here is structural: every step must name an agent that was supplied
+ * as a fact (`agent:<key>`), so an invented agent, department or capability can
+ * never enter a plan. Dependencies must reference steps of the same plan, step
+ * keys must be unique, and the fanout is bounded. Nothing is executed here — the
+ * caller still validates the plan against the live registry and RBAC.
+ */
+function finalizePlan(
+  parsedJson: unknown,
+  facts: { key: string; value: string | number | boolean | null; source: string }[],
+  signals: string[],
+  meta: LlmCallMeta,
+  request: LlmDraftRequest,
+): LlmDraftResult {
+  const parsed = copilotPlanOutputSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    return fallback('invalid_output', 'Model output did not match the plan schema', meta);
+  }
+  const plan = parsed.data;
+  // Fact keys cannot contain '-' (see sanitize.ts), so agent keys are compared
+  // in their normalised form.
+  const normalise = (key: string) => key.replace(/-/g, '_');
+  const known = new Set(
+    facts
+      .filter((f) => f.key.startsWith('agent.'))
+      .map((f) => f.key.slice('agent.'.length)),
+  );
+  const unknownAgents = plan.steps
+    .map((s) => s.agentKey)
+    .filter((k) => !known.has(normalise(k)));
+  const keys = plan.steps.map((s) => s.stepKey);
+  const duplicateKeys = keys.filter((k, i) => keys.indexOf(k) !== i);
+  const unknownDeps = plan.steps.flatMap((s) =>
+    (s.dependsOn ?? []).filter((d) => !keys.includes(d) || d === s.stepKey).map((d) => `${s.stepKey}->${d}`),
+  );
+  const ungrounded = [
+    ...unknownAgents.map((k) => `agent:${k}:not-in-catalogue`),
+    ...duplicateKeys.map((k) => `stepKey:${k}:duplicate`),
+    ...unknownDeps.map((d) => `dependsOn:${d}:unknown`),
+  ];
+  if (ungrounded.length > 0) {
+    return fallback('ungrounded_output', 'Plan named an agent or step outside the supplied catalogue', {
+      ...meta,
+      ungrounded,
+    });
+  }
+
+  metrics.incCounter('wasit_ai_llm_drafts_total', { capability: request.capability, status: 'plan' });
+  metrics.observeHistogram('wasit_ai_llm_draft_duration_seconds', meta.latencyMs / 1000, {
+    capability: request.capability,
+  });
+
+  return {
+    status: 'plan',
+    goal: plan.goal,
+    constraints: plan.constraints,
+    expectedOutputs: plan.expectedOutputs,
+    needsClarification: plan.needsClarification,
+    clarificationQuestion: plan.clarificationQuestion ?? null,
+    steps: plan.steps.map((s) => ({
+      stepKey: s.stepKey,
+      agentKey: s.agentKey,
+      reason: s.reason,
+      dependsOn: s.dependsOn ?? [],
+    })),
+    injectionSuspected: plan.injectionSuspected === true || signals.length > 0,
+    requiresReview: true,
+    meta,
+  };
+}
 
 /**
  * The single generation path for WASIT agents (AI-LLM-01).
@@ -168,7 +243,9 @@ export async function runLlmDraft(db: DB, request: LlmDraftRequest): Promise<Llm
 
   // 2) Scope contract. Facts must come from tables this agent may read, so one
   // agent's rows can never be laundered into another agent's prompt.
-  const contract = getAgentScopeContract(request.agentKey);
+  // The coordinator (Copilot) has no agent contract — it is not one of the 20 —
+  // but it does have a strictly narrower generation scope: catalogue-only.
+  const contract = generationScopeFor(request.agentKey);
   if (!contract) throw ApiError.forbidden('No scope contract for this agent');
   for (const fact of request.facts ?? []) {
     const source = typeof fact.source === 'string' ? fact.source : '';
@@ -295,6 +372,9 @@ export async function runLlmDraft(db: DB, request: LlmDraftRequest): Promise<Llm
 
   // 5) Schema. A model that ignores the contract produces nothing usable.
   const parsedJson = parseModelJson(out.content);
+  if (request.capability === 'COPILOT_PLAN') {
+    return finalizePlan(parsedJson, facts, fenced.signals, meta, request);
+  }
   const parsed = llmDraftOutputSchema.safeParse(parsedJson);
   if (!parsed.success) {
     return fallback('invalid_output', 'Model output did not match the required schema', meta);

@@ -56,6 +56,19 @@ export const LLM_TASK_LIMITS: Readonly<Record<LlmCapability, LlmTaskLimits>> = {
     timeoutMs: 15_000,
   },
   // 8,000 in ≈ 2,000 tok ($0.006) + 360 out ($0.0054) = $0.0114 → 2× = $0.023
+  // 9,000 in ≈ 2,250 tok ($0.00675) + 700 out ($0.0105) = $0.0173 → 2× = $0.035
+  // The catalogue is the whole fact set (20 agents), so the cap is roomy on
+  // output (a plan is JSON) and still bounded.
+  COPILOT_PLAN: {
+    maxFacts: 28,
+    maxFactChars: 240,
+    maxUntrustedFields: 2,
+    maxUntrustedChars: 3000,
+    maxInputChars: 9_000,
+    maxOutputTokens: 700,
+    maxCostUsd: '0.035',
+    timeoutMs: 20_000,
+  },
   PRODUCT_ANALYSIS: {
     maxFacts: 24,
     maxFactChars: 240,

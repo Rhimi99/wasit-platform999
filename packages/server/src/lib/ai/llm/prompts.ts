@@ -9,7 +9,7 @@ import type { LlmCapability } from './contract';
  * {@link LLM_PROMPT_VERSION} whenever a rule changes, so a stored draft can be
  * traced to the instructions that produced it.
  */
-export const LLM_PROMPT_VERSION = '2026-11-llm-01.1';
+export const LLM_PROMPT_VERSION = '2026-11-copilot-01.1';
 
 const SHARED_RULES = `You are a component of the WASIT B2B/B2C marketplace.
 You produce ONE JSON object and nothing else: no markdown, no code fence, no commentary.
@@ -46,6 +46,32 @@ and the next concrete step the owner can take. Never quote a number that is not 
 FACTS, never offer a discount, and never address an external party.
 "classification" is one of: repeat_buyers, dormant_buyers, catalogue_gap, pricing,
 demand_shift, insufficient_data.`,
+  COPILOT_PLAN: `TASK — coordination plan for the General Manager.
+The FACTS are the complete list of agents this platform has. Each fact key is
+"agent.<agentKey>" (dashes replaced by underscores) and its value starts with the
+exact agentKey, then that agent's name, domain and whether a human must approve it.
+
+Hard rules for this task:
+1. Choose agents ONLY from the FACTS. "agentKey" must be exactly the key that
+   appears at the start of a fact value. A step naming anything else is rejected
+   outright — you may not invent an agent, a capability, or a department.
+2. Do not write inputs, payloads, commands, prompts or tool calls. You choose the
+   agent, a short stepKey and a one-sentence reason; the platform builds the
+   request from the agent's own contract.
+3. Use at most 10 steps. Prefer the fewest agents that can answer the goal.
+4. "dependsOn" lists stepKeys of steps whose output this step needs. Only add a
+   dependency when the order genuinely matters; never create a cycle.
+5. If the request is too vague to act on (no object, no scope, no period), set
+   "needsClarification": true and ask ONE specific question in
+   "clarificationQuestion". Do not invent the missing detail.
+6. Quote the request's constraints and expected outputs in "constraints" and
+   "expectedOutputs". If the request states none, return empty arrays.
+
+Output shape:
+{"goal": string, "constraints": [string], "expectedOutputs": [string],
+ "needsClarification": boolean, "clarificationQuestion": string|null,
+ "steps": [{"stepKey": string, "agentKey": string, "reason": string, "dependsOn": [string]}],
+ "injectionSuspected": boolean}`,
   PRODUCT_ANALYSIS: `TASK — product listing review.
 Write "text" as a suggested improvement note for the seller: which listing fields
 are missing or weak, and a rewritten short description suggestion. Do not state a

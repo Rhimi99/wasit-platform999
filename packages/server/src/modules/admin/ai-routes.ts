@@ -57,6 +57,7 @@ import {
   getAiExecutionSwitchState,
   setAiExecutionEnabled,
 } from '../../lib/ai/kill-switch.js';
+import { copilotRoutes } from '../ai/copilot/routes.js';
 
 const budgetSchema = z
   .object({
@@ -362,6 +363,12 @@ adminAiRoutes.delete('/agent-schedules/:id', async (c) => {
   });
   return c.json({ success: true, data: { id: c.req.param('id')!, deleted: true } });
 });
+
+// ----- Copilot (WASIT-COPILOT-01) ------------------------------------------
+// The coordinator's own surface. It inherits this router's auth/permission gate
+// and never gains a privileged principal: plans and dispatches run as the
+// requesting user.
+adminAiRoutes.route('/copilot', copilotRoutes);
 
 // ----- Agent runs (AI-02.3.1) ----------------------------------------------
 // The operational surface for the run layer: inspect a run, dispatch one ready
