@@ -254,7 +254,7 @@ export async function retryStep(
   // consumed — and reports it as a non-retry, without dispatching. The step is
   // left exactly as it was, so re-enabling can retry it normally (no lost work,
   // no double execution).
-  if (isAiExecutionBlocked()) {
+  if (await isAiExecutionBlocked(db)) {
     return {
       stepId: step.id,
       stepKey: step.stepKey,
@@ -368,7 +368,7 @@ export async function runSupervisorCycle(db: DB, audit: AuditContext, deps: Supe
   // retries during a stop. It short-circuits to a clean no-op and records ONE
   // refusal audit entry — no run is scanned, contained or retried. It does not
   // throw, so the scheduler loop stays healthy and simply idles.
-  if (isAiExecutionBlocked()) {
+  if (await isAiExecutionBlocked(db)) {
     await writeAudit(db, audit, {
       action: 'AI.KILL_SWITCH_SUPERVISOR_REFUSED',
       entityType: 'AI_KILL_SWITCH',

@@ -668,7 +668,7 @@ export async function scanEscalations(db: DB, audit: AuditContext, options: Scan
     cases: [],
   };
 
-  if (isAiExecutionBlocked()) {
+  if (await isAiExecutionBlocked(db)) {
     await writeAudit(db, audit, {
       action: 'AI.KILL_SWITCH_ESCALATION_REFUSED',
       entityType: 'AI_KILL_SWITCH',
@@ -890,7 +890,7 @@ export async function listEscalations(db: DB, query: ListEscalationsQuery = {}):
   const items: EscalationView[] = [];
   for (const row of rows) items.push(await toView(db, row));
 
-  return { items, total: Number(totals[0]?.count ?? 0), counts, bySeverity, killSwitch: isAiExecutionBlocked() };
+  return { items, total: Number(totals[0]?.count ?? 0), counts, bySeverity, killSwitch: await isAiExecutionBlocked(db) };
 }
 
 export async function getEscalation(db: DB, id: string): Promise<EscalationView> {

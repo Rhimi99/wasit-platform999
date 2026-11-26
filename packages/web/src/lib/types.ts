@@ -1089,9 +1089,27 @@ export interface AiAdminUsage {
 }
 
 /** Central AI Kill Switch state (A1). `source` is where the state comes from. */
+export interface AiExecutionSwitchRow {
+  scope: 'GLOBAL' | 'AGENT';
+  targetKey: string;
+  stopped: boolean;
+  reason: string | null;
+  actorId: string | null;
+  version: number;
+  updatedAt: string;
+}
+
 export interface AiKillSwitchState {
   enabled: boolean;
-  source: 'runtime' | 'env';
+  /** The shared database row, the env belt, or nothing readable (fail-closed). */
+  source: 'database' | 'env' | 'unavailable';
+  failClosed: boolean;
+  globalStopped: boolean;
+  envStopped: boolean;
+  stoppedAgents: string[];
+  global: AiExecutionSwitchRow | null;
+  agents: AiExecutionSwitchRow[];
+  checkedAt: string;
 }
 
 export interface AiAdminRequestRow {
@@ -2634,7 +2652,17 @@ export interface GmAuditRow {
 }
 
 export interface GmPlatformData {
-  killSwitch: { enabled: boolean; source: 'runtime' | 'env' };
+  killSwitch: {
+    enabled: boolean;
+    source: 'database' | 'env' | 'unavailable';
+    failClosed: boolean;
+    globalStopped: boolean;
+    envStopped: boolean;
+    stoppedAgents: string[];
+    reason: string | null;
+    actorId: string | null;
+    updatedAt: string | null;
+  };
   agents: { total: number; active: number; generative: number; noExecutor: number } | null;
   tasks: { queued: number; running: number; awaitingApproval: number; failed24h: number } | null;
   copilot: { total: number; failed: number; awaiting: number } | null;

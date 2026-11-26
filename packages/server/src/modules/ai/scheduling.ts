@@ -431,7 +431,7 @@ export async function runDueAgentSchedules(
   // task is created — the sweep short-circuits to a no-op and records ONE
   // refusal audit entry. It does not throw, so the scheduler loop stays healthy
   // and simply idles until AI is re-enabled (schedules are preserved, not lost).
-  if (isAiExecutionBlocked()) {
+  if (await isAiExecutionBlocked(db)) {
     await writeAudit(db, { actorId: null, actorType: 'SYSTEM' }, {
       action: 'AI.KILL_SWITCH_SCHEDULE_REFUSED',
       entityType: 'AI_KILL_SWITCH',

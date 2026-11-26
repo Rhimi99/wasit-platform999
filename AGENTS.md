@@ -1434,3 +1434,15 @@ npx playwright install --with-deps chromium
 - **الأسرار**: `maskProvider` انتقل من `admin/ai-provider-routes.ts` إلى `lib/ai/provider-config.ts` ليتشاركه مكتب AI والمركز — لا تعِد نسخة محلية.
 - **مخزن الحدود**: `memory` يُوصف `process-local, not shared`؛ لا تنسخ `ready` إلى «مشترك بين النسخ».
 - **`DECISION REQUIRED`**: من يوافق عندما يكون الطالب هو المدير العام نفسه (الآن: خادم يرفض الموافقة الذاتية، والواجهة تعلّم الصف)، ومصدر قياس «أثر توصية نُفّذت» (غائب ⇒ 0 صريح). التفاصيل: `docs/WASIT-GM-DASHBOARD-01.md`.
+
+## WASIT-AI-KILLSWITCH-FLEET-01 — مفتاح إيقاف AI عبر كل النسخ (2026-11-26)
+
+- **مصدر حقيقة واحد**: جدول `ai_execution_switches` (migration `0049_powerful_sandman.sql`؛ scope `GLOBAL`/`AGENT` + قيدا CHECK + فهرس فريد `(scope,target_key)` + صف `GLOBAL` واحد `target_key='*'`). **لا ذاكرة محلية ولا كاش**: `lib/ai/execution-switch.ts` هو المصدر، و`lib/ai/kill-switch.ts` واجهة توافق فقط.
+- **fail-closed بثلاث حالات**: صف `GLOBAL` غائب أو فشل قراءة ⇒ `503 AI_CONTROL_UNAVAILABLE` (لا «مفتوح»)؛ `GLOBAL.stopped` ⇒ `503`؛ `AGENT.stopped` ⇒ `503 AI_AGENT_PAUSED` (رسالتان مختلفتان). `GET` الإداري يعيد `source:'unavailable', failClosed:true, enabled:false`.
+- **السباق مغلق**: `createAgentTask` (المساران) و`decideAgentTask` (الاعتماد) يفتحان معاملة ويأخذان `SELECT … FOR SHARE` على صف `GLOBAL` **قبل** الكتابة؛ الإيقاف يأخذ `FOR UPDATE` ويلغي `queued` في نفس المعاملة. لا مهمة جديدة بعد commit الإيقاف.
+- **قراءة المفتاح تتجاوز نطاق الوكيل** عبر `platformDb()` (مثل `provider-config`) — وإلا رفض الـscope الجدول وأوقف كل وكيل. لا تنسَ هذا عند إضافة مسار تنفيذ جديد.
+- **الحزام البيئي**: `AI_AGENT_EXECUTION_ENABLED=false` يوقف ويجعل `source:'env'`، ولا يمكن فتحه من الـDB (استئناف ⇒ `409`).
+- **الصلاحيات**: قراءة الحالة `AI_MANAGE|ADMIN_AI`؛ الإيقاف `ADMIN|SUPER_ADMIN`؛ رفع الإيقاف الشامل **SUPER_ADMIN فقط**. الاستئناف الذاتي مسموح لكن يُعلَّم `independentResume:false` (قرار موثّق في `docs/WASIT-AI-KILLSWITCH-FLEET-01.md §8`).
+- **الAudit**: `AI.EXECUTION_STOPPED/RESUMED` (`entityType=AI_EXECUTION_SWITCH`)، والمسار القديم `/kill-switch` يحتفظ بـ`AI.KILL_SWITCH_DISABLED/ENABLED` (`AI_KILL_SWITCH`). «لا تغيير ⇒ لا صف» (`changed:false`). الرفض الدوري مرة/دورة: `AI.KILL_SWITCH_{SCHEDULE,SUPERVISOR,RECOVERY}_REFUSED`.
+- **`vitest.config.ts` ⇒ `fileParallelism: false`**: القرار أصبح عالمياً في قاعدة مشتركة، فالتوازي بين الملفات يجعل إيقاف ملف يرفض تنفيذ آخر. لا تُعِد التوازي بلا عزل نطاقات لكل ملف.
+- **لهذا السبب** صار أي fake DB في اختبارات الوحدة يُلزَم بصف `GLOBAL` مفتوح: `tests/support/open-switch-row.ts` (`openGlobalSwitchRow()`); و`fakeDb` في أدوات الاختبار لا يحتسب قراءة `ai_execution_switches` كقراءة بيانات.

@@ -167,7 +167,7 @@ async function generationReadiness(
   db: DB,
   environment: string,
 ): Promise<{ available: boolean; reason: string | null }> {
-  if (!getAiExecutionSwitchState().enabled) {
+  if (!(await getAiExecutionSwitchState(db)).enabled) {
     return { available: false, reason: 'AI execution is stopped by the central switch' };
   }
   const rows = await listProviderRows(db);
@@ -663,11 +663,15 @@ async function buildHealthSection(db: DB, supervisor: GmSupervisorData | null): 
     });
   }
 
-  const killSwitch = getAiExecutionSwitchState();
+  const killSwitch = await getAiExecutionSwitchState(db);
   items.push({
     key: 'aiExecution',
-    state: killSwitch.enabled ? 'HEALTHY' : 'DEGRADED',
-    detail: killSwitch.enabled ? 'AI execution is open.' : 'AI execution is stopped by the central switch.',
+    state: killSwitch.failClosed ? 'DOWN' : killSwitch.enabled ? 'HEALTHY' : 'DEGRADED',
+    detail: killSwitch.failClosed
+      ? 'AI execution control is unavailable; new work is refused (fail-closed).'
+      : killSwitch.enabled
+        ? `AI execution is open (source: ${killSwitch.source}).`
+        : `AI execution is stopped (source: ${killSwitch.source}).`,
     probed: true,
     checkedAt,
   });
@@ -855,14 +859,24 @@ async function buildPlatformSection(
   const providers = parts.providers.data;
   const supervisor = parts.supervisor.data;
 
-  const killSwitch = getAiExecutionSwitchState();
+  const switchState = await getAiExecutionSwitchState(db);
   const lastActivity = [
     ...(agents?.items.map((item) => item.lastActivityAt).filter((value): value is string => Boolean(value)) ?? []),
     ...(copilot?.items.map((report) => report.createdAt) ?? []),
   ].sort().at(-1);
 
   return {
-    killSwitch,
+    killSwitch: {
+      enabled: switchState.enabled,
+      source: switchState.source,
+      failClosed: switchState.failClosed,
+      globalStopped: switchState.globalStopped,
+      envStopped: switchState.envStopped,
+      stoppedAgents: switchState.stoppedAgents,
+      reason: switchState.global?.reason ?? null,
+      actorId: switchState.global?.actorId ?? null,
+      updatedAt: switchState.global?.updatedAt ?? null,
+    },
     agents: agents
       ? {
           total: agents.counts.total,

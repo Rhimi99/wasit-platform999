@@ -1,8 +1,9 @@
 # WASIT-AI-KILLSWITCH-FLEET-01 — تصميم Kill Switch مركزي عبر النسخ
 
-> **الحالة:** تصميم جاهز + **توقّف إلزامي قبل Migration** (قاعدة المهمة §7).
+> **الحالة:** ✅ **منفَّذ ومتحقَّق** (Migration `0049` مطبَّقة على قاعدة الاختبار المعزولة فقط).
 > **الفرع:** `wasit-ai-killswitch-fleet-01` · **الأساس:** `e8c2ac0` (لوحة المدير العام).
-> **لا كود تنفيذي في هذا الالتزام:** لا جدول، لا migration، لا seed — فقط التصميم والأدلة.
+> **حالة §7 (بوابة الموافقة):** وُوفق على تغيير قاعدة البيانات الوحيد، وطُبِّق على `wasit_test`
+> المحلية فقط؛ لم تُلمس قاعدة إنتاج/ديمو/staging. حالة التنفيذ في §8.
 
 ## 1. الفجوة المؤكدة في الكود الحالي
 
@@ -185,3 +186,70 @@ ON CONFLICT ("scope","target_key") DO NOTHING;
 بعد الموافقة: تنفيذ الخدمة والمسارات والاختبارات أعلاه، ثم Commit ودفع فرع المهمة فقط.
 قبل الموافقة: **لا migration، لا جدول، لا seed، ولا كود يعتمد عليه** — حتى لا تتحول الاختبارات
 القائمة إلى فشل بـ«جدول غير موجود».
+
+---
+
+## 8. حالة التنفيذ (2026-11-26)
+
+### 8.1 قاعدة البيانات — هوية مُثبَتة قبل أي تغيير
+
+| فحص | النتيجة |
+| --- | --- |
+| الهدف | `wasit_test` على `127.0.0.1:5434` (مستخدم `wasit_test_runner`) |
+| `current_database()` | `wasit_test` |
+| `inet_server_addr()` / `inet_server_port()` | `127.0.0.1/32` / `5434` |
+| قواعد أخرى على نفس العنقود | `pg_database` ⇒ **0** (`wasit_demo`/`wasit_prod`/`wasit_staging` غير موجودة) |
+| مقارنة بـ`.env.demo` | هدف الديمو `wasit_demo` ⇒ **مختلف** عن هدف التنفيذ |
+
+**ملف الـmigration:** `packages/server/src/db/migrations/0049_powerful_sandman.sql` — جدول
+`ai_execution_switches` + 9 أعمدة + `pkey` + قيدا `CHECK` (نطاق + مفتاح الهدف) + فهرس فريد
+`(scope, target_key)` + صف `GLOBAL` واحد (`ON CONFLICT DO NOTHING`). طُبِّق بـ`drizzle-kit migrate`
+فقط على `wasit_test`؛ التحقق بعد التطبيق: الأعمدة/القيود/الفهرس/الصف موجودة، و`drizzle_migrations`
+تسجّل `0049`.
+
+**العودة للخلف:** `DROP TABLE ai_execution_switches` — إضافي بحت، لا فقد بيانات لأي جدول قائم.
+
+### 8.2 الكود
+
+| الملف | الدور |
+| --- | --- |
+| `src/db/schema/ai-execution-switch.ts` | تعريف Drizzle + `GLOBAL_TARGET_KEY='*'` |
+| `src/lib/ai/execution-switch.ts` | المصدر الوحيد: `readExecutionSwitchState`, `isExecutionBlocked`, `assertExecutionAllowed`, `lockAndAssertExecutionAllowed`, `setGlobalSwitch`, `setAgentSwitch`, `getAiExecutionSwitchState`, `describeSwitchState` |
+| `src/lib/ai/kill-switch.ts` | واجهة توافق فوق المصدر نفسه (`assertAiExecutionEnabled`, `isAiExecutionEnabled`, `setAiExecutionEnabled(db, …)`)، **لا ذاكرة محلية** |
+| `src/modules/admin/ai-routes.ts` | `GET /api/admin/ai/execution-switch`، `POST …/execution-switch/global`، `POST …/execution-switch/agents/:agentKey` + توافق `GET/POST /kill-switch` |
+| `src/modules/ai/agents.ts` | فحص + قفل `FOR SHARE` **داخل** معاملة إنشاء المهمة (المسارين المقيّد وغير المقيّد) وداخل معاملة اعتماد الموافقة |
+| `packages/web/src/pages/AdminAiPage.tsx` + `types.ts` + `i18n.ts` | عرض المصدر `database`/`env`/`unavailable` + شارة `failClosed` + السبب + الوكلاء الموقوفون (ar/en/fr/zh) |
+
+**قرارات تنفيذية تختلف عن §4 (موثّقة):**
+1. **الاستئناف الذاتي مسموح ومُعلَّم**، لا مرفوض 409: نفس المشغّل الذي أوقف يمكنه الاستئناف (مفتاح
+   أمان يجب أن يبقى قابلاً للتشغيل)، لكن الاستجابة/الـAudit تحمل `independentResume:false` بدل حجب
+   الاستئناف. رفع الإيقاف الشامل يبقى **SUPER_ADMIN فقط**.
+2. **فشل قراءة المصدر = 503 `AI_CONTROL_UNAVAILABLE`** (fail-closed) حتى في مسار القراءة الإدارية
+   (`GET` يعيد `source:'unavailable'`, `failClosed:true`, `enabled:false` — لا يدّعي «مفتوح»).
+3. **صف `GLOBAL` غائب = UNAVAILABLE**، لا «مفتوح»: حذف الصف ليس تجاوزاً.
+4. **الـAudit:** المسارات الجديدة تكتب `AI.EXECUTION_STOPPED`/`AI.EXECUTION_RESUMED`
+   (`entityType=AI_EXECUTION_SWITCH`)، والمسار القديم `/kill-switch` يحتفظ بالأسماء التاريخية
+   `AI.KILL_SWITCH_DISABLED`/`AI.KILL_SWITCH_ENABLED` (`entityType=AI_KILL_SWITCH`) كي لا تنكسر
+   استعلامات/تنبيهات قائمة. الرفض التلقائي يسجّل `AI.KILL_SWITCH_SCHEDULE_REFUSED` /
+   `AI.KILL_SWITCH_SUPERVISOR_REFUSED` / `AI.KILL_SWITCH_RECOVERY_REFUSED` **مرة واحدة لكل دورة**،
+   و«لا تغيير ⇒ لا صف» (`changed:false`).
+5. **حزام البيئة:** `AI_AGENT_EXECUTION_ENABLED=false` يمنع ويجعل `source:'env'`؛ محاولة استئناف من
+   الـDB تُرفض `409` (الحزام لا يُفتح من قاعدة البيانات).
+
+### 8.3 الاختبارات
+
+| الملف | الحالات |
+| --- | --- |
+| `tests/ai-killswitch-fleet-01.test.ts` | **11/11** — قبول كامل: نسختان (مجمّعان مختلفان + `createApp` مستقلان)، 20 وكيلاً، Copilot (plan/advance)، Supervisor، scheduler، recovery، tool-gateway، إلغاء `queued` وعدم إعادته، fail-closed بإعادة تسمية الجدول، 409 للاستئناف الفردي أثناء الشامل، البقاء بعد «restart» (مجمّع جديد)، Audit (who/what/why/version + لا صف عند عدم التغيير)، RBAC (401/403، ADMIN يوقف ولا يرفع)، سباق 20 إنشاءً متزامناً مع الإيقاف |
+| `tests/a1-kill-switch-unit.test.ts` | **9/9** — إسقاط الحالة النقي (fail-closed عند غياب صف `GLOBAL`)، رفض المتجر غير القابل للقراءة، رسائل الرفض منفصلة وبلا أسرار |
+
+**تعديل بنيوي لازم:** `vitest.config.ts` ⇒ `fileParallelism: false`. المفتاح أصبح قراراً
+**على مستوى المنصة في قاعدة مشتركة**، فتشغيل الملفات بالتوازي كان يعني أن إيقاف ملف يرفض تنفيذ ملف
+آخر. تسلسل الملفات يجعل كل قرار في القاعدة ملاحَظاً بشكل حتمي.
+
+### 8.4 خارج النطاق (لم يُنفَّذ)
+
+- لا تغيير في RBAC/الأدوار، ولا صلاحية جديدة.
+- لا إلغاء قسري لخطوة تنفيذ بدأت (الحدّ في §6 قائم).
+- لا `OBS-01` ولا أي مراقبة جديدة.
+

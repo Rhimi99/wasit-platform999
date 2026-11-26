@@ -344,6 +344,13 @@
       "when": 1795581075340,
       "tag": "0048_rfq_award",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1795713963485,
+      "tag": "0049_powerful_sandman",
+      "breakpoints": true
     }
   ]
 }

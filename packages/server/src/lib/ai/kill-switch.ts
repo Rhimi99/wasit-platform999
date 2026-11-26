@@ -1,104 +1,60 @@
-import { ApiError } from '@wasit/shared';
-import { env } from '../env';
+import type { DB } from '../../db/client';
+import { setGlobalSwitch } from './execution-switch';
+import {
+  assertExecutionAllowed,
+  isExecutionBlocked,
+  readExecutionSwitchState,
+  type ExecutionSwitchState,
+} from './execution-switch';
 
 /**
- * Central AI Kill Switch (A1).
+ * Central AI Kill Switch — compatibility surface over the fleet-wide store.
  *
- * ONE process-global gate that every AI-execution entry point consults before
- * it starts or continues work. It is deliberately independent of the LLM: it is
- * a plain in-memory boolean, so it works with no provider, no DB round-trip and
- * no model call — the emergency stop must never depend on the thing it stops.
- *
- * Fail-closed: `isAiExecutionEnabled()` returns `false` only for an explicit
- * disable. A resolution error (a bug in the resolver) also yields `false`, so a
- * broken check can never silently allow execution. Callers that need to *start*
- * or *continue* work use `assertAiExecutionEnabled()`, which throws
- * `ApiError.serviceUnavailable` (503) with a stable code so every surface —
- * API, scheduler, supervisor, recovery — refuses uniformly and observably.
+ * The authority is the `ai_execution_switches` table (see `execution-switch.ts`),
+ * read at the moment of execution. Nothing is cached in the process: a stop
+ * committed on one instance is observed by every other instance on its very next
+ * attempt, and it survives a restart.
  *
  * Scope: this is a *subsystem* stop, not a permission. It grants no authority
  * and replaces nothing: RBAC, agent permissions, human approvals, cost budgets,
- * the (future) Tool Gateway and audit all still apply on top of it.
- *
- * Durability: the switch is process-global, so it stops every entry point in
- * the same process (API requests, the in-process scheduler, supervisor and
- * recovery cycles). It is intentionally NOT persisted: this task may not add a
- * migration/table. A multi-instance deployment therefore needs a shared store
- * (DB-backed flag) to make the stop fleet-wide — that remainder is documented
- * as BLOCKED in `docs/AI_KILL_SWITCH.md`. Until then, the in-process gate is
- * authoritative per instance and the env flag seeds the initial state.
+ * the tool gateway and audit all still apply on top of it.
  */
-
 export const AI_EXECUTION_DISABLED_MESSAGE =
   'AI execution is currently disabled by the central kill switch';
 
-let runtimeOverride: boolean | null = null;
-
 /**
- * Resolves the effective state. Precedence: an explicit runtime override
- * (set via the admin control) wins; otherwise the environment default
- * (`AI_AGENT_EXECUTION_ENABLED`, default `true`). Any unexpected failure fails
- * closed.
+ * The single guard every execution entry point awaits before it starts work.
+ * Throws `ApiError.serviceUnavailable` (503) when the global switch is off, the
+ * agent is paused, or the control store cannot be read (fail-closed).
  */
-function resolveEnabled(): boolean {
-  try {
-    if (runtimeOverride !== null) return runtimeOverride;
-    return env.AI_AGENT_EXECUTION_ENABLED !== false;
-  } catch {
-    // Fail closed: if the flag cannot be resolved, refuse to execute.
-    return false;
-  }
+export async function assertAiExecutionEnabled(db: DB, agentKey?: string | null): Promise<void> {
+  await assertExecutionAllowed(db, agentKey);
 }
 
-/**
- * True when AI execution is allowed. Fail-closed: only an explicit disable (or
- * an unreadable flag) returns false.
- */
-export function isAiExecutionEnabled(): boolean {
-  return resolveEnabled();
+/** True when AI execution is currently blocked (fail-closed on any error). */
+export async function isAiExecutionBlocked(db: DB, agentKey?: string | null): Promise<boolean> {
+  return isExecutionBlocked(db, agentKey);
 }
 
-/** True when the emergency stop is active. */
-export function isAiExecutionDisabled(): boolean {
-  return !resolveEnabled();
+/** The audit-free predicate a caller uses to decide whether to attempt work. */
+export async function isAiExecutionEnabled(db: DB, agentKey?: string | null): Promise<boolean> {
+  return !(await isExecutionBlocked(db, agentKey));
+}
+
+/** The current effective state plus its source, for admin/GM read surfaces. */
+export async function getAiExecutionSwitchState(db: DB): Promise<ExecutionSwitchState> {
+  return readExecutionSwitchState(db);
 }
 
 /**
- * The single guard every execution entry point calls. Throws a 503 with a
- * stable `SERVICE_UNAVAILABLE` code and a clear, user-facing reason when the
- * switch is off. Callers do NOT audit here — auditing is the responsibility of
- * the surface that owns the attempt (so a sweep is not audited per scanned row).
+ * Direct writer for the GLOBAL switch, for test setup and operational scripts.
+ * `null`/`true` open the switch, `false` stops it. It writes the same persisted
+ * row the API writes — there is no in-process override to bypass the store.
  */
-export function assertAiExecutionEnabled(): void {
-  if (!resolveEnabled()) {
-    throw ApiError.serviceUnavailable(AI_EXECUTION_DISABLED_MESSAGE);
-  }
-}
-
-/**
- * The audit-free predicate a caller uses to *decide* whether to attempt work,
- * so it can record its own "refused" audit entry exactly once (rather than
- * relying on a thrown error). Equivalent to `isAiExecutionEnabled`.
- */
-export function isAiExecutionBlocked(): boolean {
-  return !resolveEnabled();
-}
-
-/**
- * Sets the runtime override. `null` clears the override and falls back to the
- * environment default. Used by the admin enable/disable control and by tests.
- */
-export function setAiExecutionEnabled(enabled: boolean | null): void {
-  runtimeOverride = enabled;
-}
-
-/** The current effective state plus its source, for the admin status surface. */
-export function getAiExecutionSwitchState(): {
-  enabled: boolean;
-  source: 'runtime' | 'env';
-} {
-  return {
-    enabled: resolveEnabled(),
-    source: runtimeOverride !== null ? 'runtime' : 'env',
-  };
+export async function setAiExecutionEnabled(db: DB, enabled: boolean | null): Promise<void> {
+  await setGlobalSwitch(db, {
+    stopped: enabled === false,
+    reason: enabled === false ? 'set by test/ops helper' : null,
+    actorId: 'system:switch-helper',
+  });
 }

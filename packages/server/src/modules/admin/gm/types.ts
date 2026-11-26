@@ -224,7 +224,18 @@ export interface GmAuditData {
 }
 
 export interface GmPlatformData {
-  killSwitch: { enabled: boolean; source: 'runtime' | 'env' };
+  killSwitch: {
+    enabled: boolean;
+    /** Where the decision came from: the shared database row, the env belt, or nothing readable. */
+    source: 'database' | 'env' | 'unavailable';
+    failClosed: boolean;
+    globalStopped: boolean;
+    envStopped: boolean;
+    stoppedAgents: string[];
+    reason: string | null;
+    actorId: string | null;
+    updatedAt: string | null;
+  };
   /** Each block is null when its source section was unavailable. */
   agents: { total: number; active: number; generative: number; noExecutor: number } | null;
   tasks: { queued: number; running: number; awaitingApproval: number; failed24h: number } | null;

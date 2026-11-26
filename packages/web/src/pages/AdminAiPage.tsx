@@ -337,9 +337,28 @@ export function AdminAiPage() {
                             {killSwitch.enabled ? t('adminAi.killSwitch.stateEnabled') : t('adminAi.killSwitch.stateDisabled')}
                           </span>
                           <span className="ms-2 text-slate-500">
-                            {killSwitch.source === 'runtime' ? t('adminAi.killSwitch.sourceRuntime') : t('adminAi.killSwitch.sourceEnv')}
+                            {killSwitch.source === 'database'
+                              ? t('adminAi.killSwitch.sourceDatabase')
+                              : killSwitch.source === 'env'
+                                ? t('adminAi.killSwitch.sourceEnv')
+                                : t('adminAi.killSwitch.sourceUnavailable')}
                           </span>
                         </p>
+                        {killSwitch.failClosed && (
+                          <p data-testid="admin-ai-kill-switch-failclosed" className="mt-2 rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700">
+                            {t('adminAi.killSwitch.failClosed')}
+                          </p>
+                        )}
+                        {killSwitch.global?.reason && (
+                          <p className="mt-2 text-xs text-slate-600">
+                            {t('adminAi.killSwitch.reasonLabel')}: {killSwitch.global.reason}
+                          </p>
+                        )}
+                        {killSwitch.stoppedAgents.length > 0 && (
+                          <p className="mt-1 text-xs text-slate-600">
+                            {t('adminAi.killSwitch.stoppedAgentsLabel')}: {killSwitch.stoppedAgents.join(', ')}
+                          </p>
+                        )}
                       </div>
                       <button
                         type="button"

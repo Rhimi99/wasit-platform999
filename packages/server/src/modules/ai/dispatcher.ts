@@ -208,7 +208,7 @@ export async function dispatchStep(
   // Central AI Kill Switch (A1): dispatch starts a step, so a global disable
   // refuses it BEFORE the run/step is touched — no step is marked RUNNING and no
   // task is created. Uniform across the admin route and the supervisor retry.
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
   const run = await loadRun(db, runId);
   const steps = await loadSteps(db, runId);
   const step = steps.find((s) => s.stepKey === stepKey);
@@ -785,7 +785,7 @@ export async function recoverStuckSteps(
   // stop. It short-circuits to a clean no-op (nothing scanned, nothing settled,
   // no run reconciled) and records ONE refusal audit entry — never per-row. It
   // does not throw, so the scheduler loop stays healthy and simply idles.
-  if (isAiExecutionBlocked()) {
+  if (await isAiExecutionBlocked(db)) {
     await writeAudit(db, audit, {
       action: 'AI.KILL_SWITCH_RECOVERY_REFUSED',
       entityType: 'AI_KILL_SWITCH',
@@ -912,7 +912,7 @@ export async function recoverRun(db: DB, runId: string, audit: AuditContext): Pr
   // Central AI Kill Switch (A1): the manual recovery route must not re-drive a
   // run during a stop. Refuse loudly (503) so the operator sees why, without
   // touching the run — its state stays exactly as it was, nothing is lost.
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
   const steps = await loadSteps(db, runId);
   for (const step of steps) {
     if (step.status === 'RUNNING') {

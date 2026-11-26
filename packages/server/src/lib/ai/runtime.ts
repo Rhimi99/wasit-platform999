@@ -202,7 +202,7 @@ export async function runAIFeature(
   // in the platform flows through here, so a global disable stops ALL AI work —
   // agent executors, smart features and one-off `/api/ai/run` alike — before any
   // budget reservation or provider call. Fail-closed and LLM-independent.
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
   // Idempotency: a key that is already on the ledger means this logical call
   // completed before (a retried request or a replayed event). Returning the
   // recorded outcome — with no second provider call — is the only way to keep

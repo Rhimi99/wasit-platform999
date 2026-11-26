@@ -93,7 +93,7 @@ export async function createCopilotRequest(
   input: CreateCopilotRequestInput,
   audit: AuditContext,
 ): Promise<CopilotRequestView> {
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
 
   const text = typeof input.request === 'string' ? input.request.trim() : '';
   if (text.length < MIN_REQUEST_CHARS) {
@@ -227,7 +227,7 @@ export async function advanceCopilotRun(
   runId: string,
   audit: AuditContext,
 ): Promise<{ dispatched: string[]; blocked: string[]; status: string }> {
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
   const dispatched: string[] = [];
   const blocked: string[] = [];
 

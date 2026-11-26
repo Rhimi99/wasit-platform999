@@ -43,6 +43,13 @@ for (const key of CALLER_SHELL_LEAKS) delete process.env[key];
 export default defineConfig({
   test: {
     environment: 'node',
+    // The suite shares ONE PostgreSQL database, and the AI execution switch is
+    // genuinely global: a spec that stops AI (or any spec that stops its agent)
+    // is a platform-wide decision now, not a per-process boolean. Running files
+    // concurrently would therefore let one file's stop refuse another file's
+    // execution. Files run one at a time so every DB-level decision is observed
+    // deterministically.
+    fileParallelism: false,
     include: ['tests/**/*.test.ts'],
     testTimeout: 30000,
     hookTimeout: 30000,

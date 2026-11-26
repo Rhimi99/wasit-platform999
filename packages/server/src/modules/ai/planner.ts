@@ -302,7 +302,7 @@ export async function planAgentRun(
 ): Promise<PersistedPlan> {
   // Central AI Kill Switch (A1): planning creates a new run, so a global disable
   // refuses it up front — no run or step row is written while disabled.
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
   if (typeof input.title !== 'string' || input.title.trim() === '') {
     throw validationError('title', 'A run needs a title', 'REQUIRED');
   }
