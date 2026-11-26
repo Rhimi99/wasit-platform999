@@ -150,19 +150,19 @@ beforeAll(async () => {
 beforeEach(async () => {
   await resetRateLimitStore();
   setLlmProviderOverride(null);
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
 });
 
-afterEach(() => {
+afterEach(async () => {
   setLlmProviderOverride(null);
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
   env.AI_RATE_LIMIT_ADMIN_CONTROL_MAX = savedAdminControlMax;
   env.AI_RATE_LIMIT_ADMIN_MULTIPLIER = savedAdminMultiplier;
 });
 
 afterAll(async () => {
   setLlmProviderOverride(null);
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
   env.AI_RATE_LIMIT_ADMIN_CONTROL_MAX = savedAdminControlMax;
   if (createdRunIds.length > 0) {
     await db.delete(agentRunSteps).where(inArray(agentRunSteps.runId, createdRunIds));
@@ -482,7 +482,7 @@ describe('WASIT-COPILOT-01 — the coordinator', () => {
   it('respects the kill switch and the supervisor', async () => {
     const gm = await createUser('SUPER_ADMIN', 'governance');
 
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const blocked = await gm.client.req('/api/admin/ai/copilot/requests', {
       method: 'POST',
       body: { request: 'تقرير مبيعات الشهر' },
@@ -491,7 +491,7 @@ describe('WASIT-COPILOT-01 — the coordinator', () => {
     const none = await db.select().from(agentRuns).where(eq(agentRuns.requestedBy, gm.id));
     expect(none).toHaveLength(0);
 
-    setAiExecutionEnabled(null);
+    await setAiExecutionEnabled(db, null);
     const created = await createCopilotRequest(
       db,
       gm.id,

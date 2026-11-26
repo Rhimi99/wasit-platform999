@@ -172,7 +172,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   savedEnvironment = env.AI_CONFIG_ENVIRONMENT;
   env.AI_CONFIG_ENVIRONMENT = GUARD_ENV;
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
   await clearGuardRows();
   await ensureProviderConfigs(db);
   // A case may switch a vendor on directly (to prove the runtime guard catches
@@ -185,7 +185,7 @@ beforeEach(async () => {
     );
 });
 
-afterEach(() => {
+afterEach(async () => {
   env.AI_CONFIG_ENVIRONMENT = savedEnvironment;
   delete process.env.AI_OPENAI_API_KEY;
 });

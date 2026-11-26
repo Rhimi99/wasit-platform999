@@ -13,6 +13,8 @@ import { roles, userRoles } from '../../src/db/schema/auth.js';
 import { auditLogs } from '../../src/db/schema/audit.js';
 import { notifications } from '../../src/db/schema/messaging.js';
 import { aiBudgets, aiModels, aiRequests, aiUsage } from '../../src/db/schema/ai.js';
+import { aiExecutionSwitches } from '../../src/db/schema/ai-execution-switch.js';
+import { openGlobalSwitchRow } from '../support/open-switch-row.js';
 
 /**
  * AI-INTEG-P3-T2 — the trusted action gate at the executor execution boundary.
@@ -91,6 +93,7 @@ function fakeDb() {
     aiBudgets: getTableName(aiBudgets),
     aiUsage: getTableName(aiUsage),
     aiModels: getTableName(aiModels),
+    aiExecutionSwitches: getTableName(aiExecutionSwitches),
   };
   const store: Record<string, Row[]> = {
     [TN.agentRegistry]: [],
@@ -103,6 +106,7 @@ function fakeDb() {
     [TN.aiBudgets]: [],
     [TN.aiUsage]: [],
     [TN.aiModels]: [],
+    [TN.aiExecutionSwitches]: [openGlobalSwitchRow()],
   };
   const name = (t: unknown): string => getTableName(t as never);
   const rows = (t: string): Row[] => (store[t] ??= []);

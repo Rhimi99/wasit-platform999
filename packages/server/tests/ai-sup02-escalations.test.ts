@@ -146,8 +146,8 @@ async function casesFor(key: string) {
   return rows;
 }
 
-beforeEach(() => {
-  setAiExecutionEnabled(null);
+beforeEach(async () => {
+  await setAiExecutionEnabled(db, null);
 });
 
 afterAll(async () => {
@@ -169,8 +169,8 @@ afterAll(async () => {
   // to clean; this suite only removes what it keyed.
 });
 
-afterEach(() => {
-  setAiExecutionEnabled(null);
+afterEach(async () => {
+  await setAiExecutionEnabled(db, null);
 });
 
 describe('AI-SUP-02 — detection from real rows', () => {
@@ -597,7 +597,7 @@ describe('AI-SUP-02 — failure containment', () => {
 describe('AI-SUP-02 — kill switch', () => {
   it('stops detection and notification, and says so in the audit trail', async () => {
     const key = agentKey('killed');
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
 
     const result = await scan();
     expect(result.skipped).toBe('KILL_SWITCH');
@@ -616,7 +616,7 @@ describe('AI-SUP-02 — kill switch', () => {
       .limit(1);
     expect(refusal).toHaveLength(1);
 
-    setAiExecutionEnabled(true);
+    await setAiExecutionEnabled(db, true);
     await scan();
     expect(await casesFor(key)).toHaveLength(1);
   });
@@ -628,7 +628,7 @@ describe('AI-SUP-02 — kill switch', () => {
     await scan();
     const [caseRow] = await casesFor(key);
 
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const ack = await gm.client.req(`/api/admin/ai/escalations/${caseRow.id}/acknowledge`, {
       method: 'POST',
       body: { note: 'handled during the stop' },

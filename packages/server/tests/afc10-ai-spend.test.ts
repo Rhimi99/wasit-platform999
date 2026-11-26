@@ -83,7 +83,7 @@ async function ensureGuardFixture() {
 beforeEach(async () => {
   savedEnvironment = env.AI_CONFIG_ENVIRONMENT;
   env.AI_CONFIG_ENVIRONMENT = 'test';
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
   // Limits and counters are per environment; starting each case from an empty
   // `staging` set keeps one case's cap from leaking into the next.
   await db.delete(aiSpendAlerts).where(eq(aiSpendAlerts.environment, LIMIT_ENV));
@@ -92,9 +92,9 @@ beforeEach(async () => {
   await ensureGuardFixture();
 });
 
-afterEach(() => {
+afterEach(async () => {
   env.AI_CONFIG_ENVIRONMENT = savedEnvironment;
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
 });
 
 async function insertUser(roleName: UserRole, tag: string) {

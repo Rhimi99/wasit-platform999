@@ -152,7 +152,9 @@ describe('WASIT-GM-DASHBOARD-01 — overview contract', () => {
     const { data } = await client.req('/api/admin/gm/overview');
     const platform = data.data.sections.platform.data;
     expect(typeof platform.killSwitch.enabled).toBe('boolean');
-    expect(['runtime', 'env']).toContain(platform.killSwitch.source);
+    // FLEET-01: the state is read from the shared database row, or explained by
+    // the env belt, or explicitly reported as unavailable (never a placeholder).
+    expect(['database', 'env', 'unavailable']).toContain(platform.killSwitch.source);
   });
 
   it('labels an agent generative only when its executor reaches the LLM path', async () => {

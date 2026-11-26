@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { DB } from '../../src/db/client.js';
+import { aiExecutionSwitches } from '../../src/db/schema/ai-execution-switch.js';
+import { openGlobalSwitchRow } from '../support/open-switch-row.js';
 
 /**
  * AI-INTEG-P3-T1 — the trusted execution context bound by `createAgentTask` /
@@ -53,7 +55,16 @@ const { notifications } = await import('../../src/db/schema/messaging.js');
 const { aiRequests } = await import('../../src/db/schema/ai.js');
 
 type Row = Record<string, unknown>;
-const TABLES = { agentRegistry, agentTasks, roles, userRoles, auditLogs, notifications, aiRequests } as const;
+const TABLES = {
+  agentRegistry,
+  agentTasks,
+  roles,
+  userRoles,
+  auditLogs,
+  notifications,
+  aiRequests,
+  aiExecutionSwitches,
+} as const;
 
 /**
  * Minimal evaluator for the Drizzle SQL condition objects the code builds
@@ -126,6 +137,7 @@ function fakeDb() {
     auditLogs: [],
     notifications: [],
     aiRequests: [],
+    aiExecutionSwitches: [openGlobalSwitchRow()],
   };
   const nameOf = new Map<unknown, string>(Object.entries(TABLES).map(([n, t]) => [t, n]));
   const tableName = (t: unknown): string => nameOf.get(t) ?? 'agentTasks';

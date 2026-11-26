@@ -107,9 +107,9 @@ beforeAll(async () => {
   await ensureAgentRegistrySeeded(db);
 });
 
-afterEach(() => {
+afterEach(async () => {
   // The kill switch is global state: always restore it after a test flips it.
-  setAiExecutionEnabled(true);
+  await setAiExecutionEnabled(db, true);
 });
 
 afterAll(async () => {
@@ -224,7 +224,7 @@ describe('AI-ARCH-ALIGN-01 — governance boundaries around the Copilot', () => 
 
   it('respects the central AI kill switch', async () => {
     const admin = await makeUser('SUPER_ADMIN');
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const r = await planAs(admin.client, [{ stepKey: 'a', agentKey: 'product-agent', input: {} }]);
     expect(r.status).toBe(503);
   });

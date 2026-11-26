@@ -18,6 +18,9 @@ import { EXECUTABLE_AGENT_KEYS } from '../../src/modules/ai/executors.js';
 import { auditLogs } from '../../src/db/schema/audit.js';
 import { agentTasks } from '../../src/db/schema/agents.js';
 import type { DB } from '../../src/db/client.js';
+import { getTableName } from 'drizzle-orm';
+import { aiExecutionSwitches } from '../../src/db/schema/ai-execution-switch.js';
+import { openGlobalSwitchRow } from '../support/open-switch-row.js';
 
 /**
  * AI-REG-01 — one agent layer.
@@ -62,7 +65,24 @@ function stubDb(): { db: DB; inserts: unknown[] } {
       return { values: async () => undefined };
     },
     select() {
-      throw new Error('a refused run must not read the database');
+      // The kill switch is a platform authority, not run data: it is the ONLY
+      // read a refused run may perform. Any data table still throws.
+      const b = {
+        from(t: unknown) {
+          const table = getTableName(t as never);
+          if (table !== getTableName(aiExecutionSwitches as never)) {
+            throw new Error('a refused run must not read the database');
+          }
+          return b;
+        },
+        where() { return b; },
+        for() { return b; },
+        limit() { return b; },
+        then(resolve: (rows: unknown[]) => unknown) {
+          return Promise.resolve([openGlobalSwitchRow()]).then(resolve);
+        },
+      };
+      return b;
     },
   } as unknown as DB;
   return { db, inserts };

@@ -50,9 +50,9 @@ const ctx = (agentKey: string, over: Partial<AgentRunContext> = {}): AgentRunCon
   ...over,
 });
 
-afterEach(() => {
+afterEach(async () => {
   // Never leak a stopped kill switch into another spec.
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
 });
 
 afterAll(async () => {
@@ -148,7 +148,7 @@ describe('A2 — scope isolation holds against the real registry', () => {
 describe('A2 — A1 kill switch remains effective alongside scope enforcement', () => {
   it('refuses task creation while AI is disabled', async () => {
     const staffId = await createUser('SUPER_ADMIN');
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     await expect(
       createAgentTask(db, ['SUPER_ADMIN'], staffId, { agentKey: 'marketing-agent', requestedBy: staffId, input: {} }, AUDIT),
     ).rejects.toThrow();
@@ -156,7 +156,7 @@ describe('A2 — A1 kill switch remains effective alongside scope enforcement', 
 
   it('allows task creation again after re-enabling', async () => {
     const staffId = await createUser('SUPER_ADMIN');
-    setAiExecutionEnabled(true);
+    await setAiExecutionEnabled(db, true);
     const task = await createAgentTask(
       db,
       ['SUPER_ADMIN'],
