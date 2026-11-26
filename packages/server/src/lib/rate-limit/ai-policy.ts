@@ -170,10 +170,13 @@ export const AI_LIMIT_RULES: readonly AiLimitRule[] = [
     exemptPaths: ['/api/admin/ai/providers'],
   },
   { pattern: '/api/admin/ai/*', methods: ['GET'], id: 'ai.admin.read' },
+  // The GM command center aggregates the AI desks; it reads the same tables and
+  // is therefore bounded like the admin AI reads it summarises.
+  { pattern: '/api/admin/gm/*', methods: ['GET'], id: 'ai.admin.read' },
 ];
 
 /** Per-IP backstop shared by every AI surface (bounds account rotation). */
-export const AI_IP_BACKSTOP_PATTERNS: readonly string[] = ['/api/ai/*', '/api/admin/ai/*'];
+export const AI_IP_BACKSTOP_PATTERNS: readonly string[] = ['/api/ai/*', '/api/admin/ai/*', '/api/admin/gm/*'];
 
 export function aiLimitWindowSeconds(): number {
   return env.RATE_LIMIT_AI_WINDOW_SECONDS;

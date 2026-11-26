@@ -30,6 +30,7 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
+  GmOverview, GmTasksData, GmAuditRow,
   AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
   AiSpendOverview, AiSpendLimitList, AiSpendLimitRow, AiSpendGuard,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
@@ -1376,6 +1377,49 @@ export const api = {
     return request<AgentTaskDecision>(`/api/ai/tasks/${taskId}/${decision === 'APPROVE' ? 'approve' : 'reject'}`, {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
+    });
+  },
+
+  // ---- GM command center (WASIT-GM-DASHBOARD-01) ----
+  // Read-only aggregation. Every action below calls an endpoint that already
+  // existed before the dashboard; the dashboard itself exposes no write path.
+  async adminGmOverview(days = 30) {
+    return request<GmOverview>(`/api/admin/gm/overview?days=${days}`);
+  },
+  async adminGmTasks(params: {
+    status?: string;
+    agentKey?: string;
+    kind?: 'agent_task' | 'copilot_run';
+    severity?: 'high' | 'medium' | 'low';
+    from?: string;
+    to?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}) {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    }
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<GmTasksData>(`/api/admin/gm/tasks${suffix}`);
+  },
+  async adminGmAudit(params: { action?: string; entityType?: string; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    }
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: GmAuditRow[]; page: number; pageSize: number }>(`/api/admin/gm/audit${suffix}`);
+  },
+  async adminApproveRunStep(runId: string, stepKey: string) {
+    return request<unknown>(
+      `/api/admin/ai/agent-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepKey)}/approve`,
+      { method: 'POST' },
+    );
+  },
+  async adminCancelAgentRun(runId: string) {
+    return request<{ runId: string; status: string }>(`/api/admin/ai/agent-runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
     });
   },
 

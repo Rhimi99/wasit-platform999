@@ -43,6 +43,7 @@ import { adminRoutes } from './modules/admin/routes.js';
 import { staffRoutes } from './modules/staff/routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
+import { gmRoutes } from './modules/admin/gm/routes.js';
 import { adminAiProviderRoutes } from './modules/admin/ai-provider-routes.js';
 import { adminAiSpendRoutes } from './modules/admin/ai-spend-routes.js';
 import { adminAnalyticsRoutes } from './modules/admin/analytics-routes.js';
@@ -261,6 +262,9 @@ export function createApp(): Hono {
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);
+  // GM command center (WASIT-GM-DASHBOARD-01): read-only aggregation, gated by
+  // the same `ai:manage` / `admin:ai` pair the AI oversight desk uses.
+  app.route('/api/admin/gm', gmRoutes);
   app.route('/api/admin/analytics', adminAnalyticsRoutes);
   app.route('/api/admin/observability', adminObservabilityRoutes);
   app.route('/api/admin/tax', taxRoutes);

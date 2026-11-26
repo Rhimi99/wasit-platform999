@@ -1424,3 +1424,13 @@ npx playwright install --with-deps chromium
 - **منع التكرار**: `requestId` اختياري ⇒ `runKey='copilot:<id>'`؛ إعادة الإرسال تعيد نفس التشغيل. `advance` لا يضيف مهمة لخطوة لها مهمة (`dispatchStep` يرفض) — لا حاجة لحارس إضافي.
 - **التغطية**: `tests/copilot-01.test.ts` (15) — تفويض متعدد الوكلاء، فهم ar/fr/en، توضيح، 403 خارج النطاق، رفض copilot/supervisor/مجهول، منع تكرار، تزامن، تقرير مختلط نجاح/فشل، تصعيد موافقة، heuristic بلا مزوّد، خطة LLM صحيحة ومُختلقة، حارس إنفاق، حدّ معدل، Kill Switch + Supervisor، بقاء 20 وكيلاً.
 - **`DECISION REQUIRED`**: من يوافق إن كان GM هو الطالب، سقف الوكلاء لكل طلب، ملخّص لغوي للتقرير. التفاصيل: `docs/WASIT-COPILOT-01.md` + AD-065.
+
+## WASIT-GM-DASHBOARD-01 — مركز قيادة المدير العام (2026-11-26)
+
+- **سطح قراءة فقط**: `modules/admin/gm/{routes,service,types}.ts` على `/api/admin/gm/{overview,tasks,audit}`. لا POST/PUT/PATCH/DELETE تحت هذا المسار (يثبته `tests/gm-dashboard-01.test.ts`)، وكل زر في `/admin/gm` يستدعي المسار الذي يملك الفعل (approve task، approve run step، cancel run).
+- **البوابة**: `requireAuth` + `requirePermission(AI_MANAGE, ADMIN_AI)` — بلا دور/صلاحية جديدة؛ الواجهة `AdminOnly` لكن القرار في الخادم.
+- **الصدق أولاً**: كل قسم `{state:OK|UNAVAILABLE, source, generatedAt, data, error}`؛ القسم الفاشل `UNAVAILABLE` مع رسالة، والقيم المجهولة `null` لا `0` (نجاح بلا تشغيل = `null`). أضف في الواجهة حالة `LOADING` صريحة — لا تعرض `OK` قبل وصول البيانات.
+- **مصدر تصنيف الوكلاء**: `AGENT_GENERATIVE_CAPABILITY` في `lib/ai/llm/contract.ts` (نفسه يُثبت مقابل مواضع `draftFor`)؛ وجود منفّذ ≠ توليد. `noExecutorAgents` منفصل عن `counts.declared`.
+- **الأسرار**: `maskProvider` انتقل من `admin/ai-provider-routes.ts` إلى `lib/ai/provider-config.ts` ليتشاركه مكتب AI والمركز — لا تعِد نسخة محلية.
+- **مخزن الحدود**: `memory` يُوصف `process-local, not shared`؛ لا تنسخ `ready` إلى «مشترك بين النسخ».
+- **`DECISION REQUIRED`**: من يوافق عندما يكون الطالب هو المدير العام نفسه (الآن: خادم يرفض الموافقة الذاتية، والواجهة تعلّم الصف)، ومصدر قياس «أثر توصية نُفّذت» (غائب ⇒ 0 صريح). التفاصيل: `docs/WASIT-GM-DASHBOARD-01.md`.

@@ -29,6 +29,21 @@ export function isLlmCapability(value: unknown): value is LlmCapability {
 }
 
 /**
+ * Which agents actually reach the generation path, and with which capability.
+ *
+ * This is the only source the command center uses to label an agent
+ * "generative": having an executor is not evidence of generation, and a
+ * deterministic executor that computes its analysis from SQL is labelled as
+ * such. `tests/gm-dashboard-01.test.ts` pins this map to the `draftFor` call
+ * sites in `executors.ts`, so the label cannot drift away from the code.
+ */
+export const AGENT_GENERATIVE_CAPABILITY: Readonly<Record<string, LlmCapability>> = {
+  'sales-agent': 'SALES_INSIGHT',
+  'product-agent': 'PRODUCT_ANALYSIS',
+  'support-agent': 'SUPPORT_REPLY',
+};
+
+/**
  * A single verified data point. `source` is the table (or platform source) the
  * value came from, and it must be inside the agent's scope contract — this is
  * what stops one agent's rows being laundered into another agent's prompt.

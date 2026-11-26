@@ -245,6 +245,38 @@ export interface KeyState {
   updatedAt: string | null;
 }
 
+/**
+ * A provider as an admin surface may see it: configuration plus key presence,
+ * never a secret. Lives here (not in a route) so every surface that reports a
+ * provider — the AI desk and the GM command center — masks it the same way.
+ */
+export function maskProvider(row: ProviderRow) {
+  const spec = SUPPORTED_PROVIDERS.find((p) => p.key === row.providerKey);
+  return {
+    key: row.providerKey,
+    displayName: row.displayName,
+    kind: spec?.kind ?? 'vendor',
+    enabled: row.enabled,
+    // A provider named by AI_PROVIDER is usable before any admin edit.
+    activeFromEnv: isEnvSelected(row),
+    isDefault: row.isDefault,
+    isFallback: row.isFallback,
+    model: row.model,
+    baseUrl: row.baseUrl,
+    requiresKey: spec?.requiresKey ?? true,
+    keyState: keyState(row),
+    lastTest: {
+      status: row.lastTestStatus,
+      mode: row.lastTestMode,
+      testedAt: row.lastTestedAt?.toISOString() ?? null,
+      detail: row.lastTestDetail ?? null,
+    },
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export type MaskedProvider = ReturnType<typeof maskProvider>;
+
 export function keyState(row: ProviderRow): KeyState {
   if (row.secretCiphertext) {
     return {

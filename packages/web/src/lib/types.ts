@@ -2395,3 +2395,272 @@ export interface SubmitRfqQuotePayload {
   notes?: string | null;
   lines: Array<{ rfqItemId: string; unitPrice: string; quantity: string }>;
 }
+
+// ---- GM command center (WASIT-GM-DASHBOARD-01) -----------------------------
+// Mirrors `packages/server/src/modules/admin/gm/types.ts`. A section carries its
+// own state so one failing source never blanks the dashboard, and a `null` value
+// means "unknown" — the UI must not render it as zero.
+
+export type GmSectionState = 'OK' | 'UNAVAILABLE' | 'LOADING';
+export type GmHealthState = 'HEALTHY' | 'DEGRADED' | 'DOWN' | 'UNKNOWN';
+
+export interface GmSection<T> {
+  state: GmSectionState;
+  source: string;
+  generatedAt: string;
+  data: T | null;
+  error: string | null;
+}
+
+export interface GmHealthCheck {
+  key: string;
+  state: GmHealthState;
+  detail: string;
+  probed: boolean;
+  checkedAt: string;
+}
+
+export interface GmAgentRow {
+  key: string;
+  name: string;
+  nameAr: string | null;
+  mission: string | null;
+  category: string | null;
+  tier: string | null;
+  active: boolean;
+  status: string | null;
+  requiresHumanApproval: boolean;
+  approvalActions: string[];
+  permissionsRequired: string[];
+  allowedTools: string[];
+  generation: 'llm' | 'deterministic' | 'none';
+  generationCapability: string | null;
+  execution: {
+    total: number;
+    completed: number;
+    failed: number;
+    pending: number;
+    running: number;
+    successRate: number | null;
+  };
+  cost: {
+    available: boolean;
+    requests: number;
+    actualCostUsd: string | null;
+    tokensInput: number;
+    tokensOutput: number;
+  };
+  limit: { configured: boolean; maxCost: string | null; warnRatio: string | null };
+  health: string;
+  healthReason: string;
+  lastActivityAt: string | null;
+}
+
+export interface GmAgentsData {
+  items: GmAgentRow[];
+  counts: { total: number; specialised: number; supervisor: number; executable: number; declared: number; copilot: number };
+  company: {
+    overall: Record<string, unknown>;
+    attention: unknown[];
+    dataFreshness: Record<string, unknown>;
+    notes: string[];
+    window: Record<string, unknown>;
+  };
+  generativeAgents: string[];
+  deterministicAgents: string[];
+  noExecutorAgents: string[];
+}
+
+export interface GmCopilotData {
+  items: Array<{
+    runId: string;
+    goal: string;
+    request: string | null;
+    status: string;
+    requestedBy: string;
+    createdAt: string;
+    completedAt: string | null;
+    plan: { steps?: Array<{ stepKey: string; agentKey: string; agentName?: string; status: string }> };
+  }>;
+  totals: { total: number; succeeded: number; failed: number; awaiting: number; running: number };
+  recentLimit: number;
+}
+
+export interface GmSupervisorData {
+  overview: {
+    activeRuns: number;
+    stuckRuns: number;
+    failedSteps: number;
+    awaitingRetrySteps: number;
+    containedRuns: number;
+    budgetExceededRuns: number;
+    limits: Record<string, unknown>;
+    lastCycleAt: string | null;
+  };
+  alerts: {
+    firing: number;
+    items: Array<{ id: string; rule: string; severity: string; status: string; summary: string; startedAt: string; resolvedAt: string | null }>;
+  };
+}
+
+export interface GmTaskRow {
+  id: string;
+  kind: 'agent_task' | 'copilot_run';
+  agentKey: string;
+  title: string | null;
+  status: string;
+  taskType: string | null;
+  requestedBy: string;
+  runId: string | null;
+  severity: 'high' | 'medium' | 'low';
+  cost: string;
+  model: string;
+  tokensInput: number;
+  tokensOutput: number;
+  durationMs: number | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface GmTasksData {
+  items: GmTaskRow[];
+  totals: {
+    total: number;
+    queued: number;
+    running: number;
+    awaitingApproval: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    overdue: number;
+  };
+  page: number;
+  pageSize: number;
+}
+
+export interface GmApprovalItem {
+  id: string;
+  kind: 'agent_task' | 'run_step';
+  agentKey: string;
+  action: string;
+  title: string;
+  requestedBy: string;
+  requestedAt: string;
+  ageMinutes: number;
+  risk: 'high' | 'medium' | 'low';
+  evidence: string[];
+  runId: string | null;
+  stepKey: string | null;
+  reason: string;
+  selfApprovalBlocked: boolean;
+  independentApproverAvailable: boolean;
+  state: 'PENDING' | 'BLOCKED_PENDING_INDEPENDENT_APPROVER';
+}
+
+export interface GmApprovalsData {
+  items: GmApprovalItem[];
+  blocked: number;
+  approverRoles: string[];
+}
+
+export interface GmProviderRow {
+  key: string;
+  displayName: string;
+  kind: string;
+  enabled: boolean;
+  requiresKey: boolean;
+  keyState: { present: boolean; source: string; envVar: string | null; fingerprint: string | null };
+  lastTest: { status: string | null; mode: string | null; testedAt: string | null; detail: string | null };
+}
+
+export interface GmProvidersData {
+  environment: string;
+  liveTestAllowed: boolean;
+  secretStorage: { available: boolean; reason: string | null };
+  items: GmProviderRow[];
+}
+
+export interface GmSpendingData {
+  overview: {
+    from: string;
+    to: string;
+    environment: string;
+    totals: {
+      requests: number;
+      succeeded: number;
+      failed: number;
+      tokensInput: number;
+      tokensOutput: number;
+      estimatedCost: string;
+      vendorCost: string;
+      localRequests: number;
+      unknownCostRequests: number;
+    };
+    byAgent: Array<{ agentKey: string; requests: number; tokensInput: number; tokensOutput: number; costUsd: string | null }>;
+    limits: Array<{
+      id: string;
+      scope: string;
+      targetKey: string;
+      period: string;
+      maxCost: string | null;
+      maxRequests: number | null;
+      warnRatio: string;
+      spent: string;
+      requests: number;
+      state: 'OK' | 'WARNING' | 'BLOCKED';
+      isActive: boolean;
+    }>;
+    alerts: Array<{ id: string; scope: string; targetKey: string; period: string; level: string; spent: string; limitAmount: string | null; createdAt: string }>;
+  };
+  guard: {
+    environment: string;
+    ready: boolean;
+    unavailable: boolean;
+    missing: string[];
+    caps: Array<{ period: string; maxCost: string | null; isActive: boolean }>;
+    fix: { method: string; path: string };
+  };
+}
+
+export interface GmAuditRow {
+  id: string;
+  action: string;
+  actorId: string | null;
+  entityType: string;
+  entityId: string | null;
+  createdAt: string;
+}
+
+export interface GmPlatformData {
+  killSwitch: { enabled: boolean; source: 'runtime' | 'env' };
+  agents: { total: number; active: number; generative: number; noExecutor: number } | null;
+  tasks: { queued: number; running: number; awaitingApproval: number; failed24h: number } | null;
+  copilot: { total: number; failed: number; awaiting: number } | null;
+  approvalsPending: number | null;
+  approvalsBlocked: number | null;
+  alertsFiring: number | null;
+  providers: { total: number; enabled: number; withKey: number } | null;
+  spend24h: { costUsd: string; requests: number } | null;
+  lastActivityAt: string | null;
+}
+
+export interface GmOverview {
+  generatedAt: string;
+  environment: string;
+  window: { days: number; from: string; to: string };
+  viewer: { id: string; roles: string[]; canDecideApprovals: boolean };
+  sections: {
+    platform: GmSection<GmPlatformData>;
+    agents: GmSection<GmAgentsData>;
+    copilot: GmSection<GmCopilotData>;
+    supervisor: GmSection<GmSupervisorData>;
+    tasks: GmSection<GmTasksData>;
+    approvals: GmSection<GmApprovalsData>;
+    providers: GmSection<GmProvidersData>;
+    spending: GmSection<GmSpendingData>;
+    health: GmSection<{ overall: GmHealthState; items: GmHealthCheck[] }>;
+    audit: GmSection<{ items: GmAuditRow[]; page: number; pageSize: number }>;
+  };
+}

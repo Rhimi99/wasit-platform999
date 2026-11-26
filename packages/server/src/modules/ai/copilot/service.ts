@@ -457,7 +457,7 @@ export async function buildCopilotReport(db: DB, runId: string, viewerId: string
 }
 
 /** The General Manager's request list (own requests; staff see all). */
-export async function listCopilotRequests(db: DB, viewerId: string): Promise<CopilotReport[]> {
+export async function listCopilotRequests(db: DB, viewerId: string, limit = 50): Promise<CopilotReport[]> {
   const viewerRoles = await rolesOf(db, viewerId);
   const isStaff = viewerRoles.includes('ADMIN') || viewerRoles.includes('SUPER_ADMIN');
   const rows = await db
@@ -469,7 +469,7 @@ export async function listCopilotRequests(db: DB, viewerId: string): Promise<Cop
         : and(sql`${agentRuns.runKey} like 'copilot:%'`, eq(agentRuns.requestedBy, viewerId)),
     )
     .orderBy(desc(agentRuns.createdAt))
-    .limit(50);
+    .limit(Math.max(1, Math.min(50, limit)));
   const reports: CopilotReport[] = [];
   for (const row of rows) reports.push(await buildCopilotReport(db, row.id, viewerId));
   return reports;

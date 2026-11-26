@@ -39,7 +39,7 @@ healthRoutes.get('/ready', async (c) => {
 // Backup freshness, read from the heartbeat the backup script writes. This is
 // the operator-visible half of the `backup_stale` alert: a deployment can see
 // whether its schedule is alive without querying the filesystem directly.
-function backupStatus(): {
+export function backupStatus(): {
   configured: boolean;
   heartbeat: string;
   lastSuccessAt: string | null;
