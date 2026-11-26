@@ -22,6 +22,12 @@ export interface AIProviderCallOptions {
    * to a different model silently keeps calling the default one.
    */
   model?: string;
+  /**
+   * Caller-owned deadline. When it aborts, the transport request is aborted too
+   * — not merely abandoned — so no vendor call keeps running (and billing) after
+   * the caller gave up. Adapters that cannot abort may ignore it.
+   */
+  signal?: AbortSignal;
 }
 
 export interface AIProviderCallResult {

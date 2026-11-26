@@ -318,6 +318,16 @@ function init(): void {
   metrics.counter('wasit_alert_notifications_total', 'Alert notifications delivered', ['channel', 'result']);
   metrics.counter('wasit_ai_spend_limit_hits_total', 'AI calls refused by a spend limit', ['scope', 'result']);
   metrics.counter('wasit_ai_spend_alerts_total', 'AI spend limit alerts raised', ['level']);
+  metrics.counter('wasit_ai_llm_drafts_total', 'LLM drafts produced or degraded', ['capability', 'status']);
+  metrics.counter('wasit_ai_llm_fallbacks_total', 'LLM drafts that fell back to the deterministic engine', [
+    'capability',
+    'reason',
+  ]);
+  metrics.histogram(
+    'wasit_ai_llm_draft_duration_seconds',
+    'End-to-end duration of one LLM draft attempt',
+    ['capability'],
+  );
   metrics.gauge('wasit_db_up', 'Database reachable (1) or not (0)');
   metrics.gauge('wasit_uptime_seconds', 'Process uptime in seconds');
   metrics.gauge('wasit_build_info', 'Build information', ['version', 'env']);

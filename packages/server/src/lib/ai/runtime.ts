@@ -150,6 +150,11 @@ export interface RunFeatureInput {
    * not acceptable.
    */
   allowLocalFallback?: boolean;
+  /**
+   * Deadline for the provider call, forwarded to the adapter. An abort is a
+   * failed attempt: it is recorded as FAILED and any spend reservation released.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunFeatureOutput {
@@ -336,6 +341,7 @@ export async function runAIFeature(
       temperature: 0.2,
       budgetPeriod: period,
       model: vendorModel,
+      signal: input.signal,
     });
   } catch (err) {
     // The call never produced a billable result, so release the reservation: the
