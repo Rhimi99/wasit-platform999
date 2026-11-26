@@ -10,6 +10,7 @@ import { aiProviders } from '../src/db/schema/ai_providers.js';
 import { aiSpendLimits } from '../src/db/schema/ai-spend.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { env } from '../src/lib/env.js';
+import { setAiExecutionEnabled } from '../src/lib/ai/kill-switch.js';
 import { resolveAiRoute } from '../src/lib/ai/routing.js';
 import { runAIFeature } from '../src/lib/ai/runtime.js';
 import {
@@ -465,6 +466,28 @@ describe('AI-04 connection test', () => {
       expect(res.status).toBe(409);
       expect(server.hits()).toBe(0);
     } finally {
+      await server.close();
+    }
+  });
+
+  it('never opens a socket while the central AI switch is stopped', async () => {
+    const server = await startVendorServer();
+    try {
+      env.AI_PROVIDER_ALLOW_LIVE_TEST = true;
+      env.AI_SECRET_ENCRYPTION_KEY = MASTER_KEY;
+      const admin = await login(await emailOf(adminId));
+      await admin.req('/api/admin/ai/providers/openai', { method: 'PATCH', body: { enabled: true, baseUrl: server.baseUrl } });
+      await admin.req('/api/admin/ai/providers/openai/secret', { method: 'PUT', body: { secret: SECRET } });
+
+      await setAiExecutionEnabled(db, false);
+      const res = await admin.req('/api/admin/ai/providers/openai/test', { method: 'POST', body: { mode: 'LIVE' } });
+      expect(res.status).toBe(200);
+      expect(res.data.data.status).toBe('BLOCKED');
+      expect((res.data.data.checks as Array<{ id: string }>).map((c) => c.id)).toContain('kill_switch');
+      // A blocked probe is not a probe: the vendor saw no request at all.
+      expect(server.hits()).toBe(0);
+    } finally {
+      await setAiExecutionEnabled(db, true);
       await server.close();
     }
   });

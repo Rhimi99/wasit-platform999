@@ -243,12 +243,14 @@ export async function lockAndAssertExecutionAllowed(
   if (!globalRow) throw unavailable();
   if (envStopped() || globalRow.stopped) throw disabled();
   if (agentKey) {
+    // The AGENT row must be the caller's own: reading "some" agent row would let
+    // a stop for one agent hide behind another agent's open row.
     const [agentRow] = await handle
       .select(COLUMNS)
       .from(aiExecutionSwitches)
-      .where(eq(aiExecutionSwitches.scope, 'AGENT'));
-    const stopped = agentRow ? view(agentRow).stopped : false;
-    if (stopped && agentRow!.targetKey === agentKey) throw disabled(agentKey);
+      .where(and(eq(aiExecutionSwitches.scope, 'AGENT'), eq(aiExecutionSwitches.targetKey, agentKey)))
+      .for('share');
+    if (agentRow && view(agentRow).stopped) throw disabled(agentKey);
   }
 }
 

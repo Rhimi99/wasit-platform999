@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, apiCall, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
+import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import { AiProvidersPanel } from '@/components/AiProvidersPanel';
@@ -68,6 +69,10 @@ function formatPercent(rate: number | null): string {
 
 export function AdminAiPage() {
   const { t } = useI18n();
+  const { user } = useAuth();
+  // Lifting the global stop is reserved to SUPER_ADMIN on the server; the button
+  // follows the same rule so an ADMIN is not offered an action it cannot take.
+  const isSuperAdmin = (user?.roles ?? []).includes('SUPER_ADMIN');
   const [tab, setTab] = useState<Tab>('overview');
   const [usage, setUsage] = useState<AiAdminUsage | null>(null);
   const [requests, setRequests] = useState<AiAdminRequestRow[]>([]);
@@ -108,7 +113,7 @@ export function AdminAiPage() {
       apiCall(() => api.adminAiBudgets()),
       apiCall(() => api.adminAiAgents()),
       apiCall(() => api.adminAiTasks()),
-      apiCall(() => api.adminAiKillSwitch()),
+      apiCall(() => api.adminAiExecutionSwitch()),
       apiCall(() => api.adminAiCompanyMetrics()),
     ]);
     setUsage(usageRes.data ?? null);
@@ -144,17 +149,34 @@ export function AdminAiPage() {
       decision === 'APPROVE' ? 'adminAi.taskApproved' : 'adminAi.taskRejected',
     );
 
-  // Central AI Kill Switch (A1). Disabling is an emergency action, so it asks for
-  // confirmation; enabling is safe and immediate. The server enforces RBAC
-  // (AI_MANAGE | ADMIN_AI) and records an audit entry either way.
+  // Central AI Kill Switch (A1 / FLEET-01). Stopping is an emergency action, so
+  // it asks for confirmation; resuming is safe and immediate — but lifting the
+  // GLOBAL stop is a SUPER_ADMIN act, so an ADMIN is not offered it. The server
+  // enforces the same rules and audits every change and every refusal.
   const toggleKillSwitch = () => {
     if (!killSwitch) return;
-    const next = !killSwitch.enabled;
-    if (!next && !window.confirm(t('adminAi.killSwitch.confirmDisable'))) return;
+    const resume = killSwitch.globalStopped;
+    if (!resume && !window.confirm(t('adminAi.killSwitch.confirmDisable'))) return;
+    if (resume && !isSuperAdmin) return;
     return run(
       'kill-switch',
-      () => api.adminSetAiKillSwitch(next),
-      next ? 'adminAi.killSwitch.enabledNotice' : 'adminAi.killSwitch.disabledNotice',
+      () => api.adminSetGlobalAiExecutionSwitch(!resume),
+      resume ? 'adminAi.killSwitch.enabledNotice' : 'adminAi.killSwitch.disabledNotice',
+    );
+  };
+
+  // One agent at a time: the stop belongs to that agent only and never touches
+  // the others, which is what the per-agent scope is for.
+  const globalResume = killSwitch?.globalStopped ?? false;
+  const globalResumeBlocked = globalResume && !isSuperAdmin;
+
+  const toggleAgentSwitch = (agentKey: string) => {
+    const stopped = (killSwitch?.stoppedAgents ?? []).includes(agentKey);
+    if (!stopped && !window.confirm(t('adminAi.killSwitch.agentConfirmStop'))) return;
+    return run(
+      `agent-switch:${agentKey}`,
+      () => api.adminSetAgentAiExecutionSwitch(agentKey, !stopped),
+      stopped ? 'adminAi.killSwitch.agentResumedNotice' : 'adminAi.killSwitch.agentStoppedNotice',
     );
   };
 
@@ -360,15 +382,23 @@ export function AdminAiPage() {
                           </p>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        data-testid="admin-ai-kill-switch-toggle"
-                        disabled={busy !== null}
-                        onClick={() => void toggleKillSwitch()}
-                        className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${killSwitch.enabled ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`}
-                      >
-                        {killSwitch.enabled ? t('adminAi.killSwitch.disable') : t('adminAi.killSwitch.enable')}
-                      </button>
+                      <div className="flex flex-col items-end gap-1">
+                        <button
+                          type="button"
+                          data-testid="admin-ai-kill-switch-toggle"
+                          disabled={busy !== null || globalResumeBlocked}
+                          title={globalResumeBlocked ? t('adminAi.killSwitch.resumeNeedsSuperAdmin') : undefined}
+                          onClick={() => void toggleKillSwitch()}
+                          className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${globalResume ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
+                        >
+                          {globalResume ? t('adminAi.killSwitch.enable') : t('adminAi.killSwitch.disable')}
+                        </button>
+                        {globalResumeBlocked && (
+                          <p data-testid="admin-ai-kill-switch-resume-locked" className="max-w-[16rem] text-end text-[11px] text-slate-500">
+                            {t('adminAi.killSwitch.resumeNeedsSuperAdmin')}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </Card>
                 )}
@@ -904,6 +934,7 @@ export function AdminAiPage() {
                         : a.requiresHumanApproval
                           ? { color: 'amber' as const, label: t('adminAi.agent.gated') }
                           : { color: 'teal' as const, label: t('adminAi.agent.auto') };
+                    const agentStopped = (killSwitch?.stoppedAgents ?? []).includes(a.key);
                     return (
                       <Card key={a.id ?? a.key} testId={`admin-ai-agent-${a.key}`}>
                         <div className="flex items-start justify-between gap-2">
@@ -914,6 +945,24 @@ export function AdminAiPage() {
                           <Badge color={badge.color} testId={`admin-ai-agent-status-${a.key}`}>{badge.label}</Badge>
                         </div>
                         {a.description && <p className="mt-2 text-xs text-slate-500">{a.description}</p>}
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                          {agentStopped ? (
+                            <Badge color="red" testId={`admin-ai-agent-stopped-${a.key}`}>
+                              {t('adminAi.killSwitch.agentStopped')}
+                            </Badge>
+                          ) : (
+                            <span />
+                          )}
+                          <button
+                            type="button"
+                            data-testid={`admin-ai-agent-switch-${a.key}`}
+                            disabled={busy !== null}
+                            onClick={() => void toggleAgentSwitch(a.key)}
+                            className={`rounded border px-2 py-1 text-xs font-medium disabled:opacity-50 ${agentStopped ? 'border-green-300 text-green-700 hover:border-green-500' : 'border-red-300 text-red-700 hover:border-red-500'}`}
+                          >
+                            {agentStopped ? t('adminAi.killSwitch.agentResume') : t('adminAi.killSwitch.agentStop')}
+                          </button>
+                        </div>
                       </Card>
                     );
                   })}

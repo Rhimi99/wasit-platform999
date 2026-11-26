@@ -430,6 +430,39 @@ describe('WASIT-COPILOT-01 — the coordinator', () => {
     expect(report.steps.every((s: { agentKey: string }) => s.agentKey !== 'growth-hacking-agent')).toBe(true);
   });
 
+  it('keeps the plan order when the step keys sort the other way', async () => {
+    // "marketing" precedes "market-research" in the plan, but a byte-wise sort
+    // puts "market-research" first and `en_US.utf8` puts it first for a different
+    // reason (it ignores the hyphen). Neither may reorder the plan.
+    const gm = await createUser('SUPER_ADMIN', 'planorder');
+    setLlmProviderOverride(
+      new PlanProvider('local-heuristic', () => planBody(['marketing-agent', 'market-research-agent'])),
+    );
+    const res = await gm.client.req('/api/admin/ai/copilot/requests', {
+      method: 'POST',
+      // The plan is inspected before anything is dispatched, so the order that
+      // `advance` uses can be asserted directly.
+      body: { request: 'خطة تسويق ثم دراسة السوق', autoAdvance: false },
+    });
+    expect(res.status).toBe(201);
+    const report = res.data.data.report;
+    createdRunIds.push(report.runId);
+    expect(report.steps.map((s: { agentKey: string }) => s.agentKey)).toEqual([
+      'marketing-agent',
+      'market-research-agent',
+    ]);
+
+    // The order comes from the persisted position, not from the database's
+    // collation: the first proposed step carries the higher priority.
+    const rows = await db.select().from(agentRunSteps).where(eq(agentRunSteps.runId, report.runId));
+    const priority = new Map(rows.map((r) => [r.stepKey, r.priority]));
+    expect(priority.get('marketing')!).toBeGreaterThan(priority.get('market-research')!);
+
+    // Advancing dispatches the first planned step first, on the same rule.
+    const advanced = await advanceCopilotRun(db, report.runId, AUDIT);
+    expect(advanced.dispatched[0]).toBe('marketing');
+  });
+
   it('cannot spend past the global guard when a paid provider is configured without caps', async () => {
     const gm = await createUser('SUPER_ADMIN', 'spend');
     const provider = new PlanProvider('openai', () => planBody(['sales-agent']));

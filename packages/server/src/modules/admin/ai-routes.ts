@@ -54,7 +54,7 @@ import {
 } from '../ai/memory.js';
 import { derivePlatformScope } from '../ai/scope.js';
 import { getAiExecutionSwitchState } from '../../lib/ai/kill-switch.js';
-import { setAgentSwitch, setGlobalSwitch } from '../../lib/ai/execution-switch.js';
+import { GLOBAL_TARGET_KEY, setAgentSwitch, setGlobalSwitch } from '../../lib/ai/execution-switch.js';
 import { copilotRoutes } from '../ai/copilot/routes.js';
 
 const budgetSchema = z
@@ -535,73 +535,107 @@ async function applySwitchChange(
   const ctx = getContext(c);
   const roles = (ctx.user?.roles ?? []) as UserRole[];
   const actorId = ctx.user!.id;
-  assertSwitchOperator(roles);
 
-  if (scope === 'GLOBAL' && !body.stopped && !roles.includes('SUPER_ADMIN')) {
-    throw ApiError.forbidden('Only a SUPER_ADMIN may lift the global AI execution stop');
-  }
-
-  const beforeState = await getAiExecutionSwitchState(ctx.db);
-  if (!body.stopped && beforeState.envStopped) {
-    throw ApiError.conflict(
-      'AI execution is disabled by the server environment flag; lifting the database stop does not re-enable it',
-    );
-  }
-
-  const result =
-    scope === 'GLOBAL'
-      ? await setGlobalSwitch(ctx.db, { stopped: body.stopped, reason: body.reason ?? null, actorId })
-      : await setAgentSwitch(ctx.db, agentKey!, { stopped: body.stopped, reason: body.reason ?? null, actorId });
-
-  // A resume performed by the same operator who applied the stop is permitted
-  // (a safety control must stay operable) but it is recorded as NOT independent
-  // so reviewers and the GM dashboard can see the difference.
-  const independentResume =
-    !body.stopped && result.previous.actorId !== null && result.previous.actorId !== actorId;
-
-  if (result.changed) {
-    // The pre-fleet endpoint keeps its historical action names so existing audit
-    // queries and alerts do not break; the fleet endpoints carry the richer
-    // AI.EXECUTION_* names.
-    const action = legacyAudit
-      ? body.stopped
-        ? 'AI.KILL_SWITCH_DISABLED'
-        : 'AI.KILL_SWITCH_ENABLED'
-      : body.stopped
-        ? 'AI.EXECUTION_STOPPED'
-        : 'AI.EXECUTION_RESUMED';
-    await writeAudit(
-      ctx.db,
-      { actorId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
-      {
-        action,
-        entityType: legacyAudit ? 'AI_KILL_SWITCH' : 'AI_EXECUTION_SWITCH',
-        entityId: scope === 'GLOBAL' ? null : agentKey,
-        before: { ...result.previous } as unknown as Record<string, unknown>,
-        after: { ...result.row } as unknown as Record<string, unknown>,
-        metadata: {
-          scope,
-          targetKey: result.row.targetKey,
-          reason: body.reason ?? null,
-          version: result.row.version,
-          cancelledQueued: result.cancelledQueued,
-          ...(body.stopped ? {} : { independentResume }),
+  // A refused control attempt is a fact an incident review needs. It is written
+  // on the pooled handle AFTER the failed operation has rolled back, and a
+  // failure to write it never replaces the original refusal.
+  const recordRefusal = async (err: unknown): Promise<void> => {
+    const status = err instanceof ApiError ? err.statusCode : 0;
+    if (status !== 403 && status !== 409) return;
+    try {
+      await writeAudit(
+        ctx.db,
+        { actorId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+        {
+          action: 'AI.EXECUTION_CONTROL_REFUSED',
+          entityType: 'AI_EXECUTION_SWITCH',
+          entityId: scope === 'GLOBAL' ? null : agentKey,
+          metadata: {
+            scope,
+            targetKey: agentKey ?? GLOBAL_TARGET_KEY,
+            requested: body.stopped ? 'STOP' : 'RESUME',
+            status,
+            code: err instanceof ApiError ? err.code : null,
+          },
         },
-      },
-    );
-  }
-
-  return {
-    scope,
-    targetKey: result.row.targetKey,
-    stopped: result.row.stopped,
-    reason: result.row.reason,
-    version: result.row.version,
-    cancelledQueued: result.cancelledQueued,
-    changed: result.changed,
-    independentResume: body.stopped ? null : independentResume,
-    state: await getAiExecutionSwitchState(ctx.db),
+      );
+    } catch {
+      // Never mask the refusal with an audit failure.
+    }
   };
+
+  try {
+    assertSwitchOperator(roles);
+
+    if (scope === 'GLOBAL' && !body.stopped && !roles.includes('SUPER_ADMIN')) {
+      throw ApiError.forbidden('Only a SUPER_ADMIN may lift the global AI execution stop');
+    }
+
+    const beforeState = await getAiExecutionSwitchState(ctx.db);
+    if (!body.stopped && beforeState.envStopped) {
+      throw ApiError.conflict(
+        'AI execution is disabled by the server environment flag; lifting the database stop does not re-enable it',
+      );
+    }
+
+    const result =
+      scope === 'GLOBAL'
+        ? await setGlobalSwitch(ctx.db, { stopped: body.stopped, reason: body.reason ?? null, actorId })
+        : await setAgentSwitch(ctx.db, agentKey!, { stopped: body.stopped, reason: body.reason ?? null, actorId });
+
+    // A resume performed by the same operator who applied the stop is permitted
+    // (a safety control must stay operable) but it is recorded as NOT independent
+    // so reviewers and the GM dashboard can see the difference.
+    const independentResume =
+      !body.stopped && result.previous.actorId !== null && result.previous.actorId !== actorId;
+
+    if (result.changed) {
+      // The pre-fleet endpoint keeps its historical action names so existing audit
+      // queries and alerts do not break; the fleet endpoints carry the richer
+      // AI.EXECUTION_* names.
+      const action = legacyAudit
+        ? body.stopped
+          ? 'AI.KILL_SWITCH_DISABLED'
+          : 'AI.KILL_SWITCH_ENABLED'
+        : body.stopped
+          ? 'AI.EXECUTION_STOPPED'
+          : 'AI.EXECUTION_RESUMED';
+      await writeAudit(
+        ctx.db,
+        { actorId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+        {
+          action,
+          entityType: legacyAudit ? 'AI_KILL_SWITCH' : 'AI_EXECUTION_SWITCH',
+          entityId: scope === 'GLOBAL' ? null : agentKey,
+          before: { ...result.previous } as unknown as Record<string, unknown>,
+          after: { ...result.row } as unknown as Record<string, unknown>,
+          metadata: {
+            scope,
+            targetKey: result.row.targetKey,
+            reason: body.reason ?? null,
+            version: result.row.version,
+            cancelledQueued: result.cancelledQueued,
+            ...(body.stopped ? {} : { independentResume }),
+          },
+        },
+      );
+    }
+
+    return {
+      scope,
+      targetKey: result.row.targetKey,
+      stopped: result.row.stopped,
+      reason: result.row.reason,
+      version: result.row.version,
+      cancelledQueued: result.cancelledQueued,
+      changed: result.changed,
+      independentResume: body.stopped ? null : independentResume,
+      state: await getAiExecutionSwitchState(ctx.db),
+    };
+  } catch (err) {
+    await recordRefusal(err);
+    throw err;
+  }
 }
 
 adminAiRoutes.get('/execution-switch', async (c) => {
@@ -638,12 +672,12 @@ adminAiRoutes.post('/kill-switch', validateBody(killSwitchSchema), async (c) => 
     { stopped: !body.enabled, reason: body.reason ?? null },
     true,
   );
-  // Keeps the pre-fleet response contract (`enabled`/`source`) for any client
-  // that still reads it, alongside the richer fields.
-  return c.json({
-    success: true,
-    data: { enabled: data.state.enabled, source: data.state.source, ...data },
-  });
+  // Keeps the pre-fleet response contract for any client that still reads it:
+  // the legacy body WAS the state object (`enabled`/`source`/`stoppedAgents`/
+  // `agents`), so returning only two of those fields left old clients unable to
+  // tell which agents were stopped. The full state is spread first and the
+  // change fields follow, so nothing the fleet surface added is lost either.
+  return c.json({ success: true, data: { ...data.state, ...data } });
 });
 
 // ----- Agent memory supervision (AI-MEM-01) -------------------------------

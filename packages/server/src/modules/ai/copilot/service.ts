@@ -1,5 +1,5 @@
 import Decimal from 'decimal.js';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { ApiError, type UserRole } from '@wasit/shared';
 import type { DB } from '../../../db/client';
 import type { AuditContext } from '../../../lib/audit';
@@ -21,6 +21,23 @@ import type {
   CopilotReportStep,
   CopilotRequestView,
 } from './types';
+
+/**
+ * Byte-order comparison of step keys, matching the planner's tiebreak.
+ *
+ * Deliberately NOT `localeCompare`: that follows ICU rules, and the database's
+ * `ORDER BY step_key` follows the database collation — `en_US.utf8` ignores the
+ * hyphen in "market-research" and sorts it after "marketing", `C` does not. Two
+ * engines disagreeing made the report order depend on where the database was
+ * created. The plan position (stored in `priority`) decides the order; this is
+ * only the deterministic tiebreak for rows that share a priority.
+ */
+export function compareStepKeys(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** SQL tiebreak that matches `compareStepKeys` byte for byte. */
+const stepKeyByteOrder = sql`${agentRunSteps.stepKey} collate "C" asc`;
 
 /**
  * WASIT-COPILOT-01 — coordination service.
@@ -161,12 +178,16 @@ export async function createCopilotRequest(
       runKey,
       title,
       description: text,
-      steps: plan.steps.map((s) => ({
+      steps: plan.steps.map((s, index) => ({
         stepKey: s.stepKey,
         agentKey: s.agentKey,
         input: s.input,
         dependsOn: s.dependsOn,
-        priority: 0,
+        // The plan's own position, not the step key: `priority` is "higher runs
+        // first", so the first proposed step gets the highest value and the
+        // report/dispatch order is the order the coordinator proposed. Relying
+        // on `step_key` instead made the order depend on the database collation.
+        priority: plan.steps.length - index,
       })),
     },
     audit,
@@ -242,7 +263,7 @@ export async function advanceCopilotRun(
       .filter((s) => ['PENDING', 'READY', 'RETRYING'].includes(s.status))
       .filter((s) => (s.dependsOn as string[]).every((d) => byKey.get(d)?.status === 'SUCCEEDED'))
       .filter((s) => !s.requiresApproval || (s.status === 'READY' && s.approvedBy !== null))
-      .sort((a, b) => a.priority - b.priority || a.stepKey.localeCompare(b.stepKey));
+      .sort((a, b) => b.priority - a.priority || compareStepKeys(a.stepKey, b.stepKey));
 
     if (ready.length === 0) break;
 
@@ -317,7 +338,7 @@ export async function buildCopilotReport(db: DB, runId: string, viewerId: string
     .select()
     .from(agentRunSteps)
     .where(eq(agentRunSteps.runId, runId))
-    .orderBy(asc(agentRunSteps.priority), asc(agentRunSteps.stepKey));
+    .orderBy(desc(agentRunSteps.priority), stepKeyByteOrder);
 
   const taskIds = steps
     .map((s) => safeParse(s.result)?.taskId)

@@ -1112,6 +1112,19 @@ export interface AiKillSwitchState {
   checkedAt: string;
 }
 
+/** Result of a fleet switch change (POST /api/admin/ai/execution-switch/*). */
+export interface AiSwitchChange {
+  scope: 'GLOBAL' | 'AGENT';
+  targetKey: string;
+  stopped: boolean;
+  reason: string | null;
+  version: number;
+  cancelledQueued: number;
+  changed: boolean;
+  independentResume: boolean | null;
+  state: AiKillSwitchState;
+}
+
 export interface AiAdminRequestRow {
   id: string;
   userId: string;

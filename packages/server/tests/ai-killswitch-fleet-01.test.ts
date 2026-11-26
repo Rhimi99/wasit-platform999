@@ -22,6 +22,7 @@ import { withAgentRunContext } from '../src/lib/ai/agent-run-context.js';
 import { aiExecutionSwitches } from '../src/db/schema/ai-execution-switch.js';
 import {
   readExecutionSwitchState,
+  lockAndAssertExecutionAllowed,
   AI_AGENT_PAUSED_MESSAGE,
   AI_CONTROL_UNAVAILABLE_MESSAGE,
 } from '../src/lib/ai/execution-switch.js';
@@ -531,6 +532,166 @@ describe('FLEET-01 — concurrency: a stop racing task creation', () => {
     await expect(
       createAgentTask(dbB, ['SUPER_ADMIN'], owner.id, { agentKey: 'support-agent', requestedBy: owner.id, input: {} }, AUDIT),
     ).rejects.toMatchObject({ statusCode: 503 });
+  });
+});
+
+describe('FLEET-01 — an agent stop belongs to that agent only, under lock', () => {
+  /** Two stopped agents and one open one: a "first AGENT row" lookup answers wrong. */
+  async function seedAgentRows(): Promise<void> {
+    await db.insert(aiExecutionSwitches).values([
+      { id: randomUUID(), scope: 'AGENT', targetKey: 'analytics-agent', stopped: true, reason: 'regression', actorId: null, version: 1 },
+      { id: randomUUID(), scope: 'AGENT', targetKey: 'product-agent', stopped: true, reason: 'regression', actorId: null, version: 1 },
+      { id: randomUUID(), scope: 'AGENT', targetKey: 'support-agent', stopped: false, reason: null, actorId: null, version: 1 },
+    ]);
+  }
+
+  it('refuses every stopped agent and never blocks the open one', async () => {
+    const owner = await createUser('SUPER_ADMIN');
+    await seedAgentRows();
+
+    for (const agentKey of ['analytics-agent', 'product-agent']) {
+      await expect(
+        createAgentTask(dbB, ['SUPER_ADMIN'], owner.id, { agentKey, requestedBy: owner.id, input: {} }, AUDIT),
+      ).rejects.toMatchObject({ statusCode: 503, message: AI_AGENT_PAUSED_MESSAGE });
+    }
+
+    const allowed = await createAgentTask(
+      dbB,
+      ['SUPER_ADMIN'],
+      owner.id,
+      { agentKey: 'support-agent', requestedBy: owner.id, input: {} },
+      AUDIT,
+    );
+    createdTaskIds.push(allowed.id);
+    expect(allowed.agentKey).toBe('support-agent');
+  });
+
+  it('the in-transaction check reads the caller own AGENT row', async () => {
+    await seedAgentRows();
+
+    for (const agentKey of ['analytics-agent', 'product-agent']) {
+      await expect(
+        db.transaction((tx) => lockAndAssertExecutionAllowed(tx, agentKey)),
+      ).rejects.toMatchObject({ statusCode: 503, message: AI_AGENT_PAUSED_MESSAGE });
+    }
+    await expect(db.transaction((tx) => lockAndAssertExecutionAllowed(tx, 'support-agent'))).resolves.toBeUndefined();
+    // No agent key: only the GLOBAL row decides.
+    await expect(db.transaction((tx) => lockAndAssertExecutionAllowed(tx, null))).resolves.toBeUndefined();
+  });
+
+  it('a stop waits for the in-flight creation and then refuses the next one', async () => {
+    const admin = await createUser('ADMIN');
+    const owner = await createUser('SUPER_ADMIN');
+
+    // Hold the same share lock `createAgentTask` takes, standing in for a
+    // creation that has already passed its check but has not committed yet.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const inTransaction = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const holder = dbC.transaction(async (tx) => {
+      await lockAndAssertExecutionAllowed(tx, 'sales-agent');
+      entered();
+      await gate;
+    });
+    await inTransaction;
+
+    const stop = admin.client.req(agentPath('sales-agent'), {
+      method: 'POST',
+      body: { stopped: true, reason: 'race drill: one agent' },
+    });
+    const first = await Promise.race([
+      stop.then(() => 'stopped' as const),
+      new Promise<'waiting'>((resolve) => setTimeout(() => resolve('waiting'), 400)),
+    ]);
+    // The stop cannot commit while a creation holds the share lock.
+    expect(first).toBe('waiting');
+
+    release();
+    await holder;
+    expect((await stop).status).toBe(200);
+
+    // Once the stop is committed, the next creation for that agent is refused.
+    await expect(
+      createAgentTask(dbB, ['SUPER_ADMIN'], owner.id, { agentKey: 'sales-agent', requestedBy: owner.id, input: {} }, AUDIT),
+    ).rejects.toMatchObject({ statusCode: 503, message: AI_AGENT_PAUSED_MESSAGE });
+    // ...and only that agent: an open one still runs.
+    const open = await createAgentTask(
+      dbB,
+      ['SUPER_ADMIN'],
+      owner.id,
+      { agentKey: 'support-agent', requestedBy: owner.id, input: {} },
+      AUDIT,
+    );
+    createdTaskIds.push(open.id);
+  });
+});
+
+describe('FLEET-01 — a refused control attempt is recorded, and nothing else is', () => {
+  it('records an ADMIN trying to lift the global stop, and the env-belt conflict', async () => {
+    const admin = await createUser('ADMIN');
+    const superAdmin = await createUser('SUPER_ADMIN');
+    await superAdmin.client.req(GLOBAL_PATH, { method: 'POST', body: { stopped: true, reason: 'drill' } });
+
+    const before = await auditCount('AI.EXECUTION_CONTROL_REFUSED');
+    const refused = await admin.client.req(GLOBAL_PATH, {
+      method: 'POST',
+      body: { stopped: false, reason: 'let me lift it' },
+    });
+    expect(refused.status).toBe(403);
+    expect(await auditCount('AI.EXECUTION_CONTROL_REFUSED')).toBe(before + 1);
+    const entry = await latestAuditFor('AI.EXECUTION_CONTROL_REFUSED', admin.id);
+    expect(entry.entityType).toBe('AI_EXECUTION_SWITCH');
+    expect(entry.metadata).toMatchObject({ scope: 'GLOBAL', requested: 'RESUME', status: 403 });
+    // The refusal changes nothing.
+    expect((await superAdmin.client.req(SWITCH_PATH)).data.data.globalStopped).toBe(true);
+
+    // The environment belt refuses a database resume with 409 — also recorded.
+    env.AI_AGENT_EXECUTION_ENABLED = false;
+    const conflicted = await superAdmin.client.req(GLOBAL_PATH, { method: 'POST', body: { stopped: false } });
+    expect(conflicted.status).toBe(409);
+    const envEntry = await latestAuditFor('AI.EXECUTION_CONTROL_REFUSED', superAdmin.id);
+    expect(envEntry.metadata).toMatchObject({ scope: 'GLOBAL', requested: 'RESUME', status: 409 });
+  });
+
+  it('does not record ordinary failures such as an unknown agent key', async () => {
+    const admin = await createUser('ADMIN');
+    const before = await auditCount('AI.EXECUTION_CONTROL_REFUSED');
+    expect((await admin.client.req(agentPath('not-a-real-agent'), { method: 'POST', body: { stopped: true } })).status).toBe(404);
+    expect(await auditCount('AI.EXECUTION_CONTROL_REFUSED')).toBe(before);
+  });
+});
+
+describe('FLEET-01 — the pre-fleet kill-switch endpoint keeps its contract', () => {
+  it('returns the whole state, including the stopped agents, not just enabled/source', async () => {
+    // Lifting the global stop is a SUPER_ADMIN act on every surface, the legacy
+    // one included (the pre-fleet route maps `enabled:true` to a resume).
+    const admin = await createUser('SUPER_ADMIN');
+    expect(
+      (await admin.client.req(agentPath('analytics-agent'), { method: 'POST', body: { stopped: true, reason: 'legacy drill' } }))
+        .status,
+    ).toBe(200);
+
+    const legacy = await admin.client.req('/api/admin/ai/kill-switch', {
+      method: 'POST',
+      body: { enabled: true, reason: 'legacy resume of the global row' },
+    });
+    expect(legacy.status).toBe(200);
+    const data = legacy.data.data;
+    // The pre-fleet fields a client could read before the fleet release.
+    expect(data.enabled).toBe(true);
+    expect(data.source).toBe('database');
+    expect(data.stoppedAgents).toEqual(['analytics-agent']);
+    expect(Array.isArray(data.agents)).toBe(true);
+    expect(data.failClosed).toBe(false);
+    // ...and the fleet fields are still there.
+    expect(data.scope).toBe('GLOBAL');
+    expect(data.targetKey).toBe('*');
+    expect(data.state.globalStopped).toBe(false);
   });
 });
 

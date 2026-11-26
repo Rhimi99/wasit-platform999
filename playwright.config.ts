@@ -46,6 +46,16 @@ const SERVER_ENV = {
   // Search is public and IP-keyed (production default 120/60s); the discovery
   // specs issue far more searches than that from one address.
   RATE_LIMIT_SEARCH_MAX: '100000',
+  // AI surfaces are metered per account and per class (AI-RATE-LIMIT-01): the
+  // admin desk alone issues ~8 reads per page load, and this suite loads it
+  // dozens of times inside one window, so the production ceilings (120 reads,
+  // tripled for staff, and a 300/window per-IP backstop) 429 mid-spec. The
+  // limiter runs before auth, so a 429 also masks the 403 an RBAC assertion
+  // expects and turns it into a false failure. Both knobs are raised for the E2E
+  // process only; the classes and their production defaults stay under test in
+  // `tests/ai-rate-limit-01.test.ts`.
+  RATE_LIMIT_AI_MAX: '100000',
+  RATE_LIMIT_AI_IP_MAX: '100000',
   // Video generation is per-user and deliberately tight (production default
   // 6/60s: each render is a synchronous ffmpeg job). The marketing-video studio
   // spec drives several real renders from one demo account inside a single

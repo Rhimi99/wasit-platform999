@@ -17,6 +17,7 @@ import {
 } from './provider';
 import type { AIProvider } from './types';
 import { assertSpendGuard, spendGuardState } from './spend-guard';
+import { isExecutionBlocked } from './execution-switch';
 import {
   fingerprintSecret,
   looksLikeSecret,
@@ -732,6 +733,12 @@ export async function testProviderConnection(
     } else if (checks.some((c) => !c.ok)) {
       status = 'BLOCKED';
       checks.push({ id: 'live', ok: false, detail: 'Configuration is incomplete' });
+    } else if (await isExecutionBlocked(db)) {
+      // A live probe is a real vendor request. The central switch stops AI
+      // execution, so it must stop this too — and a switch store that cannot be
+      // read counts as stopped (fail-closed), never as permission to spend.
+      status = 'BLOCKED';
+      checks.push({ id: 'kill_switch', ok: false, detail: 'AI execution is stopped by the central switch' });
     } else if (spec.kind === 'vendor') {
       // AI-SPEND-GUARD-01: a live probe is a paid call. Without an active
       // GLOBAL daily+monthly cap it is reported as BLOCKED and no socket opens.

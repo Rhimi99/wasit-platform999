@@ -29,7 +29,7 @@ import type {
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
-  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
+  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, AiSwitchChange, CompanyMetrics,
   GmOverview, GmTasksData, GmAuditRow,
   AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
   AiSpendOverview, AiSpendLimitList, AiSpendLimitRow, AiSpendGuard,
@@ -1300,6 +1300,24 @@ export const api = {
     return request<AiKillSwitchState>('/api/admin/ai/kill-switch', {
       method: 'POST',
       body: JSON.stringify({ enabled, reason: reason ?? null }),
+    });
+  },
+  // Fleet switch (WASIT-AI-KILLSWITCH-FLEET-01): one persisted decision per
+  // scope. The legacy `/kill-switch` pair above still works; these expose the
+  // per-agent scope the legacy pair cannot express.
+  async adminAiExecutionSwitch() {
+    return request<AiKillSwitchState>('/api/admin/ai/execution-switch');
+  },
+  async adminSetGlobalAiExecutionSwitch(stopped: boolean, reason?: string | null) {
+    return request<AiSwitchChange>('/api/admin/ai/execution-switch/global', {
+      method: 'POST',
+      body: JSON.stringify({ stopped, reason: reason ?? null }),
+    });
+  },
+  async adminSetAgentAiExecutionSwitch(agentKey: string, stopped: boolean, reason?: string | null) {
+    return request<AiSwitchChange>(`/api/admin/ai/execution-switch/agents/${encodeURIComponent(agentKey)}`, {
+      method: 'POST',
+      body: JSON.stringify({ stopped, reason: reason ?? null }),
     });
   },
   // ---- Copilot (WASIT-COPILOT-01): the General Manager's coordinator ----
