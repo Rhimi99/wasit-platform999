@@ -1,93 +1,128 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ApiError } from '@wasit/shared';
-import { env } from '../src/lib/env.js';
 import {
-  isAiExecutionEnabled,
-  isAiExecutionDisabled,
-  isAiExecutionBlocked,
-  assertAiExecutionEnabled,
-  setAiExecutionEnabled,
-  getAiExecutionSwitchState,
-  AI_EXECUTION_DISABLED_MESSAGE,
-} from '../src/lib/ai/kill-switch.js';
+  describeSwitchState,
+  assertExecutionAllowed,
+  isExecutionBlocked,
+  readExecutionSwitchState,
+  type SwitchRowView,
+} from '../src/lib/ai/execution-switch.js';
+import {
+  AI_AGENT_PAUSED_MESSAGE,
+  AI_CONTROL_UNAVAILABLE_MESSAGE,
+} from '../src/lib/ai/execution-switch.js';
+import { AI_EXECUTION_DISABLED_MESSAGE } from '../src/lib/ai/kill-switch.js';
 
 /**
- * A1 — Central AI Kill Switch: the gate itself.
+ * A1 / FLEET-01 — the kill switch decision itself, without a database.
  *
- * Pure, no database. Proves the single control point is fail-closed and
- * LLM-independent: an explicit disable stops everything, clearing it restores
- * the environment default, and a broken check refuses rather than allows.
+ * The projection is pure: it must fail closed when the authoritative GLOBAL row
+ * is missing, let the environment flag stop work but never re-open it, and
+ * expose the agents that are stopped individually. Database failures are proven
+ * closed in `ai-killswitch-fleet-01.test.ts` (a real unreachable pool).
  */
 
-afterEach(() => {
-  // Never leak switch state into another spec in this file.
-  setAiExecutionEnabled(null);
+const GLOBAL_OPEN: SwitchRowView = {
+  scope: 'GLOBAL',
+  targetKey: '*',
+  stopped: false,
+  reason: null,
+  actorId: null,
+  version: 1,
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
+
+const agentRow = (key: string, stopped: boolean): SwitchRowView => ({
+  scope: 'AGENT',
+  targetKey: key,
+  stopped,
+  reason: stopped ? 'paused' : null,
+  actorId: 'u-1',
+  version: 2,
+  updatedAt: '2026-01-01T00:00:00.000Z',
 });
 
-describe('A1 — AI kill switch gate', () => {
-  it('defaults to enabled from the environment (unchanged behaviour)', () => {
-    setAiExecutionEnabled(null);
-    expect(isAiExecutionEnabled()).toBe(true);
-    expect(isAiExecutionDisabled()).toBe(false);
-    expect(isAiExecutionBlocked()).toBe(false);
-    expect(getAiExecutionSwitchState()).toEqual({ enabled: true, source: 'env' });
-  });
-
-  it('does not throw from the guard while enabled', () => {
-    setAiExecutionEnabled(true);
-    expect(() => assertAiExecutionEnabled()).not.toThrow();
-  });
-
-  it('an explicit disable stops execution and the guard refuses with 503', () => {
-    setAiExecutionEnabled(false);
-    expect(isAiExecutionEnabled()).toBe(false);
-    expect(isAiExecutionDisabled()).toBe(true);
-    expect(isAiExecutionBlocked()).toBe(true);
-    expect(getAiExecutionSwitchState()).toEqual({ enabled: false, source: 'runtime' });
-
-    let caught: unknown;
-    try {
-      assertAiExecutionEnabled();
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeInstanceOf(ApiError);
-    expect((caught as ApiError).statusCode).toBe(503);
-    expect((caught as ApiError).code).toBe('SERVICE_UNAVAILABLE');
-    expect((caught as ApiError).message).toBe(AI_EXECUTION_DISABLED_MESSAGE);
-  });
-
-  it('re-enabling restores execution', () => {
-    setAiExecutionEnabled(false);
-    expect(isAiExecutionDisabled()).toBe(true);
-    setAiExecutionEnabled(true);
-    expect(isAiExecutionEnabled()).toBe(true);
-    expect(() => assertAiExecutionEnabled()).not.toThrow();
-  });
-
-  it('clearing the override falls back to the environment default', () => {
-    setAiExecutionEnabled(false);
-    setAiExecutionEnabled(null);
-    expect(getAiExecutionSwitchState().source).toBe('env');
-    expect(isAiExecutionEnabled()).toBe(env.AI_AGENT_EXECUTION_ENABLED);
-  });
-
-  it('fails closed: a broken flag resolution refuses execution (no bypass)', () => {
-    // Simulate a resolution failure. The switch must NOT default to "allowed".
-    setAiExecutionEnabled(null);
-    const original = Object.getOwnPropertyDescriptor(env, 'AI_AGENT_EXECUTION_ENABLED');
-    Object.defineProperty(env, 'AI_AGENT_EXECUTION_ENABLED', {
-      configurable: true,
-      get() {
-        throw new Error('flag resolution failed');
-      },
+describe('FLEET-01 — switch state projection', () => {
+  it('is open when the GLOBAL row is open and the env belt is not applied', () => {
+    const state = describeSwitchState([GLOBAL_OPEN], false);
+    expect(state).toMatchObject({
+      enabled: true,
+      source: 'database',
+      failClosed: false,
+      globalStopped: false,
+      envStopped: false,
     });
-    try {
-      expect(isAiExecutionEnabled()).toBe(false);
-      expect(isAiExecutionBlocked()).toBe(true);
-      expect(() => assertAiExecutionEnabled()).toThrow(/disabled by the central kill switch/);
-    } finally {
-      if (original) Object.defineProperty(env, 'AI_AGENT_EXECUTION_ENABLED', original);
+  });
+
+  it('reports the env belt as the source when it stops work', () => {
+    expect(describeSwitchState([GLOBAL_OPEN], true)).toMatchObject({
+      enabled: false,
+      source: 'env',
+      envStopped: true,
+      failClosed: false,
+    });
+  });
+
+  it('reports a stopped GLOBAL row as stopped', () => {
+    const state = describeSwitchState([{ ...GLOBAL_OPEN, stopped: true, version: 4 }], false);
+    expect(state).toMatchObject({ enabled: false, source: 'database', globalStopped: true });
+    expect(state.global?.version).toBe(4);
+  });
+
+  it('fails closed when the authoritative GLOBAL row is missing', () => {
+    const state = describeSwitchState([agentRow('sales-agent', true)], false);
+    expect(state).toMatchObject({
+      enabled: false,
+      source: 'unavailable',
+      failClosed: true,
+      global: null,
+    });
+    expect(state.stoppedAgents).toEqual(['sales-agent']);
+  });
+
+  it('lists stopped agents only', () => {
+    const state = describeSwitchState(
+      [GLOBAL_OPEN, agentRow('sales-agent', true), agentRow('product-agent', false)],
+      false,
+    );
+    expect(state.stoppedAgents).toEqual(['sales-agent']);
+  });
+});
+
+describe('FLEET-01 — an unreadable control store fails closed', () => {
+  const broken = {
+    select() {
+      throw new Error('connection refused');
+    },
+  } as never;
+
+  it('refuses execution instead of assuming it is allowed', async () => {
+    await expect(assertExecutionAllowed(broken)).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      message: AI_CONTROL_UNAVAILABLE_MESSAGE,
+    });
+  });
+
+  it('reports blocked (not enabled) from the predicate', async () => {
+    expect(await isExecutionBlocked(broken)).toBe(true);
+  });
+
+  it('reports an unavailable state for read surfaces, never "open"', async () => {
+    const state = await readExecutionSwitchState(broken);
+    expect(state).toMatchObject({ enabled: false, source: 'unavailable', failClosed: true });
+  });
+
+  it('keeps the public refusal messages distinct and secret-free', () => {
+    expect(AI_EXECUTION_DISABLED_MESSAGE).not.toBe(AI_AGENT_PAUSED_MESSAGE);
+    expect(AI_AGENT_PAUSED_MESSAGE).not.toBe(AI_CONTROL_UNAVAILABLE_MESSAGE);
+    for (const message of [
+      AI_EXECUTION_DISABLED_MESSAGE,
+      AI_AGENT_PAUSED_MESSAGE,
+      AI_CONTROL_UNAVAILABLE_MESSAGE,
+    ]) {
+      expect(message).not.toMatch(/postgres|password|secret|token|key=/i);
     }
+    expect(new ApiError(503, 'SERVICE_UNAVAILABLE', AI_CONTROL_UNAVAILABLE_MESSAGE).statusCode).toBe(503);
   });
 });

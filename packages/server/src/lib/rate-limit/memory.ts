@@ -30,6 +30,10 @@ export class MemoryRateLimitStore implements RateLimitStore {
     return Promise.resolve();
   }
 
+  probe(): Promise<void> {
+    return Promise.resolve();
+  }
+
   purgeExpired(now = Date.now()): Promise<number> {
     let removed = 0;
     for (const [key, bucket] of this.buckets) {

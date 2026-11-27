@@ -56,9 +56,9 @@ SMTP_SECURE=false
 SMTP_USER=
 SMTP_PASSWORD=
 
-# حدّ المعدل — memory (نسخة واحدة/تطوير) أو postgres (مشاركة العدّادات بين النسخ).
-# استخدم postgres في أي نشر بأكثر من نسخة API.
-RATE_LIMIT_STORE=memory
+# حدّ المعدل — postgres إلزامي في production وstaging (AI-RATE-LIMIT-HARDENING-01).
+# memory مسموح محليًا فقط (development/test) أو بنسخة واحدة أثناء التطوير.
+RATE_LIMIT_STORE=postgres
 RATE_LIMIT_PURGE_INTERVAL_MINUTES=15
 ```
 

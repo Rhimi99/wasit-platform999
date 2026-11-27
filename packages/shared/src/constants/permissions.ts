@@ -52,6 +52,16 @@ export const PERMISSIONS = {
   ORDER_DELETE: 'order:delete',
   ORDER_LIST: 'order:list',
 
+  // B2B requests for quotation (B2B-01).
+  // Participant permissions, not staff permissions: holding one proves nothing on
+  // its own — `modules/rfq/access.ts` still requires the caller to own the company
+  // (buyer side) or the invited seller entity (seller side). Staff roles are
+  // deliberately not granted these, so an administrator cannot act commercially.
+  RFQ_CREATE: 'rfq:create',
+  RFQ_READ_OWN: 'rfq:read:own',
+  RFQ_QUOTE: 'rfq:quote',
+  RFQ_DECIDE: 'rfq:decide',
+
   // Transactions
   TRANSACTION_READ: 'transaction:read',
   TRANSACTION_LIST: 'transaction:list',

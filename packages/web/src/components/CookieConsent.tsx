@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '@/lib/i18n-context';
 import { useConsent } from '@/lib/consent-context';
 import {
@@ -32,6 +32,7 @@ function categoryDescKey(c: ConsentCategory): string {
 }
 
 export function CookieConsent() {
+  const bannerRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
   const { hasDecision, categories, isOpen, acceptAll, rejectNonEssential, save, open, close, policyChanged } = useConsent();
   const [draft, setDraft] = useState<ConsentCategories>(categories);
@@ -44,6 +45,25 @@ export function CookieConsent() {
   const showBanner = !hasDecision && !isOpen;
   const showDialog = isOpen;
 
+  // The banner is fixed to the bottom edge, so it publishes its measured height
+  // and the dashboard shell reserves that much space: a primary action must
+  // never end up underneath it (a first visit on a phone is the common case).
+  useEffect(() => {
+    const el = bannerRef.current;
+    if (!el) {
+      document.documentElement.style.removeProperty('--cookie-banner-h');
+      return;
+    }
+    const apply = () => document.documentElement.style.setProperty('--cookie-banner-h', `${el.offsetHeight}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty('--cookie-banner-h');
+    };
+  }, [showBanner]);
+
   if (!showBanner && !showDialog) return null;
 
   const toggle = (c: ConsentCategory) => setDraft((d) => ({ ...d, [c]: !d[c] }));
@@ -52,6 +72,7 @@ export function CookieConsent() {
     <>
       {showBanner ? (
         <div
+          ref={bannerRef}
           data-testid="cookie-consent-banner"
           role="region"
           aria-label={t('cookie.title')}

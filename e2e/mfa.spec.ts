@@ -65,6 +65,10 @@ test.describe('MFA UI end-to-end', () => {
     // --- Enable MFA from the Security page ---
     await page.goto('/dashboard/security');
     await expect(page.getByTestId('mfa-status')).toHaveText(/غير مفعّلة|Disabled/i);
+    // Enrolment is re-authenticated: the form demands the account password
+    // before it will mint a secret, so the button stays disabled until it is
+    // filled.
+    await page.getByTestId('mfa-enroll-password').fill(PASSWORD);
     await page.getByTestId('mfa-enable').click();
 
     const secret = (await page.getByTestId('mfa-secret').innerText()).trim();
@@ -116,6 +120,7 @@ test.describe('MFA UI end-to-end', () => {
     await expect(page).toHaveURL(/\/dashboard/);
 
     await page.goto('/dashboard/security');
+    await page.getByTestId('mfa-enroll-password').fill(PASSWORD);
     await page.getByTestId('mfa-enable').click();
     const secret = (await page.getByTestId('mfa-secret').innerText()).trim();
     await page.getByTestId('mfa-code').fill(await currentTotp(page, secret));

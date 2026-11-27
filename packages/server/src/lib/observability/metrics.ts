@@ -309,6 +309,7 @@ function init(): void {
   );
   metrics.counter('wasit_http_errors_total', 'HTTP 5xx responses', ['route', 'status']);
   metrics.counter('wasit_rate_limit_rejections_total', 'Requests rejected by the rate limiter', ['prefix']);
+  metrics.counter('wasit_rate_limit_store_errors_total', 'Rate-limit counter store failures', ['prefix', 'mode']);
   metrics.counter('wasit_cache_lookups_total', 'Read-cache lookups', ['result']);
   metrics.counter('wasit_cache_invalidations_total', 'Read-cache entries invalidated by a write');
   metrics.gauge('wasit_cache_entries', 'Live read-cache entries');
@@ -317,6 +318,16 @@ function init(): void {
   metrics.counter('wasit_alert_notifications_total', 'Alert notifications delivered', ['channel', 'result']);
   metrics.counter('wasit_ai_spend_limit_hits_total', 'AI calls refused by a spend limit', ['scope', 'result']);
   metrics.counter('wasit_ai_spend_alerts_total', 'AI spend limit alerts raised', ['level']);
+  metrics.counter('wasit_ai_llm_drafts_total', 'LLM drafts produced or degraded', ['capability', 'status']);
+  metrics.counter('wasit_ai_llm_fallbacks_total', 'LLM drafts that fell back to the deterministic engine', [
+    'capability',
+    'reason',
+  ]);
+  metrics.histogram(
+    'wasit_ai_llm_draft_duration_seconds',
+    'End-to-end duration of one LLM draft attempt',
+    ['capability'],
+  );
   metrics.gauge('wasit_db_up', 'Database reachable (1) or not (0)');
   metrics.gauge('wasit_uptime_seconds', 'Process uptime in seconds');
   metrics.gauge('wasit_build_info', 'Build information', ['version', 'env']);

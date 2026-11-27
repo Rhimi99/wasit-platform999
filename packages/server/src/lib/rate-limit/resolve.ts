@@ -2,7 +2,39 @@ import { env } from '../env';
 import type { DB } from '../../db/client';
 import { MemoryRateLimitStore } from './memory';
 import { PostgresRateLimitStore } from './postgres';
+import { deploymentTier, durableStoreRequired, type RateLimitConfig } from './policy';
 import type { RateLimitStore } from './port';
+
+/** The configuration the runtime is actually holding, read at call time. */
+export function rateLimitConfigNow(): RateLimitConfig {
+  return {
+    nodeEnv: env.NODE_ENV,
+    store: env.RATE_LIMIT_STORE,
+    allowMemoryStore: env.AI_RATE_LIMIT_ALLOW_MEMORY_STORE,
+    requireDurable: env.AI_RATE_LIMIT_REQUIRE_DURABLE,
+  };
+}
+
+/**
+ * Whether counters must be shared. True in production and staging no matter what
+ * the flags say — that is the point of the hardening: the escape hatch is a
+ * local-development affordance, not a deployment setting.
+ */
+export function rateLimitStoreRequired(): boolean {
+  return durableStoreRequired(rateLimitConfigNow());
+}
+
+/**
+ * Second gate (the first is in `env.ts`): refuse to construct an in-process store
+ * in a deployed tier even if the environment object was changed after boot.
+ */
+function assertStoreAllowed(id: 'memory' | 'postgres'): void {
+  if (id === 'memory' && deploymentTier(env.NODE_ENV) !== 'local') {
+    throw new Error(
+      `Refusing to use the in-process rate-limit store in ${env.NODE_ENV}: counters must be shared`,
+    );
+  }
+}
 
 let store: RateLimitStore | null = null;
 let currentDb: DB | null = null;
@@ -35,6 +67,7 @@ export function resolveRateLimitStore(db?: DB): RateLimitStore {
     forced = false;
     return store;
   }
+  assertStoreAllowed('memory');
   store = new MemoryRateLimitStore();
   currentDb = db ?? null;
   forced = false;
@@ -54,6 +87,7 @@ export function peekRateLimitStore(): RateLimitStore | null {
  * fall back to the environment-driven selection.
  */
 export function setRateLimitStore(next: RateLimitStore | null): void {
+  if (next) assertStoreAllowed(next.id);
   store = next;
   currentDb = null;
   forced = next !== null;

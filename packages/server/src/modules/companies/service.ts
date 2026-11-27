@@ -5,6 +5,7 @@ import { companies } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
 import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+import { updateEntityById } from '../entities/service.js';
 
 /**
  * The company columns a public profile may expose. The legal identifiers
@@ -132,26 +133,29 @@ export async function getCompany(db: DB, id: string, viewer: EntityViewer = {}) 
   return publicFields;
 }
 
+/**
+ * The caller's own company, or `null`. One company per user, so this is the
+ * company context a buyer may order for; the checkout UI reads it to offer a
+ * company purchase, and the order service proves the same ownership again on
+ * write. Returns the owner projection (the caller owns the row).
+ */
+export async function getMyCompany(db: DB, userId: string) {
+  const rows = await db.select(COMPANY_ROW_FIELDS).from(companies).where(eq(companies.userId, userId)).limit(1);
+  if (rows.length === 0) return null;
+  return {
+    ...toPublicCompany(rows[0] as unknown as Record<string, unknown>),
+    registrationNumber: rows[0].registrationNumber,
+    taxId: rows[0].taxId,
+    isActive: rows[0].isActive,
+  };
+}
+
 export async function updateCompany(
   db: DB,
   id: string,
-  input: Partial<CreateCompanyInput>,
+  input: Record<string, unknown>,
   actorId: string,
 ) {
-  const row = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
-  if (row.length === 0) throw ApiError.notFound('Company not found');
-  if (row[0].userId !== actorId) throw ApiError.forbidden();
-  const before = row[0];
-  await db
-    .update(companies)
-    .set({
-      legalName: input.legalName ?? before.legalName,
-      description: input.description ?? before.description,
-      logoUrl: input.logoUrl ?? before.logoUrl,
-      industry: input.industry ?? before.industry,
-      updatedAt: new Date(),
-    })
-    .where(eq(companies.id, id));
-  // The owner just wrote the row, so the private/owner view is the right response.
-  return getCompany(db, id, { userId: actorId });
+  const { entity } = await updateEntityById(db, 'company', id, input, { actorId });
+  return entity;
 }

@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
+import { ProductImageManager } from '@/components/ProductImageManager';
 import type { Category, ProductDetail, ProductSummary } from '@/lib/types';
 
 interface EditProductModalProps {
@@ -134,6 +135,7 @@ export function DashboardProductsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
+  const [imagesFor, setImagesFor] = useState<{ id: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -165,7 +167,24 @@ export function DashboardProductsPage() {
             <tbody>
               {products.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.name}</td>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      {p.image ? (
+                        <img
+                          src={p.image}
+                          alt={p.name}
+                          loading="lazy"
+                          className="h-9 w-9 rounded object-cover"
+                          data-testid={`product-thumb-${p.id}`}
+                        />
+                      ) : (
+                        <span className="flex h-9 w-9 items-center justify-center rounded bg-slate-100 text-[10px] text-slate-400">
+                          {t('product.noImage')}
+                        </span>
+                      )}
+                      <span>{p.name}</span>
+                    </div>
+                  </td>
                   <td className="text-xs">{p.sku}</td>
                   <td>{formatMoney(p.basePrice, p.currencyCode)}</td>
                   <td><Badge color={p.status === 'ACTIVE' ? 'green' : 'slate'}>{p.status}</Badge></td>
@@ -185,6 +204,14 @@ export function DashboardProductsPage() {
                           {p.status === 'ACTIVE' ? t('form.unpublish') : t('form.publish')}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        data-testid={`product-images-${p.id}`}
+                        onClick={() => setImagesFor({ id: p.id, name: p.name })}
+                        className="min-h-11 rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:border-wasit-400 hover:text-wasit-700"
+                      >
+                        {t('productImages.manage')}
+                      </button>
                       {p.status !== 'SUSPENDED' && (
                         <button
                           type="button"
@@ -202,6 +229,14 @@ export function DashboardProductsPage() {
             </tbody>
           </table>
         </Card>
+      )}
+      {imagesFor && (
+        <ProductImageManager
+          productId={imagesFor.id}
+          productName={imagesFor.name}
+          onClose={() => setImagesFor(null)}
+          onChanged={() => { void load(); }}
+        />
       )}
       {editId && (
         <EditProductModal

@@ -11,6 +11,8 @@ import { suppliers, merchants, companies } from '../../db/schema/trade.js';
 import { users } from '../../db/schema/auth.js';
 import { auditLogs } from '../../db/schema/audit.js';
 import { writeAudit } from '../../lib/audit.js';
+import { isStaffAccount } from '../staff/service.js';
+import { revokeAllSessionsForUser } from '../auth/service.js';
 import { reportingCurrency } from '../../lib/env.js';
 import { resolveCurrencyScope } from '../../lib/currency-scope.js';
 
@@ -201,6 +203,15 @@ adminRoutes.get('/users', async (c) => {
   return c.json({ success: true, data: { items: rows } });
 });
 
+/**
+ * Account status for *business* accounts.
+ *
+ * Staff accounts are deliberately out of reach here (RBAC-02): they are managed
+ * on `/api/admin/staff`, which is SUPER_ADMIN-only, so an ADMIN holding
+ * `user:update` cannot disable a colleague — or a SUPER_ADMIN — through the
+ * generic users list. The same self-guard and session revocation apply, so a
+ * deactivation takes effect immediately instead of at token expiry.
+ */
 adminRoutes.patch('/users/:id/status', async (c) => {
   const ctx = getContext(c);
   const id = c.req.param('id')!;
@@ -216,17 +227,43 @@ adminRoutes.patch('/users/:id/status', async (c) => {
   if (before.length === 0) {
     return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'User not found' } }, 404 as never);
   }
+  if (await isStaffAccount(ctx.db, id)) {
+    await writeAudit(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
+      action: 'RBAC.ESCALATION_REJECTED',
+      entityType: 'USER',
+      entityId: id,
+      metadata: { reason: 'staff_account_via_generic_users_route' },
+    });
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Staff accounts are managed on the staff desk (SUPER_ADMIN only)',
+        },
+      },
+      403 as never,
+    );
+  }
+  if (id === ctx.user!.id) {
+    return c.json(
+      { success: false, error: { code: 'FORBIDDEN', message: 'You cannot change your own account status' } },
+      403 as never,
+    );
+  }
   await ctx.db.update(users).set({ isActive, updatedAt: new Date() }).where(eq(users.id, id));
-  await writeAudit(ctx.db, { actorId: ctx.user!.id }, {
+  const sessionsRevoked = isActive ? 0 : await revokeAllSessionsForUser(ctx.db, id);
+  await writeAudit(ctx.db, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent }, {
     action: 'ADMIN.USER_STATUS',
     entityType: 'USER',
     entityId: id,
     before: { isActive: before[0].isActive },
     after: { isActive },
-    metadata: { reason: 'Admin status change' },
+    metadata: { reason: 'Admin status change', sessionsRevoked },
   });
   return c.json({ success: true });
 });
+
 
 // ----- Orders ---------------------------------------------------------------
 adminRoutes.get('/orders', async (c) => {

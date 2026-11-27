@@ -6,6 +6,7 @@ import { env } from '../../lib/env.js';
 import { mailStatus } from '../../lib/mail/resolve.js';
 import { smsStatus } from '../../lib/sms/resolve.js';
 import { rateLimitStoreStatus } from '../../lib/rate-limit/resolve.js';
+import { checkRateLimitStoreReadiness } from '../../lib/rate-limit/readiness.js';
 import { alertStatus } from '../../lib/observability/resolve-notifier.js';
 import { describeMediaProviders } from '../../lib/media/resolve.js';
 import { readCacheStatus } from '../../lib/cache/resolve.js';
@@ -17,19 +18,28 @@ healthRoutes.get('/live', (c) => c.json({ status: 'ok', timestamp: new Date().to
 healthRoutes.get('/ready', async (c) => {
   try {
     await pingDb();
-    return c.json({ status: 'ready', db: 'connected', timestamp: new Date().toISOString() });
   } catch (err) {
     return c.json(
       { status: 'not_ready', db: 'disconnected', error: (err as Error).message },
       503 as never,
     );
   }
+  // A replica that cannot share rate-limit counters must not receive traffic in
+  // a deployed environment: its limits would be per-process.
+  const rateLimit = await checkRateLimitStoreReadiness(getDb(c));
+  if (!rateLimit.ready) {
+    return c.json(
+      { status: 'not_ready', db: 'connected', rateLimit, timestamp: new Date().toISOString() },
+      503 as never,
+    );
+  }
+  return c.json({ status: 'ready', db: 'connected', rateLimit, timestamp: new Date().toISOString() });
 });
 
 // Backup freshness, read from the heartbeat the backup script writes. This is
 // the operator-visible half of the `backup_stale` alert: a deployment can see
 // whether its schedule is alive without querying the filesystem directly.
-function backupStatus(): {
+export function backupStatus(): {
   configured: boolean;
   heartbeat: string;
   lastSuccessAt: string | null;
@@ -59,7 +69,7 @@ healthRoutes.get('/channels', async (c) =>
     status: 'ok',
     mail: mailStatus(),
     sms: smsStatus(),
-    rateLimit: rateLimitStoreStatus(getDb(c)),
+    rateLimit: { ...rateLimitStoreStatus(getDb(c)), ...(await checkRateLimitStoreReadiness(getDb(c))) },
     cache: await readCacheStatus(),
     observability: { alerts: alertStatus() },
     media: await describeMediaProviders(),

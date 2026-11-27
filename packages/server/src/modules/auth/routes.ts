@@ -13,6 +13,7 @@ import {
   disableMfa,
   regenerateRecoveryCodes,
   verifyMfaChallenge,
+  assertIdentityForFactorChange,
   getMfaStatus,
   generateTotp,
 } from '../../lib/mfa';
@@ -22,6 +23,7 @@ import {
   beginStaffMfaEnrollment,
   completeStaffMfaEnrollment,
   logoutUser,
+  revokeOtherSessions,
   registerUser,
   verifyEmail,
   requestPasswordReset,
@@ -39,7 +41,16 @@ import { ApiError, SELF_SELECTABLE_ROLES, SUPPORTED_LOCALES, DEFAULT_LOCALE } fr
 import { env, devToolingActive, cookieSecure, demoAutoLoginEnabled } from '../../lib/env';
 import { hashToken } from '../../lib/security';
 
-const mfaEnrollSchema = z.object({});
+/**
+ * GM-ACCESS-01: starting (or restarting) enrollment replaces the stored secret,
+ * so it must re-prove identity rather than trust the session alone — a hijacked
+ * cookie must not be able to displace the owner's factor. `code` is required
+ * only when a factor is already enabled (a TOTP or a recovery code).
+ */
+const mfaEnrollSchema = z.object({
+  password: z.string().min(1),
+  code: z.string().min(6).max(20).optional(),
+});
 const mfaConfirmSchema = z.object({ code: z.string().length(6).regex(/^\d{6}$/) });
 const mfaDisableSchema = z.object({ code: z.string().length(6).regex(/^\d{6}$/) });
 const mfaVerifySchema = z.object({ code: z.string().min(1).max(20) }); // TOTP or recovery code
@@ -84,6 +95,14 @@ const loginSchema = z.object({
    * simply sending `true`.
    */
   allowUnverifiedEmail: z.boolean().optional().default(false),
+  /**
+   * GM-ACCESS-01. Single-use recovery ticket, minted only by the local operator
+   * CLI (`scripts/gm-access.ts`). It is consulted *only* when the email gate is
+   * the blocker; it never bypasses a second factor, never resets a password and
+   * never changes a role. Unknown/expired/replayed tickets fall through to the
+   * normal 403.
+   */
+  gmTicket: z.string().min(16).max(200).optional(),
 });
 
 const forgotSchema = z.object({ email: z.string().email() });
@@ -128,6 +147,7 @@ authRoutes.post(
       // Production never enables it, so the verification gate cannot be skipped
       // by a caller that simply sends `allowUnverifiedEmail: true`.
       allowUnverifiedEmail: body.allowUnverifiedEmail && devToolingActive(),
+      gmTicket: body.gmTicket ?? null,
     });
 
     if (result.kind === 'mfa_required') {
@@ -474,7 +494,9 @@ authRoutes.post(
   rateLimit({ windowSeconds: 60, max: 5, keyPrefix: 'auth-mfa-enroll' }),
   validateBody(mfaEnrollSchema),
   async (c) => {
+    const body = getValidatedBody<z.infer<typeof mfaEnrollSchema>>(c);
     const ctx = getContext(c);
+    await assertIdentityForFactorChange(ctx.db, ctx.user!.id, body.password, body.code);
     const result = await enrollMfa(ctx.db, ctx.user!.id, ctx.user!.email);
     await writeAudit(
       ctx.db,
@@ -498,12 +520,13 @@ authRoutes.post(
     const body = getValidatedBody<z.infer<typeof mfaConfirmSchema>>(c);
     const ctx = getContext(c);
     await confirmMfa(ctx.db, ctx.user!.id, body.code);
+    const revoked = await revokeOtherSessions(ctx.db, ctx.user!.id, getCookie(c, SESSION_COOKIE) ?? null);
     await writeAudit(
       ctx.db,
       { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
-      { action: 'AUTH.MFA_ENABLE', entityType: 'USER', entityId: ctx.user!.id },
+      { action: 'AUTH.MFA_ENABLE', entityType: 'USER', entityId: ctx.user!.id, metadata: { sessionsRevoked: revoked } },
     );
-    return c.json({ success: true });
+    return c.json({ success: true, data: { sessionsRevoked: revoked } });
   },
 );
 
@@ -517,12 +540,13 @@ authRoutes.post(
     const body = getValidatedBody<z.infer<typeof mfaDisableSchema>>(c);
     const ctx = getContext(c);
     await disableMfa(ctx.db, ctx.user!.id, body.code);
+    const revoked = await revokeOtherSessions(ctx.db, ctx.user!.id, getCookie(c, SESSION_COOKIE) ?? null);
     await writeAudit(
       ctx.db,
       { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
-      { action: 'AUTH.MFA_DISABLE', entityType: 'USER', entityId: ctx.user!.id },
+      { action: 'AUTH.MFA_DISABLE', entityType: 'USER', entityId: ctx.user!.id, metadata: { sessionsRevoked: revoked } },
     );
-    return c.json({ success: true });
+    return c.json({ success: true, data: { sessionsRevoked: revoked } });
   },
 );
 
@@ -536,10 +560,11 @@ authRoutes.post(
     const body = getValidatedBody<z.infer<typeof mfaRegenSchema>>(c);
     const ctx = getContext(c);
     const { recoveryCodes } = await regenerateRecoveryCodes(ctx.db, ctx.user!.id, body.code);
+    const revoked = await revokeOtherSessions(ctx.db, ctx.user!.id, getCookie(c, SESSION_COOKIE) ?? null);
     await writeAudit(
       ctx.db,
       { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
-      { action: 'AUTH.MFA_RECOVERY_REGEN', entityType: 'USER', entityId: ctx.user!.id },
+      { action: 'AUTH.MFA_RECOVERY_REGEN', entityType: 'USER', entityId: ctx.user!.id, metadata: { sessionsRevoked: revoked } },
     );
     return c.json({ success: true, data: { recoveryCodes } });
   },

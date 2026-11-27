@@ -1,4 +1,4 @@
-import { test, expect, storageFor, type DemoRole } from './helpers';
+import { test, expect, storageFor, completeEmailVerification, loginViaUi, DEMO_PASSWORD, type DemoRole } from './helpers';
 import type { APIRequestContext, Page } from '@playwright/test';
 
 /**
@@ -123,13 +123,23 @@ test.describe('Admin AI governance desk', () => {
   });
 
   test('refresh re-reads the requests table changed behind the page', async ({ page }) => {
+    // The table renders only when at least one request exists, so the fixture is
+    // created here instead of being inherited from whichever test ran before.
+    const seedCtx = await page.context().browser()!.newContext({ storageState: storageFor('customer') });
+    try {
+      const seedPage = await seedCtx.newPage();
+      expect((await seedPage.request.post('/api/ai/smart-search', { data: { q: 'refresh seed' } })).ok()).toBeTruthy();
+    } finally {
+      await seedCtx.close();
+    }
+
     // Mutate the server after the page has already loaded its snapshot: another
     // actor issues a real AI request after this table has rendered.
     await page.goto('/admin/ai');
     await page.getByTestId('admin-ai-tab-requests').click();
     await expect(page.getByTestId('admin-ai-requests')).toBeVisible();
     const rows = page.locator('[data-testid^="admin-ai-request-"]');
-    await expect.poll(async () => rows.count()).toBeGreaterThanOrEqual(0);
+    await expect(rows.first()).toBeVisible();
     const firstBefore = await rows.first().getAttribute('data-testid');
 
     const customerCtx = await page.context().browser()!.newContext({ storageState: storageFor('customer') });
@@ -147,6 +157,40 @@ test.describe('Admin AI governance desk', () => {
     const apiNewest = (await (await page.request.get('/api/admin/ai/requests?limit=1')).json()).data.items[0] as { id: string };
     await expect.poll(async () => rows.first().getAttribute('data-testid')).toBe(`admin-ai-request-${apiNewest.id}`);
     expect(await rows.first().getAttribute('data-testid')).not.toBe(firstBefore);
+  });
+
+  test('stops one agent from the desk and lifts that stop again', async ({ page }) => {
+    // The fleet scope: one agent stops, the others keep working. The UI must
+    // offer the control, show the state the server reports, and offer the way
+    // back — a stop with no reachable resume is a trap.
+    const agentKey = 'analytics-agent';
+    page.on('dialog', (dialog) => void dialog.accept());
+
+    await page.goto('/admin/ai');
+    await page.getByTestId('admin-ai-tab-agents').click();
+    const toggle = page.getByTestId(`admin-ai-agent-switch-${agentKey}`);
+    await expect(toggle).toBeVisible();
+
+    try {
+      await toggle.click();
+      await expect(page.getByTestId(`admin-ai-agent-stopped-${agentKey}`)).toBeVisible();
+      const stopped = (await (await page.request.get('/api/admin/ai/execution-switch')).json()).data;
+      expect(stopped.stoppedAgents).toContain(agentKey);
+      // Only that agent: the global switch is untouched.
+      expect(stopped.globalStopped).toBe(false);
+      expect(stopped.enabled).toBe(true);
+
+      await expect(toggle).toHaveText(/إعادة تفعيل هذا الوكيل|Re-enable this agent/i);
+      await toggle.click();
+      await expect(page.getByTestId(`admin-ai-agent-stopped-${agentKey}`)).toHaveCount(0);
+      const resumed = (await (await page.request.get('/api/admin/ai/execution-switch')).json()).data;
+      expect(resumed.stoppedAgents).not.toContain(agentKey);
+    } finally {
+      // Other specs drive this agent; leave the fleet open on every exit path.
+      await page.request.post(`/api/admin/ai/execution-switch/agents/${agentKey}`, {
+        data: { stopped: false, reason: 'e2e cleanup' },
+      });
+    }
   });
 
   test('creates a model from the desk and reads it back from the server', async ({ page }) => {
@@ -390,9 +434,32 @@ test.describe('Admin AI governance desk — RBAC', () => {
  * invisible: the backend held the result but the UI never surfaced it.
  */
 test.describe('Agent task results reach the requesting user', () => {
-  test.use({ storageState: storageFor('merchant') });
+  // A dedicated seller, not the shared demo merchant: agent work is metered per
+  // account (`ai.agent`), and the other merchant specs spend that quota. Sharing
+  // it made this spec fail on a 429 that had nothing to do with task results.
+  const ISOLATED_MERCHANT = { email: 'e2e-ai-merchant@wasit.tn', password: DEMO_PASSWORD };
 
   test('an approved gated task appears with its result on the merchant AI page', async ({ page, playwright }) => {
+    // Idempotent fixture: register once, then reuse. Verification goes through
+    // the real dev link, and the sign-in is the real form.
+    const setup = await playwright.request.newContext({ baseURL: process.env.E2E_API_URL ?? 'http://localhost:3000' });
+    try {
+      const reg = await setup.post('/api/auth/register', {
+        data: { email: ISOLATED_MERCHANT.email, password: ISOLATED_MERCHANT.password, firstName: 'E2E AI', role: 'MERCHANT' },
+      });
+      expect([201, 409]).toContain(reg.status());
+      // A demo stack registers accounts already verified and hides the dev link,
+      // so a missing link is not fatal there; the login below is the real check.
+      if (reg.status() === 201) {
+        await completeEmailVerification(setup, ISOLATED_MERCHANT.email).catch(() => false);
+      }
+    } finally {
+      await setup.dispose();
+    }
+    await loginViaUi(page, ISOLATED_MERCHANT.email, ISOLATED_MERCHANT.password);
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    expect((await page.request.get('/api/auth/me')).ok(), 'the isolated merchant is signed in').toBeTruthy();
+
     await page.goto('/dashboard/ai');
 
     // Run the gated Sales Agent from the merchant UI.

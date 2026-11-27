@@ -43,7 +43,7 @@ directory**, so the file must be at the root the process is started from (see
 | --- | --- | --- |
 | `RATE_LIMIT_REGISTER_MAX` | `10` | Registrations per window. Raise for CI/tests. |
 | `RATE_LIMIT_LOGIN_MAX` | `15` | Logins per window. |
-| `RATE_LIMIT_STORE` | `memory` | `memory` (single instance) or `postgres` (**required when running more than one API instance** — counters must be shared). |
+| `RATE_LIMIT_STORE` | `memory` | `postgres` (**mandatory in production and staging** — the process refuses to boot on `memory`, since N replicas would each enforce their own ceiling). `memory` is a local development/test affordance only. |
 | `RATE_LIMIT_PURGE_INTERVAL_MINUTES` | `15` | Scheduler interval to drop expired buckets. |
 | `RATE_LIMIT_API_MAX` | `300` | General `/api/*` backstop: requests per window per subject (authenticated user, else trusted client IP). Generous by design. `/api/auth` and `/api/health` are exempt (011.4). |
 | `RATE_LIMIT_API_WINDOW_SECONDS` | `60` | Window for the general backstop. |
@@ -132,6 +132,9 @@ Only **one** provider is active, selected by `PAYMENT_PROVIDER`.
 | `MEDIA_MAX_VIDEO_BYTES` | `52428800` | 50 MiB output ceiling. |
 | `MEDIA_VIDEO_MAX_CONCURRENCY` | `2` | Concurrent marketing-video renders per process; a request that cannot get a slot within the queue timeout is shed with 503 (011.4). |
 | `MEDIA_VIDEO_QUEUE_TIMEOUT_MS` | `15000` | How long a video request waits for a render slot before being shed (011.4). |
+| `MEDIA_MAX_IMAGE_BYTES` | `5242880` | Ceiling for one uploaded product image (MEDIA-01); a larger file is refused with 413. |
+| `MEDIA_MAX_IMAGES_PER_PRODUCT` | `8` | Images one product may carry; the next upload is refused with 422. |
+| `MEDIA_IMAGE_MAX_DIMENSION` | `1600` | Longest side of the stored display copy; a bigger photo is downscaled at upload (`0` stores the validated original). |
 
 > The **35–120 second** duration window is a business rule held in
 > `@wasit/shared` (`MARKETING_VIDEO_DURATION`), not an env var — the UI and the

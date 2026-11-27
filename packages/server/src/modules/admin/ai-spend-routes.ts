@@ -4,7 +4,7 @@ import { ApiError, PERMISSIONS } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, validateQuery, getValidatedBody, getValidatedQuery } from '../../middleware/validate.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
-import { configEnvironment } from '../../lib/ai/provider-config.js';
+import { configEnvironment, isPaidProvider, keyState, listProviderRows } from '../../lib/ai/provider-config.js';
 import {
   deleteSpendLimit,
   listSpendLimits,
@@ -13,6 +13,7 @@ import {
   type SpendPeriod,
   type SpendScope,
 } from '../../lib/ai/spend-limits.js';
+import { setGlobalGuardCaps, spendGuardState } from '../../lib/ai/spend-guard.js';
 
 /**
  * AI consumption and spend control (AI-05).
@@ -97,4 +98,55 @@ adminAiSpendRoutes.delete('/limits/:id', async (c) => {
     userAgent: ctx.userAgent,
   });
   return c.json({ success: true, data: { deleted: true } });
+});
+
+/**
+ * AI-SPEND-GUARD-01 — the general manager's view of the spend guard.
+ *
+ * A paid provider is only callable when the environment has an active GLOBAL
+ * daily AND monthly cost cap. `ready: false` lists exactly what is missing, and
+ * `providers` shows which paid providers are waiting on it, so the fix is one
+ * request away (PUT on this same path).
+ */
+const guardBody = z.object({
+  environment: z.string().min(1).max(30).optional(),
+  dailyMaxCost: z.union([z.string(), z.number()]),
+  monthlyMaxCost: z.union([z.string(), z.number()]),
+  currencyCode: z.string().length(3).optional(),
+  warnRatio: z.union([z.string(), z.number()]).optional(),
+});
+
+adminAiSpendRoutes.get('/guard', async (c) => {
+  const ctx = getContext(c);
+  const environment = c.req.query('environment') ?? configEnvironment();
+  const guard = await spendGuardState(ctx.db, environment);
+  const providers = await listProviderRows(ctx.db);
+  return c.json({
+    success: true,
+    data: {
+      ...guard,
+      providers: providers.map((row) => ({
+        key: row.providerKey,
+        displayName: row.displayName,
+        paid: isPaidProvider(row.providerKey),
+        enabled: row.enabled,
+        isDefault: row.isDefault,
+        isFallback: row.isFallback,
+        keyPresent: keyState(row).present,
+        keySource: keyState(row).source,
+      })),
+    },
+  });
+});
+
+adminAiSpendRoutes.put('/guard', validateBody(guardBody), async (c) => {
+  const ctx = getContext(c);
+  const body = getValidatedBody<z.infer<typeof guardBody>>(c);
+  const state = await setGlobalGuardCaps(
+    ctx.db,
+    { actorId: ctx.user!.id, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    body.environment ?? configEnvironment(),
+    body,
+  );
+  return c.json({ success: true, data: state });
 });

@@ -127,8 +127,8 @@ beforeAll(async () => {
   disputeStaffId = await insertUser('DISPUTE', 'reviewer');
 });
 
-afterEach(() => {
-  setAiExecutionEnabled(null);
+afterEach(async () => {
+  await setAiExecutionEnabled(db, null);
 });
 
 afterAll(async () => {
@@ -230,7 +230,7 @@ describe('AI-03 dispute assistant automation', () => {
   it('keeps a dispute assignable when the assistant cannot be created, and creates it on retry', async () => {
     const { disputeId } = await openDispute('failure');
 
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const failed = await assignDispute(db, disputeId, admin2, admin1);
     expect(failed.id).toBe(disputeId);
     expect(failed.aiAssistant.state).toBe('TASK_FAILED');
@@ -242,7 +242,7 @@ describe('AI-03 dispute assistant automation', () => {
     const failedAudit = await auditActions(disputeId, ['DISPUTE.AI_ASSIST_FAILED']);
     expect(failedAudit).toHaveLength(1);
 
-    setAiExecutionEnabled(true);
+    await setAiExecutionEnabled(db, true);
     const retried = await requestDisputeAssistant(db, { disputeId, trigger: 'MANUAL_RETRY', actorId: admin2 });
     expect(retried.state).toBe('TASK_CREATED');
     expect(await tasksFor(disputeId)).toHaveLength(1);

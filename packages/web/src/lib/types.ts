@@ -83,6 +83,125 @@ export interface ProductSummary {
   image: string | null;
 }
 
+/** The caller's own company, or `null` when the account has none. */
+export interface MyCompany {
+  id: string;
+  legalName: string;
+  slug: string;
+  countryId: string | null;
+  cityId: string | null;
+  industry: string | null;
+  description: string | null;
+  logoUrl: string | null;
+  verified: boolean;
+  isActive: boolean;
+  registrationNumber?: string | null;
+  taxId?: string | null;
+}
+
+/** RBAC-02 — staff accounts and the role catalogue of the staff desk. */
+export type StaffRoleName = 'SUPPORT' | 'RISK' | 'DISPUTE' | 'ADMIN' | 'SUPER_ADMIN';
+export type AssignableStaffRole = 'SUPPORT' | 'RISK' | 'DISPUTE' | 'ADMIN';
+
+export interface StaffMember {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  roles: UserRole[];
+  isActive: boolean;
+  isLocked: boolean;
+  emailVerified: boolean;
+  mfaEnabled: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface StaffListResponse {
+  items: StaffMember[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface StaffRoleEntry {
+  role: AssignableStaffRole;
+  permissions: string[];
+}
+
+export interface StaffRoleCatalog {
+  assignable: StaffRoleEntry[];
+  allStaffRoles: StaffRoleName[];
+  protectedRole: 'SUPER_ADMIN';
+}
+
+export interface StaffActivityRow {
+  id: string;
+  action: string;
+  actorId: string | null;
+  actorEmail: string | null;
+  before: unknown;
+  after: unknown;
+  metadata: unknown;
+  createdAt: string;
+}
+
+/** ENTITY-01 — the caller's own entity profiles, as returned by `/api/entities/me`. */
+export type EntityProfileType = 'merchant' | 'supplier' | 'company';
+
+interface EntityProfileBase {
+  id: string;
+  slug: string;
+  countryId: string | null;
+  cityId: string | null;
+  description: string | null;
+  logoUrl: string | null;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MerchantProfile extends EntityProfileBase {
+  type: 'merchant';
+  storeName: string;
+}
+
+export interface SupplierProfile extends EntityProfileBase {
+  type: 'supplier';
+  companyName: string;
+}
+
+export interface CompanyProfile extends EntityProfileBase {
+  type: 'company';
+  legalName: string;
+  industry: string | null;
+}
+
+export interface MyEntities {
+  merchant: MerchantProfile | null;
+  supplier: SupplierProfile | null;
+  company: CompanyProfile | null;
+}
+
+/** How the buyer acts in this order; the server proves it before it is stored. */
+export type BuyerType = 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
+
+/** One uploaded product photo, as returned by the media API. */
+export interface ProductImageRow {
+  id: string;
+  productId: string;
+  url: string;
+  altText: string | null;
+  isPrimary: boolean;
+  sortOrder: number;
+  width: number | null;
+  height: number | null;
+  sizeBytes: number;
+  mimeType: string;
+  createdAt: string;
+}
+
 export interface MediaAsset {
   id: string;
   kind: string;
@@ -906,6 +1025,35 @@ export interface AiSpendOverview {
   alerts: AiSpendAlertRow[];
 }
 
+export interface AiSpendGuardCap {
+  limitId: string;
+  maxCost: string;
+  currencyCode: string;
+  warnRatio: string;
+  updatedAt: string;
+}
+
+export interface AiSpendGuardProvider {
+  key: string;
+  displayName: string;
+  paid: boolean;
+  enabled: boolean;
+  isDefault: boolean;
+  isFallback: boolean;
+  keyPresent: boolean;
+  keySource: string;
+}
+
+export interface AiSpendGuard {
+  environment: string;
+  ready: boolean;
+  unavailable: boolean;
+  missing: Array<'DAILY' | 'MONTHLY'>;
+  caps: { daily: AiSpendGuardCap | null; monthly: AiSpendGuardCap | null };
+  fix: { method: 'PUT'; path: string };
+  providers: AiSpendGuardProvider[];
+}
+
 export interface AiSpendLimitList {
   environment: string;
   limits: Omit<AiSpendLimitRow, 'spent' | 'requests' | 'state'>[];
@@ -941,9 +1089,40 @@ export interface AiAdminUsage {
 }
 
 /** Central AI Kill Switch state (A1). `source` is where the state comes from. */
+export interface AiExecutionSwitchRow {
+  scope: 'GLOBAL' | 'AGENT';
+  targetKey: string;
+  stopped: boolean;
+  reason: string | null;
+  actorId: string | null;
+  version: number;
+  updatedAt: string;
+}
+
 export interface AiKillSwitchState {
   enabled: boolean;
-  source: 'runtime' | 'env';
+  /** The shared database row, the env belt, or nothing readable (fail-closed). */
+  source: 'database' | 'env' | 'unavailable';
+  failClosed: boolean;
+  globalStopped: boolean;
+  envStopped: boolean;
+  stoppedAgents: string[];
+  global: AiExecutionSwitchRow | null;
+  agents: AiExecutionSwitchRow[];
+  checkedAt: string;
+}
+
+/** Result of a fleet switch change (POST /api/admin/ai/execution-switch/*). */
+export interface AiSwitchChange {
+  scope: 'GLOBAL' | 'AGENT';
+  targetKey: string;
+  stopped: boolean;
+  reason: string | null;
+  version: number;
+  cancelledQueued: number;
+  changed: boolean;
+  independentResume: boolean | null;
+  state: AiKillSwitchState;
 }
 
 export interface AiAdminRequestRow {
@@ -1004,6 +1183,82 @@ export interface AgentTaskRow {
   model: string;
   latencyMs: number;
   createdAt: string;
+}
+
+/** WASIT-COPILOT-01 — the coordinator's report, as the API returns it. */
+export interface CopilotReportStep {
+  stepKey: string;
+  agentKey: string;
+  agentName: string;
+  reason: string;
+  status: string;
+  requiresApproval: boolean;
+  approvedBy: string | null;
+  taskId: string | null;
+  taskStatus: string | null;
+  attempts: number;
+  outcome: string | null;
+  refused: boolean;
+  costUsd: string | null;
+  error: string | null;
+}
+
+export interface CopilotEscalation {
+  kind: 'approval' | 'failure' | 'stalled';
+  stepKey: string;
+  agentKey: string;
+  message: string;
+}
+
+export interface CopilotReport {
+  runId: string;
+  goal: string;
+  request: string | null;
+  status: string;
+  requestedBy: string;
+  createdAt: string;
+  completedAt: string | null;
+  plan: {
+    source: 'llm' | 'heuristic';
+    fallbackReason: string | null;
+    promptVersion: string | null;
+    injectionSuspected: boolean;
+    constraints: string[];
+    expectedOutputs: string[];
+    model: string | null;
+    costUsd: string;
+  };
+  steps: CopilotReportStep[];
+  progress: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    skipped: number;
+    awaitingApproval: number;
+    pending: number;
+    running: number;
+  };
+  outcomes: { completed: string[]; partial: string[]; stalled: string[] };
+  escalations: CopilotEscalation[];
+  cost: { totalUsd: string; planningUsd: string; executionUsd: string; complete: boolean };
+  governance: { approvalsRequired: number; selfApproval: false; dispatchable: boolean };
+}
+
+export interface CopilotIntentView {
+  goal: string;
+  constraints: string[];
+  expectedOutputs: string[];
+  locale: 'ar' | 'fr' | 'en';
+  needsClarification: boolean;
+  clarificationQuestion: string | null;
+  signals: string[];
+}
+
+export interface CopilotRequestView {
+  needsClarification: boolean;
+  clarificationQuestion: string | null;
+  intent: CopilotIntentView;
+  report: CopilotReport | null;
 }
 
 export interface AgentTaskDecision {
@@ -1860,4 +2115,593 @@ export interface ManualCompletionResult {
   amount: string;
   currencyCode: string;
   alreadyPaid: boolean;
+}
+
+// ---- CART-01 — server-priced basket (POST /api/orders/quote) ----
+export interface QuoteIssue {
+  productId: string;
+  code: 'PRODUCT_NOT_FOUND' | 'PRODUCT_UNAVAILABLE' | 'MOQ_VIOLATION' | 'INSUFFICIENT_STOCK' | 'CURRENCY_MISMATCH';
+  message: string;
+  available?: number;
+  moq?: number;
+}
+
+export interface QuoteLine {
+  productId: string;
+  name: string;
+  sku: string;
+  image: string | null;
+  unitPrice: string;
+  quantity: number;
+  lineTotal: string;
+  moq: number;
+  available: number;
+}
+
+export interface QuoteSeller {
+  sellerId: string;
+  sellerType: string;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  lines: QuoteLine[];
+}
+
+export interface QuoteResult {
+  currencyCode: string | null;
+  itemsTotal: string;
+  commission: string;
+  commissionSeller: string;
+  commissionBuyer: string;
+  paymentFee: string;
+  grandTotal: string;
+  sellerCount: number;
+  sellers: QuoteSeller[];
+  issues: QuoteIssue[];
+}
+
+// ---------------------------------------------------------------------------
+// B2B-01 — requests for quotation (RFQ), offers and negotiation.
+// Mirrors the server projections in `modules/rfq/views.ts`: no user ids, no
+// contact data, no payment fields — because the server never sends them.
+// ---------------------------------------------------------------------------
+
+export type RfqStatus = 'DRAFT' | 'OPEN' | 'AWARDED' | 'CANCELLED' | 'EXPIRED' | 'CLOSED';
+export type RfqRecipientStatus = 'INVITED' | 'VIEWED' | 'QUOTED' | 'DECLINED' | 'WITHDRAWN';
+export type RfqQuoteStatus = 'SUBMITTED' | 'SUPERSEDED' | 'ACCEPTED' | 'REJECTED' | 'WITHDRAWN' | 'EXPIRED';
+
+export interface RfqItem {
+  id: string;
+  productId: string | null;
+  freeTextName: string | null;
+  productName: string | null;
+  quantity: string;
+  unit: string | null;
+  targetPrice: string | null;
+  position: number;
+}
+
+export interface RfqCompanyCard {
+  id: string;
+  legalName: string;
+  slug: string;
+  verified: boolean;
+}
+
+export interface RfqRecipient {
+  sellerId: string;
+  sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+  sellerName: string;
+  status: RfqRecipientStatus;
+  invitedAt: string;
+  viewedAt: string | null;
+  respondedAt: string | null;
+  declinedAt: string | null;
+  declineReason: string | null;
+}
+
+export interface RfqQuoteLine {
+  rfqItemId: string;
+  unitPrice: string;
+  quantity: string;
+  lineTotal: string;
+}
+
+export interface RfqQuote {
+  id: string;
+  sellerId: string;
+  sellerType: 'SUPPLIER' | 'MERCHANT' | 'COMPANY';
+  revision: number;
+  status: RfqQuoteStatus;
+  currencyCode: string;
+  itemsTotal: string;
+  leadTimeDays: number | null;
+  paymentTerms: string | null;
+  notes: string | null;
+  validUntil: string;
+  submittedAt: string;
+  decidedAt: string | null;
+  decisionReason: string | null;
+  withdrawnAt: string | null;
+  withdrawalReason: string | null;
+  expiredAt: string | null;
+  lines: RfqQuoteLine[];
+}
+
+export interface RfqTimelineEntry {
+  id: string;
+  eventType: string;
+  actorType: 'USER' | 'SYSTEM';
+  quoteId: string | null;
+  quoteRevision: number | null;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface BuyerRfq {
+  id: string;
+  rfqNumber: string;
+  title: string;
+  description: string | null;
+  currencyCode: string;
+  status: RfqStatus;
+  neededBy: string | null;
+  expiresAt: string | null;
+  sentAt: string | null;
+  awardedAt: string | null;
+  awardedQuoteId: string | null;
+  orderId: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  company: RfqCompanyCard;
+  items: RfqItem[];
+  recipients: RfqRecipient[];
+  quoteCount: number;
+}
+
+export interface SellerRfq {
+  id: string;
+  rfqNumber: string;
+  title: string;
+  description: string | null;
+  currencyCode: string;
+  status: RfqStatus;
+  neededBy: string | null;
+  expiresAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  buyer: RfqCompanyCard;
+  items: RfqItem[];
+  myInvitation: {
+    sellerId: string;
+    status: RfqRecipientStatus;
+    invitedAt: string;
+    viewedAt: string | null;
+    respondedAt: string | null;
+    declinedAt: string | null;
+    declineReason: string | null;
+  };
+}
+
+export interface RfqAcceptedOrder {
+  rfqId: string;
+  rfqNumber: string;
+  status: 'AWARDED';
+  quoteId: string;
+  revision: number;
+  sellerId: string;
+  sellerName: string;
+  order: {
+    orderId: string;
+    orderNumber: string;
+    itemsTotal: string;
+    commission: string;
+    commissionSeller: string;
+    commissionBuyer: string;
+    commissionRate: string;
+    commissionSellerRate: string;
+    commissionBuyerRate: string;
+    policyId: string | null;
+    paymentFee: string;
+    paymentFeePolicyId: string | null;
+    grandTotal: string;
+    currencyCode: string;
+    transactionId: string;
+    sellerOrderIds: string[];
+    sellerCount: number;
+    replayed?: boolean;
+  };
+  /** True when the award had already been made and this is the same answer. */
+  replayed: boolean;
+  rejectedQuoteIds: string[];
+}
+
+export type RfqComparisonReason =
+  | 'SUPERSEDED'
+  | 'EXPIRED'
+  | 'WITHDRAWN'
+  | 'REJECTED'
+  | 'ACCEPTED'
+  | 'CURRENCY_MISMATCH'
+  | 'RFQ_NOT_OPEN';
+
+export interface RfqComparisonLine {
+  rfqItemId: string;
+  itemName: string | null;
+  requestedQuantity: string;
+  quotedQuantity: string;
+  unit: string | null;
+  unitPrice: string;
+  lineTotal: string;
+  targetPrice: string | null;
+  targetDelta: string | null;
+}
+
+export interface RfqComparisonRow {
+  quoteId: string;
+  sellerId: string;
+  sellerName: string;
+  sellerType: string;
+  revision: number;
+  status: RfqQuoteStatus;
+  currencyCode: string;
+  itemsTotal: string;
+  leadTimeDays: number | null;
+  paymentTerms: string | null;
+  notes: string | null;
+  validUntil: string;
+  submittedAt: string;
+  comparable: boolean;
+  priceRank: number | null;
+  lines: RfqComparisonLine[];
+}
+
+export interface RfqComparisonExcluded {
+  quoteId: string;
+  sellerId: string;
+  sellerName: string;
+  revision: number;
+  status: RfqQuoteStatus;
+  reason: RfqComparisonReason;
+}
+
+export interface RfqComparison {
+  rfq: {
+    id: string;
+    rfqNumber: string;
+    title: string;
+    currencyCode: string;
+    status: RfqStatus;
+    neededBy: string | null;
+    expiresAt: string | null;
+    acceptsQuotes: boolean;
+  };
+  scope: 'ALL' | 'OWN';
+  items: RfqItem[];
+  rows: RfqComparisonRow[];
+  excluded: RfqComparisonExcluded[];
+  summary: {
+    comparableQuotes: number;
+    lowestTotal: string | null;
+    highestTotal: string | null;
+    averageTotal: string | null;
+    bestPriceQuoteId: string | null;
+    fastestLeadTimeDays: number | null;
+    fastestLeadTimeQuoteId: string | null;
+    currencyMixed: boolean;
+    perItem: Array<{
+      rfqItemId: string;
+      itemName: string | null;
+      requestedQuantity: string;
+      lowestUnitPrice: string | null;
+      lowestQuoteId: string | null;
+      highestUnitPrice: string | null;
+      averageUnitPrice: string | null;
+    }>;
+  };
+  generatedAt: string;
+}
+
+export type RfqView = BuyerRfq | SellerRfq;
+
+export interface CreateRfqPayload {
+  title: string;
+  description?: string | null;
+  currencyCode: string;
+  neededBy?: string | null;
+  items: Array<{
+    productId?: string | null;
+    freeTextName?: string | null;
+    quantity: string;
+    unit?: string | null;
+    targetPrice?: string | null;
+  }>;
+}
+
+export interface SubmitRfqQuotePayload {
+  currencyCode: string;
+  leadTimeDays?: number | null;
+  paymentTerms?: string | null;
+  notes?: string | null;
+  lines: Array<{ rfqItemId: string; unitPrice: string; quantity: string }>;
+}
+
+// ---- GM command center (WASIT-GM-DASHBOARD-01) -----------------------------
+// Mirrors `packages/server/src/modules/admin/gm/types.ts`. A section carries its
+// own state so one failing source never blanks the dashboard, and a `null` value
+// means "unknown" — the UI must not render it as zero.
+
+export type GmSectionState = 'OK' | 'UNAVAILABLE' | 'LOADING';
+export type GmHealthState = 'HEALTHY' | 'DEGRADED' | 'DOWN' | 'UNKNOWN';
+
+export interface GmSection<T> {
+  state: GmSectionState;
+  source: string;
+  generatedAt: string;
+  data: T | null;
+  error: string | null;
+}
+
+export interface GmHealthCheck {
+  key: string;
+  state: GmHealthState;
+  detail: string;
+  probed: boolean;
+  checkedAt: string;
+}
+
+export interface GmAgentRow {
+  key: string;
+  name: string;
+  nameAr: string | null;
+  mission: string | null;
+  category: string | null;
+  tier: string | null;
+  active: boolean;
+  status: string | null;
+  requiresHumanApproval: boolean;
+  approvalActions: string[];
+  permissionsRequired: string[];
+  allowedTools: string[];
+  generation: 'llm' | 'deterministic' | 'none';
+  generationCapability: string | null;
+  execution: {
+    total: number;
+    completed: number;
+    failed: number;
+    pending: number;
+    running: number;
+    successRate: number | null;
+  };
+  cost: {
+    available: boolean;
+    requests: number;
+    actualCostUsd: string | null;
+    tokensInput: number;
+    tokensOutput: number;
+  };
+  limit: { configured: boolean; maxCost: string | null; warnRatio: string | null };
+  health: string;
+  healthReason: string;
+  lastActivityAt: string | null;
+}
+
+export interface GmAgentsData {
+  items: GmAgentRow[];
+  counts: { total: number; specialised: number; supervisor: number; executable: number; declared: number; copilot: number };
+  company: {
+    overall: Record<string, unknown>;
+    attention: unknown[];
+    dataFreshness: Record<string, unknown>;
+    notes: string[];
+    window: Record<string, unknown>;
+  };
+  generativeAgents: string[];
+  deterministicAgents: string[];
+  noExecutorAgents: string[];
+}
+
+export interface GmCopilotData {
+  items: Array<{
+    runId: string;
+    goal: string;
+    request: string | null;
+    status: string;
+    requestedBy: string;
+    createdAt: string;
+    completedAt: string | null;
+    plan: { steps?: Array<{ stepKey: string; agentKey: string; agentName?: string; status: string }> };
+  }>;
+  totals: { total: number; succeeded: number; failed: number; awaiting: number; running: number };
+  recentLimit: number;
+}
+
+export interface GmSupervisorData {
+  overview: {
+    activeRuns: number;
+    stuckRuns: number;
+    failedSteps: number;
+    awaitingRetrySteps: number;
+    containedRuns: number;
+    budgetExceededRuns: number;
+    limits: Record<string, unknown>;
+    lastCycleAt: string | null;
+  };
+  alerts: {
+    firing: number;
+    items: Array<{ id: string; rule: string; severity: string; status: string; summary: string; startedAt: string; resolvedAt: string | null }>;
+  };
+}
+
+export interface GmTaskRow {
+  id: string;
+  kind: 'agent_task' | 'copilot_run';
+  agentKey: string;
+  title: string | null;
+  status: string;
+  taskType: string | null;
+  requestedBy: string;
+  runId: string | null;
+  severity: 'high' | 'medium' | 'low';
+  cost: string;
+  model: string;
+  tokensInput: number;
+  tokensOutput: number;
+  durationMs: number | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface GmTasksData {
+  items: GmTaskRow[];
+  totals: {
+    total: number;
+    queued: number;
+    running: number;
+    awaitingApproval: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    overdue: number;
+  };
+  page: number;
+  pageSize: number;
+}
+
+export interface GmApprovalItem {
+  id: string;
+  kind: 'agent_task' | 'run_step';
+  agentKey: string;
+  action: string;
+  title: string;
+  requestedBy: string;
+  requestedAt: string;
+  ageMinutes: number;
+  risk: 'high' | 'medium' | 'low';
+  evidence: string[];
+  runId: string | null;
+  stepKey: string | null;
+  reason: string;
+  selfApprovalBlocked: boolean;
+  independentApproverAvailable: boolean;
+  state: 'PENDING' | 'BLOCKED_PENDING_INDEPENDENT_APPROVER';
+}
+
+export interface GmApprovalsData {
+  items: GmApprovalItem[];
+  blocked: number;
+  approverRoles: string[];
+}
+
+export interface GmProviderRow {
+  key: string;
+  displayName: string;
+  kind: string;
+  enabled: boolean;
+  requiresKey: boolean;
+  keyState: { present: boolean; source: string; envVar: string | null; fingerprint: string | null };
+  lastTest: { status: string | null; mode: string | null; testedAt: string | null; detail: string | null };
+}
+
+export interface GmProvidersData {
+  environment: string;
+  liveTestAllowed: boolean;
+  secretStorage: { available: boolean; reason: string | null };
+  items: GmProviderRow[];
+}
+
+export interface GmSpendingData {
+  overview: {
+    from: string;
+    to: string;
+    environment: string;
+    totals: {
+      requests: number;
+      succeeded: number;
+      failed: number;
+      tokensInput: number;
+      tokensOutput: number;
+      estimatedCost: string;
+      vendorCost: string;
+      localRequests: number;
+      unknownCostRequests: number;
+    };
+    byAgent: Array<{ agentKey: string; requests: number; tokensInput: number; tokensOutput: number; costUsd: string | null }>;
+    limits: Array<{
+      id: string;
+      scope: string;
+      targetKey: string;
+      period: string;
+      maxCost: string | null;
+      maxRequests: number | null;
+      warnRatio: string;
+      spent: string;
+      requests: number;
+      state: 'OK' | 'WARNING' | 'BLOCKED';
+      isActive: boolean;
+    }>;
+    alerts: Array<{ id: string; scope: string; targetKey: string; period: string; level: string; spent: string; limitAmount: string | null; createdAt: string }>;
+  };
+  guard: {
+    environment: string;
+    ready: boolean;
+    unavailable: boolean;
+    missing: string[];
+    caps: Array<{ period: string; maxCost: string | null; isActive: boolean }>;
+    fix: { method: string; path: string };
+  };
+}
+
+export interface GmAuditRow {
+  id: string;
+  action: string;
+  actorId: string | null;
+  entityType: string;
+  entityId: string | null;
+  createdAt: string;
+}
+
+export interface GmPlatformData {
+  killSwitch: {
+    enabled: boolean;
+    source: 'database' | 'env' | 'unavailable';
+    failClosed: boolean;
+    globalStopped: boolean;
+    envStopped: boolean;
+    stoppedAgents: string[];
+    reason: string | null;
+    actorId: string | null;
+    updatedAt: string | null;
+  };
+  agents: { total: number; active: number; generative: number; noExecutor: number } | null;
+  tasks: { queued: number; running: number; awaitingApproval: number; failed24h: number } | null;
+  copilot: { total: number; failed: number; awaiting: number } | null;
+  approvalsPending: number | null;
+  approvalsBlocked: number | null;
+  alertsFiring: number | null;
+  providers: { total: number; enabled: number; withKey: number } | null;
+  spend24h: { costUsd: string; requests: number } | null;
+  lastActivityAt: string | null;
+}
+
+export interface GmOverview {
+  generatedAt: string;
+  environment: string;
+  window: { days: number; from: string; to: string };
+  viewer: { id: string; roles: string[]; canDecideApprovals: boolean };
+  sections: {
+    platform: GmSection<GmPlatformData>;
+    agents: GmSection<GmAgentsData>;
+    copilot: GmSection<GmCopilotData>;
+    supervisor: GmSection<GmSupervisorData>;
+    tasks: GmSection<GmTasksData>;
+    approvals: GmSection<GmApprovalsData>;
+    providers: GmSection<GmProvidersData>;
+    spending: GmSection<GmSpendingData>;
+    health: GmSection<{ overall: GmHealthState; items: GmHealthCheck[] }>;
+    audit: GmSection<{ items: GmAuditRow[]; page: number; pageSize: number }>;
+  };
 }

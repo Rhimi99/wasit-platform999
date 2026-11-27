@@ -6,6 +6,14 @@ import { securityHeaders } from './middleware/security-headers.js';
 import { csrfProtection } from './middleware/csrf.js';
 import { requestBodyLimit } from './middleware/body-limit.js';
 import { rateLimit } from './middleware/rate-limit.js';
+import {
+  AI_IP_BACKSTOP_PATTERNS,
+  AI_LIMIT_CLASSES,
+  AI_LIMIT_RULES,
+  aiLimitWindowSeconds,
+  aiStaffMultiplier,
+  requireDurableAiStore,
+} from './lib/rate-limit/ai-policy.js';
 import { requireStaffMfa } from './middleware/mfa.js';
 import { requireLegalAcceptance } from './modules/legal/enforcement.js';
 import { observabilityMiddleware } from './middleware/observability.js';
@@ -15,9 +23,11 @@ import { authRoutes } from './modules/auth/routes.js';
 import { healthRoutes } from './modules/health/routes.js';
 import { productsRoutes } from './modules/products/routes.js';
 import { ordersRoutes } from './modules/orders/routes.js';
+import { rfqRoutes } from './modules/rfq/routes.js';
 import { suppliersRoutes } from './modules/suppliers/routes.js';
 import { merchantRoutes } from './modules/merchants/routes.js';
 import { companyRoutes } from './modules/companies/routes.js';
+import { entityRoutes } from './modules/entities/routes.js';
 import { searchRoutes } from './modules/search/routes.js';
 import { comparisonRoutes } from './modules/comparison/routes.js';
 import { directoryRoutes } from './modules/directory/routes.js';
@@ -30,8 +40,10 @@ import { trustRoutes } from './modules/trust/routes.js';
 import { riskRoutes } from './modules/risk/routes.js';
 import { disputeRoutes, publicDisputeRoutes } from './modules/disputes/routes.js';
 import { adminRoutes } from './modules/admin/routes.js';
+import { staffRoutes } from './modules/staff/routes.js';
 import { adminEnginesRoutes } from './modules/admin/engines-routes.js';
 import { adminAiRoutes } from './modules/admin/ai-routes.js';
+import { gmRoutes } from './modules/admin/gm/routes.js';
 import { adminAiProviderRoutes } from './modules/admin/ai-provider-routes.js';
 import { adminAiSpendRoutes } from './modules/admin/ai-spend-routes.js';
 import { adminAnalyticsRoutes } from './modules/admin/analytics-routes.js';
@@ -40,6 +52,7 @@ import { adminCountryRoutes } from './modules/admin/country-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import { aiRoutes } from './modules/ai/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
+import { PRODUCT_IMAGE_UPLOAD_ENVELOPE_BYTES } from './modules/media/images.js';
 import { analyticsRoutes } from './modules/analytics/routes.js';
 import { revenueRoutes } from './modules/revenue/routes.js';
 import { geoRoutes } from './modules/geo/routes.js';
@@ -63,7 +76,17 @@ export function createApp(): Hono {
   app.use('*', securityHeaders);
   // Reject an oversized request body before any handler (or the JSON parse)
   // reads it, so a large payload cannot be buffered by an expensive route.
-  app.use('*', requestBodyLimit());
+  // The product-image upload is the only route that carries a binary, so it
+  // gets its own ceiling (image limit + multipart envelope) rather than a
+  // blanket raise that would also widen every JSON endpoint.
+  app.use(
+    '*',
+    requestBodyLimit((path) =>
+      path === '/api/media/product-images'
+        ? env.MEDIA_MAX_IMAGE_BYTES + PRODUCT_IMAGE_UPLOAD_ENVELOPE_BYTES
+        : env.MAX_REQUEST_BODY_BYTES,
+    ),
+  );
   // Structured request logging + metrics, tagged with the trace id. Replaces
   // Hono's `logger()` so there is exactly one log line per request.
   app.use('*', observabilityMiddleware());
@@ -99,26 +122,39 @@ export function createApp(): Hono {
       exemptPaths: ['/api/auth', '/api/health'],
     }),
   );
-  // AI: a tight per-user limit plus a per-IP backstop (an attacker rotating
-  // accounts from one host still trips the host limit).
-  app.use(
-    '/api/ai/*',
-    rateLimit({
-      windowSeconds: env.RATE_LIMIT_AI_WINDOW_SECONDS,
-      max: () => env.RATE_LIMIT_AI_MAX,
-      keyPrefix: 'ai-user',
-      subject: 'user',
-    }),
-  );
-  app.use(
-    '/api/ai/*',
-    rateLimit({
-      windowSeconds: env.RATE_LIMIT_AI_WINDOW_SECONDS,
-      max: () => env.RATE_LIMIT_AI_IP_MAX,
-      keyPrefix: 'ai-ip',
-      subject: 'ip',
-    }),
-  );
+  // AI-RATE-LIMIT-01: the AI surfaces are the only ones where a request can
+  // spend money, so each route is counted in its own class (money paths tight,
+  // reads roomy) instead of one flat ceiling. The table lives in
+  // `lib/rate-limit/ai-policy.ts`; a per-IP backstop on both AI surfaces bounds
+  // an attacker rotating accounts from one host.
+  for (const rule of AI_LIMIT_RULES) {
+    const cls = AI_LIMIT_CLASSES[rule.id];
+    app.use(
+      rule.pattern,
+      rateLimit({
+        windowSeconds: aiLimitWindowSeconds(),
+        max: cls.max,
+        keyPrefix: rule.id,
+        subject: 'user',
+        methods: rule.methods,
+        exemptPaths: rule.exemptPaths,
+        onStoreError: cls.onStoreError,
+        staffMultiplier: cls.staffMultiplier ? aiStaffMultiplier : undefined,
+        requireDurableStore: cls.paid ? requireDurableAiStore : false,
+      }),
+    );
+  }
+  for (const pattern of AI_IP_BACKSTOP_PATTERNS) {
+    app.use(
+      pattern,
+      rateLimit({
+        windowSeconds: aiLimitWindowSeconds(),
+        max: () => env.RATE_LIMIT_AI_IP_MAX,
+        keyPrefix: 'ai-ip',
+        subject: 'ip',
+      }),
+    );
+  }
   // Search is public and relatively costly → limit per trusted client IP.
   app.use(
     '/api/search/*',
@@ -179,9 +215,11 @@ export function createApp(): Hono {
   });
   app.route('/api/products', productsRoutes);
   app.route('/api/orders', ordersRoutes);
+  app.route('/api/rfqs', rfqRoutes);
   app.route('/api/suppliers', suppliersRoutes);
   app.route('/api/merchants', merchantRoutes);
   app.route('/api/companies', companyRoutes);
+  app.route('/api/entities', entityRoutes);
   app.route('/api/search', searchRoutes);
   app.route('/api/price-comparison', comparisonRoutes);
   app.route('/api/directory', directoryRoutes);
@@ -220,9 +258,13 @@ export function createApp(): Hono {
   // first mount that matches, so a later one would answer 404 for these paths.
   app.route('/api/admin/ai/providers', adminAiProviderRoutes);
   app.route('/api/admin/ai/spend', adminAiSpendRoutes);
+  app.route('/api/admin/staff', staffRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);
+  // GM command center (WASIT-GM-DASHBOARD-01): read-only aggregation, gated by
+  // the same `ai:manage` / `admin:ai` pair the AI oversight desk uses.
+  app.route('/api/admin/gm', gmRoutes);
   app.route('/api/admin/analytics', adminAnalyticsRoutes);
   app.route('/api/admin/observability', adminObservabilityRoutes);
   app.route('/api/admin/tax', taxRoutes);

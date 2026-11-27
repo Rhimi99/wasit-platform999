@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { ApiError, PERMISSIONS, type UserRole } from '@wasit/shared';
@@ -11,7 +11,7 @@ import { newId } from '../../lib/ids.js';
 import { aiBudgets, aiModels, aiRequests } from '../../db/schema/ai.js';
 import { agentTasks } from '../../db/schema/agents.js';
 import { adminUsageSummary } from '../ai/service.js';
-import { agentLayerSummary, copilotAgent, listAgents } from '../ai/agents.js';
+import { AGENT_CATALOGUE, agentLayerSummary, copilotAgent, listAgents } from '../ai/agents.js';
 import { planAgentRun } from '../ai/planner.js';
 import {
   dispatchStep,
@@ -53,10 +53,9 @@ import {
   purgeExpiredMemories,
 } from '../ai/memory.js';
 import { derivePlatformScope } from '../ai/scope.js';
-import {
-  getAiExecutionSwitchState,
-  setAiExecutionEnabled,
-} from '../../lib/ai/kill-switch.js';
+import { getAiExecutionSwitchState } from '../../lib/ai/kill-switch.js';
+import { GLOBAL_TARGET_KEY, setAgentSwitch, setGlobalSwitch } from '../../lib/ai/execution-switch.js';
+import { copilotRoutes } from '../ai/copilot/routes.js';
 
 const budgetSchema = z
   .object({
@@ -363,6 +362,12 @@ adminAiRoutes.delete('/agent-schedules/:id', async (c) => {
   return c.json({ success: true, data: { id: c.req.param('id')!, deleted: true } });
 });
 
+// ----- Copilot (WASIT-COPILOT-01) ------------------------------------------
+// The coordinator's own surface. It inherits this router's auth/permission gate
+// and never gains a privileged principal: plans and dispatches run as the
+// requesting user.
+adminAiRoutes.route('/copilot', copilotRoutes);
+
 // ----- Agent runs (AI-02.3.1) ----------------------------------------------
 // The operational surface for the run layer: inspect a run, dispatch one ready
 // step, record a human approval, cancel, and reconcile. Every action goes
@@ -484,47 +489,195 @@ adminAiRoutes.post('/supervisor/runs/:runId/contain', validateBody(containSchema
   return c.json({ success: true, data: result });
 });
 
-// ----- Central AI Kill Switch (A1) -----------------------------------------
-// ONE central control for AI execution. The router is already gated by
-// AI_MANAGE | ADMIN_AI (see `.use('*')`), so no new permission is introduced and
-// an unprivileged user (e.g. CUSTOMER) is refused before reaching the handler.
-// The switch is an emergency *subsystem* stop, not a permission: it grants no
-// authority and RBAC/approvals/budgets/audit all still apply on top of it.
+// ----- Central AI Kill Switch (fleet-wide) --------------------------------
+// ONE central control for AI execution, persisted in PostgreSQL so every
+// instance enforces the same decision (WASIT-AI-KILLSWITCH-FLEET-01). The router
+// is already gated by AI_MANAGE | ADMIN_AI (see `.use('*')` above); the switch
+// handlers additionally require an ADMIN or SUPER_ADMIN role, and lifting the
+// GLOBAL stop requires SUPER_ADMIN — an independent authority from the one that
+// applies it. The switch is an emergency *subsystem* stop, not a permission: it
+// grants no authority and RBAC/approvals/budgets/audit all still apply on top.
 const killSwitchSchema = z.object({
   enabled: z.boolean(),
   reason: z.string().max(300).optional().nullable(),
 });
 
+const switchChangeSchema = z.object({
+  stopped: z.boolean(),
+  reason: z.string().max(300).optional().nullable(),
+});
+
+function assertSwitchOperator(roles: UserRole[]): void {
+  if (!roles.includes('ADMIN') && !roles.includes('SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only an administrator may control the AI execution switch');
+  }
+}
+
+interface SwitchChangeData {
+  scope: 'GLOBAL' | 'AGENT';
+  targetKey: string;
+  stopped: boolean;
+  reason: string | null;
+  version: number;
+  cancelledQueued: number;
+  changed: boolean;
+  independentResume: boolean | null;
+  state: Awaited<ReturnType<typeof getAiExecutionSwitchState>>;
+}
+
+async function applySwitchChange(
+  c: Context,
+  scope: 'GLOBAL' | 'AGENT',
+  agentKey: string | null,
+  body: { stopped: boolean; reason?: string | null },
+  legacyAudit = false,
+): Promise<SwitchChangeData> {
+  const ctx = getContext(c);
+  const roles = (ctx.user?.roles ?? []) as UserRole[];
+  const actorId = ctx.user!.id;
+
+  // A refused control attempt is a fact an incident review needs. It is written
+  // on the pooled handle AFTER the failed operation has rolled back, and a
+  // failure to write it never replaces the original refusal.
+  const recordRefusal = async (err: unknown): Promise<void> => {
+    const status = err instanceof ApiError ? err.statusCode : 0;
+    if (status !== 403 && status !== 409) return;
+    try {
+      await writeAudit(
+        ctx.db,
+        { actorId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+        {
+          action: 'AI.EXECUTION_CONTROL_REFUSED',
+          entityType: 'AI_EXECUTION_SWITCH',
+          entityId: scope === 'GLOBAL' ? null : agentKey,
+          metadata: {
+            scope,
+            targetKey: agentKey ?? GLOBAL_TARGET_KEY,
+            requested: body.stopped ? 'STOP' : 'RESUME',
+            status,
+            code: err instanceof ApiError ? err.code : null,
+          },
+        },
+      );
+    } catch {
+      // Never mask the refusal with an audit failure.
+    }
+  };
+
+  try {
+    assertSwitchOperator(roles);
+
+    if (scope === 'GLOBAL' && !body.stopped && !roles.includes('SUPER_ADMIN')) {
+      throw ApiError.forbidden('Only a SUPER_ADMIN may lift the global AI execution stop');
+    }
+
+    const beforeState = await getAiExecutionSwitchState(ctx.db);
+    if (!body.stopped && beforeState.envStopped) {
+      throw ApiError.conflict(
+        'AI execution is disabled by the server environment flag; lifting the database stop does not re-enable it',
+      );
+    }
+
+    const result =
+      scope === 'GLOBAL'
+        ? await setGlobalSwitch(ctx.db, { stopped: body.stopped, reason: body.reason ?? null, actorId })
+        : await setAgentSwitch(ctx.db, agentKey!, { stopped: body.stopped, reason: body.reason ?? null, actorId });
+
+    // A resume performed by the same operator who applied the stop is permitted
+    // (a safety control must stay operable) but it is recorded as NOT independent
+    // so reviewers and the GM dashboard can see the difference.
+    const independentResume =
+      !body.stopped && result.previous.actorId !== null && result.previous.actorId !== actorId;
+
+    if (result.changed) {
+      // The pre-fleet endpoint keeps its historical action names so existing audit
+      // queries and alerts do not break; the fleet endpoints carry the richer
+      // AI.EXECUTION_* names.
+      const action = legacyAudit
+        ? body.stopped
+          ? 'AI.KILL_SWITCH_DISABLED'
+          : 'AI.KILL_SWITCH_ENABLED'
+        : body.stopped
+          ? 'AI.EXECUTION_STOPPED'
+          : 'AI.EXECUTION_RESUMED';
+      await writeAudit(
+        ctx.db,
+        { actorId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+        {
+          action,
+          entityType: legacyAudit ? 'AI_KILL_SWITCH' : 'AI_EXECUTION_SWITCH',
+          entityId: scope === 'GLOBAL' ? null : agentKey,
+          before: { ...result.previous } as unknown as Record<string, unknown>,
+          after: { ...result.row } as unknown as Record<string, unknown>,
+          metadata: {
+            scope,
+            targetKey: result.row.targetKey,
+            reason: body.reason ?? null,
+            version: result.row.version,
+            cancelledQueued: result.cancelledQueued,
+            ...(body.stopped ? {} : { independentResume }),
+          },
+        },
+      );
+    }
+
+    return {
+      scope,
+      targetKey: result.row.targetKey,
+      stopped: result.row.stopped,
+      reason: result.row.reason,
+      version: result.row.version,
+      cancelledQueued: result.cancelledQueued,
+      changed: result.changed,
+      independentResume: body.stopped ? null : independentResume,
+      state: await getAiExecutionSwitchState(ctx.db),
+    };
+  } catch (err) {
+    await recordRefusal(err);
+    throw err;
+  }
+}
+
+adminAiRoutes.get('/execution-switch', async (c) => {
+  return c.json({ success: true, data: await getAiExecutionSwitchState(getContext(c).db) });
+});
+
+adminAiRoutes.post('/execution-switch/global', validateBody(switchChangeSchema), async (c) => {
+  const body = getValidatedBody<z.infer<typeof switchChangeSchema>>(c);
+  return c.json({ success: true, data: await applySwitchChange(c, 'GLOBAL', null, body) });
+});
+
+adminAiRoutes.post('/execution-switch/agents/:agentKey', validateBody(switchChangeSchema), async (c) => {
+  const body = getValidatedBody<z.infer<typeof switchChangeSchema>>(c);
+  const agentKey = c.req.param('agentKey')!;
+  if (!AGENT_CATALOGUE.some((agent: { key: string }) => agent.key === agentKey)) {
+    throw ApiError.notFound('Agent');
+  }
+  return c.json({ success: true, data: await applySwitchChange(c, 'AGENT', agentKey, body) });
+});
+
+// Backward-compatible surface: the pre-fleet endpoints now read and write the
+// same persisted GLOBAL row, so existing operators/UI keep working while the
+// decision is shared across instances.
 adminAiRoutes.get('/kill-switch', async (c) => {
-  const state = getAiExecutionSwitchState();
-  return c.json({ success: true, data: state });
+  return c.json({ success: true, data: await getAiExecutionSwitchState(getContext(c).db) });
 });
 
 adminAiRoutes.post('/kill-switch', validateBody(killSwitchSchema), async (c) => {
-  const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof killSwitchSchema>>(c);
-  const before = getAiExecutionSwitchState();
-  setAiExecutionEnabled(body.enabled);
-  const after = getAiExecutionSwitchState();
-  await writeAudit(
-    ctx.db,
-    {
-      actorId: ctx.user!.id,
-      ipAddress: ctx.ipAddress,
-      userAgent: ctx.userAgent,
-    },
-    {
-      action: body.enabled ? 'AI.KILL_SWITCH_ENABLED' : 'AI.KILL_SWITCH_DISABLED',
-      entityType: 'AI_KILL_SWITCH',
-      entityId: null,
-      before: { enabled: before.enabled, source: before.source },
-      after: { enabled: after.enabled, source: after.source },
-      // A reason is free text supplied by the operator; never a secret. Kept
-      // short and optional so the audit stays a decision record, not a log dump.
-      metadata: { reason: body.reason ?? null },
-    },
+  const data = await applySwitchChange(
+    c,
+    'GLOBAL',
+    null,
+    { stopped: !body.enabled, reason: body.reason ?? null },
+    true,
   );
-  return c.json({ success: true, data: after });
+  // Keeps the pre-fleet response contract for any client that still reads it:
+  // the legacy body WAS the state object (`enabled`/`source`/`stoppedAgents`/
+  // `agents`), so returning only two of those fields left old clients unable to
+  // tell which agents were stopped. The full state is spread first and the
+  // change fields follow, so nothing the fleet surface added is lost either.
+  return c.json({ success: true, data: { ...data.state, ...data } });
 });
 
 // ----- Agent memory supervision (AI-MEM-01) -------------------------------

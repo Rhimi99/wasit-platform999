@@ -432,6 +432,32 @@ async function seedPolicies(): Promise<void> {
       },
     ]);
   }
+  // --- B2B-01 negotiation terms (Policy Engine). These are the *seeded* values
+  // for a fresh install; the code falls back to the same safe defaults when the
+  // row is absent, so a missing policy narrows nothing and widens nothing. ---
+  const rfqPolicyCount = await import('drizzle-orm').then(({ eq }) =>
+    db.select().from(policies).where(eq(policies.code, 'RFQ_TERMS')),
+  );
+  if (rfqPolicyCount.length === 0) {
+    await db.insert(policies).values([
+      {
+        id: newId(),
+        scope: 'B2B',
+        code: 'RFQ_TERMS',
+        name: 'B2B Request for Quotation Terms',
+        description: 'Quote validity, negotiation rounds and invitation limits for RFQs',
+        rules: {
+          quoteValidityDays: 14,
+          maxRounds: 5,
+          maxRecipientsPerRfq: 20,
+          maxItemsPerRfq: 50,
+          responseWindowDays: 30,
+        },
+        isActive: true,
+        version: 1,
+      },
+    ]);
+  }
 }
 
 async function seedSubscriptionPlans(): Promise<void> {

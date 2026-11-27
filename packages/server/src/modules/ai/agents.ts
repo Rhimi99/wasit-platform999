@@ -37,6 +37,7 @@ import {
 import { assertAgentScopeContract, assertRunOwnerScope } from './agent-scope.js';
 import { SYSTEM_PRINCIPAL } from './scope.js';
 import { assertAiExecutionEnabled } from '../../lib/ai/kill-switch.js';
+import { lockAndAssertExecutionAllowed } from '../../lib/ai/execution-switch.js';
 import { env } from '../../lib/env.js';
 import { logger } from '../../lib/observability/logger';
 
@@ -349,7 +350,7 @@ export async function createAgentTask(
   // Central AI Kill Switch (A1): no NEW AI task may be created while disabled —
   // user requests, scheduler dispatches and approval-triggered runs all pass
   // through here. Fail-closed and uniform across every surface.
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db, input.agentKey);
 
   // AI-REG-01: the agent must exist AND have a real executor. Declared-only
   // agents, the Copilot and the oversight supervisor are refused here — before
@@ -491,6 +492,11 @@ export async function createAgentTask(
     // share one transaction, so Recovery cannot settle the step in between and a
     // stale dispatch cannot attach a task to a step it no longer owns.
     await db.transaction(async (tx) => {
+      // The kill switch is checked INSIDE this transaction, holding the GLOBAL
+      // switch row `FOR SHARE`: a stop that commits before this point is seen
+      // here, and one that commits after must wait for this insert — so a task
+      // can never appear after a stop has been acknowledged.
+      await lockAndAssertExecutionAllowed(tx, agent.key);
       // The ownership UPDATE is taken FIRST so it doubles as the step's row lock.
       // Two concurrent creators for the same step then serialise here: the loser
       // blocks until the winner commits and only then reads the task table. A
@@ -535,16 +541,19 @@ export async function createAgentTask(
       });
     });
   } else {
-    await db.insert(agentTasks).values({
-      id,
-      agentKey: agent.key,
-      requestedBy,
-      input: effectiveInput as never,
-      status: initialStatus,
-      requiresApproval,
-      model: 'local-heuristic',
-      ...(origin?.dedupeKey ? { dedupeKey: origin.dedupeKey } : {}),
-      ...(origin?.triggeredBy ? { triggeredBy: origin.triggeredBy } : {}),
+    await db.transaction(async (tx) => {
+      await lockAndAssertExecutionAllowed(tx, agent.key);
+      await tx.insert(agentTasks).values({
+        id,
+        agentKey: agent.key,
+        requestedBy,
+        input: effectiveInput as never,
+        status: initialStatus,
+        requiresApproval,
+        model: 'local-heuristic',
+        ...(origin?.dedupeKey ? { dedupeKey: origin.dedupeKey } : {}),
+        ...(origin?.triggeredBy ? { triggeredBy: origin.triggeredBy } : {}),
+      });
     });
   }
 
@@ -832,7 +841,7 @@ export async function decideAgentTask(
   // starting a run and then failing mid-flight. Rejection stays allowed: it is a
   // safe, no-execution decision and must remain available during a stop.
   if (decision === 'APPROVE') {
-    assertAiExecutionEnabled();
+    await assertAiExecutionEnabled(db, task.agentKey);
   }
 
   // Separation of duties (AI-02.P0): the person who requested a task may never
@@ -879,11 +888,16 @@ export async function decideAgentTask(
   // matches no row and is refused BEFORE any provider call — this closes the
   // double-execution window a plain check-then-act left open. It is a lone
   // statement (its own implicit transaction), so no lock is held afterwards.
-  const claimed = await db
-    .update(agentTasks)
-    .set({ status: 'running', approvedBy: approverId, approvedAt: new Date(), startedAt: new Date() })
-    .where(and(eq(agentTasks.id, taskId), eq(agentTasks.status, 'awaiting_approval')))
-    .returning({ id: agentTasks.id });
+  const claimed = await db.transaction(async (tx) => {
+    // The approval starts execution: it must observe the same authority, under
+    // the same lock, so a stop cannot land between the check and the claim.
+    await lockAndAssertExecutionAllowed(tx, task.agentKey);
+    return tx
+      .update(agentTasks)
+      .set({ status: 'running', approvedBy: approverId, approvedAt: new Date(), startedAt: new Date() })
+      .where(and(eq(agentTasks.id, taskId), eq(agentTasks.status, 'awaiting_approval')))
+      .returning({ id: agentTasks.id });
+  });
   if (claimed.length === 0) {
     // Someone else already claimed (or decided) this task. Do not run anything.
     throw ApiError.conflict('Task is not awaiting approval');

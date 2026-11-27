@@ -1,6 +1,136 @@
 # CHECKPOINT — WASIT BUSINESS GLOBAL
 
-آخر تحديث: **2026-09-23**
+آخر تحديث: **2026-11-25**
+
+## B2B-01 phase 4 — قبول عرض وتحويله إلى طلب (COMPLETE_VERIFIED — 2026-11-25)
+
+### ما وجدناه قبل التنفيذ (لا افتراض)
+`ACCEPTED` و`AWARDED` معلنتان في آلة الحالات منذ المرحلة 2، لكن **لا مسار واحد يكتبهما**: المرحلة 3 أضافت قراءة فقط. النتيجة: وساطة B2B تتوقف عند «أفضل عرض» — لا طلب تجاري، ولا ربط بين ما اتُّفق عليه وما يُدفع.
+
+قبل الكتابة فحصنا: `createOrder` (هوية المشتري، `buyerType`/`companyId`، العمولة من `commission_policies`، حجز المخزون، `seller_orders`، `transaction_ledger`، Audit) و`resolveBuyerIdentity` (شركة واحدة للمستخدم، و`companyId` يجب أن يطابق شركته) و`createOrderSchema`، ومخطط `rfq_items`/`rfq_quote_lines` لمعرفة كيف يتحوّل سطر العرض إلى منتج. الخلاصة التي حكمت التصميم: **بند الطلب مرجع لمنتج في الكاتالوج**، والسعر المتفق عليه موجود في سطر العرض لا في المنتج.
+
+### ما بُني
+- **`modules/rfq/acceptance.ts`** (جديد): `acceptQuote` — كل شيء في معاملة واحدة: قفل صف الطلب (`FOR UPDATE`) ⇒ إعادة قراءة الساعة ⇒ قفل العرض والتحقق (`SUBMITTED`، صلاحية، آخر إصدار) ⇒ مطابقة الكاتالوج (منتج `ACTIVE` منشور يملكه البائع الفائز، نفس العملة، كمية صحيحة، سعر موجب، إجمالي سطر متسق) ⇒ `createOrder(tx, …)` بالسعر المتفق عليه ⇒ العرض `ACCEPTED` ⇒ بقية العروض `REJECTED` بسبب ⇒ `AWARDED` + `awarded_quote_id` + `order_id` ⇒ أحداث + Audit + إشعارات.
+- **`POST /api/rfqs/:id/quotes/:quoteId/accept`** (`RFQ_DECIDE`, rate-limit 20/دقيقة، جسم `{}` صارم): لا `buyerCompanyId` ولا `supplierId` ولا سعر ولا عمولة ولا `idempotencyKey` من العميل — أي حقل 422.
+- **التكرار**: مفتاح مشتق على الخادم `sha256(buyerUserId:rfqId:quoteId:revision)` ⇒ إعادة المحاولة تُرجع نفس الطلب (`replayed: true`) من `orders.metadata.idempotency.response`. إعادة المحاولة **داخل** القفل بعد فوز متزامن تُعالج كإعادة تشغيل لا كتعارض.
+- **migration `0048_rfq_award`**: `rfqs.awarded_quote_id`/`order_id` + فهرس · **فهرس فريد جزئي** `rfq_quotes_one_accepted_idx (rfq_id) WHERE quote_status='ACCEPTED'` (الحارس الوحيد الذي لا يمكن لمسار مستقبلي أن يتجاوزه) · توسيع تريغر الحالة النهائية ليشمل `ACCEPTED`.
+- **`views.ts`**: `BuyerRfqView` يعرض `awardedQuoteId`/`orderId` ⇒ لافتة الترسية تبقى بعد إعادة التحميل.
+- **الواجهة**: زر «قبول العرض وإنشاء طلب» للعروض الحيّة فقط، مع **تأكيد صريح** يذكر البائع والمبلغ والإصدار وتحذير «طلب حقيقي غير مدفوع وستُغلق بقية العروض»، ثم لافتة ترسية + رابط مباشر إلى الطلب. مفاتيح `rfq.accept.*` في ar/en/fr/zh.
+
+### الإثبات
+- `tests/b2b01d-award-order.test.ts` — **21/21** (بلا mocks): سعر متفق عليه لا سعر الكاتالوج · عمولة من السياسة (تغييرها يغيّر المعدل والنتيجة) · طلب `PENDING`/`UNPAID` بلا `payment_intent` وبلا settlement وكل القيود `PENDING` · رفض الباقي بسبب · أحداث/تدقيق/إشعارات · تكرار ⇒ طلب واحد · عرض ثانٍ بعد الترسية 409 · تزامن: عرضان ⇒ فائز واحد، والعرض نفسه ×5 ⇒ طلب واحد وخمس ردود بنفس `orderId` · إصدار قديم/مسحوب/مرفوض/منتهي 409 · طلب منتهٍ/ملغى 409 · 404 لشركة أخرى و403 لبائع و401 للمجهول · رفض كل حقل من العميل 422 · بند نص حر · بائع معطّل · منتج لبائع آخر · **مخزون غير كافٍ ⇒ لا أثر** · **فشل تريغر بعد كتابة الطلب ⇒ rollback كامل ثم نجاح**.
+- الحزمة الكاملة: **2516/2516** (189 ملفًا) — Typecheck (server+web) = 0 — Web build ناجح.
+- المتصفح (`scripts/ui-rfq-check.mjs`): **47/47** — القبول من الواجهة، التأكيد، لافتة الترسية بعد إعادة التحميل، اختفاء الزر، فتح الطلب، والإجمالي بالسعر المتفق عليه (200 × 1.100 = 220).
+
+### ملاحظة بيئة (ليست من هذا التغيير)
+حاوية جديدة ⇒ PostgreSQL 17 و`ffmpeg` غير مثبّتين؛ أعيد تثبيتهما (منفذ 5434، دور `wasit_test_runner`) وأُعيد بناء `wasit_test` من migrations. اختبارا الفيديو كانا يفشلان لغياب `ffmpeg` فقط، و`read-cache` كان تقلبًا تحت التزامن؛ بعد التثبيت: 2516/2516.
+
+### قيد معلن
+الترسية على مورّد لا يملك منتجات بنود الطلب مرفوضة (409) — مسجَّل `B2B-01-P4-A` في `GAP_REGISTER` كـ`DECISION REQUIRED` (خرائط منتج بديل أو مطابقة يدوية)، ولم يُفترض قرار من عندنا.
+
+
+## B2B-01 phase 2 — دورة حياة RFQ والعروض والتفاوض (COMPLETE_VERIFIED — 2026-11-24)
+
+### ما وجدناه قبل التنفيذ (لا افتراض)
+المرحلة 1 (commit `6fa1c3e`) أنشأت الكيانات والمسارات الأساسية: `create` (DRAFT) · `send` (بإقرار إفصاح + موافقة بائع) · `submitQuote` (بإصدارات) · `cancel` · قراءة معزولة للمشاركين، مع **24 اختبارًا أخضر**. لكن دورة الحياة بعد الإرسال كانت ناقصة فعليًا:
+
+| الفجوة | الأثر الحقيقي |
+| --- | --- |
+| لا حالة `VIEWED` | البائع لا يُسجَّل اطلاعه، والمشتري لا يعرف من رأى الطلب |
+| لا رفض دعوة | البائع الصامت والممتنع متطابقان |
+| لا سحب عرض | البائع لا يستطيع التراجع؛ والمشتري يرى عرضًا ميتًا كأنه حيّ |
+| لا رفض عرض | المشتري لا يوثّق سبب استبعاد عرض، والبائع لا يعرف |
+| `EXPIRED`/`validUntil` غير مفعّلين | `expiresAt` و`valid_until` يُكتبان ولا يُقيَّمان أبدًا: طلب منتهٍ يبقى `OPEN` ويقبل عروضًا |
+| لا حالة نهائية للعرض القديم | الإصدار السابق `SUPERSEDED` قابل للسحب/الرفض، ولا شيء يمنع إعادة فتحه في القاعدة |
+| `zod` بلا `.strict()` | `buyerCompanyId`/`sellerId` في الجسم تُهمَل بصمت بدل رفضها |
+
+### ما بُني
+- **`modules/rfq/lifecycle.ts`** (جديد): ثلاث آلات حالات صريحة (`RFQ_TRANSITIONS`, `RECIPIENT_TRANSITIONS`, `QUOTE_TRANSITIONS`) + `assert*Transition` (409 يسمّي الحالتين) + `rfqAcceptsQuotes`/`quoteIsLive`. كل حالة على العرض غير `SUBMITTED` **نهائية**.
+- **`service.ts`**: `expireIfDue` و`expireQuotesIfDue` (تحديث SQL واحد محروس ⇒ حدث `EXPIRED` واحد بـ`actorType='SYSTEM'` و`actorUserId=null` حتى تحت 5 قراءات متزامنة) · `markViewed` (مرة واحدة، محروس على `INVITED`) · `declineInvitation` · `withdrawQuote` · `rejectQuote` (سبب إلزامي، `decidedByUserId`) · `listQuoteRevisions` · إعادة الربط: الإصدار السابق **الحيّ فقط** يصبح `SUPERSEDED`، أما `REJECTED`/`WITHDRAWN` فيبقى على حاله (القرار حقيقة) ويُربط الجديد بـ`supersedes_id`.
+- **`db/schema/rfq.ts` + migration `0046_rfq_lifecycle`**: `rfq_quotes.{decided_by_user_id, decision_reason, withdrawn_at, withdrawal_reason, expired_at}` · `rfq_recipients.{declined_at, decline_reason, withdrawn_at}` · `rfq_events.{quote_id, quote_revision}` + فهرس.
+- **حُرّاس في القاعدة** (لأن قاعدة الخدمة قد ينساها مسار لاحق): `rfq_events` و`rfq_quote_lines` append-only (UPDATE/DELETE ⇒ استثناء) · تجميد أعمدة المال/الهوية/`valid_until`/`revision` في `rfq_quotes` · حالة نهائية لا تُعاد فتحها · منع حذف أي عرض.
+- **`routes.ts`**: `POST /:id/decline` · `POST /:id/quotes/:quoteId/withdraw` · `POST /:id/quotes/:quoteId/reject` (صلاحية `rfq:decide`) · `GET /:id/quotes/:quoteId/revisions`، و**`.strict()`** على كل جسم ⇒ `buyerCompanyId`/`sellerId`/`recipientStatus` تُرفض 422. الهوية تُشتق من الجلسة فقط.
+- **`views.ts`**: إسقاطات صريحة حقلاً حقلاً لـ`decisionReason`/`withdrawnAt`/`expiredAt`/`declinedAt`/`viewedAt`، و`TimelineEntry` يحمل `quoteId`+`quoteRevision`.
+- **إشعارات داخلية**: `RFQ_QUOTE_WITHDRAWN`, `RFQ_QUOTE_REJECTED`, `RFQ_INVITATION_DECLINED`, `RFQ_QUOTE_EXPIRED`, `RFQ_EXPIRED` — `data` يحمل `{rfqId, quoteId?}` فقط، بلا بريد/هاتف/`userId`.
+
+### الإثبات
+- `tests/b2b01b-lifecycle-unit.test.ts` — **8/8**: اكتمال الجداول، شكل انتقالات RFQ، نهائية `CANCELLED/EXPIRED/CLOSED`، عدم إعادة فتح دعوة مرفوضة، نهائية كل حالة عرض، رسائل 409، حدود `rfqAcceptsQuotes`/`quoteIsLive` عند اللحظة نفسها.
+- `tests/b2b01b-rfq-lifecycle.test.ts` — **22/22** على HTTP حقيقي + PostgreSQL حقيقي (بلا mocks): `INVITED→VIEWED` مرة واحدة · رفض دعوة + سبب يظهر للمشتري + منع الاقتباس بعده · منع رفض الدعوة مع عرض حيّ · سحب عرض ثم إعادة دخول بإصدار جديد · حفظ الإصدار القديم حرفيًا (المبالغ/البنود/`submittedAt`) وقراءة السلسلة · 409 على سحب/رفض إصدار `SUPERSEDED` و404 على كل مسار كتابة غير موجود · رفض بائع آخر (404) ورفض المشتري (403) · رفض بسبب إلزامي + `decidedByUserId` + إعادة عرض بعد الرفض · `maxRounds` من السياسة + تعارض العملة · `quoteValidityDays` من السياسة (72 ساعة مضبوطة) · انتهاء العرض يغلق الجولة · انتهاء الطلب ذرّيًا (5 قراءات ⇒ حدث واحد) ويغلق كل المسارات · الإلغاء يغلق كل شيء والسحب يبقى مسموحًا · `B2B_PARTNER_DISCOVERY` ليست بديلًا · الإفصاح · تزوير الهوية 422 · الأحداث تحمل الفاعل/التوقيت/الإصدار · الإشعارات بلا اتصال · **صفر تغيّر في `orders`/`transaction_ledger`/`payment_intents`** · اتساق جدول الدعوات مع حالات العروض.
+- **التراجع**: `tests/b2b01-rfq-isolation.test.ts` **24/24** كما هي.
+- **الحزمة الكاملة للخادم**: **2474/2474** (187 ملفًا) على PostgreSQL 17 — والاختبارات الأربعة التي ظهرت حمراء (`ai-video-agent` 1 و`agent-video-download` 3) كانت **بيئية** (غياب `ffmpeg` في الحاوية)؛ بعد `apt-get install ffmpeg` تمرّ **12/12**، فلا فشل منطقي. Typecheck (server) = 0، Typecheck (web) = 0، Web build = PASS.
+- **توثيق**: `docs/B2B-01_RFQ_LIFECYCLE.md` (آلات الحالات + جدول المسارات + جدول الرفض + الأحداث + الإشعارات + السياسة).
+
+### واجهة الويب (نفس المرحلة)
+- `packages/web/src/pages/DashboardRfqPages.tsx`: ثلاث صفحات — `/dashboard/rfqs` (قائمة + إنشاء ببنود ديناميكية)، `/dashboard/rfqs/:id` (لوحة مشتري **أو** بائع حسب إسقاط الخادم)، `/dashboard/rfq-inbox` (دعوات البائع).
+- المشتري: إرسال دعوات (بحث في الدليل + إقرار الإفصاح)، جدول دعوات مع أسباب الاعتذار، عروض مع الإجمالي/`rev`/المدة/الصلاحية، **الإصدارات**، رفض بسبب إلزامي، إلغاء. البائع: نموذج عرض لكل بند، إعادة إرسال كإصدار، سحب، اعتذار.
+- `lib/types.ts` + `lib/api.ts` (13 عميلًا) + `lib/rbac.ts` (`rfq.buy`/`rfq.sell`) + `AppSidebar` (COMPANY يرى الاثنين، MERCHANT/SUPPLIER صندوق الوارد فقط، CUSTOMER لا شيء) + `App.tsx` (3 مسارات).
+- i18n: **102 مفتاحًا × 4 لغات** (`rfq.*`, `rfq.status.*`, `rfq.event.*`) + `common.saving`، مع RTL.
+- الواجهة **لا تحسب أي سعر** (تقرأ `lineTotal` من الخادم) ولا ترسل هوية.
+- **الإثبات**: `scripts/ui-rfq-check.mjs` — **33/33 فحصًا** في متصفح حقيقي (Chromium) ضد API حقيقي وPostgres حقيقي: إنشاء من النموذج · إرسال · صندوق · عرض · إعادة إصدار · رفض بسبب وقراءته · إصدارات · اعتذار · إلغاء · قفل بعد الإلغاء · اللغات الأربع · صفر أخطاء صفحة. `tsc --noEmit` (web) = 0، `npm run build -w @wasit/web` = PASS.
+- تشغيل السكربت موثّق في رأسه (DB مؤقت `wasit_ui` + migrate/seed + خادم على 3100 برفع حد تسجيل الدخول + vite على 5199).
+
+### حدود متعمّدة
+- **المرحلة 3 لم تبدأ**: لا مسار يكتب `ACCEPTED` أو `AWARDED`، ولا تحويل إلى طلب. معلن في السجل كبند **مفتوح**.
+- **الانتهاء كسول بلا Scheduler**: يُقيَّم عند الوصول. لا وظيفة مجدولة جديدة في هذه المرحلة.
+- **`.strict()` رفض الجسم لا تجاهله**: العميل القديم الذي يرسل حقولًا إضافية سيُرفض 422 بدل أن يُتجاهل — تغيير مقصود ومُختبَر.
+- **لم يُلمس**: `master`، لا Demo/Production DB (استُخدمت قاعدة مؤقتة `wasit_ui` ثم حُذفت)، لا تغيير في النموذج التجاري أو الدفع/Webhooks أو `ROLE_PERMISSIONS`، لا محفظة ولا دفتر قيود.
+
+## ENTITY-01 — تحرير بيانات الكيان من مالكه (COMPLETE_VERIFIED — 2026-11-24)
+
+### ما وجدناه قبل التنفيذ (لا افتراض)
+- **`ENTITY-01` لم يكن مُسجَّلاً** في `GAP_REGISTER` ولا في `CHECKPOINT` تحت هذا المعرّف؛ أقرب بند قائم هو `PERM-01C` (حماية المسارات) و`SEC-04B` (حماية القراءة). سُجِّل الآن في `GAP_REGISTER` §21 كبند **جديد** أُغلق بأدلّته.
+- **الجداول الثلاثة لا تتطابق**: `merchants.store_name` / `suppliers.company_name` / `companies.legal_name`، والصناعة والرقم القانوني والرقم الجبائي للشركة فقط.
+- الحالة الفعلية قبل العمل:
+  | النوع | قراءة | تحديث | المشكلة |
+  | --- | --- | --- | --- |
+  | MERCHANT | `GET /api/merchants/:id` (إسقاط عام) | `PATCH /:id` (ملكية) | يكتب 3 حقول فقط (`storeName/description/logoUrl`) — **بلا `countryId`/`cityId`**، و**بلا Audit** |
+  | SUPPLIER | `GET /api/suppliers/:id` | **لا يوجد PATCH إطلاقاً** | المورد لا يستطيع تعديل ملفه |
+  | COMPANY | `GET /api/companies/:id` + `/mine` | `PATCH /:id` (ملكية) | يكتب 4 حقول، ويقبل `registrationNumber`/`taxId` في التحقق ثم **يتجاهلهما بصمت** (يُوهم العميل بالنجاح) — و**بلا Audit** |
+
+### ما بُني
+- **`modules/entities/`** (جديد):
+  - `fields.ts` — قائمة سماح صريحة لكل نوع (`storeName/companyName/legalName` + `countryId/cityId/description/logoUrl` + `industry` للشركة) وقائمة **`PROTECTED_ENTITY_FIELDS`**: `id`, `userId`, `slug`, `verified`, `isActive`, `createdAt`, `updatedAt`, `registrationNumber`, `taxId`.
+  - `schemas.ts` — zod `.strict()` لكل نوع: الحقل المحمي يُرفض **422** مع تسمية المفتاح، لا يُسقَط بصمت.
+  - `service.ts` — `getMyEntities` + `updateMyEntity` (الصف يُحلّ من `userId` في الجلسة، لا من الـpayload) + `updateEntityById` (للعقد القديم `/:id`، بمقارنة مالك صريحة → 403)، مع `diffPatch` (فقط الحقول المتغيّرة) و`writeAudit('ENTITY.UPDATE', before/after للحقول المتغيّرة فقط, metadata.source='self-service')`.
+  - `routes.ts` — `GET /api/entities/me`، و`PATCH /api/entities/{merchant|supplier|company}/me`، كل واحد بصلاحيته الحقيقية (`merchant:update` / `supplier:update` / `company:update`).
+- **إعادة توصيل** `modules/{merchants,companies}/service.ts` بالخدمة المشتركة (فتكسب Audit + `countryId/cityId` + رفض الحقول المحمية بدل تجاهلها)، و**إضافة `PATCH /api/suppliers/:id`** لأول مرة (بصلاحية `supplier:update` + ملكية) — بلا كسر أي تدفق إنشاء.
+- **الواجهة**: `DashboardEntityPage` على `/dashboard/entity` (رابط في شريط MERCHANT/SUPPLIER/COMPANY)، نموذج يتبدّل حسب نوع الكيان (صناعة للشركة فقط)، بطاقة حالة للقراءة فقط (نوع/توثيق/حالة/المعرّف العام)، ملاحظة صريحة بأن حقول التوثيق والحالة والرقم القانوني/الجبائي لا تُعدَّل من هنا. مفاتيح i18n `entity.*` + `dashboard.entity` في **ar/fr/en/zh**، RTL/LTR من تخطيط الصفحة، وتخطيط عمودين على الشاشات الكبيرة وعمود واحد على الهاتف.
+- **لا migration، لا seed، لا تغيير RBAC**: الأعمدة كلها موجودة، وكل دور يملك `*:update` الخاصة به أصلاً.
+
+### الإثبات
+- `tests/entity-profile.test.ts` — **21/21**: قراءة `/api/entities/me` (401 للمجهول، `null` لمن لا يملك كياناً، حقول النوع الصحيحة، بلا `userId`)؛ تحديث كل نوع بواسطة مالكه؛ المسار القديم `/:id` للمورد والتاجر والشركة؛ `changed:false` بلا كتابة Audit عند عدم التغيير؛ **رفض `verified`/`isActive`/`slug`/`userId`/`registrationNumber`/`taxId` بـ422 مع بقاء الصف كما هو**؛ اسم فارغ 422؛ **عزل**: تاجر لا يعدّل تاجراً آخر (403) وشركة لا تعدّل شركة أخرى (403)؛ كل حساب يرى كيانه فقط؛ دور لا يكتب نوعاً لا يملكه (403)؛ عميل بلا صلاحية 403؛ تاجر بلا ملف 404 بلا إنشاء صف؛ Audit يحمل الفاعل والكيان والحقول المتغيّرة فقط.
+- **التراجعات**: `perm01c-rbac-cleanup` (23/23)، `sec04b-entity-read-access` (12/12)، `order-buyer-identity` (10/10) — 45/45.
+- **E2E حقيقي على الويب** (`.entity-run/entity-check.mjs`، Chromium، بلا mocks): **17/17** — تاجر على الهاتف (390×844) وسطح المكتب (1280×900): تحميل الملف، حفظ الوصف، ظهور تأكيد، **ثبات القيمة بعد إعادة التحميل**، رفض الحقول المحمية من داخل الصفحة (422)، **رفض تعديل ملف تاجر آخر (403)** بوجود تاجر ثانٍ حقيقي، وبلا تجاوز أفقي؛ المورد: الملف يُحمَّل وبلا حقل صناعة؛ الشركة: حقل الصناعة يظهر ويُحفظ ويُستعاد. اللقطات: `/tmp/entity-{mobile,desktop,supplier,company}.png`.
+- **الحزمة الكاملة للخادم**: **2380 ناجحًا / 4 فاشلة (من 2384)** — الأربعة هي أعطال مُولِّد الفيديو المعروفة مسبقًا (`ai-video-agent` 1، `agent-video-download` 3) ولا علاقة لها بالكيانات؛ لا تراجع جديد.
+- Typecheck (server + web) = 0 أخطاء، وبناء الخادم والواجهة ناجح.
+
+### ملاحظة تشغيلية
+- الاختبارات/E2E جرت على قاعدة **`wasit_test`** (تُعاد بناؤها بالـharness) و**`wasit_dev`** المحلية فقط. **لم تُلمس** قاعدة الـDemo أو الإنتاج، ولم تُضَف أي migration.
+
+## ORDER-01 — هوية المشتري من الواجهة إلى قاعدة البيانات (COMPLETE_VERIFIED — 2026-11-24)
+
+### العطل الحقيقي
+1. **الواجهة لم تكن ترسل `buyerType` أصلًا**: `api.createOrder` في `packages/web/src/lib/api.ts` كان يرسل `{ buyerId, items, currencyCode, notes }` فقط، فيأخذ الخادم القيمة الافتراضية `CUSTOMER` لكل طلب من الويب. النتيجة: **لا يوجد طلب شركة واحد** من الواجهة، مهما كان الحساب شركة.
+2. **الخادم كان يثق بالقيمة القادمة من العميل**: `createOrderSchema` يقبل `buyerType` كما هو ويكتبه في `orders.buyer_type`؛ ولا تحقّق أن المستخدم يملك شركة، ولا أن `companyId` (لو أُرسل) تخصّه. أي حساب مصادَق كان يستطيع كتابة صف بصفة `COMPANY` بلا أي شركة.
+
+### الإصلاح
+- **`modules/orders/buyer-identity.ts` (جديد)** — `resolveBuyerIdentity(db, { userId, buyerType, companyId })` تحسم الهوية من سجلات المستخدم نفسه **قبل** أي حجز مخزون أو كتابة صف:
+  - `CUSTOMER` — فرد، بلا كيانات (المسار القديم كما هو).
+  - `MERCHANT` — يتطلّب كيان تاجر **أو** مورد نشطًا يملكه المستدعي (المشتري التجاري).
+  - `COMPANY` — يتطلّب شركة نشطة يملكها المستدعي؛ `companyId` إن أُرسل **يجب أن يطابقها** وإلا `403` (منع انتحال شركة أخرى بتعديل الـpayload)، ويُرفض `companyId` مع أي نوع آخر (`422`).
+- **`createOrder`** يفرض `input.buyerId === ctx.actorId` داخل الخدمة (لا في المسار فقط)، ويكتب `identity.buyerType`، ويحفظ لقطة الشركة في `orders.metadata.buyer = { type, companyId, companyName }` (ربط الطلب بالشركة بلا migration).
+- **`GET /api/companies/mine`** (جديد، `requireAuth`، مسجّل قبل `/:id`): سياق الشركة الخاص بالمستدعي أو `null` — تقرأه الواجهة لتعرض خيار الشركة.
+- **`CheckoutPage`**: عند وجود شركة نشطة يظهر اختيار «أشتري باسم الشركة» (مُحدَّد افتراضيًا) و«أشتري كفرد»، ويُرسل `buyerType` (+`companyId` للشركة). اختيار المشتري لا يُلغى بوصول استجابة الشركة المتأخرة (`useRef`).
+- **i18n**: `checkout.buyerType/asCompany/asIndividual/companyInactive/buyerTypeHint` في ar/en/fr/zh.
+
+### الإثبات
+- `tests/order-buyer-identity.test.ts` — **10/10**: فرد بلا `buyerType` ⇒ `CUSTOMER` بلا شركة؛ شركة ⇒ `COMPANY` + `metadata.buyer.companyId`؛ حساب بلا شركة يطلب `COMPANY` ⇒ `403` ولا يُكتب صف؛ **انتحال شركة أخرى** ⇒ `403`، و`companyId` مع `CUSTOMER` ⇒ `422`، وشركة المهاجم نفسه تعمل؛ `MERCHANT` بلا كيان ⇒ `403`؛ مورد يشتري ⇒ `MERCHANT`؛ عزل القراءة (`403` للغريب)؛ سلة متعدّدة البائعين ⇒ `COMPANY` + شركة واحدة + فرعيتان؛ `buyerId` لغير المستدعي ⇒ `403`؛ `/api/companies/mine` (شركة / `null` / `401`).
+- **التراجعات**: `orders`/`directory`/`m2`/`m21`/`m22`/`m23`/`payments`/`settlement-ledger`/`payment-fee-policy`/`commission-rate` — **96/96** + **24/24** بعد تنظيف المسار. **الحزمة الكاملة للخادم: 2359 ناجحًا / 4 فاشلة** — الأربعة هي أعطال مُولِّد الفيديو المعروفة مسبقًا (`ai-video-agent`، `agent-video-download`؛ لا تلمس الطلبات ولا الشركات).
+- **E2E حقيقي** (`e2e/order-buyer-identity.spec.ts` — **3/3**): شركة تشتري من `/checkout` ⇒ الصف `COMPANY` + شركتها؛ نفس الحساب يبدّل إلى «فرد» ⇒ `CUSTOMER`؛ عميل بلا شركة لا يرى الخيار إطلاقًا. **تراجعات الدفع/الطلبات: 10/10** (`marketplace`، `order-lifecycle`، `functional-audit`).
+- Typecheck (server+web) = 0 أخطاء. **لا migration ولا seed جديد**، ولا تغيير في RBAC (الشراء كان `requireAuth` ويبقى كذلك؛ التحقق أُضيف ولم يُحذف شيء).
+
+### ملاحظة معمارية (فجوة متابعة موثّقة)
+ربط الطلب بالشركة يتم الآن داخل `orders.metadata.buyer` لأن إضافة عمود `buyer_company_id` مع FK تتطلّب migration. البيانات محفوظة وموثّقة، والتحقق الخادمي قائم، لكن تقارير SQL المباشرة على الشركة تحتاج قراءة JSONB. مقترح `ORDER-01-FU` في `GAP_REGISTER`.
 
 ## Milestone M8 — Role-scoped Customer/Partner Directories (6 أسطح) + إصلاح أعطال الواجهة الحقيقية
 
@@ -1287,3 +1417,138 @@ npm run test:e2e          # Playwright، يشغّل server + web تلقائيا�
 - **Health/Ops**: `GET /api/health/channels` يعرض `media.storage` و`media.video` (id/available/reason/async) بلا أسرار. `.wasit-media/` في `.gitignore`.
 - **الاختبارات**: `tests/marketing-video.test.ts` — 13 حالة: 401 غير مصادق، 403 لـCUSTOMER (RBAC)، 403 لمنتج تاجر آخر، 422 لمنتج غير ACTIVE، **MP4 حقيقي** (تحقق ftyp + حفظ DB + ظهور في المكتبة)، تشكيل عربي، عزل بين المستخدمين، توكن غير صالح، حذف ناعم، تعرّض Agent للوسائط الحقيقية، و`/mine` (ملكية/فارغ/401).
 - **التحقق**: الخادم **434/434** (42 ملفاً)، typecheck للخادم والواجهة نظيف، و`vite build` للواجهة ناجح.
+
+## Milestone — CI-01: بوابة الاختبارات تعمل فعلياً (2026-11-23)
+
+- **العطب**: `.github/workflows/ci.yml` كان يضبط `TEST_DATABASE_URL` على `localhost:5432` بينما `packages/server/tests/test-db-guard.ts` يرفض كل هدف غير `127.0.0.1:5434/wasit_test`؛ و`vitest.config.ts` يستدعي `resolveTestDatabaseUrl()` عند التحميل ⇒ **الوظيفة تفشل قبل تشغيل أي اختبار**. إضافةً: لا `ffprobe` على الـrunner، و`age` مثبَّت بإصدار دقيق اختفى من أرشيف Ubuntu.
+- **الإصلاح (بلا إضعاف الحارس)**: نشر خدمة PostgreSQL على `127.0.0.1:5434` في الوظائف الثلاث التي تحتاجها، و`POSTGRES_HOST_AUTH_METHOD=trust` بلا كلمة مرور (حاوية عابرة لكل وظيفة، مربوطة بـloopback) ⇒ **صفر أسرار في ملف CI**. تثبيت `ffmpeg` + `fonts-dejavu-core` + piper في `test` و`e2e` مع خطوات تحقّق تُفشل الوظيفة عند غيابها. `permissions: contents: read`، `timeout-minutes` لكل وظيفة، و`workflow_dispatch` لتشغيل البوابة على فرع عمل.
+- **أربعة أعطال بيئية كشفتها التشغيلات الحقيقية**:
+  1. `npm ci --ignore-scripts` يتخطّى postinstall الخاص بـ`ffmpeg-static` ⇒ الباينري المضمَّن غائب والمواصفات تُفشل. الحل: `npm rebuild argon2 ffmpeg-static` (لا إسقاط للتأكيد).
+  2. `scripts/install-tts.sh` **لم يكن يعمل من نسخة نظيفة**: `cp -a piper/. .` يصطدم بأن مدخل `piper` في الأرشيف ملف يحمل اسم مجلده. الحل: `tar --strip-components=1` ⇒ التخطيط المسطّح الذي يتوقّعه التطبيق (`vendor/piper/piper`)، والـsmoke test يستدعي الباينري نفسه. أُثبت محلياً بتركيب كامل (piper + 4 أصوات + ملف wav 2.29s).
+  3. `pg_dump` يأتي من الـrunner (Ubuntu 26.04، عميل **18.7**) ويكتب دائماً `SET transaction_timeout = 0;`، وخادم 16 يرفضه ⇒ نصف الاستعادة يفشل. خادم الفحص صار **17** (أول إصدار يعرف الإعداد، وهو الإصدار الموثَّق للتطوير/الإنتاج).
+  4. `e2e/mfa.spec.ts` لا يملأ كلمة المرور التي يشترطها نموذج تفعيل MFA (إعادة مصادقة) ⇒ الزر `disabled` واختباران يتوقّفان عند 45s. المواصفة صارت تنفّذ نفس الخطوة التي ينفّذها المستخدم.
+- **التحقق على runner حقيقي (تشغيل `#45133544390` على `GM-ACCESS-01`)**: `Typecheck & build` ✅ · `Unit & integration tests` ✅ **179 ملف / 2335 اختباراً / 0 فاشل / 0 متخطّى** (353s، ffmpeg/ffprobe 8.0.1، piper ready) · `Backup & restore drill` ✅ **113 PASS** بما فيها E3 (استعادة مشفّرة بهوية صحيحة، 120 صفاً، `pg_dump 18.7` ← خادم 17) · `E2E` **242 ناجح / 15 متخطّى / فشلان**.
+- **لم يُخفَ أي اختبار**: لا `skipIf` جديد، ولا تخفيف لأي تأكيد، وعدد التخطّي في حزمة الخادم صار **صفراً** في CI (كان 26 قبل تثبيت piper).
+- **متبقٍ خارج النطاق (OBS-01)**: الفشلان في `e2e/admin-webhook-failures.spec.ts` — المواصفة تتوقّع `404` لكل تسليم ثم `DEAD_LETTERED` بعد 5 محاولات سريعة، بينما محرّك الاستعادة (OBS-01-RECOVERY) يردّ `200` (إقرار + تصنيف + backoff 30s) فلا تُستنفد المحاولات. قرار الشكل وتسليط `WEBHOOK_RETRY_*` في بيئة الـE2E يخصّان OBS-01 ولم يُلمسا.
+
+## Milestone — CI-01-CLOSEOUT: مكتب فشل الـWebhooks يُثبَت من طرف إلى طرف (2026-11-23)
+
+- **العطب المتبقّي**: مواصفة `e2e/admin-webhook-failures.spec.ts` كانت تُرسل نفس الحدث الفاشل 5 مرات فوراً وتتوقّع `404` من كل تسليم. محرّك الاستعادة (OBS-01-RECOVERY) يردّ على التسليم الثاني وما بعده **200** (`retryScheduled`) لأن `next_attempt_at` لم يستحقّ بعد (30s) ⇒ لا تُستنفد الميزانية ولا يُبلَغ `DEAD_LETTERED`. لم يكن عيباً في المواصفة وحدها: كان افتراضها «كل تسليم = محاولة» صحيحاً قبل الـbackoff.
+- **الإصلاح (سطر واحد، بيئة E2E فقط)**: `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` في `SERVER_ENV` داخل `playwright.config.ts`. الـ`webServer` في Playwright بيئته واحدة للعملية كلها، لذا لا يوجد تسليط لكل مواصفة على حدة؛ التسليط تحقّق بأن الإعداد **خامل** لبقية المواصفات: المواصفة الوحيدة التي تنشر أحداثاً فاشلة هي مكتب الـwebhooks، ولا مواصفة تعتمد `retryScheduled`/`nextAttemptAt`، و`maxAttempts` بقي على قيمة الإنتاج (5). **لا تغيير** في الكود الإنتاجي، ولا في `.env`، ولا في Demo.
+- **Backoff الحقيقي بقي مُثبَتاً بالقيم الافتراضية**: `tests/obs01-webhook-recovery.test.ts` **13/13** (بلا أي تجاوز: `30s` ثم تضاعف، ورفض المحاولة قبل الاستحقاق 200 `retryScheduled`، و`DEAD_LETTERED` بعد استنفاد الميزانية، و`CONFLICT` يُسدَّل من المحاولة الأولى 409).
+- **إثبات الانتقال النهائي (قاعدة البيانات مباشرة، بعد تشغيل المواصفة)**: صف `DEAD_LETTERED` بـ`attempts=5`, `failure_class=TRANSIENT`, `next_attempt_at=NULL`, `dead_lettered_at` مضبوط، وسجل المحاولات `1..4 retry_scheduled=t` و`5 retry_scheduled=f`؛ وصف مُعاد تشغيله صار `RECEIVED/attempts=0` مع صف محاولة `REPLAY`. الـAudit: `PAYMENT.WEBHOOK_DEAD_LETTERED` بفاعل `SYSTEM` (بلا هوية)، و`PAYMENT.WEBHOOK_REPLAY` بفاعل `USER` (هوية المشغّل).
+- **التحقق**: `admin-webhook-failures.spec.ts` **4/4** (بما فيها رفض التاجر 403 على المسارين) · المواصفات السبع الأخرى التي تنشر webhooks **32/32** (payments, settlement-integrity, admin-refunds, dispute-refund, order-lifecycle, financial-audit, admin-finance) · الخادم **2335/2335** (179 ملفاً، 0 متخطّى) · Typecheck (server+web) وBuild نظيفان.
+- **لا اختبار أُخفي**: لا `skip` جديد، ولا تخفيف لتأكيد، وعدد التخطّي في E2E بقي 15 (كلها بوّابات بيئية قائمة، موثّقة أدناه).
+
+### جرد الـ15 اختباراً المتخطّى في E2E (تدقيق — بلا تغيير)
+
+| # | المواصفة | العدد | سبب التخطّي | التصنيف |
+| --- | --- | --- | --- | --- |
+| 1 | `agent-surfaces.spec.ts:43` (إنتاج/بوّابة/معاينة/تنزيل فيديو) | 2 (chromium + mobile) | `hasCredentials=false`: `DEMO_ACCOUNT_PASSWORD_MERCHANTA`/`DEMO_STAFF_PASSWORD_ADMIN` غير مُصدَّرين في CI | **بيئية + فجوة تغطية** (مسار التوليد مُغطّى في `tests/ai-video-agent.test.ts` و`tests/agent-video-download.test.ts` على CI نفسه) |
+| 2 | `agent-surfaces.spec.ts:138` (غريب لا يقرأ المهمة/الفيديو) | 2 | نفس البوّابة، وأيضاً `items.length === 0` عند غياب مهمة | **بيئية + فجوة تغطية** |
+| 3 | `agent-surfaces.spec.ts:169` (موافقة الشراكة تحكم الاكتشاف) | 2 | نفس البوّابة | **بيئية + فجوة تغطية** |
+| 4 | `demo-auto-login.spec.ts:29, :50` | 2 | `DEMO_AUTO_LOGIN=false` افتراضياً (مقصود: الاختبار المقابل `:61` يُثبت **الرفض**) | **مقصودة** — الحالة السلبية مُختبَرة |
+| 5 | `demo-owner.spec.ts:57,80,101,114,126,137,155` | 7 | نفس البوّابة (`/api/auth/demo-session` غير مُفعَّل) | **مقصودة** — الحالة السلبية `:182` مُختبَرة |
+
+- **فجوة التغطية الباقية (مسجّلة، غير منفَّذة)**: سطح إنتاج الفيديو واقتراحات الشراكة في الواجهة لا يُمارَسان في CI لأن حسابَي الديمو غير مُصدَّرين. الحل المقترح لاحقاً: وظيفة CI منفصلة بـ`DEMO_AUTO_LOGIN=true` + كلمتَي المرور، لأن تفعيله في التشغيل الافتراضي يقلب مواصفات «الرفض» المقصودة.
+
+## Milestone — SEC-01: تدقيق الاعتماديات وإغلاق ما يُغلَق بلا كسر (2026-11-23)
+
+- **النطاق**: `package-lock.json` واحد للمستودع (workspaces: server/shared/web). `npm audit --omit=dev` = **7** ثغرة إنتاج (3 high · 4 moderate · 0 critical)؛ `npm audit` الكامل = **18** (2 critical، كلها في أدوات التطوير).
+- **المنهج**: كل استشارة فُحصت مقابل الكود قبل التصنيف — هل تُستدعى الـAPI المثابة فعلاً؟ وهل المدخل من مستخدم؟ لم تُخفَّض أي خطورة ولم يُستثنَ أي بند (`--audit-level` أو `npm audit --ignore` لم تُستعمل).
+- **أُصلح (داخل النطاق الدلالي المعلن — بلا كسر)**:
+  - `hono` 4.13.7 → **4.13.21** (6 استشارات). الأهمّ: `GHSA-h7mg-cq63-vhpq` — `RegExpRouter` يتخطّى **wildcard middleware** لبعض مجموعات المسارات وللمسارات ذات محرف سطر مُرمَّز. هذا هو عمود حماية WASIT: `app.use('/api/*', csrf)`، `requireStaffMfa`، rate-limit، legal gate. الاستشارات الخمس الأخرى (`serveStatic`، `mount()`، `css`، `csrf()`، `validator('form')`) **غير قابلة للوصول** لأن WASIT لا يستدعي أيّاً منها (CSRF مكتوب داخلياً، والملفات الثابتة من nginx).
+  - `@hono/node-server` 1.19.17 → **1.19.19** — `GHSA-jpvv-r467-5p4w`: backslash يُعامَل كفاصل مسار ⇒ تجاوز حجب مبني على المسار عند reverse proxy. يبقى `serveStatic` (يحتاج 2.x) وهو **غير مستخدم** عندنا.
+  - `source-map-js` 1.2.1 → **1.2.4** (high، عبر `postcss` — وقت البناء فقط) و`postcss-selector-parser` 6.1.4 → **6.1.6** (عبر `tailwindcss`) — تحديثا lock فقط، بلا تغيير في `package.json`.
+  - **النتيجة**: الإنتاج **7 → 6**، الإجمالي **18 → 15**، و`npm audit fix --dry-run` = **0 تغييرات** (أي لا إصلاح آخر ممكن دون كسر — لا ثغرة أُهملت).
+- **لم يُصلَح (يحتاج ترقية كاسرة ⇒ `SEC-DEP-02`، قرار مستقل)**: `zod` 3→4 (استنفاد ذاكرة — مُخفَّف بسقف جسم الطلب 1 MiB + nginx 20m)، `nodemailer` 6→10 (22 استشارة؛ الملموس عندنا فئات addressparser DoS)، `drizzle-orm` 0.36→0.45 (SQL injection عبر معرّفات — غير قابل للوصول: كل `sql.raw` بقيم كودية)، `@hono/node-server` 1→2، `react-router-dom` 6→7 (SPA بلا SSR)، وأدوات التطوير `vite`/`vitest`/`tinypool`/`esbuild`/`drizzle-kit` (لا تُشحن في `dist-bundle`).
+- **لا تغيير في السلوك**: المصادقة، RBAC، الدفع، Webhooks، Migrations، Seeds — لم تُلمس. تغيّرت **4 حزم فقط** في الـlock (تحقّق آلي بمقارنة `packages` قبل/بعد).
+- **التحقق**: `npm audit` (قبل/بعد) · Typecheck server+web = 0 · `build` + `build:prod` (bundle 2.79 MB) · Web typecheck/build + **73/73** اختبار واجهة · الخادم **2335/2335** (179 ملفاً) · CI كامل على GitHub.
+
+## Milestone — MEDIA-01: صور المنتجات من رفع البائع إلى واجهة المتجر (2026-11-23)
+
+- **الفجوة المُغلقة**: كان المنتج يُنشَأ ويُنشَر بلا صورة واحدة. `product_images` و`media_assets` موجودان في الـSchema، لكن **لا مسار رفع** ولا ربط بمنتج، ولا مكان في الواجهة يرفع صورة، فكان كل منتج يظهر ببطاقة بلا صورة في المتجر. الجدول نفسه كان **بلا كاتب** (لا `insert` في أي module).
+- **الخادم** (`modules/media/images.ts` + `lib/media/image-probe.ts` + `lib/media/image-derivative.ts`):
+  - `POST /api/media/product-images` (multipart، `MEDIA_UPLOAD`) — يتحقّق من **البايتات لا من الاسم/النوع المُعلَن**: JPEG/PNG/WebP فقط، وSVG/HTML/PE تُرفَض 422. الأبعاد تُقرأ من الـheader (PNG IHDR، JPEG SOF، WebP VP8/VP8L/VP8X) بسقوف `20,000px` للضلع و`40MP` للمساحة، فملف لا يُفكّ ترميزه لا يُخزَّن.
+  - **الحدود من env لا من الكود**: `MEDIA_MAX_IMAGE_BYTES` (5 MiB، 413)، `MEDIA_MAX_IMAGES_PER_PRODUCT` (8، 422)، `MEDIA_IMAGE_MAX_DIMENSION` (1600). التصغير عبر `ffmpeg-static` **best effort**: فشل التحويل يُبقي الأصل المتحقَّق بدل إفشال الرفع.
+  - **الملكية قبل أي كتابة**: `loadOwnedProduct` يمرّ بـ`assertSellerOwnership` على `sellerId` (كيان لا مستخدم) — تاجر لا يرفع على منتج تاجر آخر (403)، والإدارة تمرّ.
+  - **الرابط العام بلا مفتاح تخزين**: `product_images.url = /api/media/products/<productId>/images/<assetId>/content`، ويُخدَم عبر `GET` عام **مُصرَّح بظهور المنتج** (منشور + ACTIVE) لا بجلسة الرافع. منتج غير منشور ⇒ 404 للغريب حتى لو خمّن المعرّف؛ والمالك/الـstaff يقرأ الصورة بـ`Cache-Control: private, no-store` (لأن لوحة البائع ترسم نفس الـURL).
+  - **الحذف** يحرّر الغلاف: يُحذف الرابط، ويُرقّى التالي في الترتيب إلى `isPrimary`، ويُعلَّم الأصل `DELETED` ويُمسح من المخزن — المنتج نفسه لا يُلمس.
+  - **Audit** لكل تغيير: `MEDIA.PRODUCT_IMAGE_UPLOADED` / `_PRIMARY_SET` / `_DELETED`.
+- **سقف الجسم**: `requestBodyLimit` صار يقبل دالة `resolveMax(path)`؛ مسار الرفع وحده يأخذ `MEDIA_MAX_IMAGE_BYTES + 64 KiB` (ظرف multipart) وبقية المسارات تبقى على `MAX_REQUEST_BODY_BYTES`. لا رفع للسقف العام.
+- **الواجهة**: `components/ProductImageManager.tsx` (اختيار صورة، معاينة شبكة، «اجعلها الغلاف»، حذف، حالات تحميل/خطأ/فراغ) مدمج في `DashboardProductsPage` مع **عمود صورة مصغّرة** في الجدول؛ `ProductDetailsPage` يعرض **معرضاً** بمصغّرات واختيار الصورة النشطة، و`ProductCard` يرسم الصورة مع بديل `product.noImage`. `api.ts` صار يتعامل مع `FormData` بلا فرض `Content-Type` (وإلا انكسر حدّ الـmultipart).
+- **i18n**: `productImages.*` و`nav.openMenu` في ar/fr/en/zh — لا نص واجهة مكتوب داخل المكوّن.
+- **إصلاح لازم كشفته المراجعة البصرية على الهاتف**: لوحة التحكم كانت تُبقي الشريط الجانبي (`w-60`) عموداً دائماً على شاشة 390px ⇒ ~150px للصفحة، وكل جداول اللوحة غير قابلة للاستخدام. `AppLayout` صار: عمود من `lg` وما فوق، و**دُرج** تحت `lg` بزر في `TopHeader`، يُغلق عند التنقّل أو لمس الخلفية. لا تغيير في سطح المكتب (1280×720 كما هي).
+- **الاختبارات**:
+  - `tests/product-images.test.ts` — **18/18** على PostgreSQL حقيقي: رفع PNG فعلي، ربط بالمنتج، ظهور في المتجر، رفض non-multipart واسم فيه `../`، تصغير صورة 3000px، الغلاف، سقف العدد، الحذف وترقية الغلاف، ملكية الغريب 403، غير المصادَق 401، ومنتج غير منشور (404 للغريب والغريب-البائع، 200 للمالك بـ`private, no-store`).
+  - `e2e/product-images.spec.ts` — **4/4** على متصفح حقيقي: (1) الدُرج على الهاتف بلا تجاوز أفقي وإغلاق عند التنقّل، (2) رفع من اللوحة ⇒ ظهور في `/products/:id` مع `naturalWidth>0`، (3) ملف مزيّف يُرفض برسالة واضحة ولا يُخزَّن شيء، (4) حذف الصورة الوحيدة يُبقي المنتج صالحاً ويُظهر البديل، مع إبقاء الصورة ظاهرة للمالك بعد الأرشفة.
+  - **انحدار**: الخادم **2349 ناجحاً / 2353** (180 ملفاً) — الفشلان الأربعة (`ai-video-agent`, `agent-video-download`) **سابقان لهذا العمل ومُثبَت ذلك**: أُعيد تشغيلهما على `b64394c` بعد `git stash` فأعطيا **نفس** الفشل (رسم فيديو يحتاج خطوطاً غير مثبَّتة في هذه الحاوية؛ CI يثبّتها ويمرّرها). E2E المواصفات المجاورة (`library`, `marketplace`) **14/14**. Typecheck (server+web) = 0، `VITE_DEMO_MODE=true build` ناجح.
+- **لم يُلمس**: `master`، لا Migration ولا Seed ولا تغيير في النموذج التجاري أو الدفع/Webhooks. لا Mock: الصور المرفوعة في الاختبارات ملفات PNG حقيقية تُخزَّن وتُخدَم من المسار الحقيقي.
+
+## Milestone — RBAC-02: إدارة الموظفين والأدوار تحت SUPER_ADMIN فقط (2026-11-24)
+
+- **الفجوة المُغلقة**: لم يكن هناك سطح لإدارة الموظفين. `ADMIN` يحمل `user:read/create/update/delete` و`admin:users`، وكان `PATCH /api/admin/users/:id/status` يسمح له بتعطيل **أي** حساب — بما فيه `SUPER_ADMIN` — بلا حماية «آخر مالك»، وبلا إبطال جلسات، وبلا أي مسار لتغيير دور أو لعرض الصلاحيات الناتجة. لا يوجد أصلًا `staff:*` في مصفوفة الصلاحيات.
+- **القرار البنيوي (بلا تغيير في RBAC)**: البوّابة `requireRole('SUPER_ADMIN')` على الـsub-app نفسه (`/api/admin/staff`)، **لا** `requirePermission`. لم تُضَف صلاحية جديدة، ولم تُعدَّل `ROLE_PERMISSIONS`، ولا Migration، ولا Seed. `ADMIN` يحتفظ بـ`user:*` للحسابات **التجارية** فقط ولا يكسب شيئًا هنا.
+- **الخادم** (`modules/staff/{types,service,routes}.ts`):
+  - `GET /api/admin/staff` — قائمة **موظفين فقط** (أدوار `STAFF_ROLES`) مع `q`/`role`/`status`/ترقيم؛ الحساب التجاري غير موجود في هذه الدفّة، و`GET /:id` له يعيد **404** لا 403 (لا استكشاف وجود).
+  - `GET /roles` — الأدوار القابلة للتعيين (SUPPORT/RISK/DISPUTE/ADMIN) مع **الصلاحيات الفعلية** من `ROLE_PERMISSIONS` نفسها (ليست نسخة يمكن أن تنحرف)، و`SUPER_ADMIN` خارج القائمة.
+  - `POST /` — ينشئ الحساب بكلمة مرور **عشوائية تُولَّد على الخادم ولا تُعاد ولا تُدقَّق أبدًا**، ثم يرسل **دعوة** عبر مسار إعادة تعيين كلمة المرور القائم (رمز أحادي الاستخدام إلى بريد الموظف). `devResetToken` يُعاد فقط حين `devToolingActive()` — نفس قاعدة `forgot-password`. الجسم `.strict()`: `password`/`passwordHash`/`permissions`/`roles`/`isActive`/`mfaEnabled` كلها **422**، لا mass assignment.
+  - `PATCH /:id/role` و`PATCH /:id/status` — قائمة سماح للأدوار، رفض `SUPER_ADMIN` كهدف وكدور، رفض التعديل الذاتي، وإبطال **كل** جلسات الهدف (`revokeAllSessionsForUser` في `modules/auth/service.ts`). الأدوار تُقرأ من DB في كل طلب، فالتخفيض ساري فورًا؛ الإبطال يغلق نافذة الرمز الممنوح تحت الدور القديم.
+  - **قاعدة «آخر SUPER_ADMIN»** مستخرجة كدالة نقية `staffStatusRefusal()` — كل فروعها مُختبَرة بلا حاجة لتحريك حالة النشر (الحزمة تعمل بالتوازي على قاعدة واحدة، فلا يجوز تعطيل مالكي البيئة في اختبار).
+  - **Audit**: `RBAC.STAFF_CREATED` / `RBAC.STAFF_ROLE_CHANGED` / `RBAC.STAFF_STATUS_CHANGED` / `RBAC.ESCALATION_REJECTED`، مع `before`/`after` و`actorId` وIP/UA، وبلا أي سر.
+- **تحصين المسار القديم**: `PATCH /api/admin/users/:id/status` يرفض **أي حساب موظف** بـ403 (`staff_account_via_generic_users_route`، مع Audit) ويرفض تعطيل الحساب الذاتي، ويُبطل الجلسات عند التعطيل. سلوك الحسابات التجارية لم يتغيّر (مُثبَت في الاختبارات وفي `e2e/admin-user-status.spec.ts`).
+- **الواجهة**: `/admin/staff` (`AdminStaffPage`) — قائمة مع بحث/تصفية، إنشاء مع **عرض صلاحيات الدور قبل الإنشاء**، لوحة تفاصيل تعرض الصلاحيات الفعلية وسجل العمليات، وتغيير دور **بمرحلتين**: اختيار الدور ⇒ عرض صلاحياته ⇒ «تأكيد». `SuperAdminOnly` + `Feature 'admin.staff'` (SUPER_ADMIN فقط) يُخفيان الرابط عن `ADMIN`. جدول على سطح المكتب وبطاقات على الهاتف، وi18n ar/fr/en/zh.
+- **التحقق**:
+  - `tests/rbac02-staff-management.test.ts` — **19/19**: 401 للمجهول، 403 لكل دور تجاري و**لـADMIN على كل مسار**، القائمة موظفين فقط وبلا أسرار، الفلاتر، الإنشاء + دعوة تُستخدَم فعليًا (reset → login)، رفض SUPER_ADMIN/الدور المجهول/التكرار/الحقول الإضافية، تغيير الدور + إبطال الجلسة + Audit قبل/بعد، حماية SUPER_ADMIN، منع التعديل الذاتي، التعطيل/الإعادة + منع الدخول، قاعدة آخر مالك (كل الفروع)، حارس الخدمة، المسار القديم، وسجل العمليات.
+  - `e2e/rbac02-staff.spec.ts` — **5/5** على متصفح حقيقي ضد خادم وPostgres حقيقيين: إنشاء ⇒ معاينة صلاحيات ⇒ تغيير دور ⇒ تعطيل مع تحقّق من الـAPI وإعادة تحميل، حماية حساب SUPER_ADMIN (لا محدد دور ولا زر حالة، و403 من الـAPI)، رفض `ADMIN` (صفحة + API + غياب الرابط)، وتخطيط هاتف 390×844 بلا تجاوز أفقي.
+  - **الحزمة الكاملة**: **2403/2403** (183 ملفاً) `exit 0`. الفشل الخمسة التي ظهرت في التشغيل الأول كانت **بيئية**: `ffmpeg` غير مثبَّت في الحاوية (رسم الفيديو) — بعد `apt-get install ffmpeg` مرّت الثلاثة (`ai-video-agent`, `agent-video-download`, `agent-video-retention`) **18/18**.
+  - Typecheck (server+web) = **0**، `npm run build -w @wasit/web` ناجح.
+- **حدود الإثبات**: «آخر SUPER_ADMIN» مُثبَت كقرار نقي + كحارس خدمة، لا بتشغيل نشر فيه مالك واحد (غير آمن على قاعدة مشتركة). الدعوة البريدية تُثبت عبر رمز إعادة التعيين الحقيقي؛ إرسال SMTP الفعلي يبقى على `mail:log` في هذه البيئة كما في بقية المسارات.
+- **لم يُلمس**: `master`، لا Migration، لا Seed، لا تغيير في النموذج التجاري أو الدفع/Webhooks، ولا في `ROLE_PERMISSIONS`. لا Mock: كل الاختبارات على PostgreSQL حقيقي وكل E2E على متصفح حقيقي.
+
+## Milestone — CART-01: سلة متعددة المنتجات والبائعين في طلب واحد (2026-11-24)
+
+- **الفجوة المُغلقة (`PR-01`)**: `CheckoutPage` كان يسعّر **منتجاً واحداً** ويُنشئ طلباً من بند واحد. الواجهة لم تكن تعرف السلة إطلاقاً، ولم يكن هناك مسار يعرض للمشتري مجموع سلة متعددة البائعين قبل الشراء. الخادم كان يدعم البنود المتعددة والبائعين المتعددين (`M2`)، فالفجوة كانت في **العقد وطبقة العرض** لا في قاعدة البيانات: لا تسعير خادمي قبل الإنشاء، ولا حارس ضد الإرسال المكرَّر.
+- **القرار البنيوي**: **لا سعر من المتصفح**. السلة تحمل `productId + quantity` فقط (مع لقطة عرض للاسم/السعر تُستبدل دائماً ببيانات الخادم)، وكل رقم يراه المشتري يأتي من `POST /api/orders/quote`. لا Migration، لا Seed، لا جدول سلة على الخادم: السلة تفضيل عرض، والطلب هو السجل المالي الوحيد.
+- **الخادم** (`modules/orders/service.ts` + `routes.ts`):
+  - `priceBasket()` مستخرجة من `createOrder` — **مصدر تسعير واحد** يستخدمه الاقتباس والإنشاء، فلا يمكن أن يختلف الرقم المعروض عن الرقم المفوتر.
+  - `quoteBasket()`/`POST /api/orders/quote` (auth + `rateLimit`): يتحقّق من وجود المنتج ونشره وتوفّر مخزونه و`MOQ` وتجانُس العملة، ويعيد تجميعاً **لكل بائع** (`itemsTotal`، `commissionSeller`، `commissionBuyer`، بنود) + إجماليات + `issues[]` بأكواد مقروءة. **لا يكتب شيئاً** (مُثبَت: عدد الطلبات لا يتغيّر).
+  - `createOrder` يقبل السلة كما هي، ويستبعد البنود غير المتوفرة من الإجماليات بدل تسعيرها، ويحسب العمولة **على مجموع كل بائع** من سياسة DB (4% = 2%+2%، لا Hardcode)، ويُنشئ suborders لكل بائع.
+  - **Idempotency**: `metadata.idempotencyKey` + قفل استشاري لكل (مشتري، مفتاح) وإعادة الرد المحفوظ (`replayed: true`) — ضغطتان متتاليتان أو متوازيتان تُنتجان **طلباً واحداً** ولا خصم مخزون مزدوج.
+- **الواجهة**: `lib/cart.tsx` (Context + `localStorage` نسخة `v1`، تطهير أي مدخل تالف، سقف 50 سطراً مطابق للخادم، مزامنة بين التبويبات)، `pages/CartPage.tsx` (بنود + stepper + حذف + إفراغ + ملخص من الخادم + رسائل الفجوات + زر معطَّل عند وجود مشكلة)، `CheckoutPage?cart=1` (مجموعات بائعين + إجماليات الخادم + إفراغ السلة بعد النجاح)، زر «أضف إلى السلة» في `ProductDetailsPage`، وشارة عدد في `PublicHeader` و`TopHeader`. المسار **عام** (`/cart` بلا تسجيل دخول)؛ الزائر يرى لقطة ويُطلب منه الدخول للتسعير، و`/checkout` يبقى خلف `RequireAuth`.
+- **إصلاحان كشفهما E2E الحقيقي (لا اختبارات الوحدة)**: (1) `formatMoney(v, '')` كان يُسقط الصفحة كاملة (`Intl` يرمي `RangeError` على رمز عملة فارغ) — اقتباس بلا بند قابل للتسعير يعيد `currencyCode: null`، فأُضيف احتياط `TND`؛ (2) `Card` لا يمرّر `data-testid` (يأخذ `testId`)، فكانت حالة السلة الفارغة بلا معرّف اختباري.
+- **i18n/RTL**: `cart.*` و`checkout.cartTitle` في ar/fr/en/zh، وتخطيط بخصائص منطقية (`ms-`, `end-`) فلا ينكسر في RTL.
+- **التحقق**:
+  - `packages/server/tests/cart01-multi-product-cart.test.ts` — **17/17**: منتج واحد، عدة منتجات لنفس البائع، عدة بائعين (suborders و`itemsTotal` صحيح)، تغيير كمية، تغيير سعر (السعر الجديد لا القديم)، تجاهل سعر مُرسَل من العميل، نقص مخزون، منتج موقوف، منتج محذوف، تعارض عملة، خرق `MOQ`، idempotency متسلسل **ومتوازٍ**، «الاقتباس لا يكتب»، تسلسل COMPANY/CUSTOMER، وعزل المشتري.
+  - `e2e/cart01.spec.ts` — **10/10** على متصفح حقيقي ضد خادم وPostgreSQL حقيقيين: بائعان/ثلاثة بنود ⇒ طلب واحد باثنين suborders، الكميات والحذف يغيّران الإجمالي، بقاء السلة بعد التحديث والتنقل، منتج مسحوب يُعلَّم ويُعطّل الدفع، سطر ناقص المخزون يعرض المتاح، **نقرتان ⇒ طلب واحد**، مشترٍ فردي وشركة من نفس السلة، سلة الزائر تبقى بعد الدخول، هاتف 390×844 بلا تجاوز أفقي، وانحدار الدفع لمنتج واحد.
+  - انحدار E2E: `order-buyer-identity` + `marketplace` + `payments` = **18/18**.
+  - الحزمة الكاملة: **2420/2420** (184 ملفاً) `exit 0`. Typecheck (server+web) = **0**، `vite build` ناجح. (الفشل الخمسة في التشغيل الأول كانت `ffmpeg` غير مثبَّت بعد إعادة إنشاء الحاوية + سباق `read-cache` على قاعدة مشتركة؛ بعد تثبيت `ffmpeg` وإعادة التشغيل: **2420/2420**.)
+- **لم يُلمس**: `master`، لا Migration، لا Seed، لا تغيير في النموذج التجاري أو الدفع/Webhooks أو `ROLE_PERMISSIONS`. لا Mock: كل الاقتباسات والطلبات على قاعدة حقيقية وكل E2E على متصفح حقيقي.
+
+## Milestone — B2B-01 phase 3: مقارنة العروض والانتهاء الموثوق (2026-11-24)
+
+- **الفجوة (`GAP_REGISTER.md` → `B2B-01 (phase 3)`)** كانت مزدوجة: (1) لا سطح مقارنة، فالمشتري يقرأ عروضًا متفرقة ويقارن يدويًا بلا حارس عملات أو مراجعات؛ (2) الانتهاء **كسول فقط**: إن لم يفتح أحد الطلب، يبقى `OPEN` في القاعدة إلى الأبد، و`valid_until` لا يُطبَّق إلا عند وصول. الحل: قراءة مقارنة محسوبة على الخادم + مهمة دورية تستخدم **نفس** الحارس الذرّي.
+- **قرار بنيوي**: منطق الانتهاء نُقل إلى وحدة واحدة `modules/rfq/expiry.ts` (و`recordEvent` إلى `modules/rfq/events.ts`). المهمة الدورية والمسار التفاعلي يستدعيان نفس الدالتين، فلا يمكن أن تختلف دلالة «منتهٍ» بينهما. `expireRfqIfDue` يعيد `{ rfq, transitioned }` — **الفائز وحده** يكتب الحدث، وهذا ما يجعل عدّادات الجولات المتزامنة صادقة (كشفه اختبار التزامن: كانت الجولات الخاسرة تعُدّ انتقالات لم تكتبها).
+- **المقارنة** (`modules/rfq/comparison.ts`, `GET /api/rfqs/:id/comparison`): أحدث مراجعة لكل بائع فقط، وصالحة (`SUBMITTED` + داخل `valid_until`)، وعملة الطلب نفسها. البائع يستدعي المسار نفسه ويحصل على `scope: 'OWN'` — **لا يرى سعر منافس أبدًا** (مُثبَت بفحص الـpayload نصًّا). المستبعد يعود في `excluded[]` بسبب صريح: `SUPERSEDED|EXPIRED|WITHDRAWN|REJECTED|ACCEPTED|CURRENCY_MISMATCH|RFQ_NOT_OPEN`. الترتيب (الإجمالي ← المدة ← وقت التقديم) والوسيط والمتوسط و«أفضل سعر» كلها خادمية؛ الواجهة تطبعها ولا تحسبها.
+- **المهمة الدورية** (`runRfqExpirySweep`): معاملة لكل دفعة، `UPDATE … RETURNING` محروس، أحداث داخل نفس المعاملة، `batchSize=100`/`maxBatches=20` مع `truncated`، لا `DELETE`، ولا إشعار خارجي (`notifications` صفوف داخلية فقط). موصولة بـ`RFQ_EXPIRY_SWEEP_ENABLED` (افتراضي **false**) / `_INTERVAL_MINUTES=5` / `_BATCH_SIZE=100` ← `startScheduler()` ← `src/index.ts`، وقابلة للاستدعاء من cron.
+- **Migration `0047_rfq_expiry_indexes`**: **إضافية فقط** — `CREATE INDEX IF NOT EXISTS` لفهرسين جزئيين (`rfqs_open_expires_idx … where status='OPEN'`، `rfq_quotes_live_expiry_idx … where quote_status='SUBMITTED'`). لا تعديل على `0046` أو ما قبلها.
+- **الواجهة**: `ComparisonPanel` داخل لوحة المشتري (زر «مقارنة العروض»): ترتيب، أفضل سعر، مصفوفة سعر الوحدة لكل بند، قائمة المستبعد بأسبابه. 29 مفتاح `rfq.compare.*` × 4 لغات (ar/en/fr/zh).
+- **التحقق**:
+  - `packages/server/tests/b2b01c-comparison-expiry.test.ts` — **21/21** على PostgreSQL حقيقي عبر HTTP: مقارنة 3 عروض، مدد توريد مختلفة، استبعاد المراجعة القديمة، المنتهي/المسحوب/المرفوض، **منع خلط العملات** (صف بـ`EUR` مُقحَم بـSQL: مستبعد ولا يدخل أي إحصاء)، عزل البائع، 404 لغير المشارك/الشركة الأخرى و401 للمجهول، `RFQ_NOT_OPEN` بعد الإلغاء، رفض كمية مختلفة 422، «المقارنة لا تكتب»، انتهاء واحد بـ`reason`+`expiresAt`، **جولة ثانية صفر**، **5 جولات متزامنة ⇒ 3 طلبات + 3 عروض بلا تكرار**، عدم لمس `AWARDED`/`CANCELLED`/`EXPIRED` ولا العروض المحسومة، عدم إحياء طلب منتهٍ، دفعات محدودة، وصفر تغيير في orders/ledger/payments/settlements.
+  - تراجعات المرحلتين 1 و2: **54/54** (`b2b01b-lifecycle-unit` 8 + `b2b01b-rfq-lifecycle` 22 + `b2b01-rfq-isolation` 24) — المجموع 75/75 مع ملف المرحلة 3.
+  - `scripts/ui-rfq-check.mjs` — **38/38** في متصفح حقيقي ضد API وPostgres حقيقيين (أُضيفت 4 فحوص للمقارنة: الجدول، وسم أفضل سعر، مصفوفة الوحدات، استبعاد المراجعة القديمة).
+  - Typecheck (server + web) = **0**، `vite build` ناجح. قاعدة `wasit_ui` المؤقتة حُذفت والخوادم أُوقفت.
+- **لم يُلمس**: `master`، لا قبول عرض، لا تحويل إلى `Order`، لا تغيير في Payment/Ledger/Settlement/Wallet، لا تعديل في RBAC أو النموذج التجاري، ولا أي migration على Demo/Production.
+
+## Milestone — B2B-01 phase 5: التكامل وتجربة الاستخدام وجاهزية الإصدار (2026-11-25)
+
+- **الهدف**: إثبات أن دورة RFQ كاملة **تتركّب** من أول طلب إلى الطلب التجاري، وأن الشاشات صالحة للاستخدام على الهاتف وسطح المكتب بأربع لغات — لا إضافة قدرة تجارية جديدة.
+- **اختبار الرحلة** (`packages/server/tests/b2b01e-journey.test.ts` — **11/11**، HTTP + Postgres حقيقيان، بلا Mocks): مسار COMPANY كامل (مسودّة ← دعوة ← `VIEWED` ← عرض ← رفض بسبب ← مراجعة ← منافس ← مقارنة ← ترسية ← طلب ← فتح البائع) + عزل البائع (`scope: OWN`، لا سعر منافس في الـpayload) + 404 لغير المشارك على كل مسار + منع دعوة بائع بلا موافقة (409 بالاسم لا بالمعرّف) + الإلغاء والانتهاء لا يُحيَيان + التزامن (`200`+`409` ⇒ طلب واحد وإعادة الفوز `replayed`) + بند النص الحر `409` بلا طلب + `ADMIN`/`SUPPORT` 403 و`b2b-agent` لا يرسّي + رفض كل حقل من العميل (422) + صفر `payment_intent`/`settlement`/`payout` وكل القيود `PENDING`.
+- **عيوب UX أُغلقت**:
+  1. **بند كاتالوج بمعرّف UUID**: أُضيف `RfqItemView.productName` عبر `LEFT JOIN products` في `loadRfqItems` (مصدر واحد للمشتري/البائع/المقارنة)، والواجهة تطبع `freeTextName ?? productName ?? productId` بدالة `itemLabel`. بند النص الحر يبقى `productName: null`.
+  2. **لافتة الكوكيز تغطي زر القبول على الهاتف**: اللافتة تنشر `--cookie-banner-h` (نمط `--demo-banner-h`) و`AppLayout` يحجز المساحة أسفل `<main>`؛ الفحص الهندسي في المتصفح يثبت أن زر القبول فوق اللافتة.
+- **المتصفح** (`scripts/ui-rfq-check.mjs`): **78/78** — منها تأكيد القبول بلغاته الأربع بلا مفاتيح خامّة وإلغاؤه لا يُرسّي، اختفاء كل إجراء متعارض في `AWARDED` (مشتري وبائع)، مسار خطأ «أدخل سعر وحدة لكل بند.»، وهاتف 390×844 بلا فيض أفقي ولا أخطاء صفحة.
+- **تغطية الترجمة**: 138 مفتاح `rfq.*` × 4 لغات، و108 مفتاح مستخدم في الشاشات كلها معرَّف — صفر ناقص.
+- **الأرقام**: الحزمة **2527/2527** (190 ملفًا) `exit 0` · Typecheck (server+web) = **0** · `vite build` ناجح.
+- **ملاحظة معلنة**: `formatDate` يمرّر `'fr-TN'` صراحةً فتظهر `déc. 2026 25` داخل واجهة عربية/إنجليزية/صينية — يخص كل الشاشات، سُجِّل `I18N-DATE-01` (DECISION REQUIRED) ولم يُغيَّر هنا.
+- **لم يُلمس**: `master`، لا Migration، لا Seed، لا تغيير في RBAC أو النموذج التجاري أو الدفع/Ledger/Settlement، وقيد `B2B-01-P4-A` ما زال `DECISION REQUIRED`.

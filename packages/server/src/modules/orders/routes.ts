@@ -3,11 +3,14 @@ import { z } from 'zod';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { createOrder, getOrder, listMyOrders, updateOrderStatus } from './service.js';
+import { rateLimit } from '../../middleware/rate-limit.js';
+import { createOrder, getOrder, listMyOrders, quoteBasket, updateOrderStatus } from './service.js';
 
 const createOrderSchema = z.object({
   buyerId: z.string().min(1),
   buyerType: z.enum(['CUSTOMER', 'MERCHANT', 'COMPANY']).default('CUSTOMER'),
+  // An assertion only: the service checks it against the caller's own company.
+  companyId: z.string().min(1).max(36).optional(),
   items: z.array(
     z.object({
       productId: z.string().min(1),
@@ -16,6 +19,17 @@ const createOrderSchema = z.object({
   ).min(1).max(100),
   currencyCode: z.string().length(3).optional(),
   notes: z.string().max(2000).optional(),
+  // Makes a retried submit return the original order instead of a duplicate.
+  idempotencyKey: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/).optional(),
+});
+
+const quoteSchema = z.object({
+  items: z.array(
+    z.object({
+      productId: z.string().min(1),
+      quantity: z.number().int().positive(),
+    }),
+  ).min(1).max(100),
 });
 
 const updateStatusSchema = z.object({
@@ -29,12 +43,28 @@ export const ordersRoutes = new Hono();
 
 ordersRoutes.use('*', requireAuth);
 
+/**
+ * Cart quote: the server prices the basket (current price, stock, per-seller
+ * commission, payment fee) without writing anything. The cart and checkout
+ * screens render this instead of computing money in the browser.
+ */
+ordersRoutes.post(
+  '/quote',
+  rateLimit({ windowSeconds: 60, max: 120, keyPrefix: 'order-quote' }),
+  validateBody(quoteSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof quoteSchema>>(c);
+    const ctx = getContext(c);
+    const result = await quoteBasket(ctx.db, body.items);
+    return c.json({ success: true, data: result });
+  },
+);
+
 ordersRoutes.post('/', validateBody(createOrderSchema), async (c) => {
   const body = getValidatedBody<z.infer<typeof createOrderSchema>>(c);
   const ctx = getContext(c);
-  if (body.buyerId !== ctx.user!.id) {
-    throw new (await import('@wasit/shared')).ApiError(403, 'FORBIDDEN', 'You can only create orders for yourself');
-  }
+  // `createOrder` refuses a buyerId that is not the caller, so the invariant holds
+  // for every caller of the service, not only this route.
   const result = await createOrder(ctx.db, body, { actorId: ctx.user!.id, ipAddress: ctx.ipAddress });
   return c.json({ success: true, data: result }, 201 as never);
 });

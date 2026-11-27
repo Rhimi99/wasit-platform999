@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
+import { useCart } from '@/lib/cart';
 import type { Feature } from '@/lib/rbac';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { Brand } from '@/components/brand/Brand';
@@ -31,6 +32,7 @@ function baseNav(roleKey: string): NavItem[] {
     case 'MERCHANT':
       return [
         { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
+        { to: '/dashboard/rfq-inbox', key: 'dashboard.rfqInbox', icon: '📨', feature: 'rfq.sell' },
         { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
         { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
         { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
@@ -47,6 +49,7 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/suppliers', key: 'dashboard.suppliers', icon: '🏭' },
         { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
         { to: '/dashboard/trust', key: 'dashboard.trust', icon: '🛡️' },
+        { to: '/dashboard/entity', key: 'dashboard.entity', icon: '🏢' },
         { to: '/dashboard/verification', key: 'dashboard.verification', icon: '✅' },
         { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
         { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
@@ -57,6 +60,8 @@ function baseNav(roleKey: string): NavItem[] {
     case 'COMPANY':
       return [
         { to: '/dashboard', key: 'dashboard.overview', icon: '📊' },
+        { to: '/dashboard/rfqs', key: 'dashboard.rfqs', icon: '📋', feature: 'rfq.buy' },
+        { to: '/dashboard/rfq-inbox', key: 'dashboard.rfqInbox', icon: '📨', feature: 'rfq.sell' },
         { to: '/dashboard/products', key: 'dashboard.products', icon: '📦' },
         { to: '/dashboard/products/new', key: 'nav.products', icon: '➕' },
         { to: '/dashboard/inventory', key: 'dashboard.inventory', icon: '🗃️' },
@@ -73,6 +78,7 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/suppliers', key: 'dashboard.suppliers', icon: '🏭' },
         { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
         { to: '/dashboard/trust', key: 'dashboard.trust', icon: '🛡️' },
+        { to: '/dashboard/entity', key: 'dashboard.entity', icon: '🏢' },
         { to: '/dashboard/verification', key: 'dashboard.verification', icon: '✅' },
         { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
         { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
@@ -96,10 +102,12 @@ function baseNav(roleKey: string): NavItem[] {
         { to: '/dashboard/agent-video', key: 'agentVideo.nav', icon: '🎥', feature: 'ai.use' },
         { to: '/dashboard/partners', key: 'partners.nav', icon: '🤝', feature: 'ai.use' },
         { to: '/dashboard/buyers', key: 'dashboard.buyers', icon: '🤝' },
+        { to: '/dashboard/rfq-inbox', key: 'dashboard.rfqInbox', icon: '📨', feature: 'rfq.sell' },
         { to: '/dashboard/my-merchants', key: 'directory.myMerchantsTitle', icon: '🛒' },
         { to: '/dashboard/merchants-list', key: 'dashboard.merchants', icon: '🏪' },
         { to: '/dashboard/library', key: 'library.favorites', icon: '⭐', feature: 'library' },
         { to: '/dashboard/trust', key: 'dashboard.trust', icon: '🛡️' },
+        { to: '/dashboard/entity', key: 'dashboard.entity', icon: '🏢' },
         { to: '/dashboard/verification', key: 'dashboard.verification', icon: '✅' },
         { to: '/dashboard/disputes', key: 'dashboard.disputes', icon: '⚖️' },
         { to: '/dashboard/messages', key: 'dashboard.messages', icon: '💬' },
@@ -117,6 +125,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/analytics', key: 'admin.analytics', icon: '📊' },
   { to: '/admin/reports', key: 'admin.reports', icon: '📄' },
   { to: '/admin/users', key: 'admin.users', icon: '👥' },
+  { to: '/admin/staff', key: 'admin.staff', icon: '🧑‍💼', feature: 'admin.staff' },
   { to: '/admin/products', key: 'admin.products', icon: '📦' },
   { to: '/admin/orders', key: 'admin.orders', icon: '🧾' },
   { to: '/admin/transactions', key: 'admin.transactions', icon: '💳' },
@@ -129,13 +138,14 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/policies', key: 'admin.policies', icon: '📜' },
   { to: '/admin/ads', key: 'admin.ads', icon: '📣' },
   { to: '/admin/subscriptions', key: 'admin.subscriptions', icon: '🔁' },
+  { to: '/admin/gm', key: 'admin.gmCommandCenter', icon: '🎛️' },
   { to: '/admin/ai', key: 'admin.aiGovernance', icon: '🤖' },
   { to: '/admin/observability', key: 'admin.observability', icon: '📈' },
   { to: '/admin/privacy', key: 'admin.privacy', icon: '🔒' },
   { to: '/admin/audit', key: 'admin.audit', icon: '🔎' },
 ];
 
-export function AppSidebar() {
+export function AppSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { t } = useI18n();
   const { user, role, can, logout } = useAuth();
   const navigate = useNavigate();
@@ -152,7 +162,7 @@ export function AppSidebar() {
   };
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-e border-slate-200 bg-white">
+    <aside className="flex h-full w-60 shrink-0 flex-col border-e border-slate-200 bg-white">
       <div className="flex items-center justify-center border-b border-slate-100 px-3 py-3">
         <Brand compact />
       </div>
@@ -165,6 +175,7 @@ export function AppSidebar() {
           <Link
             key={i.to}
             to={i.to}
+            onClick={onNavigate}
             className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-wasit-50 hover:text-wasit-700"
           >
             <span className="text-base" aria-hidden>{i.icon}</span>
@@ -173,7 +184,11 @@ export function AppSidebar() {
         ))}
       </nav>
       <div className="space-y-1 border-t border-slate-100 p-2">
-        <Link to="/" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50">
+        <Link
+          to="/"
+          onClick={onNavigate}
+          className="block rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50"
+        >
           🏠 {t('nav.home')}
         </Link>
         <CookieSettingsLink className="block w-full rounded-md px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50" />
@@ -185,17 +200,45 @@ export function AppSidebar() {
   );
 }
 
-export function TopHeader() {
+export function TopHeader({ onOpenNav }: { onOpenNav?: () => void } = {}) {
   const { user } = useAuth();
+  const { t } = useI18n();
+  const { count: cartCount } = useCart();
   return (
     <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
       <div className="flex min-w-0 items-center gap-3">
+        {/* Below `lg` the sidebar is a drawer, so the header owns the only way in. */}
+        <button
+          type="button"
+          onClick={onOpenNav}
+          aria-label={t('nav.openMenu')}
+          data-testid="dashboard-nav-toggle"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 lg:hidden"
+        >
+          <span aria-hidden className="text-lg">☰</span>
+        </button>
         {/* The mark alone: the sidebar already carries the full lockup, and the
             compact header has no room for the wordmark on phones. */}
         <AxisMark size={28} title="" className="h-7 w-7 shrink-0 lg:hidden" />
         <span className="truncate text-sm font-semibold text-slate-700">{user?.email}</span>
       </div>
       <div className="flex items-center gap-3">
+        <Link
+          to="/cart"
+          className="relative flex h-9 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-slate-600 hover:text-wasit-700"
+          aria-label={t('cart.title')}
+          data-testid="cart-link"
+        >
+          <span aria-hidden className="text-lg">🛒</span>
+          {cartCount > 0 && (
+            <span
+              className="absolute -top-1 end-0 min-w-[18px] rounded-full bg-wasit-600 px-1 text-center text-[10px] font-bold leading-[18px] text-white"
+              data-testid="cart-badge"
+            >
+              {cartCount}
+            </span>
+          )}
+        </Link>
         <NotificationsBell />
         <LanguageSwitcher />
       </div>

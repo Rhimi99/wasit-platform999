@@ -4,7 +4,7 @@
 import { shouldRedirectToLegalAcceptance, redirectToLegalAcceptance } from './legal-gate';
 import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
-  AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
+  AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap, CopilotReport, CopilotRequestView,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
   DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeAssistantView, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
@@ -12,13 +12,27 @@ import type {
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
   PlatformOverview, ProductDetail, ProductSummary, RetentionSnapshot, RevenueBreakdown, RiskEventRow, RiskProfileRow, SearchResponse, ServedAdRow, SupplierSummary, ThreadDetail,
   PriceComparisonResponse,
+  QuoteResult,
+  ProductImageRow,
+  MyCompany,
+  AssignableStaffRole,
+  StaffActivityRow,
+  StaffListResponse,
+  StaffMember,
+  StaffRoleCatalog,
+  MyEntities,
+  EntityProfileType,
+  MerchantProfile,
+  SupplierProfile,
+  CompanyProfile,
   ThreadSummary, Transaction, TrustOverview, TrustScoreRow, User, VerificationPolicy, VerificationRequestRow,
   VerificationStatusOverview,
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
-  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
+  AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, AiSwitchChange, CompanyMetrics,
+  GmOverview, GmTasksData, GmAuditRow,
   AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
-  AiSpendOverview, AiSpendLimitList, AiSpendLimitRow,
+  AiSpendOverview, AiSpendLimitList, AiSpendLimitRow, AiSpendGuard,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -31,6 +45,7 @@ import type {
   PublicRefundPolicy,
   LegalAcceptanceState,
   LegalAcceptanceHistoryEntry,
+  BuyerRfq, CreateRfqPayload, RfqAcceptedOrder, RfqComparison, RfqQuote, RfqTimelineEntry, RfqView, SellerRfq, SubmitRfqQuotePayload,
 } from './types';
 
 export class ApiClientError extends Error {
@@ -65,9 +80,12 @@ export function apiErrorMessage(e: unknown): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  // A FormData body must keep the browser-generated multipart boundary: setting
+  // `Content-Type: application/json` here would make the upload unparseable.
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const res = await fetch(path, {
     headers: {
-      'Content-Type': 'application/json',
+      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
       ...options.headers,
     },
     credentials: 'include',
@@ -106,10 +124,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   // ---- Auth ----
-  async login(email: string, password: string) {
+  /**
+   * `gmTicket` is the single-use operator recovery ticket (GM-ACCESS-01). It is
+   * only consulted by the server when the email-verification gate is the
+   * blocker, so sending it never changes the outcome of a normal sign-in.
+   */
+  async login(email: string, password: string, gmTicket?: string) {
     return request<LoginResponse>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify(gmTicket ? { email, password, gmTicket } : { email, password }),
     });
   },
   async mfaChallenge(challengeToken: string, code: string) {
@@ -159,8 +182,16 @@ export const api = {
   async mfaStatus() {
     return request<MfaStatus>('/api/auth/mfa/status');
   },
-  async mfaEnroll() {
-    return request<MfaEnrollment>('/api/auth/mfa/enroll', { method: 'POST', body: JSON.stringify({}) });
+  /**
+   * Re-proves identity before a factor is created or replaced: the password is
+   * always required, and a current TOTP/recovery code as well when a factor is
+   * already enabled. A session cookie alone must not be able to move the factor.
+   */
+  async mfaEnroll(password: string, code?: string) {
+    return request<MfaEnrollment>('/api/auth/mfa/enroll', {
+      method: 'POST',
+      body: JSON.stringify(code ? { password, code } : { password }),
+    });
   },
   async mfaConfirm(code: string) {
     return request('/api/auth/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) });
@@ -267,6 +298,31 @@ export const api = {
   async deleteMediaAsset(id: string) {
     return request<{ id: string }>(`/api/media/assets/${id}`, { method: 'DELETE' });
   },
+
+  // ---- Product images ----
+  async listProductImages(productId: string) {
+    return request<{ items: ProductImageRow[] }>(
+      `/api/media/product-images?productId=${encodeURIComponent(productId)}`,
+    );
+  },
+  async uploadProductImage(
+    productId: string,
+    file: File,
+    opts: { altText?: string; isPrimary?: boolean } = {},
+  ) {
+    const form = new FormData();
+    form.set('productId', productId);
+    form.set('file', file);
+    if (opts.altText) form.set('altText', opts.altText);
+    if (opts.isPrimary) form.set('isPrimary', 'true');
+    return request<ProductImageRow>('/api/media/product-images', { method: 'POST', body: form });
+  },
+  async setPrimaryProductImage(id: string) {
+    return request<ProductImageRow>(`/api/media/product-images/${id}/primary`, { method: 'PATCH' });
+  },
+  async deleteProductImage(id: string) {
+    return request<{ deleted: boolean }>(`/api/media/product-images/${id}`, { method: 'DELETE' });
+  },
   async getStructuredData(type: LibraryEntityType | 'CATEGORY' | 'COUNTRY', id: string) {
     return request<JsonLd>(`/api/seo/structured-data/${type}/${id}`);
   },
@@ -358,9 +414,41 @@ export const api = {
     return request<{ id: string }>('/api/companies', { method: 'POST', body: JSON.stringify(data) });
   },
 
+  // ---- Entity profiles (ENTITY-01) ----
+  /** The caller's own merchant/supplier/company profile; each may be `null`. */
+  async myEntityProfiles() {
+    return request<MyEntities>('/api/entities/me');
+  },
+  /** Self-service update: the server resolves the row from the session, never from the body. */
+  async updateMyEntity(type: EntityProfileType, data: Record<string, unknown>) {
+    return request<{ entity: MerchantProfile | SupplierProfile | CompanyProfile; changed: boolean }>(
+      `/api/entities/${type}/me`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+    );
+  },
+
   // ---- Orders ----
-  async createOrder(data: { buyerId: string; items: { productId: string; quantity: number }[]; currencyCode?: string; notes?: string }) {
-    return request<{ orderId: string; orderNumber: string; itemsTotal: string; commission: string; commissionSeller: string; commissionBuyer: string; paymentFee: string; grandTotal: string; currencyCode: string; transactionId: string }>('/api/orders', { method: 'POST', body: JSON.stringify(data) });
+  async createOrder(data: {
+    buyerId: string;
+    items: { productId: string; quantity: number }[];
+    currencyCode?: string;
+    notes?: string;
+    /** Identity the buyer claims; the server verifies it against their entities. */
+    buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY';
+    /** Only for a COMPANY order, and only ever the caller's own company. */
+    companyId?: string;
+    /** A retried submit with the same key returns the original order. */
+    idempotencyKey?: string;
+  }) {
+    return request<{ orderId: string; orderNumber: string; itemsTotal: string; commission: string; commissionSeller: string; commissionBuyer: string; paymentFee: string; grandTotal: string; currencyCode: string; transactionId: string; sellerCount?: number; replayed?: boolean }>('/api/orders', { method: 'POST', body: JSON.stringify(data) });
+  },
+  /** Server-priced basket for the cart and checkout. Writes nothing. */
+  async quoteOrder(items: { productId: string; quantity: number }[]) {
+    return request<QuoteResult>('/api/orders/quote', { method: 'POST', body: JSON.stringify({ items }) });
+  },
+  /** The caller's own company, or `null`. Drives the company option in checkout. */
+  async myCompany() {
+    return request<{ company: MyCompany | null }>('/api/companies/mine');
   },
   // ---- Payments ----
   async getPaymentMethods() {
@@ -549,6 +637,51 @@ export const api = {
   },
   async adminSetUserStatus(id: string, isActive: boolean) {
     return request('/api/admin/users/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ isActive }) });
+  },
+
+  // ---- RBAC-02: staff desk (SUPER_ADMIN only; the server is the gate) ----
+  async adminStaffList(params: { q?: string; role?: string; status?: string; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.role) qs.set('role', params.role);
+    if (params.status && params.status !== 'all') qs.set('status', params.status);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const suffix = qs.toString();
+    return request<StaffListResponse>(`/api/admin/staff${suffix ? `?${suffix}` : ''}`);
+  },
+  async adminStaffRoles() {
+    return request<StaffRoleCatalog>('/api/admin/staff/roles');
+  },
+  async adminStaffMember(id: string) {
+    return request<{ member: StaffMember }>(`/api/admin/staff/${id}`);
+  },
+  async adminStaffActivity(id: string) {
+    return request<{ items: StaffActivityRow[] }>(`/api/admin/staff/${id}/activity`);
+  },
+  async adminStaffCreate(data: {
+    email: string;
+    firstName?: string;
+    lastName?: string;
+    role: AssignableStaffRole;
+    sendInvite?: boolean;
+  }) {
+    return request<{ member: StaffMember; inviteSent: boolean; devResetToken?: string }>('/api/admin/staff', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  async adminStaffSetRole(id: string, role: AssignableStaffRole) {
+    return request<{ member: StaffMember }>(`/api/admin/staff/${id}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    });
+  },
+  async adminStaffSetStatus(id: string, isActive: boolean) {
+    return request<{ member: StaffMember }>(`/api/admin/staff/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    });
   },
 
   // ---- Phase 9: Verification ----
@@ -1169,6 +1302,43 @@ export const api = {
       body: JSON.stringify({ enabled, reason: reason ?? null }),
     });
   },
+  // Fleet switch (WASIT-AI-KILLSWITCH-FLEET-01): one persisted decision per
+  // scope. The legacy `/kill-switch` pair above still works; these expose the
+  // per-agent scope the legacy pair cannot express.
+  async adminAiExecutionSwitch() {
+    return request<AiKillSwitchState>('/api/admin/ai/execution-switch');
+  },
+  async adminSetGlobalAiExecutionSwitch(stopped: boolean, reason?: string | null) {
+    return request<AiSwitchChange>('/api/admin/ai/execution-switch/global', {
+      method: 'POST',
+      body: JSON.stringify({ stopped, reason: reason ?? null }),
+    });
+  },
+  async adminSetAgentAiExecutionSwitch(agentKey: string, stopped: boolean, reason?: string | null) {
+    return request<AiSwitchChange>(`/api/admin/ai/execution-switch/agents/${encodeURIComponent(agentKey)}`, {
+      method: 'POST',
+      body: JSON.stringify({ stopped, reason: reason ?? null }),
+    });
+  },
+  // ---- Copilot (WASIT-COPILOT-01): the General Manager's coordinator ----
+  async copilotCreate(body: { request: string; locale?: 'ar' | 'fr' | 'en'; requestId?: string; autoAdvance?: boolean }) {
+    return request<CopilotRequestView>('/api/admin/ai/copilot/requests', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  async copilotList() {
+    return request<{ items: CopilotReport[] }>('/api/admin/ai/copilot/requests');
+  },
+  async copilotGet(runId: string) {
+    return request<CopilotReport>(`/api/admin/ai/copilot/requests/${runId}`);
+  },
+  async copilotAdvance(runId: string) {
+    return request<{ dispatched: string[]; blocked: string[]; status: string; report: CopilotReport }>(
+      `/api/admin/ai/copilot/requests/${runId}/advance`,
+      { method: 'POST' },
+    );
+  },
   async adminAiRequests(limit = 50) {
     return request<{ items: AiAdminRequestRow[] }>(`/api/admin/ai/requests?limit=${limit}`);
   },
@@ -1225,6 +1395,49 @@ export const api = {
     return request<AgentTaskDecision>(`/api/ai/tasks/${taskId}/${decision === 'APPROVE' ? 'approve' : 'reject'}`, {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
+    });
+  },
+
+  // ---- GM command center (WASIT-GM-DASHBOARD-01) ----
+  // Read-only aggregation. Every action below calls an endpoint that already
+  // existed before the dashboard; the dashboard itself exposes no write path.
+  async adminGmOverview(days = 30) {
+    return request<GmOverview>(`/api/admin/gm/overview?days=${days}`);
+  },
+  async adminGmTasks(params: {
+    status?: string;
+    agentKey?: string;
+    kind?: 'agent_task' | 'copilot_run';
+    severity?: 'high' | 'medium' | 'low';
+    from?: string;
+    to?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}) {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    }
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<GmTasksData>(`/api/admin/gm/tasks${suffix}`);
+  },
+  async adminGmAudit(params: { action?: string; entityType?: string; page?: number; pageSize?: number } = {}) {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    }
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<{ items: GmAuditRow[]; page: number; pageSize: number }>(`/api/admin/gm/audit${suffix}`);
+  },
+  async adminApproveRunStep(runId: string, stepKey: string) {
+    return request<unknown>(
+      `/api/admin/ai/agent-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepKey)}/approve`,
+      { method: 'POST' },
+    );
+  },
+  async adminCancelAgentRun(runId: string) {
+    return request<{ runId: string; status: string }>(`/api/admin/ai/agent-runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
     });
   },
 
@@ -1290,6 +1503,21 @@ export const api = {
     isActive?: boolean;
   }) {
     return request<AiSpendLimitRow>('/api/admin/ai/spend/limits', { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async adminAiSpendGuard(environment?: string) {
+    const suffix = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+    return request<AiSpendGuard>(`/api/admin/ai/spend/guard${suffix}`);
+  },
+  async adminSetAiSpendGuard(body: {
+    environment?: string;
+    dailyMaxCost: string;
+    monthlyMaxCost: string;
+    currencyCode?: string;
+  }) {
+    return request<AiSpendGuard>('/api/admin/ai/spend/guard', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
   },
   async adminDeleteAiSpendLimit(id: string) {
     return request<{ deleted: boolean }>(`/api/admin/ai/spend/limits/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -1374,6 +1602,85 @@ export const api = {
   async directoryMerchants(params: { q?: string; page?: number; pageSize?: number } = {}) {
     return request<DirectoryListResponse<DirectoryMerchantRow>>(`/api/directory/merchants?${directoryQuery(params)}`);
   },
+
+  // ---- B2B-01: requests for quotation -------------------------------------
+  // The server derives the caller's side (buyer or invited seller) from the
+  // session; none of these calls take a company or seller id from the client.
+  async rfqs() {
+    return request<BuyerRfq[]>('/api/rfqs');
+  },
+  async rfqInbox() {
+    return request<SellerRfq[]>('/api/rfqs/inbox');
+  },
+  async rfq(id: string) {
+    return request<RfqView>(`/api/rfqs/${encodeURIComponent(id)}`);
+  },
+  async createRfq(payload: CreateRfqPayload) {
+    return request<{ id: string; rfqNumber: string; status: string }>('/api/rfqs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  async sendRfq(id: string, sellerIds: string[], acknowledgeDisclosure: boolean) {
+    return request<{ status: string; recipientCount: number; expiresAt: string }>(
+      `/api/rfqs/${encodeURIComponent(id)}/send`,
+      { method: 'POST', body: JSON.stringify({ sellerIds, acknowledgeDisclosure }) },
+    );
+  },
+  async cancelRfq(id: string, reason?: string | null) {
+    return request<{ status: string }>(`/api/rfqs/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason?.trim() || null }),
+    });
+  },
+  async rfqQuotes(id: string) {
+    return request<RfqQuote[]>(`/api/rfqs/${encodeURIComponent(id)}/quotes`);
+  },
+  async rfqQuoteRevisions(id: string, quoteId: string) {
+    return request<RfqQuote[]>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/revisions`,
+    );
+  },
+  /**
+   * Accepting an offer sends nothing: the server derives the company, the seller,
+   * the prices and the idempotency key from the session and the stored quote.
+   */
+  async rfqAcceptQuote(rfqId: string, quoteId: string) {
+    return request<RfqAcceptedOrder>(
+      `/api/rfqs/${encodeURIComponent(rfqId)}/quotes/${encodeURIComponent(quoteId)}/accept`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+  },
+  async rfqComparison(id: string) {
+    return request<RfqComparison>(`/api/rfqs/${encodeURIComponent(id)}/comparison`);
+  },
+  async rfqTimeline(id: string) {
+    return request<RfqTimelineEntry[]>(`/api/rfqs/${encodeURIComponent(id)}/timeline`);
+  },
+  async submitRfqQuote(id: string, payload: SubmitRfqQuotePayload) {
+    return request<{ quoteId: string; revision: number; itemsTotal: string }>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  },
+  async declineRfq(id: string, reason?: string | null) {
+    return request<{ status: string }>(`/api/rfqs/${encodeURIComponent(id)}/decline`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason?.trim() || null }),
+    });
+  },
+  async withdrawRfqQuote(id: string, quoteId: string, reason?: string | null) {
+    return request<{ status: string }>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/withdraw`,
+      { method: 'POST', body: JSON.stringify({ reason: reason?.trim() || null }) },
+    );
+  },
+  async rejectRfqQuote(id: string, quoteId: string, reason: string) {
+    return request<{ status: string; revision: number }>(
+      `/api/rfqs/${encodeURIComponent(id)}/quotes/${encodeURIComponent(quoteId)}/reject`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
 };
 
 function directoryQuery(params: { q?: string; page?: number; pageSize?: number; buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY' }): string {
@@ -1389,7 +1696,9 @@ export function formatMoney(value: string | number | undefined | null, currencyC
   if (value === undefined || value === null || value === '') return '—';
   const num = Number(value);
   if (Number.isNaN(num)) return String(value);
-  return new Intl.NumberFormat('fr-TN', { style: 'currency', currency: currencyCode }).format(num);
+  // An empty code would make Intl throw and blank the page; a quote with no
+  // priceable line legitimately has none.
+  return new Intl.NumberFormat('fr-TN', { style: 'currency', currency: currencyCode || 'TND' }).format(num);
 }
 
 export function formatDate(value: string | Date | undefined | null): string {

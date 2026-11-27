@@ -16,6 +16,8 @@ import {
   VENDOR_MODEL_NAMES,
 } from './provider';
 import type { AIProvider } from './types';
+import { assertSpendGuard, spendGuardState } from './spend-guard';
+import { isExecutionBlocked } from './execution-switch';
 import {
   fingerprintSecret,
   looksLikeSecret,
@@ -93,6 +95,11 @@ export const SUPPORTED_PROVIDERS: readonly SupportedProvider[] = [
     productionAllowed: false,
   },
 ];
+
+/** A vendor bills per call and sends data out; the in-process engines do not. */
+export function isPaidProvider(providerKey: string): boolean {
+  return SUPPORTED_PROVIDERS.some((p) => p.key === providerKey && p.kind === 'vendor');
+}
 
 /** Deployment environment this process manages. Config never crosses it. */
 export function configEnvironment(): string {
@@ -238,6 +245,38 @@ export interface KeyState {
   fingerprint: string | null;
   updatedAt: string | null;
 }
+
+/**
+ * A provider as an admin surface may see it: configuration plus key presence,
+ * never a secret. Lives here (not in a route) so every surface that reports a
+ * provider — the AI desk and the GM command center — masks it the same way.
+ */
+export function maskProvider(row: ProviderRow) {
+  const spec = SUPPORTED_PROVIDERS.find((p) => p.key === row.providerKey);
+  return {
+    key: row.providerKey,
+    displayName: row.displayName,
+    kind: spec?.kind ?? 'vendor',
+    enabled: row.enabled,
+    // A provider named by AI_PROVIDER is usable before any admin edit.
+    activeFromEnv: isEnvSelected(row),
+    isDefault: row.isDefault,
+    isFallback: row.isFallback,
+    model: row.model,
+    baseUrl: row.baseUrl,
+    requiresKey: spec?.requiresKey ?? true,
+    keyState: keyState(row),
+    lastTest: {
+      status: row.lastTestStatus,
+      mode: row.lastTestMode,
+      testedAt: row.lastTestedAt?.toISOString() ?? null,
+      detail: row.lastTestDetail ?? null,
+    },
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export type MaskedProvider = ReturnType<typeof maskProvider>;
 
 export function keyState(row: ProviderRow): KeyState {
   if (row.secretCiphertext) {
@@ -458,6 +497,20 @@ export async function updateProviderConfig(
     values.keyEnvVar = patch.keyEnvVar === null || patch.keyEnvVar.trim() === '' ? null : assertEnvVarName(patch.keyEnvVar);
   }
 
+  // AI-SPEND-GUARD-01: making a paid provider usable requires an explicit money
+  // ceiling. The check runs before any write, so a refused activation leaves the
+  // row exactly as it was (no half-enabled provider).
+  // `role` is applied inside the transaction below, so it has to be folded in
+  // here; `NONE` clears both roles and must stay possible without a cap (turning
+  // a vendor off is always allowed).
+  const willBeEnabled = values.enabled ?? before.enabled;
+  const willBeDefault = patch.role === 'DEFAULT' || (patch.role === undefined && (values.isDefault ?? before.isDefault));
+  const willBeFallback =
+    patch.role === 'FALLBACK' || (patch.role === undefined && (values.isFallback ?? before.isFallback));
+  if (spec.kind === 'vendor' && (willBeEnabled || willBeDefault || willBeFallback)) {
+    await assertSpendGuard(db, providerKey, before.environment);
+  }
+
   await platformDb(db).transaction(async (tx) => {
     // A single default and a single fallback per environment: clear the old one
     // in the same statement so the partial unique index can never be violated.
@@ -527,6 +580,9 @@ export async function storeProviderSecret(
     throw new ApiError(409, 'SECRET_STORAGE_DISABLED', 'Storing provider keys is disabled on this server; use an environment variable instead');
   }
   const row = await getProviderRow(db, providerKey);
+  // A stored key is what makes a paid provider callable, so the guard applies
+  // here too — not only on the `enabled` flag.
+  if (spec.kind === 'vendor') await assertSpendGuard(db, providerKey, row.environment);
   const value = assertStorableSecret(spec, secret, row.baseUrl);
   const fingerprint = fingerprintSecret(value);
   let envelope: string;
@@ -677,21 +733,39 @@ export async function testProviderConnection(
     } else if (checks.some((c) => !c.ok)) {
       status = 'BLOCKED';
       checks.push({ id: 'live', ok: false, detail: 'Configuration is incomplete' });
+    } else if (await isExecutionBlocked(db)) {
+      // A live probe is a real vendor request. The central switch stops AI
+      // execution, so it must stop this too — and a switch store that cannot be
+      // read counts as stopped (fail-closed), never as permission to spend.
+      status = 'BLOCKED';
+      checks.push({ id: 'kill_switch', ok: false, detail: 'AI execution is stopped by the central switch' });
     } else if (spec.kind === 'vendor') {
-      try {
-        const probe = await probeVendor(
-          spec,
-          key as string,
-          VENDOR_MODEL_NAMES[model] ?? model,
-          row.baseUrl?.trim() || (spec.defaultBaseUrl as string),
-        );
-        latencyMs = probe.latencyMs;
-        const ok = probe.status >= 200 && probe.status < 300;
-        checks.push({ id: 'live', ok, detail: ok ? `Provider answered ${probe.status}` : `Provider answered ${probe.status}` });
-        status = ok ? 'OK' : 'FAILED';
-      } catch (err) {
-        checks.push({ id: 'live', ok: false, detail: `Probe failed (${(err as Error).name})` });
-        status = 'FAILED';
+      // AI-SPEND-GUARD-01: a live probe is a paid call. Without an active
+      // GLOBAL daily+monthly cap it is reported as BLOCKED and no socket opens.
+      const guard = await spendGuardState(db, row.environment);
+      if (!guard.ready) {
+        status = 'BLOCKED';
+        checks.push({
+          id: 'spend_guard',
+          ok: false,
+          detail: `No active ${guard.missing.map((p) => `GLOBAL ${p.toLowerCase()} cost cap`).join(' and ')}`,
+        });
+      } else {
+        try {
+          const probe = await probeVendor(
+            spec,
+            key as string,
+            VENDOR_MODEL_NAMES[model] ?? model,
+            row.baseUrl?.trim() || (spec.defaultBaseUrl as string),
+          );
+          latencyMs = probe.latencyMs;
+          const ok = probe.status >= 200 && probe.status < 300;
+          checks.push({ id: 'live', ok, detail: ok ? `Provider answered ${probe.status}` : `Provider answered ${probe.status}` });
+          status = ok ? 'OK' : 'FAILED';
+        } catch (err) {
+          checks.push({ id: 'live', ok: false, detail: `Probe failed (${(err as Error).name})` });
+          status = 'FAILED';
+        }
       }
     } else {
       // In-process engine: run it for real, it costs nothing and sends nothing.

@@ -16,11 +16,14 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/AuthPages';
 import { CheckoutPage } from './pages/CheckoutPage';
+import { CartPage } from './pages/CartPage';
 import { RequireAuth } from './components/layouts/AppLayout';
 import { DashboardOverviewPage } from './pages/DashboardOverviewPage';
 import { DashboardOrdersPage, DashboardOrderDetailPage } from './pages/DashboardOrdersPage';
 import { DashboardProductsPage, DashboardCreateProductPage } from './pages/DashboardProductsPage';
 import { DashboardProfilePage, DashboardSecurityPage, DashboardSettingsPage } from './pages/DashboardSimplePages';
+import { DashboardEntityPage } from './pages/DashboardEntityPage';
+import { DashboardRfqListPage, DashboardRfqInboxPage, DashboardRfqDetailPage } from './pages/DashboardRfqPages';
 import { DashboardMessagesPage } from './pages/DashboardMessagesPage';
 import { DashboardTrustPage, DashboardVerificationPage, DashboardDisputesPage } from './pages/DashboardEnginesPages';
 import { DashboardAdsPage, DashboardAnalyticsPage, DashboardAIPage, DashboardSubscriptionsPage } from './pages/DashboardBusinessPages';
@@ -30,14 +33,16 @@ import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
 import { DashboardAgentVideoPage } from './pages/DashboardAgentVideoPage';
 import { DashboardPartnersPage } from './pages/DashboardPartnersPage';
-import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
+import { AdminOnly, SuperAdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
 import { AdminSubscriptionsPage } from './pages/AdminSubscriptionPages';
 import { AdminAiPage } from './pages/AdminAiPage';
+import { AdminGmPage } from './pages/AdminGmPage';
 import { AdminObservabilityPage } from './pages/AdminObservabilityPage';
 import { AdminPrivacyPage } from './pages/AdminPrivacyPage';
 import { AdminAdsPage } from './pages/AdminAdsPage';
+import { AdminStaffPage } from './pages/AdminStaffPage';
 import { AdminReportsPage } from './pages/AdminReportsPage';
 import { AdminFinancePage } from './pages/AdminFinancePages';
 import { NotFoundPage, DashboardOnboardingPage } from './pages/OnboardingPage';
@@ -64,6 +69,7 @@ export default function App() {
       <Route path="/search" element={<SearchPage />} />
       <Route path="/price-comparison" element={<PriceComparisonPage />} />
       <Route path="/products/:id" element={<ProductDetailsPage />} />
+      <Route path="/cart" element={<CartPage />} />
       <Route path="/suppliers" element={<SuppliersPage />} />
       <Route path="/suppliers/:id" element={<SuppliersDetailPage />} />
       <Route path="/merchants" element={<MerchantsPage />} />
@@ -120,6 +126,10 @@ export default function App() {
       <Route path="/dashboard/branches" element={<RequireAuth><DashboardListPage kind="branches" /></RequireAuth>} />
       <Route path="/dashboard/employees" element={<RequireAuth><DashboardListPage kind="employees" /></RequireAuth>} />
       <Route path="/dashboard/trust" element={<RequireAuth><DashboardTrustPage /></RequireAuth>} />
+      <Route path="/dashboard/entity" element={<RequireAuth><DashboardEntityPage /></RequireAuth>} />
+      <Route path="/dashboard/rfqs" element={<RequireAuth><DashboardRfqListPage /></RequireAuth>} />
+      <Route path="/dashboard/rfqs/:id" element={<RequireAuth><DashboardRfqDetailPage /></RequireAuth>} />
+      <Route path="/dashboard/rfq-inbox" element={<RequireAuth><DashboardRfqInboxPage /></RequireAuth>} />
       <Route path="/dashboard/verification" element={<RequireAuth><DashboardVerificationPage /></RequireAuth>} />
       <Route path="/dashboard/disputes" element={<RequireAuth><DashboardDisputesPage /></RequireAuth>} />
       <Route path="/dashboard/ads" element={<RequireAuth><DashboardAdsPage /></RequireAuth>} />
@@ -135,6 +145,7 @@ export default function App() {
       <Route path="/admin/analytics" element={<RequireAuth><AdminOnly><AdminAnalyticsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/reports" element={<RequireAuth><AdminOnly><AdminReportsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/users" element={<RequireAuth><AdminOnly><AdminUsersPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/staff" element={<RequireAuth><SuperAdminOnly><AdminStaffPage /></SuperAdminOnly></RequireAuth>} />
       <Route path="/admin/products" element={<RequireAuth><AdminOnly><AdminProductsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/orders" element={<RequireAuth><AdminOnly><AdminOrdersPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/transactions" element={<RequireAuth><AdminOnly><AdminTransactionsPage /></AdminOnly></RequireAuth>} />
@@ -148,6 +159,7 @@ export default function App() {
       <Route path="/admin/policies" element={<RequireAuth><AdminOnly><AdminPoliciesPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/subscriptions" element={<RequireAuth><AdminOnly><AdminSubscriptionsPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ai" element={<RequireAuth><AdminOnly><AdminAiPage /></AdminOnly></RequireAuth>} />
+      <Route path="/admin/gm" element={<RequireAuth><AdminOnly><AdminGmPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/observability" element={<RequireAuth><AdminOnly><AdminObservabilityPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/privacy" element={<RequireAuth><AdminOnly><AdminPrivacyPage /></AdminOnly></RequireAuth>} />
       <Route path="/admin/ads" element={<RequireAuth><AdminOnly><AdminAdsPage /></AdminOnly></RequireAuth>} />

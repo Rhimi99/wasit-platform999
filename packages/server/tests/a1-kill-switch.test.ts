@@ -117,12 +117,12 @@ beforeAll(async () => {
   await ensureAgentRegistrySeeded(db);
 });
 
-afterEach(() => {
-  setAiExecutionEnabled(null);
+afterEach(async () => {
+  await setAiExecutionEnabled(db, null);
 });
 
 afterAll(async () => {
-  setAiExecutionEnabled(null);
+  await setAiExecutionEnabled(db, null);
   await cleanupOwnedRows(db, {
     userIds: createdUserIds,
     runIds: createdRunIds,
@@ -135,7 +135,7 @@ afterAll(async () => {
 
 describe('A1 — enabled: current behaviour is untouched', () => {
   it('1. creates a task and dispatches a step normally while enabled', async () => {
-    setAiExecutionEnabled(true);
+    await setAiExecutionEnabled(db, true);
     const admin = await createUser('SUPER_ADMIN');
     const p = await plan(admin, [step({ stepKey: 'mkt', agentKey: 'product-agent' })]);
     const out = await dispatchStep(db, p.runId, 'mkt', auditCtx);
@@ -148,7 +148,7 @@ describe('A1 — enabled: current behaviour is untouched', () => {
 describe('A1 — disabled: every entry point refuses', () => {
   it('2. refuses NEW task creation', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     await expect(
       createAgentTask(db, ['SUPER_ADMIN'], admin, { agentKey: 'product-agent', requestedBy: admin, input: {} }, auditCtx),
     ).rejects.toMatchObject({ statusCode: 503, code: 'SERVICE_UNAVAILABLE' });
@@ -160,7 +160,7 @@ describe('A1 — disabled: every entry point refuses', () => {
   it('3. refuses dispatch of a new step', async () => {
     const admin = await createUser('SUPER_ADMIN');
     const p = await plan(admin, [step({ stepKey: 'mkt', agentKey: 'product-agent' })]);
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     await expect(dispatchStep(db, p.runId, 'mkt', auditCtx)).rejects.toMatchObject({ statusCode: 503 });
     // The step was not moved to RUNNING and no task was created.
     expect((await stepRow(p.runId, 'mkt')).status).toBe('PENDING');
@@ -170,7 +170,7 @@ describe('A1 — disabled: every entry point refuses', () => {
 
   it('4. refuses planning a new run', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     await expect(
       planAgentRun(db, admin, { title: 'blocked', steps: [step({ stepKey: 'x', agentKey: 'product-agent' })] }, auditCtx),
     ).rejects.toMatchObject({ statusCode: 503 });
@@ -183,7 +183,7 @@ describe('A1 — disabled: every entry point refuses', () => {
     await db.update(agentSchedules).set({ nextRunAt: new Date(Date.now() - 60_000) }).where(eq(agentSchedules.id, row.id));
 
     const before = await auditCount('AI.KILL_SWITCH_SCHEDULE_REFUSED', null);
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const result = await runDueAgentSchedules(db, 'a1-sweeper', { leaseSeconds: 60 });
     expect(result).toEqual({ claimed: 0, created: 0, skippedApproval: 0, budgetBlocked: 0, failed: 0 });
     const after = await auditCount('AI.KILL_SWITCH_SCHEDULE_REFUSED', null);
@@ -194,7 +194,7 @@ describe('A1 — disabled: every entry point refuses', () => {
   });
 
   it('6. refuses the supervisor cycle and recovery sweep (no-op + one audit each)', async () => {
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const supBefore = await auditCount('AI.KILL_SWITCH_SUPERVISOR_REFUSED', null);
     const recBefore = await auditCount('AI.KILL_SWITCH_RECOVERY_REFUSED', null);
     const cycle = await runSupervisorCycle(db, auditCtx);
@@ -214,7 +214,7 @@ describe('A1 — disabled: every entry point refuses', () => {
     await db.update(agentRunSteps).set({ status: 'FAILED', attemptCount: 1 }).where(eq(agentRunSteps.id, s.id));
     const failed = await stepRow(p.runId, 'mkt');
 
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const out = await retryStep(
       db,
       p.runId,
@@ -234,13 +234,13 @@ describe('A1 — disabled: every entry point refuses', () => {
   it('8. refuses the manual run recovery route', async () => {
     const admin = await createUser('SUPER_ADMIN');
     const p = await plan(admin, [step({ stepKey: 'mkt', agentKey: 'product-agent' })]);
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     await expect(recoverRun(db, p.runId, auditCtx)).rejects.toMatchObject({ statusCode: 503 });
   });
 
   it('9. refuses the innermost provider call (runAIFeature), so no surface bypasses it', async () => {
     const admin = await createUser('SUPER_ADMIN');
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     const before = await db.select({ n: sql<number>`count(*)` }).from(aiRequests);
     // The executor path reaches runAIFeature; with the switch off it must refuse
     // before any provider call or ai_requests row is written. createAgentTask
@@ -264,12 +264,12 @@ describe('A1 — multi-step run stops before the next step, resumes without dupl
     if (first.taskId) createdTaskIds.push(first.taskId);
     expect(first.status).toBe('SUCCEEDED');
 
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(db, false);
     await expect(dispatchStep(db, p.runId, 'b', auditCtx)).rejects.toMatchObject({ statusCode: 503 });
     expect((await stepRow(p.runId, 'b')).status).toBe('PENDING');
 
     // Re-enable: the second step runs exactly once and closes the run.
-    setAiExecutionEnabled(true);
+    await setAiExecutionEnabled(db, true);
     const second = await dispatchStep(db, p.runId, 'b', auditCtx);
     if (second.taskId) createdTaskIds.push(second.taskId);
     expect(second.status).toBe('SUCCEEDED');
@@ -290,7 +290,7 @@ describe('A1 — admin control surface: RBAC and audit', () => {
 
     const disable = await client.req('/api/admin/ai/kill-switch', { method: 'POST', body: { enabled: false, reason: 'drill' } });
     expect(disable.status).toBe(200);
-    expect(disable.data.data).toMatchObject({ enabled: false, source: 'runtime' });
+    expect(disable.data.data).toMatchObject({ enabled: false, source: 'database' });
 
     // A subsequent read reflects the stop.
     const read2 = await client.req('/api/admin/ai/kill-switch');

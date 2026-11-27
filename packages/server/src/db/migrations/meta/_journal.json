@@ -309,6 +309,48 @@
       "when": 1795374754731,
       "tag": "0043_ai_spend_control",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1795378320913,
+      "tag": "0044_gm_access_tickets",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1795538190723,
+      "tag": "0045_broken_ben_urich",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1795552237989,
+      "tag": "0046_rfq_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1795556486801,
+      "tag": "0047_rfq_expiry_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795581075340,
+      "tag": "0048_rfq_award",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1795713963485,
+      "tag": "0049_powerful_sandman",
+      "breakpoints": true
     }
   ]
 }

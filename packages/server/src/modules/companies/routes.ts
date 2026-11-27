@@ -4,7 +4,8 @@ import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
 import { requireAuth, requireRoleOrPermission, requirePermission, optionalAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '@wasit/shared';
-import { createCompany, listCompanies, getCompany, updateCompany } from './service.js';
+import { createCompany, listCompanies, getCompany, getMyCompany, updateCompany } from './service.js';
+import { companyUpdateSchema } from '../entities/schemas.js';
 
 const createCompanySchema = z.object({
   legalName: z.string().min(2).max(250),
@@ -17,8 +18,6 @@ const createCompanySchema = z.object({
   logoUrl: z.string().url().max(2000).optional(),
 });
 
-const updateCompanySchema = createCompanySchema.partial();
-
 export const companyRoutes = new Hono();
 
 // Public directory of active companies — public projection only (no legal/tax
@@ -28,6 +27,14 @@ companyRoutes.get('/', optionalAuth, async (c) => {
   const ctx = getContext(c);
   const result = await listCompanies(ctx.db, { q: qs.q, countryId: qs.countryId });
   return c.json({ success: true, data: result });
+});
+
+// The caller's own company (or `null`). Registered before `/:id` so the literal
+// path is never read as a company id.
+companyRoutes.get('/mine', requireAuth, async (c) => {
+  const ctx = getContext(c);
+  const company = await getMyCompany(ctx.db, ctx.user!.id);
+  return c.json({ success: true, data: { company } });
 });
 
 // A company profile: public projection for everyone; the owner and internal staff
@@ -59,9 +66,9 @@ companyRoutes.patch(
   '/:id',
   requireAuth,
   requirePermission(PERMISSIONS.COMPANY_UPDATE),
-  validateBody(updateCompanySchema),
+  validateBody(companyUpdateSchema),
   async (c) => {
-    const body = getValidatedBody<z.infer<typeof updateCompanySchema>>(c);
+    const body = getValidatedBody<z.infer<typeof companyUpdateSchema>>(c);
     const ctx = getContext(c);
     const company = await updateCompany(ctx.db, c.req.param('id')!, body, ctx.user!.id);
     return c.json({ success: true, data: company });

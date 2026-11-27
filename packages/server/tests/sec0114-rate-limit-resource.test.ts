@@ -344,6 +344,7 @@ describe('011.4 — fail-closed when the store is unavailable', () => {
       },
       reset: async () => {},
       purgeExpired: async () => 0,
+      probe: async () => {},
     });
     try {
       const client = makeClient();

@@ -10,6 +10,8 @@ import {
 } from '../../src/lib/ai/agent-run-context.js';
 import { aiModels, aiRequests, aiBudgets, aiUsage } from '../../src/db/schema/ai.js';
 import type { DB } from '../../src/db/client.js';
+import { aiExecutionSwitches } from '../../src/db/schema/ai-execution-switch.js';
+import { openGlobalSwitchRow } from '../support/open-switch-row.js';
 import type { AIProvider } from '../../src/lib/ai/types.js';
 
 /**
@@ -25,10 +27,16 @@ import type { AIProvider } from '../../src/lib/ai/types.js';
 
 type Row = Record<string, unknown>;
 
-const TABLES = { aiModels, aiRequests, aiBudgets, aiUsage } as const;
+const TABLES = { aiModels, aiRequests, aiBudgets, aiUsage, aiExecutionSwitches } as const;
 
 function fakeDb(seedModels: Row[] = [], opts: { failRequestInsert?: boolean } = {}) {
-  const store: Record<string, Row[]> = { aiModels: [...seedModels], aiRequests: [], aiBudgets: [], aiUsage: [] };
+  const store: Record<string, Row[]> = {
+    aiModels: [...seedModels],
+    aiRequests: [],
+    aiBudgets: [],
+    aiUsage: [],
+    aiExecutionSwitches: [openGlobalSwitchRow()],
+  };
   const nameOf = new Map<unknown, string>(Object.entries(TABLES).map(([n, t]) => [t, n]));
   const tableName = (t: unknown): string => nameOf.get(t) ?? 'aiModels';
 

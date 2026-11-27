@@ -7,7 +7,7 @@ import {
 } from '@wasit/shared';
 import { getContext } from '../../lib/request-context.js';
 import { validateBody, getValidatedBody } from '../../middleware/validate.js';
-import { requireAuth, requirePermission } from '../../middleware/auth.js';
+import { optionalAuth, requireAuth, requirePermission } from '../../middleware/auth.js';
 import {
   VIDEO_AUDIENCES,
   VIDEO_LANGUAGES,
@@ -18,6 +18,13 @@ import {
   listMyMedia,
   openAssetForDownload,
 } from './service.js';
+import {
+  deleteProductImage,
+  listProductImages,
+  openPublicProductImage,
+  setPrimaryProductImage,
+  uploadProductImage,
+} from './images.js';
 
 const generateSchema = z.object({
   productId: z.string().min(1).max(36),
@@ -98,6 +105,31 @@ mediaRoutes.get('/assets/:id/content', async (c) => {
   return new Response(new Uint8Array(body), { status: range ? 206 : 200, headers });
 });
 
+// ----- Public product images (storefront) --------------------------------
+// Declared before the blanket `requireAuth`: the storefront is public, so the
+// image is authorized by the *product's* visibility (published + ACTIVE) and by
+// the asset being linked to that product — never by the uploader's session.
+// The storage key is never exposed; the client only ever sees this URL.
+mediaRoutes.get('/products/:productId/images/:assetId/content', optionalAuth, async (c) => {
+  const ctx = getContext(c);
+  const productId = requireParam(c, 'productId');
+  const assetId = requireParam(c, 'assetId');
+  const viewer = ctx.user ? { userId: ctx.user.id, roles: ctx.user.roles } : null;
+  const { asset, body, publicVisible } = await openPublicProductImage(ctx.db, productId, assetId, viewer);
+  return new Response(new Uint8Array(body), {
+    status: 200,
+    headers: {
+      'Content-Type': asset.mimeType,
+      'Content-Length': String(body.length),
+      'Cache-Control': publicVisible ? 'public, max-age=3600' : 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Content-Disposition': `inline; filename="wasit-${asset.id}.${asset.extension}"`,
+      ETag: `"${asset.id}"`,
+    },
+  });
+});
+
 // Every remaining media endpoint requires an authenticated user.
 mediaRoutes.use('*', requireAuth);
 
@@ -144,5 +176,100 @@ mediaRoutes.delete('/assets/:id', requirePermission(PERMISSIONS.MEDIA_DELETE_OWN
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
   });
+  return c.json({ success: true, data: { deleted: true } });
+});
+
+// ----- Product images (seller surface) -----------------------------------
+
+const IMAGE_ID_RE = /^[0-9a-fA-F-]{36}$/;
+
+/** Reads the multipart upload, mapping every malformed shape to a 400. */
+async function readImageUpload(c: {
+  req: { header: (n: string) => string | undefined; parseBody: () => Promise<Record<string, string | File>> };
+}): Promise<{ file: File; productId: string; altText: string | null; isPrimary: boolean }> {
+  const contentType = c.req.header('content-type') ?? '';
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+    throw ApiError.validation([
+      { field: 'file', message: 'Send the image as multipart/form-data', code: 'INVALID_CONTENT_TYPE' },
+    ]);
+  }
+
+  let body: Record<string, string | File>;
+  try {
+    body = await c.req.parseBody();
+  } catch {
+    throw ApiError.validation([{ field: 'file', message: 'Malformed upload body', code: 'MALFORMED_BODY' }]);
+  }
+
+  const file = body.file as unknown;
+  const isFile =
+    typeof file === 'object' && file !== null && typeof (file as File).arrayBuffer === 'function';
+  if (!isFile) {
+    throw ApiError.validation([{ field: 'file', message: 'An image file is required', code: 'REQUIRED' }]);
+  }
+
+  const productId = typeof body.productId === 'string' ? body.productId.trim() : '';
+  if (!IMAGE_ID_RE.test(productId)) {
+    throw ApiError.validation([{ field: 'productId', message: 'A valid product is required', code: 'REQUIRED' }]);
+  }
+
+  const altText = typeof body.altText === 'string' ? body.altText.trim().slice(0, 200) : '';
+  const isPrimary = body.isPrimary === 'true' || body.isPrimary === '1';
+
+  return { file: file as File, productId, altText: altText || null, isPrimary };
+}
+
+mediaRoutes.post('/product-images', requirePermission(PERMISSIONS.MEDIA_UPLOAD), async (c) => {
+  const ctx = getContext(c);
+  const upload = await readImageUpload(c);
+  const bytes = Buffer.from(await upload.file.arrayBuffer());
+  const image = await uploadProductImage(
+    ctx.db,
+    { userId: ctx.user!.id, roles: ctx.user!.roles },
+    {
+      productId: upload.productId,
+      bytes,
+      filename: upload.file.name,
+      altText: upload.altText,
+      isPrimary: upload.isPrimary,
+    },
+    { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
+  return c.json({ success: true, data: image }, 201);
+});
+
+mediaRoutes.get('/product-images', requirePermission(PERMISSIONS.MEDIA_READ_OWN), async (c) => {
+  const ctx = getContext(c);
+  const productId = c.req.query('productId') ?? '';
+  if (!IMAGE_ID_RE.test(productId)) {
+    throw ApiError.validation([{ field: 'productId', message: 'A valid product is required', code: 'REQUIRED' }]);
+  }
+  const items = await listProductImages(ctx.db, { userId: ctx.user!.id, roles: ctx.user!.roles }, productId);
+  return c.json({ success: true, data: { items } });
+});
+
+mediaRoutes.patch(
+  '/product-images/:id/primary',
+  requirePermission(PERMISSIONS.MEDIA_UPLOAD),
+  async (c) => {
+    const ctx = getContext(c);
+    const image = await setPrimaryProductImage(
+      ctx.db,
+      { userId: ctx.user!.id, roles: ctx.user!.roles },
+      requireParam(c, 'id'),
+      { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    );
+    return c.json({ success: true, data: image });
+  },
+);
+
+mediaRoutes.delete('/product-images/:id', requirePermission(PERMISSIONS.MEDIA_DELETE_OWN), async (c) => {
+  const ctx = getContext(c);
+  await deleteProductImage(
+    ctx.db,
+    { userId: ctx.user!.id, roles: ctx.user!.roles },
+    requireParam(c, 'id'),
+    { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+  );
   return c.json({ success: true, data: { deleted: true } });
 });

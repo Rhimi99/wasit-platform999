@@ -17,6 +17,7 @@ import { recordCountryPolicyGap, resolveCountryPolicyGap } from '../../lib/count
 import { normalizePhone } from '../auth/service';
 import { LEGAL_DOCUMENTS, findLegalDocument, isAcceptable, needsReacceptance, appliesToRoles, type LegalDocumentEntry } from '../../lib/legal/catalogue';
 import { newId } from '../../lib/ids';
+import { RFQ_PARTICIPATION_CONSENT } from '../../lib/consent-types';
 
 type DeletionStage = (typeof deletionStageEnum.enumValues)[number];
 
@@ -32,9 +33,20 @@ export const CONSENT_TYPES = [
   // AI-FIRST-COMPLETION-04: opt-in for appearing in another tenant's B2B
   // partner suggestions, and for receiving suggestions yourself.
   'B2B_PARTNER_DISCOVERY',
+  // B2B-01: a seller's standing opt-in to receive requests for quotation. Kept
+  // separate from B2B_PARTNER_DISCOVERY — being suggested as a partner is not
+  // the same permission as being sent a company's request and quoting on it.
+  RFQ_PARTICIPATION_CONSENT,
 ] as const;
 
 export type ConsentType = (typeof CONSENT_TYPES)[number];
+
+/**
+ * Same registry as a mutable tuple, so the route can validate with `z.enum`
+ * instead of accepting any string and silently storing an unknown value as
+ * `CUSTOM`.
+ */
+export const CONSENT_TYPE_VALUES = [...CONSENT_TYPES] as [ConsentType, ...ConsentType[]];
 
 /** Policy that governs retention duration and the records that survive deletion. */
 export const DATA_RETENTION_CODE = 'DATA_RETENTION';

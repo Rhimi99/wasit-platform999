@@ -2,6 +2,9 @@ import { and, asc, desc, eq, gte, inArray, lt, or, sql, type SQL } from 'drizzle
 import { platformDb, type DB } from '../../db/client';
 import type { AgentDefinition } from '../../lib/ai/types';
 import { runAIFeature } from '../../lib/ai/runtime';
+import { runLlmDraft } from '../../lib/ai/llm/service';
+import { LLM_PROMPT_VERSION } from '../../lib/ai/llm/prompts';
+import type { LlmCapability, LlmFact, LlmUntrustedField } from '../../lib/ai/llm/contract';
 import { requireAction } from '../../lib/ai/agent-run-context';
 import { withAgentDataScope } from './agent-scope';
 import { products, categories, productVariants, productImages } from '../../db/schema/products';
@@ -78,6 +81,63 @@ function adviceText(template: string, facts: Record<string, unknown>): string {
   return text;
 }
 
+/**
+ * Runs the unified generation path (AI-LLM-01) and shapes the outcome for a task
+ * result. A draft is always a reviewable draft; a refusal degrades to the
+ * executor's deterministic analysis instead of failing the task. Scope and
+ * identity violations are re-thrown: those are defects, not degraded answers.
+ */
+async function draftFor(
+  db: DB,
+  agentKey: string,
+  capability: LlmCapability,
+  facts: LlmFact[],
+  untrusted: LlmUntrustedField[],
+  audience: 'user' | 'staff',
+): Promise<{ block: Record<string, unknown>; tokensInput: number; tokensOutput: number; cost: string }> {
+  try {
+    const res = await runLlmDraft(db, { agentKey, capability, facts, untrusted, audience });
+    const meta = { ...res.meta, promptVersion: LLM_PROMPT_VERSION };
+    if (res.status === 'draft') {
+      return {
+        block: {
+          status: 'draft',
+          text: res.text,
+          analysis: res.analysis,
+          evidence: res.evidence,
+          insufficientInfo: res.insufficientInfo,
+          injectionSuspected: res.injectionSuspected,
+          requiresReview: res.requiresReview,
+          audience: res.audience,
+          meta,
+        },
+        tokensInput: res.meta.tokensInput,
+        tokensOutput: res.meta.tokensOutput,
+        cost: res.meta.cost,
+      };
+    }
+    // These executors never request COPILOT_PLAN, so anything that is not a
+    // draft is a refusal carrying a reason.
+    if (res.status !== 'fallback') {
+      throw new Error('Unexpected plan result from a draft-only capability');
+    }
+    return {
+      block: { status: 'fallback', reason: res.reason, detail: res.detail, meta },
+      tokensInput: res.meta.tokensInput,
+      tokensOutput: res.meta.tokensOutput,
+      cost: res.meta.cost,
+    };
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 403) throw err;
+    return {
+      block: { status: 'fallback', reason: 'input_rejected', detail: messageOf(err), meta: null },
+      tokensInput: 0,
+      tokensOutput: 0,
+      cost: '0',
+    };
+  }
+}
+
 // ---------- helpers for queries ----------
 
 interface ProductWithCategory {
@@ -91,6 +151,8 @@ interface ProductWithCategory {
   isPublished: boolean;
   brand: string | null;
   moq: number;
+  /** Seller-written free text: content for the model, never an instruction. */
+  description: string | null;
 }
 
 async function pickProduct(db: DB, productId?: unknown, scopeFilter?: SQL): Promise<ProductWithCategory | null> {
@@ -107,6 +169,7 @@ async function pickProduct(db: DB, productId?: unknown, scopeFilter?: SQL): Prom
       isPublished: products.isPublished,
       brand: products.brand,
       moq: products.moq,
+      description: products.description,
     })
     .from(products)
     .leftJoin(categories, eq(products.categoryId, categories.id))
@@ -125,6 +188,7 @@ async function pickProduct(db: DB, productId?: unknown, scopeFilter?: SQL): Prom
     isPublished: row.isPublished,
     brand: row.brand,
     moq: row.moq,
+    description: row.description,
   };
 }
 
@@ -361,17 +425,34 @@ async function execSalesAgent(db: DB, agent: AgentDefinition, input: Record<stri
         { periodDays: facts.periodDays, orders: facts.orders, gmv: facts.gmv, net: facts.net, activeProducts: facts.activeProducts },
       );
 
-  const out = await runAIFeature(db, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
-    roles: ['SUPER_ADMIN'],
-    requestType: `AGENT:${agent.key}`,
-    system: 'You are the WASIT Sales Agent.',
-    user: text,
-    maxTokens: 96,
-    metadata: { agentKey: agent.key, action: input.action },
-  });
+  // AI-LLM-01: the narrative comes from the unified generation path, grounded on
+  // exactly the facts the deterministic analysis above computed.
+  const llm = await draftFor(
+    db,
+    agent.key,
+    'SALES_INSIGHT',
+    [
+      { key: 'period_days', value: facts.periodDays, source: 'orders' },
+      { key: 'orders', value: facts.orders, source: 'orders' },
+      { key: 'gmv', value: facts.gmv, source: 'orders' },
+      { key: 'commission', value: facts.commission, source: 'orders' },
+      { key: 'payment_fees', value: facts.paymentFees, source: 'orders' },
+      { key: 'net', value: facts.net, source: 'orders' },
+      { key: 'active_products', value: facts.activeProducts, source: 'products' },
+      { key: 'avg_trust', value: facts.avgTrust, source: 'trust_scores' },
+      ...(scope.isStaff
+        ? [
+            { key: 'merchants', value: facts.merchants, source: 'merchants' },
+            { key: 'companies', value: facts.companies, source: 'companies' },
+          ]
+        : []),
+    ],
+    [],
+    'staff',
+  );
+  data.llm = llm.block;
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  return { content: JSON.stringify(data), tokensInput: llm.tokensInput, tokensOutput: llm.tokensOutput, cost: llm.cost };
 }
 
 async function execMarketingAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -1022,17 +1103,33 @@ async function execProductAgent(db: DB, agent: AgentDefinition, input: Record<st
     { name: p.name, sku: p.sku, price: facts.price, category: p.categoryName ?? 'none', variants: facts.variants, images: facts.images, inventoryQty: facts.inventoryQty, recommendation },
   );
 
-  const out = await runAIFeature(db, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
-    roles: ['SUPER_ADMIN'],
-    requestType: `AGENT:${agent.key}`,
-    system: 'You are the WASIT Product Agent.',
-    user: text,
-    maxTokens: 96,
-    metadata: { agentKey: agent.key, productId: p.id },
-  });
+  // AI-LLM-01: structural facts come from the scoped reads above; the seller's
+  // own free text is the untrusted field. A suggested description is a draft,
+  // never a write.
+  const llm = await draftFor(
+    db,
+    agent.key,
+    'PRODUCT_ANALYSIS',
+    [
+      { key: 'product_id', value: p.id, source: 'products' },
+      { key: 'product_name', value: p.name, source: 'products' },
+      { key: 'sku', value: p.sku, source: 'products' },
+      { key: 'price', value: facts.price, source: 'products' },
+      { key: 'currency', value: p.currencyCode, source: 'products' },
+      { key: 'category', value: p.categoryName, source: 'categories' },
+      { key: 'brand', value: p.brand, source: 'products' },
+      { key: 'moq', value: p.moq, source: 'products' },
+      { key: 'is_published', value: p.isPublished, source: 'products' },
+      { key: 'variants', value: facts.variants, source: 'product_variants' },
+      { key: 'images', value: facts.images, source: 'product_images' },
+      { key: 'stock', value: facts.inventoryQty, source: 'inventory_items' },
+    ],
+    p.description ? [{ field: `product:${p.id}:description`, text: p.description }] : [],
+    'user',
+  );
+  data.llm = llm.block;
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  return { content: JSON.stringify(data), tokensInput: llm.tokensInput, tokensOutput: llm.tokensOutput, cost: llm.cost };
 }
 
 async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {
@@ -1093,17 +1190,26 @@ async function execSupportAgent(db: DB, agent: AgentDefinition, input: Record<st
     { activeThreads: facts.activeThreads, unreadMessages: facts.unreadMessages, activeUsers: facts.activeUsers ?? 'own scope' },
   );
 
-  const out = await runAIFeature(db, {
-    userId: typeof input.__userId === 'string' ? (input.__userId as string) : 'system',
-    roles: ['SUPER_ADMIN'],
-    requestType: `AGENT:${agent.key}`,
-    system: 'You are the WASIT Support Agent.',
-    user: text,
-    maxTokens: 96,
-    metadata: { agentKey: agent.key, action: input.action },
-  });
+  // AI-LLM-01: a reply draft for a human to review. Message bodies are the only
+  // untrusted input this agent has, so they are fenced and screened, never
+  // merged into the instructions.
+  const llm = await draftFor(
+    db,
+    agent.key,
+    'SUPPORT_REPLY',
+    [
+      { key: 'active_threads', value: facts.activeThreads, source: 'threads' },
+      { key: 'unread_messages', value: facts.unreadMessages, source: 'messages' },
+      ...(facts.activeUsers === null
+        ? []
+        : [{ key: 'active_users', value: facts.activeUsers, source: 'users' }]),
+    ],
+    facts.recentUnread.map((m) => ({ field: `message:${m.id}`, text: m.body })),
+    'user',
+  );
+  data.llm = llm.block;
 
-  return { content: JSON.stringify(data), tokensInput: out.tokensInput, tokensOutput: out.tokensOutput, cost: out.cost };
+  return { content: JSON.stringify(data), tokensInput: llm.tokensInput, tokensOutput: llm.tokensOutput, cost: llm.cost };
 }
 
 async function execAnalyticsAgent(db: DB, agent: AgentDefinition, input: Record<string, unknown>): Promise<AgentExecutorResult> {

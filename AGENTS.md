@@ -2,6 +2,58 @@
 
 ذاكرة الوكيل لحالة المشروع وإرشادات البناء.
 
+## AI-RATE-LIMIT-HARDENING-01 — لا مخزن محلي في بيئة منشورة (2026-11-25، مكتملة)
+
+- **production وstaging يشترطان `RATE_LIMIT_STORE=postgres`**: أي قيمة أخرى (أو عدم الضبط ⇒ `memory`) ⇒ **رفض إقلاع** عبر `assertRateLimitConfigOrExit()` في `lib/rate-limit/boot.ts` (يستدعيها `src/index.ts` قبل `serve()`؛ **ليست** في `env.ts` كي لا تتعطّل أدوات المشغّل/CLI التي تستورد البيئة). و`AI_RATE_LIMIT_ALLOW_MEMORY_STORE=true` أو `AI_RATE_LIMIT_REQUIRE_DURABLE=false` في بيئة منشورة ⇒ رفض إقلاع أيضًا (لا يمكن إبطال الاشتراط).
+- **بوابة ثانية في `resolve.ts`**: `resolveRateLimitStore`/`setRateLimitStore` يرميان إذا حاول أحد بناء/حقن `MemoryRateLimitStore` في بيئة منشورة — لا تحوّل صامت أبدًا.
+- **جاهزية**: `checkRateLimitStoreReadiness(db)` + `probe()` (قراءة `SELECT 1 ... LIMIT 1` بلا كتابة). `src/index.ts` لا يشغّل `serve()` إن لم يكن المخزن جاهزًا؛ `GET /api/health/ready` ⇒ 503؛ `/api/health/channels` يعرض `{store,durable,required,ready}`.
+- **الاختبارات**: `tests/ai-rate-limit-hardening-01.test.ts` (28) — منها 7 تُقلع العملية فعليًا عبر `tests/fixtures/boot-env-probe.ts` و`src/index.ts` وتقرأ رمز الخروج. أي suite جديدة تعمل بـ`NODE_ENV=production` داخل العملية (عبر `withEnv`) لا تتأثر ما دام المخزن مبنيًا قبل التبديل.
+- **فخ تشغيل**: `.env.demo` (staging) كان `RATE_LIMIT_STORE=memory` — صار `postgres`. أي بيئة staging/إنتاج تُنشر الآن بلا هذا المتغيّر **لن تُقلع**، وهذا مقصود.
+- **الحدود لم تُخفَّض** (30/15/10 ثابتة باختبار)؛ منهج المعايرة في `docs/AI-RATE-LIMIT-HARDENING-01.md §7`. التفاصيل + إغلاق قرارات AD-063 في نفس الملف وفي ذيل AD-063.
+
+## AI-RATE-LIMIT-01 — حدود معدل مركزية للـAI (2026-11-25، مكتملة)
+
+- **السياسة كلها في ملف واحد**: `src/lib/rate-limit/ai-policy.ts` — جدول يربط كل مسار بفئة (`ai.read` 120، `ai.feature` 30، `ai.agent` 15، `ai.memory` 60، `ai.admin.read` 120، `ai.admin.control` 30، `ai.provider` 10، نافذة 60ث) + backstop لكل IP. `app.ts` يركّبها بحلقة واحدة؛ **لا تكتب `rateLimit()` يدويًا في أي راوتر AI** — أضف قاعدة في الجدول.
+- **اختبار التغطية** في `tests/ai-rate-limit-01.test.ts` يقرأ `app.routes` ويفشل إذا شحن أي مسار غير-GET تحت `/api/ai` أو`/api/admin/ai` بلا فئة.
+- **Fail-closed** للفئات المدفوعة عند تعطل المخزن أو عند مخزن محلي في production (`AI_RATE_LIMIT_REQUIRE_DURABLE`)؛ **fail-open** للقراءات المحلية فقط.
+- **الهوية**: `user:<id>` من الجلسة أو `ip:<socket>` من `resolveClientIp` — لا header يغيّر الدلو، ولا API يعدّل الحدود (env فقط).
+- **مضاعف الإدارة** `×3` على فئتي الإدارة فقط، أبدًا على `ai.feature`/`ai.agent`/`ai.provider`.
+- **`RATE_LIMIT_AI_MAX` صار اختياريًا**: عند ضبطه يعلو على كل الفئات (تستخدمه `sec0114` و`afc09`). لا تفترض أنه موجود — استخدم `env.RATE_LIMIT_AI_MAX ?? env.AI_RATE_LIMIT_*_MAX`.
+- **فخ اختبارات**: أي suite تُصدر أكثر من 10 عمليات على `/api/admin/ai/providers/*` لمستخدم واحد في الدقيقة سترى 429 — ارفع `RATE_LIMIT_AI_MAX` في `beforeEach` (كما في `afc09`).
+- **البيئة**: الحاوية الجديدة تفقد PostgreSQL. أعِد بناء عنقود اختبار على المنفذ 5434 (`/workspace/pgdata-rl01`، دور `wasit_test_runner`، كلمة المرور في `/workspace/secrets/wasit-test-db.env`) ثم `TEST_DATABASE_URL=... npx vitest run`.
+- التفاصيل: `docs/AI-RATE-LIMIT-01.md` + AD-063.
+
+## AI-SPEND-GUARD-01 — لا مزوّد مدفوع بلا سقف إنفاق (2026-11-25، مكتملة)
+
+- **القاعدة**: مزوّد `kind: 'vendor'` لا يُفعَّل ولا يُخزَّن له مفتاح ولا يُنادى إلا إذا وُجد سقف `GLOBAL` **يومي** وسقف `GLOBAL` **شهري** فعّالان بقيمة موجبة في بيئة التشغيل نفسها. الرفض `409 SPEND_GUARD_REQUIRED` ويسبق أي كتابة أو نداء (fail-closed: تعذّر قراءة `ai_spend_limits` = لا سقف).
+- **نقاط الحارس**: `lib/ai/provider-config.ts` (`updateProviderConfig` يشمل `patch.role`، `storeProviderSecret`، `testProviderConnection`) و`lib/ai/runtime.ts` (`runAIFeature` قبل الحجز) — أي مسار جديد ينداء مزوّدًا يجب أن يمرّ بـ`assertSpendGuard`.
+- **«مدفوع»** = `isPaidProvider(key)` (`kind === 'vendor'`) — لا تكتب قائمة أسماء في الحارس. `local-heuristic`/`noop` لا يُحجبان أبدًا.
+- **الإدارة**: `GET/PUT /api/admin/ai/spend/guard` (`AI_MANAGE`، تدقيق `AI_SPEND.GUARD_SET`) + بطاقة «حماية الإنفاق» أعلى `AiSpendPanel`.
+- **الاختبارات**: `tests/ai-spend-guard.test.ts` (17). `afc09`/`afc10` تُنشئ fixture سقف GLOBAL 1000/1000 في بيئتيهما (`test`, `staging`) — لا تحذفه، فهو مشترك بين ملفات متوازية.
+- **فخ**: `env.AI_CONFIG_ENVIRONMENT` مقيّد بنوع اتحاد (`development|test|staging|production`)؛ اختبار يحتاج بيئة معزولة يستخدم `'x' as typeof env.AI_CONFIG_ENVIRONMENT & string`.
+- **فخ بيئي**: 4 اختبارات فيديو (`ai-video-agent`, `agent-video-download`) تفشل على القاعدة نفسها لغياب `ffmpeg` — ليست regressions.
+- **`DECISION REQUIRED`**: منع إقلاع الإنتاج عند مزوّد مفعّل بلا سقفين؛ السماح بتخفيض السقف تحت المصروف الحالي؛ صلاحية الضبط (`AI_MANAGE` أم `SUPER_ADMIN`). التفاصيل: `docs/AI-SPEND-GUARD-01.md` + AD-062.
+
+## B2B-01 Phase 5 — التكامل وتجربة الاستخدام (2026-11-25، مكتملة)
+
+- **الرحلة الكاملة**: `tests/b2b01e-journey.test.ts` **11/11** — COMPANY من مسودّة إلى طلب عبر HTTP/Postgres حقيقيين، مع عزل البائع، منع غير المشارك (404)، منع دعوة بلا موافقة، عدم إحياء الملغى/المنتهي، تزامن (طلب واحد)، رفض بند النص الحر، `ADMIN`/`SUPPORT` 403، وAI لا يرسّي.
+- **`RfqItemView.productName`**: `loadRfqItems` في `modules/rfq/service.ts` يجلب اسم المنتج بـ`LEFT JOIN products`؛ استخدمه في أي شاشة تعرض بندًا (`freeTextName ?? productName ?? productId`) ولا تطبع `productId` خامًّا. المقارنة تستخدم نفس الدالة (`summary.perItem[].itemName`).
+- **لافتة الكوكيز**: تنشر `--cookie-banner-h`، و`AppLayout` يحجزها أسفل `<main>` — أي شريط `fixed bottom` جديد يجب أن يفعل الشيء نفسه وإلا غطّى أزرارًا على الهاتف.
+- **المتصفح**: `scripts/ui-rfq-check.mjs` **78/78** (تأكيد القبول في 4 لغات بلا مفاتيح خامّة، اختفاء الإجراءات في `AWARDED`، خطأ «أدخل سعر وحدة لكل بند.»، هاتف 390×844 بلا فيض أفقي، ولافتة الكوكيز لا تغطي زر القبول).
+- **الأرقام**: الحزمة **2527/2527** (190 ملفًا) · Typecheck (server+web)=0 · Web build ناجح.
+- **`I18N-DATE-01`**: `formatDate` يمرّر `'fr-TN'` صراحةً فتُعرض التواريخ بالفرنسية داخل أي واجهة — `DECISION REQUIRED`، لا تُغيّره بلا قرار (يغيّر كل تواريخ التطبيق).
+
+## B2B-01 Phase 4 — قبول عرض ← طلب (2026-11-25، مكتملة)
+
+- **المسار**: `POST /api/rfqs/:id/quotes/:quoteId/accept` — جسم `{}` فقط؛ أي حقل (`buyerCompanyId`/`supplierId`/`unitPrice`/`commissionRate`/`idempotencyKey`) يُرفض 422 لأن الهوية والسعر والمفتاح تُشتق من الجلسة والعرض المخزّن.
+- **كل شيء في معاملة واحدة** (`modules/rfq/acceptance.ts`): قفل `rfqs … FOR UPDATE` ← تحقق العرض ← `createOrder(tx, …)` ← `ACCEPTED` ← رفض بقية العروض ← `AWARDED` + `order_id`. أي فشل يلغي الطلب أيضًا (مُثبت بتريغر اختباري).
+- **`createOrder` تُستدعى بمعاملة الأب** فتُنشئ SAVEPOINT داخليًا؛ لا تستدعِها في معاملة منفصلة وإلا فقدت ذرّية «الطلب والترسية معًا».
+- **Idempotency**: مفتاح مشتق `sha256(buyerUserId:rfqId:quoteId:revision)`؛ لا مفتاح من العميل. الإعادة تُرجع نفس `orderId` من `orders.metadata.idempotency.response`.
+- **حارس القاعدة**: فهرس فريد جزئي `rfq_quotes_one_accepted_idx` على `rfq_id WHERE quote_status='ACCEPTED'` (migration `0048`) — لا تعتمد على فحص الخدمة وحده.
+- **قيد معلن**: بند الطلب مرجع لمنتج؛ لا ترسية لبائع لا يملك المنتجات (409). مسجَّل `B2B-01-P4-A` كـ`DECISION REQUIRED`.
+- **اختبارات**: `tests/b2b01d-award-order.test.ts` **21/21**؛ الحزمة **2516/2516** (189 ملفًا)؛ المتصفح `scripts/ui-rfq-check.mjs` **47/47**.
+- **بيئة**: الحاوية الجديدة تحتاج `postgresql-17` (منفذ 5434، دور `wasit_test_runner`) و`ffmpeg` (اختبارات الفيديو) و`npx playwright install chromium` (فحوص المتصفح).
+
 ## ⛔ إلزامي قبل أي عمل — سياسة حفظ العمل (2026-11-20)
 
 **GitHub هو النسخة الدائمة. الحاوية والمساحة المحلية مؤقتتان. أي عمل ليس في
@@ -49,6 +101,21 @@ commit مدفوع على `origin` معرّض للضياع.**
 | `npm test` | `vitest run` (يعيد بناء wasit_test تلقائياً) |
 | `npm run db:generate` / `db:migrate` | Drizzle migrations |
 | `npm run dev` | tsx watch |
+
+## CI (GitHub Actions) — عقد يجب احترامه (CI-01، 2026-11-23)
+
+- **`tests/test-db-guard.ts` هو المرجع، لا ملف الـCI.** الحارس يرفض أي هدف غير `127.0.0.1:5434/wasit_test` (ولا fallback إلى `DATABASE_URL`/`localhost`/`5432`) لأن `tests/setup.ts` ينفّذ `DROP/CREATE DATABASE`. لذلك CI ينشر خدمة Postgres على **`127.0.0.1:5434:5432`** ويكتب `postgresql://wasit@127.0.0.1:5434/...`.
+- **لا كلمة مرور في الـworkflow**: الحاوية عابرة لكل وظيفة، مربوطة بـloopback، وتعمل بـ`POSTGRES_HOST_AUTH_METHOD: trust`. إن أُضيفت قاعدة مُدارة لاحقاً فالقيمة من `secrets` مع بقاء المضيف/المنفذ مطابقين للحارس.
+- **`ffprobe` ليس من `ffmpeg-static`**: الرسم يستخدم `ffmpeg` (نظام أو `ffmpeg-static`)، لكن التحقّق (`verify.ts`/`video-quality.ts`/`tts.ts`) يستدعي **`ffprobe` من PATH**. وظيفتا `test` و`e2e` تثبّتان `ffmpeg` + `fonts-dejavu-core` وتتحقّقان من `libass` قبل التشغيل.
+- **لا `skipIf` لأدوات مفقودة**: الاختبارات تُفشل عند غياب الأداة (كما في `marketing-video.test.ts` قبلAll). الإصلاح يكون بتثبيت الأداة في البيئة.
+- **مهل الفيديو صريحة**: ملفات الفيديو تُرسم فعلياً وتتنافس على CPU ⇒ مهلة على مستوى الحزمة 180s (و240s لاختبار 35s+120s). لا تعتمد على المهلة العامة 30s.
+- **عدّ الصفوف يجب أن يُقيَّد بالكيان الذي أنشأه الاختبار** (مثل `media_assets WHERE product_id = ...`) لا بـ`count(*)` عالمي — الملفات تعمل متوازية على نفس القاعدة.
+- **`age` في وظيفة النسخ الاحتياطي بلا إصدار دقيق**: أرشيف Ubuntu يبدّل إصدارات patch، وتثبيت `age=1.1.1-1ubuntu0.24.04.3` أوقف الوظيفة سابقاً (exit 100).
+- **عميل `pg_dump` يأتي من الـrunner، لا من apt**: `ubuntu-latest` صار Ubuntu 26.04 بعميل PostgreSQL **18**، و`pg_dump` 18 يكتب دائماً `SET transaction_timeout = 0;` — يرفضه أي خادم 16. لذلك خدمة وظيفة النسخ الاحتياطي على `postgres:17` (أول إصدار يعرف الإعداد). لا تُثبّت `postgresql-client-16` (غير موجود في أرشيف 26.04) ولا تُخفّض الخادم إلى 16.
+- **piper يُثبَّت بـ`scripts/install-tts.sh`**: يستخدم `tar --strip-components=1` لينتج `packages/server/vendor/piper/piper` (ملف). لا تُعِد `cp -a piper/. .` — مدخل `piper` في الأرشيف ملف بنفس اسم مجلده فيفشل. `vendor/piper` مستبعد من git، وبدونه `voice-pack.test.ts` يفشل و26 اختباراً صوتياً تُتخطّى.
+- **`npm ci --ignore-scripts` يعني باينري `ffmpeg-static` غائب**: أضف `npm rebuild argon2 ffmpeg-static`، وإلا فشلت `marketing-video.test.ts` عند `beforeAll` رغم وجود ffmpeg النظامي.
+- **تشغيل البوابة على فرع عمل**: `workflow_dispatch` مفعّل؛ استخدم `gh workflow run ci.yml --ref <branch>`. لا تضف الفرع إلى فلتر `push` (الفلتر للفروع التكاملية فقط).
+- **مواصفات E2E قد تتخلّف عن الواجهة**: تفعيل MFA يتطلّب إعادة إدخال كلمة المرور (`mfa-enroll-password`) قبل `mfa-enable`، وإلا فالزر `disabled` وينتهي الاختبار بمهلة. راجع الواجهة قبل تعديل المواصفة.
 
 ## E2E Testing (Playwright — 2026-09-19، Phase 18)
 
@@ -487,6 +554,19 @@ npx playwright install --with-deps chromium
 - ✅ **Geo API** `modules/geo/routes.ts` مبني على `geo/service.ts`: countries / regions / cities / currencies / languages / exchange-rates — كلها GET عامة (بيانات مرجعية) مع zod query validation وpagination.
 - ✅ **`geo/service.ts`** (304 سطرًا) في commit `01b1959`؛ 16 استيرادًا في الـ routes كلها مصدَّرة — تطابق 1:1، tsc=0.
 
+## B2B-01 — RFQ / Offers / Negotiation (المرحلة 1 فقط — 2026-11-24)
+
+- ✅ **النطاق المُنجز**: مخطط + migration `0045` (6 جداول: `rfqs`, `rfq_items`, `rfq_recipients`, `rfq_quotes`, `rfq_quote_lines`, `rfq_events`)، صلاحيات `RFQ_CREATE/READ_OWN/QUOTE/DECIDE`، `assertRfqAccess`، عزل الأطراف، 24 اختبار HTTP حقيقي.
+- ✅ **المرحلة 2 (منجزة في commit `01148b1`)**: آلات الحالات، الإصدارات، السحب، الرفض بسبب، الإلغاء، الانتهاء الكسول الذرّي، الواجهة (4 لغات)، migration `0046`.
+- ✅ **المرحلة 3 (منجزة)**: مقارنة العروض (`GET /api/rfqs/:id/comparison` — أحدث مراجعة صالحة فقط، بلا خلط عملات، `scope: OWN` للبائع) + مهمة انتهاء دورية (`runRfqExpirySweep` عبر `RFQ_EXPIRY_SWEEP_*`، idempotent ومتزامنة-آمنة، بلا حذف وبلا إشعار خارجي) + migration `0047` (فهرسان جزئيان) + لوحة مقارنة في الواجهة.
+- ⛔ **لم يُبنَ بعد (المرحلة 4)**: قبول عرض (`ACCEPTED`/`AWARDED`) وتحويله إلى طلب حقيقي عبر `createOrder`، وإشعارات بريدية.
+- **حدود الوصول**: `modules/rfq/access.ts` هو المالك الوحيد للقرار. غير المشارك يحصل على **404** (لا 403) كي لا يُكشف وجود الطلب. البائع يجب أن يملك الكيان المدعو **و** أن يملك موافقة `RFQ_PARTICIPATION` **الشخصية** (سحبها يُلغي الوصول فوراً ويُفرغ الـinbox).
+- **الصلاحيات**: `COMPANY` = إنشاء/قرار/اقتباس/قراءة؛ `MERCHANT`/`SUPPLIER` = اقتباس/قراءة فقط؛ `CUSTOMER` وبقية الأدوار بلا شيء. **`ADMIN` لا يملك أي صلاحية RFQ**. `SUPER_ADMIN` يرث كل الصلاحيات بحكم تصميم المنصة (اختبارات `lc03`/`perm01` تفرض ذلك) لذا الحاجز الفعلي هو الملكية: staff لا يملك شركة/كيان ⇒ 403 من الخدمة (مُثبت في الاختبار).
+- **الموافقة**: `RFQ_PARTICIPATION` نوع موافقة مستقل في `CONSENT_TYPES` (لا يُعاد استخدام `B2B_PARTNER_DISCOVERY`). مسار `PUT /api/privacy/consents` صار يتحقق بـ`z.enum(CONSENT_TYPES)` — أي نوع غير معروف يُرفض 422 بدل تخزينه `CUSTOM`.
+- **السياسة**: `B2B/RFQ_TERMS` عبر Policy Engine (seed idempotent + قيم افتراضية آمنة في `modules/rfq/policy.ts` تُقصّ إلى حدود معقولة). `quoteValidityDays`/`maxRounds` تُنسخ snapshot على الـRFQ عند الإنشاء/الإرسال.
+- **مالياً**: لا كتابة في `transaction_ledger` ولا Wallet. الإجماليات تُحسب على الخادم بـ`decimal.js` (`fmt` 4dp)، ولا تُقبل من العميل.
+- **اختبار**: `tests/b2b01-rfq-isolation.test.ts` (24 حالة) — يعتمد `TEST_DATABASE_URL` على `127.0.0.1:5434`/`wasit_test`. لا mocks ولا route interception.
+
 ## الحالة الحالية للاختبارات
 
 - **TypeScript (Server)**: `npx tsc --noEmit` = **exit 0 — صفر أخطاء** (بعد إصلاحات Geo/Revenue/Subscriptions — انظر قسم TypeScript Clean أعلاه).
@@ -513,6 +593,38 @@ npx playwright install --with-deps chromium
 - **API**: `/api/admin/ai/providers` (list, `-readiness`, `:key`, PATCH, `PUT/DELETE :key/secret`, `POST :key/test`, `GET :key/usage`) under `AI_MANAGE`/`ADMIN_AI`, audited as `AI_PROVIDER.*`. Mounted **before** `app.route('/api/admin', ...)` — Hono dispatches to the first matching mount.
 - **UI**: tab «المزوّدون» in `/admin/ai` (`components/AiProvidersPanel.tsx`), i18n `adminAi.providers.*` in ar/en/fr/zh.
 - **Tests**: `tests/afc09-ai-providers.test.ts` (23). Full suite after AI-04: **174 files / 2233 tests**.
+
+## GM-ACCESS-01 — دخول المدير العام بلا بريد (2026-11-23)
+
+- **البوابة لم تُعطَّل ولن تُعطَّل**: `loginUser` يبقى يرفض `emailVerified=false` بـ`403 EMAIL_NOT_VERIFIED` لكل حساب. لا تُضِف استثناءً لدور (لا `SUPER_ADMIN` ولا غيره) ولا `if (role === ...) skip`.
+- **مسارات الإشباع الثلاثة**: رابط البريد · **عامل ثانٍ مؤكَّد** (`authenticator_apps.enabled AND confirmed_at IS NOT NULL`، يُقرأ حيًّا عبر `hasConfirmedSecondFactor`) · **تذكرة مشغّل** (`gm_access_tickets`، هاش فقط، 15 دقيقة، أحادية الاستخدام، مقيَّدة بحساب، سقف 3 محاولات).
+- **التذكرة تُولَّد من CLI فقط**: `npm run gm:access -- issue|reset-factor|status --email <..> --reason ".." --confirm` (`src/scripts/gm-access.ts`). لا مسار HTTP يولّدها، و`issueGmAccessTicket` ترفض أي حساب ليس `SUPER_ADMIN` وتدقّق الرفض `GM_ACCESS.TICKET_REFUSED`. لا تُضِف مسار HTTP للاسترداد.
+- **التذكرة لا تتجاوز عاملًا مُفعَّلًا** ولا تمنح دورًا ولا تعيد تعيين كلمة مرور — مُثبت في `tests/gm-access-01.test.ts` (17 حالة). لا تُغيّر ترتيب الفحص: العامل المؤكَّد أولًا، ثم التذكرة، ثم الرفض.
+- **`/api/auth/mfa/enroll` يتطلب كلمة المرور دائمًا** (+ رمز حالي إن كان العامل مُفعَّلًا) عبر `assertIdentityForFactorChange`. لا تُعِد قبول جلسة وحدها: جلسة مسروقة كانت تُزيح عامل المالك.
+- **تغيير العامل يُبطل الجلسات الأخرى**: `revokeOtherSessions` بعد confirm/disable/recovery-codes، و`revokeAllSessionsForUser` في `reset-factor`. الجلسة الطالبة تبقى.
+- **لا أسرار في التدقيق**: صفوف `GM_ACCESS.*` تحمل `ticketId`/السبب/المشغّل فقط. أي إضافة تكتب التذكرة أو هاشها أو كلمة المرور تُفشل `secret-scan` أو اختبار التسريب.
+- **التوثيق**: `docs/GM-ACCESS-01.md` (الإجراء للمالك) + AD-058 + §25 في `docs/GAP_REGISTER.md`.
+
+## GM-ACCESS-04 — حارس بيئة قاعدة البيانات (2026-11-23)
+
+- **البوابة** `lib/db-target-guard.ts`: `set-password` و`reset-factor` يرفضان ما لم يتحقّق **ثلاثة شروط مستقلة**: `NODE_ENV=production`، و`WASIT_PRODUCTION_DB_NAME` مساوٍ لِـ`current_database()` المقروء من الخادم، والاسم غير محمي. `WASIT_PRODUCTION_DB_HOST` تثبيت اختياري (يقارن بـ`host(inet_server_addr())` بلا netmask).
+- **ترتيب مقصود**: فحص الاسم المحمي **بعد** التطابق (فإعلان `wasit_demo` لا يُشرّع نفسه)، والبوابة كلها **قبل** البحث عن الحساب ⇒ الرفض لا يكتب صف تدقيق ولا يبطل جلسة ولا يقرأ ملف السر. رمز الخروج `2`.
+- **الأسماء المحمية**: `postgres`, `template*`, `wasit_dev`, `wasit_staging`, `wasit_test`, `wasit_demo`, `*_test`, `*_demo`, `*_dev`, `*_staging`, `_restore*`, `_drill*`. لا تُخفّف القائمة ولا تُضاف استثناءات.
+- **الهوية من الخادم لا من السلسلة**: `current_database()`/`host(inet_server_addr())`/`inet_server_port()`/`current_user` — `DATABASE_URL` ليس دليلًا أبدًا.
+- **غير محروس بقصد**: `status` (قراءة) و`issue` (خارج النطاق — `DECISION REQUIRED` في AD-060).
+- **`lib/env.ts`** يعطي إشارة ثانية مجانية: الإقلاع في `production` يُرفض بـ`JWT_SECRET` افتراضي أو بـ`ALLOW_DEV_TOOLING`/`DEMO_PAYMENT_MODE`، فلا يمكن تزييف بيئة إنتاج على خادم اختباري.
+- **الاختبارات** `tests/gm-access-04.test.ts` (18): مصفوفة قبول/رفض على دالّة القرار + 4 حالات تشغّل الـCLI الحقيقي كعمليّة فرعية (برفض `wasit_test` حتى مع `NODE_ENV=production`). أي تعديل على `main()` يجب أن يُبقي هذه الأربع ناجحة.
+- **التوثيق**: `docs/GM-ACCESS-04.md` (إجراء الإنتاج + الفحوص قبل الكتابة) · AD-060 · §27. لا Migration، لا مسار HTTP، لا صلاحية.
+
+## GM-ACCESS-02 — تدوير كلمة مرور المدير العام (2026-11-23)
+
+- **الأمر الوحيد**: `npm run gm:access -- set-password --email <..> --reason ".." --confirm [--generate | --password-file <path>]`. لا مسار HTTP، ولا كلمة مرور مشتركة، ولا `Rhimi123`/`Passw0rd!2026` (قائمة رفض في `BANNED_PASSWORDS`).
+- **النطاق**: `users.password_hash` لحساب `SUPER_ADMIN` واحد + `sessions.revoked_at`. **لا تلمس** `email_verified` (البوابة باقية) ولا `mfa_enabled`/`authenticator_apps` (العامل يبقى مطلوبًا) ولا `user_roles` (لا ترقية).
+- **لا سر في argv ولا في المخرجات**: `--password` مرفوض صراحةً؛ المولّد `generateGmPassword()` (٣٢ حرفًا، أربع فئات مضمونة، CSPRNG عبر `randomInt`)؛ `--password-file` يُرفض إن كان مقروءًا للمجموعة/الآخرين؛ الخزانة ملف `0600` داخل مجلد `0700` **خارج أي شجرة Git** (`assertOutsideGitTree`)، تُكتب قبل التغيير وتُحذف إن فشل التطبيق.
+- **السياسة**: ≥ ٢٤ حرفًا + أربع فئات + لا اسم الحساب (`assertStrongGmPassword`) — أقوى من التسجيل (٨) ومن `bootstrap-super-admin` (١٢). لا تُخفّضها.
+- **التدقيق**: `GM_ACCESS.PASSWORD_RESET` (سبب + مشغّل + `sessionsRevoked`) و`GM_ACCESS.PASSWORD_RESET_REFUSED` لغير `SUPER_ADMIN` — **بلا** كلمة المرور أو الهاش. اختبار `tests/gm-access-02.test.ts` (12 حالة) يبحث عن السر والهاش في الصفوف.
+- **لا Migration**: الأداة تستخدم `users.password_hash` و`sessions` القائمين. لا تُضِف جدولًا لهذا الغرض.
+- **التوثيق**: `docs/GM-ACCESS-02.md` (إجراء المالك + الخزانة) · AD-059 · §26 في `docs/GAP_REGISTER.md`. أي تطبيق على حساب فعلي يحتاج موافقة صريحة.
 
 ## Money Path Invariants (2026-09-24)
 
@@ -1229,3 +1341,108 @@ npx playwright install --with-deps chromium
 - **إدارة**: `/api/admin/ai/spend` (`AI_MANAGE`/`ADMIN_AI`) — overview + limits PUT/DELETE، كل تغيير في `audit_logs` (`AI_SPEND.LIMIT_UPDATED`/`LIMIT_DELETED`). الواجهة: تبويب «الاستهلاك» في `AdminAiPage` (`components/AiSpendPanel.tsx`).
 - **فخ بيئي (ليس عطلاً في الكود)**: مسار TTS يستدعي `ffprobe` من النظام. `ffmpeg-static` يوفّر `ffmpeg` فقط؛ بدون `apt-get install -y ffmpeg` تفشل 4 اختبارات فيديو بـ`spawn ffprobe ENOENT`. الصورة الإنتاجية تُثبّت `ffmpeg`+`ffprobe` عبر apt.
 - **اختبارات**: `tests/afc10-ai-spend.test.ts` (22). لا تُنشئ SUPER_ADMIN في اختبار جديد: `super-admin-bootstrap.test.ts` يفشل إن وُجد صف SUPER_ADMIN أثناء تشغيله (تلوّث بين الملفات).
+
+## GM-ACCESS-05 — Production recovery deployment package (2026-11-23)
+
+- **`deploy/gm-recovery/`** is the operator-facing package: `check-runtime.sh` → `precheck.sh` (writes a baseline, changes nothing) → `generate-password.sh` (on-host secret) or a 0600 file → `rotate.sh` (typed confirmation of the DB name) → `verify.sh` (10 checks against the baseline) → `login-check.sh` (real login, prints only status/MFA). `package.sh --out <dir>` builds `wasit-gm-recovery-<stamp>.tar.gz` with `SHA256SUMS` and refuses to stage any secret-shaped file.
+- **Bundle is not fully self-contained**: `build:prod` keeps `argon2` external (native addon). The package copies `argon2`, `@phc/format`, `node-gyp-build` into `scripts/node_modules/` (prebuilds for linux-x64/arm64). `check-runtime.sh` proves it loads; on another platform run from the deployed `packages/server`.
+- **CLI needs the deployment env**, not just `DATABASE_URL`: it imports `db/client` → `env.ts`, so `JWT_SECRET` must be present in production (`lib/env.ts` refuses the committed default). Source the deployment env file; never retype the URL.
+- **New read-only CLI actions**: `precheck` (identity + gate decision + masked account + target counts + session count; exit 2 when the gate refuses, writes a baseline only when it passes), `verify` (compares live state with the baseline; exit 2 on any failed check), `generate-password` (writes a 0600 file, applies to no account, needs no `--email`).
+- **Ordering trap (fixed)**: `precheck`/`verify`/`generate-password` are handled **before** `loadSuperAdmin`, so a wrong email cannot mask a wrong database, and generation needs no account.
+- **Baseline contains no secret**: account id, masked email, `email_verified`, `mfa_enabled`, confirmed-factor presence, roles, hash *algorithm*, live session count, last audit id. `verify` fails if the audit row carries a secret-shaped key (`auditPayloadLeaksSecret`).
+- **Shell arg convention**: `require_email "$@"` reads `$1/$2` without consuming them — every script must `shift 2`, not `shift`.
+- **Docs**: `docs/GM-ACCESS-05.md` (runbook, refusal layers, test limits), AD-061, gap §28. Tests: `tests/gm-access-05.test.ts` (33).
+
+## E2E harness env scoping (CI-01-CLOSEOUT, 2026-11-23)
+
+- `webServer.env` in `playwright.config.ts` is **one process-wide env**, not per spec. Any per-spec tuning must therefore be inert for every other spec, and that must be verified, not assumed.
+- `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` lives in `SERVER_ENV` for that reason: the webhook failure desk spec drives an event to `DEAD_LETTERED` by re-delivering it, and the production 30s gate would answer `200` (`retryScheduled`) after the first attempt so the budget is never spent. Only that spec posts failing events, and no spec asserts `retryScheduled`/`nextAttemptAt`.
+- Keep `WEBHOOK_RETRY_MAX_ATTEMPTS` at the production value (5): changing the budget changes what the spec proves. The real 30s → doubling backoff and the not-due refusal stay asserted against the default in `packages/server/tests/obs01-webhook-recovery.test.ts`.
+- Provider-facing webhook status contract (`404` on first failure, `200` on not-due) is **not** settled for a real acquirer: see `OBS-01-CONTRACT` in `docs/GAP_REGISTER.md` §5.
+
+## RBAC-02 — Staff desk (2026-11-24)
+
+- **`/api/admin/staff` is SUPER_ADMIN-only by role, not by permission**: `staffRoutes.use('*', requireAuth, requireRole('SUPER_ADMIN'))`. No `staff:*` permission exists and `ROLE_PERMISSIONS` was not touched, so `ADMIN`'s `user:*` stays scoped to business accounts.
+- **Staff population only**: every read/write goes through `modules/staff/service.ts`, which resolves roles via `STAFF_ROLES`; a business account id is a **404** (not 403) so the desk cannot probe accounts.
+- **SUPER_ADMIN is provisioned out of band** (`npm run bootstrap:super-admin`). It is never creatable, never re-roled and — via `staffStatusRefusal()` — never the last one disabled. The decision is a pure function on purpose: the test suite runs in parallel against one DB, so no test may deactivate the environment's owners.
+- **No password ever crosses the wire**: `POST /api/admin/staff` generates a random password server-side (never returned, never audited) and sends the existing password-reset token as the invite. `devResetToken` appears only under `devToolingActive()`.
+- **Role/status changes revoke every live session** (`revokeAllSessionsForUser` in `modules/auth/service.ts`). Roles are re-read per request anyway, so the revocation closes the token window rather than enabling the demotion.
+- **The legacy `PATCH /api/admin/users/:id/status` refuses staff targets** (403 + `RBAC.ESCALATION_REJECTED` audit) and refuses self-deactivation; business accounts behave exactly as before. Do not relax this to "fix" an admin workflow.
+- E2E: `e2e/rbac02-staff.spec.ts` uses the seeded `admin@wasit.tn` (SUPER_ADMIN) vs `admin2@wasit.tn` (ADMIN). It creates throwaway `e2e-staff-*` accounts in `wasit_dev`; delete them after a run (user_roles + sessions + users) so they never appear in the demo staff list.
+
+## CART-01 — Multi-product cart (2026-11-24)
+
+- **Server contract**: `POST /api/orders/quote` (`quoteBasket`) prices a basket **without writing**; `POST /api/orders` accepts the same `items[]` and returns `sellerCount`/`replayed`. Both share `priceBasket()` in `modules/orders/service.ts` — never price a basket anywhere else.
+- **No price from the browser**: the cart stores `productId + quantity` only. `createOrder` ignores any client price; out-of-stock lines are excluded from totals instead of being priced.
+- **Idempotency**: pass `idempotencyKey` (stable per basket); stored under `orders.metadata.idempotencyKey` with a per-(buyer,key) advisory lock, replay returns the original response with `replayed: true`.
+- **Web**: `lib/cart.tsx` (localStorage `wasit.cart.v1`, sanitized, 50-line cap, cross-tab sync), `pages/CartPage.tsx` (`/cart`, public), `CheckoutPage?cart=1`. `Card` takes `testId`, not `data-testid`.
+- **`formatMoney(v, '')` used to throw** (`Intl` rejects an empty currency) and blank the whole page — quotes with no priceable line return `currencyCode: null`. Keep the `|| 'TND'` guard.
+- **Tests**: `packages/server/tests/cart01-multi-product-cart.test.ts` (17) + `e2e/cart01.spec.ts` (10, desktop + 390×844 phone).
+
+## B2B-01 — RFQ / quotes / negotiation (2026-11-24)
+
+- **Module**: `packages/server/src/modules/rfq/{access,lifecycle,policy,events,expiry,comparison,service,views,routes}.ts` over `db/schema/rfq.ts` (migrations `0045` = tables, `0046` = lifecycle columns + triggers, `0047` = partial expiry indexes). Full surface + state machines: `docs/B2B-01_RFQ_LIFECYCLE.md`.
+- **Three state machines, one table each** (`modules/rfq/lifecycle.ts`): RFQ `DRAFT→OPEN→{CANCELLED|EXPIRED|AWARDED}`, recipient `INVITED→VIEWED→QUOTED↔WITHDRAWN`, quote `SUBMITTED→{SUPERSEDED|WITHDRAWN|REJECTED|EXPIRED|ACCEPTED}`. **Every non-`SUBMITTED` quote status is terminal**; never "reopen" one to fix a flow — submit revision+1 instead.
+- **Database triggers are the invariant, not advice**: `rfq_events` and `rfq_quote_lines` are append-only, `rfq_quotes` money/identity/`valid_until`/`revision` are frozen, terminal statuses cannot move, quotes cannot be deleted. A test that needs to move the clock must `alter table … disable trigger rfq_quotes_frozen_terms` and re-enable it in a `finally`.
+- **A new revision only supersedes a live revision** (`where quote_status='SUBMITTED'`). A `REJECTED`/`WITHDRAWN` revision keeps its status and its recorded reason; `listQuotes` keeps the highest revision per seller, so the buyer still sees one row per seller.
+- **Expiry lives in one place** (`modules/rfq/expiry.ts`): `expireRfqIfDue` returns `{ rfq, transitioned }` and `expireLapsedQuotes` returns the rows it actually moved. `transitioned` is what keeps counts and events truthful when two callers race — the loser sees `EXPIRED` but must not write a second event.
+- **Two callers, one rule**: the request path evaluates expiry lazily on every access, and the scheduler runs `runRfqExpirySweep` (`RFQ_EXPIRY_SWEEP_ENABLED`, default off, 5 min, batch 100). The sweep is idempotent, concurrency-safe (the guarded `UPDATE` is the guard), writes its events inside the same transaction, never deletes, never touches a settled row (`status='OPEN'` / `quote_status='SUBMITTED'` only), and sends no external message (`notifications` rows only). `expireRfqIfDue` events carry `{ scope, expiresAt|validUntil, reason, fromStatus }` — `RESPONSE_WINDOW_LAPSED` / `QUOTE_VALIDITY_LAPSED`.
+- **Comparison is read-only** (`modules/rfq/comparison.ts`, `GET /api/rfqs/:id/comparison`): newest revision per seller, only `SUBMITTED` and inside its validity window, never mixing currencies, and `scope: 'OWN'` for a seller so a participant can never read a competitor's price. Rows are ranked server-side (`itemsTotal`, then lead time, then submission); the web component prints the ranking and never sorts or sums. Non-comparable offers come back in `excluded[]` with a reason (`SUPERSEDED|EXPIRED|WITHDRAWN|REJECTED|ACCEPTED|CURRENCY_MISMATCH|RFQ_NOT_OPEN`).
+- **Withdrawal stays allowed after cancel/expire** (it removes an offer, creates nothing). Quote submission, revision, decline and reject are all refused once the RFQ is not OPEN.
+- **`.strict()` on every RFQ body**: `buyerCompanyId`/`sellerId`/`sellerUserId`/`recipientStatus` are rejected `422`, never silently ignored. Identity comes from the session (`access.ts`), and a quote id is not a capability (`requireOwnQuote` = id + rfq + seller, else `404`).
+- **Non-participants get `404`, not `403`** — RFQ existence is itself commercial data. Keep `assertRfqAccess` as the only entry point.
+- **No money**: RFQs never write `orders`/`transaction_ledger`/`payment_intents`/`seller_settlements` (asserted by counting rows before/after the whole negotiation, and again around the comparison and the expiry sweep). Phase 3 shipped comparison + reliable expiry only; accept → order is phase 4 and is deliberately unbuilt.
+- **Web**: `pages/DashboardRfqPages.tsx` (`/dashboard/rfqs`, `/dashboard/rfqs/:id`, `/dashboard/rfq-inbox`), clients in `lib/api.ts`, types in `lib/types.ts`, features `rfq.buy`/`rfq.sell` in `lib/rbac.ts` (COMPANY sees both; MERCHANT/SUPPLIER only the inbox; CUSTOMER neither). The detail page picks the buyer or seller panel from the server projection (`'recipients' in view`), and the UI never computes a price — it prints `lineTotal`/`itemsTotal` as sent.
+- **i18n**: 131 `rfq.*` keys per locale in `lib/i18n.ts`; `rfq.status.*` is shared by RFQ/recipient/quote statuses, so a new status needs a key in all four dictionaries (missing keys silently fall back to English).
+- **Tests**: `tests/b2b01c-comparison-expiry.test.ts` (21, HTTP + Postgres, phase 3), `tests/b2b01b-lifecycle-unit.test.ts` (8, pure), `tests/b2b01b-rfq-lifecycle.test.ts` (22, HTTP + Postgres), `tests/b2b01-rfq-isolation.test.ts` (24, phase 1), `scripts/ui-rfq-check.mjs` (38 browser checks — see its header for the disposable-DB setup). The lifecycle spec resets the in-memory rate-limit store per case (`resetRateLimitStore`) because one company hits the 20 creations/minute cap within a single file — the limits themselves are unchanged.
+
+## AI-LLM-01 — مسار التوليد اللغوي الموحّد (2026-11-26)
+
+- **مدخل واحد**: كل استدعاء توليدي يمرّ عبر `runLlmDraft` (`src/lib/ai/llm/service.ts`). لا تستدعِ مزوّدًا من منفّذ مباشرة، ولا تضف `system`/`model`/`tools` إلى العقد — التعليمات من `llm/prompts.ts` فقط، والمزوّد من `resolveAiRoute`.
+- **يحتاج سياق تشغيل**: بلا `withAgentRunContext` ⇒ 403، و`agentKey` مخالف ⇒ 403. وكل `fact.source` يجب أن يكون داخل `allowedTables` لعقد الوكيل (`agent-scope.ts`) وإلا 403 — هكذا لا تُهَرَّب صفوف وكيل إلى برومبت وكيل آخر.
+- **`facts` مقابل `untrusted`**: الحقائق فقط تؤسس `evidence`؛ نص المستخدم يُلفّ بـ`<<<UNTRUSTED_DATA id="<nonce>">>>` ويُعلَّم بـ`[quoted]` عند أي إشارة تعليمات (`sanitize.ts`). الكشف وحده لا يكفي: **الاستناد** (`grounding.ts`) هو خط الدفاع الأخير — كل مبلغ بعملة يجب أن يطابق حقيقة **قيمتها نصية** (أعمدة `numeric` تُقرأ نصوصًا، العدّادات أرقام)، فلا يمكن ترقية عدّاد `1` إلى «1 TND».
+- **حدود لكل قدرة** في `llm/limits.ts` (facts/أحرف/توكنات/سقف تكلفة/مهلة). سقف التكلفة = ضعف أسوأ حالة عند أغلى نموذج في الكتالوج؛ اختبار الاتساق يفشل إن غُيّر حدّ ولم يُحدَّث السقف. تجاوز الحدود ⇒ 422 (يُحوّله المنفّذ إلى `fallback/input_rejected`).
+- **المال**: `runLlmDraft` لا يتجاوز `AI-SPEND-GUARD-01`/`AI-RATE-LIMIT-01`. `spend_guard`/`spend_limit`/`cost_cap` تُرجع `fallback` **قبل** أي استدعاء (الاختبار يؤكد `provider.calls.length === 0`). كل محاولة تُسجَّل `ai_requests.request_type='LLM:<CAPABILITY>'` بلا نص برومبت/رسالة.
+- **المهلة**: `AbortController` يلغي النقل + `Promise.race` يضمن العودة حتى لو تجاهل المزوّد الإشارة (`signal` أُضيف إلى `AIProviderCallOptions` و`RunFeatureInput`).
+- **الانحدار آمن**: التحليل الحتمي (`snapshot`/`completeness`/`recommendation`) يبقى ويُضاف `data.llm`. في هذه البيئة بلا مفتاح ⇒ `fallback/no_generative_provider` بلا استدعاء (السلوك السابق حرفيًا).
+- **seam للاختبار**: `setLlmProviderOverride` (يُرفض في production) يستبدل **النقل** فقط؛ هوية مزوّد مدفوعة تُبقي سعر الكتالوج كي يعمل الحارس والسقوف والتكلفة كالإنتاج.
+- **التغطية**: `tests/ai-llm-01.test.ts` (23) — توليد من صفوف حقيقية، تعليمات غير قابلة للاستبدال، مهلة، schema، استناد، حقن (بما فيه نموذج مطيع للتعليمات)، عزل مستأجرين، هوية/نطاق 403، سقوف، سجل بلا نصوص، قراءة فقط، حدّ المعدل 429.
+- **`DECISION REQUIRED`**: بوابة موافقة بشرية قبل إرسال مسودّة دعم، أول قدرة تُشغَّل بمفتاح حقيقي وسقفها اليومي، فرض اللغة. التفاصيل: `docs/AI-LLM-01.md` + AD-064.
+
+## WASIT-COPILOT-01 — طبقة التنسيق (2026-11-26)
+
+- **الـCopilot ليس وكيلاً**: لا منفّذ، لا صف في `agent_registry`، و`agentRunRefusal(COPILOT_CATALOGUE)` يعيد `COPILOT_NOT_RUNNABLE`. لا تُضِفه إلى `AGENT_CATALOGUE` ولا إلى `AGENT_SCOPE_CONTRACTS` ولا تمنحه `input` قابل للتنفيذ.
+- **لا مسار تنفيذ خاص**: كل خطوة تُفوَّض عبر `dispatchStep` → `createAgentTask`. أي «تسريع» بتنفيذ منفّذ مباشرة من `copilot/service.ts` يُسقط RBAC/Kill Switch/الموافقة/الميزانية/التدقيق دفعة واحدة.
+- **هوية الطالب فقط**: `planAgentRun` و`dispatchStep` يعملان بـ`run.requestedBy`. لا تستخدم حساباً إدارياً بديلاً لتجاوز رفض صلاحية — الاختبار يثبت 403 بلا أي صف مكتوب.
+- **النموذج يختار الوكيل، لا الـpayload**: `domains.ts` يحمل `defaultInput` لكل وكيل؛ الخطة من النموذج تُترجم إلى `input` من هذا الجدول حصراً. الوكلاء الذين يحتاجون كياناً (`supplier-agent`/`merchant-agent`) في `NON_PLANNABLE_AGENTS` — لا يُخطَّط لهم.
+- **قدرة `COPILOT_PLAN`**: عبر `runLlmDraft` نفسه، بعقد `generationScopeFor()` الذي يعطي المنسّق `allowedTables=['agent_catalogue']` فقط. `finalizePlan` يرفض أي وكيل غير موجود في الحقائق (`ungrounded_output`) وأي `stepKey` مكرر أو اعتمادية مجهولة. مفاتيح الحقائق بصيغة `agent.<key_with_underscores>` لأن `FACT_KEY` لا يقبل `-` ولا `:`.
+- **لا اعتماد على المزوّد**: أي رفض يعود إلى `heuristicPlan` ويُسجَّل في `report.plan.fallbackReason`. لا تجعل التخطيط يفشل لأن المزوّد غير متاح.
+- **توضيح فقط عند نقص مؤثر**: `parseIntent` يطلب توضيحاً فقط عندما لا يُعرَف أي مجال (`signals.length === 0`)؛ وإلا ينفّذ. لا تجعل طلباً مفهوماً ينتظر إجابة.
+- **الصدق في التقرير**: الحالة من `agent_run_steps`، و`refused` من حمولة المنفّذ (`refused:true`/`error`) ⇒ تُصنَّف `partial` لا `completed`. `outcomes.completed/partial/stalled` منفصلة. `cost.complete=false` إن وُجدت مهمة بلا تكلفة مسجّلة.
+- **الموافقة**: الخطوات الحسّاسة تبقى `PENDING` بـ`approvedBy=null`، والـCopilot لا يوافق أبداً (`governance.selfApproval=false`). الموافقة عبر `POST /api/admin/ai/agent-runs/:runId/steps/:stepKey/approve` بمخوَّل آخر غير الطالب.
+- **المسارات**: `POST/GET /api/admin/ai/copilot/requests`, `GET /requests/:runId`, `POST /requests/:runId/advance` — ترث `AI_MANAGE|ADMIN_AI` وفئتي `ai.admin.control`/`ai.admin.read`.
+- **منع التكرار**: `requestId` اختياري ⇒ `runKey='copilot:<id>'`؛ إعادة الإرسال تعيد نفس التشغيل. `advance` لا يضيف مهمة لخطوة لها مهمة (`dispatchStep` يرفض) — لا حاجة لحارس إضافي.
+- **التغطية**: `tests/copilot-01.test.ts` (15) — تفويض متعدد الوكلاء، فهم ar/fr/en، توضيح، 403 خارج النطاق، رفض copilot/supervisor/مجهول، منع تكرار، تزامن، تقرير مختلط نجاح/فشل، تصعيد موافقة، heuristic بلا مزوّد، خطة LLM صحيحة ومُختلقة، حارس إنفاق، حدّ معدل، Kill Switch + Supervisor، بقاء 20 وكيلاً.
+- **`DECISION REQUIRED`**: من يوافق إن كان GM هو الطالب، سقف الوكلاء لكل طلب، ملخّص لغوي للتقرير. التفاصيل: `docs/WASIT-COPILOT-01.md` + AD-065.
+
+## WASIT-GM-DASHBOARD-01 — مركز قيادة المدير العام (2026-11-26)
+
+- **سطح قراءة فقط**: `modules/admin/gm/{routes,service,types}.ts` على `/api/admin/gm/{overview,tasks,audit}`. لا POST/PUT/PATCH/DELETE تحت هذا المسار (يثبته `tests/gm-dashboard-01.test.ts`)، وكل زر في `/admin/gm` يستدعي المسار الذي يملك الفعل (approve task، approve run step، cancel run).
+- **البوابة**: `requireAuth` + `requirePermission(AI_MANAGE, ADMIN_AI)` — بلا دور/صلاحية جديدة؛ الواجهة `AdminOnly` لكن القرار في الخادم.
+- **الصدق أولاً**: كل قسم `{state:OK|UNAVAILABLE, source, generatedAt, data, error}`؛ القسم الفاشل `UNAVAILABLE` مع رسالة، والقيم المجهولة `null` لا `0` (نجاح بلا تشغيل = `null`). أضف في الواجهة حالة `LOADING` صريحة — لا تعرض `OK` قبل وصول البيانات.
+- **مصدر تصنيف الوكلاء**: `AGENT_GENERATIVE_CAPABILITY` في `lib/ai/llm/contract.ts` (نفسه يُثبت مقابل مواضع `draftFor`)؛ وجود منفّذ ≠ توليد. `noExecutorAgents` منفصل عن `counts.declared`.
+- **الأسرار**: `maskProvider` انتقل من `admin/ai-provider-routes.ts` إلى `lib/ai/provider-config.ts` ليتشاركه مكتب AI والمركز — لا تعِد نسخة محلية.
+- **مخزن الحدود**: `memory` يُوصف `process-local, not shared`؛ لا تنسخ `ready` إلى «مشترك بين النسخ».
+- **`DECISION REQUIRED`**: من يوافق عندما يكون الطالب هو المدير العام نفسه (الآن: خادم يرفض الموافقة الذاتية، والواجهة تعلّم الصف)، ومصدر قياس «أثر توصية نُفّذت» (غائب ⇒ 0 صريح). التفاصيل: `docs/WASIT-GM-DASHBOARD-01.md`.
+
+## WASIT-AI-KILLSWITCH-FLEET-01 — مفتاح إيقاف AI عبر كل النسخ (2026-11-26)
+
+- **مصدر حقيقة واحد**: جدول `ai_execution_switches` (migration `0049_powerful_sandman.sql`؛ scope `GLOBAL`/`AGENT` + قيدا CHECK + فهرس فريد `(scope,target_key)` + صف `GLOBAL` واحد `target_key='*'`). **لا ذاكرة محلية ولا كاش**: `lib/ai/execution-switch.ts` هو المصدر، و`lib/ai/kill-switch.ts` واجهة توافق فقط.
+- **fail-closed بثلاث حالات**: صف `GLOBAL` غائب أو فشل قراءة ⇒ `503 AI_CONTROL_UNAVAILABLE` (لا «مفتوح»)؛ `GLOBAL.stopped` ⇒ `503`؛ `AGENT.stopped` ⇒ `503 AI_AGENT_PAUSED` (رسالتان مختلفتان). `GET` الإداري يعيد `source:'unavailable', failClosed:true, enabled:false`.
+- **السباق مغلق**: `createAgentTask` (المساران) و`decideAgentTask` (الاعتماد) يفتحان معاملة ويأخذان `SELECT … FOR SHARE` على صف `GLOBAL` **قبل** الكتابة؛ الإيقاف يأخذ `FOR UPDATE` ويلغي `queued` في نفس المعاملة. لا مهمة جديدة بعد commit الإيقاف.
+- **قراءة المفتاح تتجاوز نطاق الوكيل** عبر `platformDb()` (مثل `provider-config`) — وإلا رفض الـscope الجدول وأوقف كل وكيل. لا تنسَ هذا عند إضافة مسار تنفيذ جديد.
+- **الحزام البيئي**: `AI_AGENT_EXECUTION_ENABLED=false` يوقف ويجعل `source:'env'`، ولا يمكن فتحه من الـDB (استئناف ⇒ `409`).
+- **الصلاحيات**: قراءة الحالة `AI_MANAGE|ADMIN_AI`؛ الإيقاف `ADMIN|SUPER_ADMIN`؛ رفع الإيقاف الشامل **SUPER_ADMIN فقط**. الاستئناف الذاتي مسموح لكن يُعلَّم `independentResume:false` (قرار موثّق في `docs/WASIT-AI-KILLSWITCH-FLEET-01.md §8`).
+- **الAudit**: `AI.EXECUTION_STOPPED/RESUMED` (`entityType=AI_EXECUTION_SWITCH`)، والمسار القديم `/kill-switch` يحتفظ بـ`AI.KILL_SWITCH_DISABLED/ENABLED` (`AI_KILL_SWITCH`). «لا تغيير ⇒ لا صف» (`changed:false`). الرفض الدوري مرة/دورة: `AI.KILL_SWITCH_{SCHEDULE,SUPERVISOR,RECOVERY}_REFUSED`.
+- **`vitest.config.ts` ⇒ `fileParallelism: false`**: القرار أصبح عالمياً في قاعدة مشتركة، فالتوازي بين الملفات يجعل إيقاف ملف يرفض تنفيذ آخر. لا تُعِد التوازي بلا عزل نطاقات لكل ملف.
+- **لهذا السبب** صار أي fake DB في اختبارات الوحدة يُلزَم بصف `GLOBAL` مفتوح: `tests/support/open-switch-row.ts` (`openGlobalSwitchRow()`); و`fakeDb` في أدوات الاختبار لا يحتسب قراءة `ai_execution_switches` كقراءة بيانات.

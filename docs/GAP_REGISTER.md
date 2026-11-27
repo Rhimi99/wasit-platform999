@@ -35,8 +35,8 @@
 
 | المحور | العدد |
 | --- | --- |
-| بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 19 |
-| بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 43 |
+| بنود مفتوحة (PENDING/BLOCKED/IN_PROGRESS + GAP-A2-01/02) | 21 |
+| بنود مُغلقة فعلياً (COMPLETED/COMPLETE_VERIFIED) | 44 |
 | فجوات كاذبة مُستبعدة | 6 |
 | بنود تحتاج طرفاً خارجياً (عقود/بنية) | 10 |
 | بنود في السجل المرجعي بلا صف تفصيلي هنا (`LC-08`) | 1 |
@@ -82,10 +82,11 @@
 
 **تفصيل العدّ (تحقّق آلي، محدّث M2.5-T3 — 2026-11-16):**
 
-- **المفتوحة = 20:** P0 → 2 (PS-03, PS-06) · P1 → 4 (AI-02 `IN_PROGRESS`؛ AI-03, AI-04, AI-05) · P2 → 6 (PR-01, PR-02, PR-03, PR-06, PR-10, PR-11) · P3 → 6 (LC-01, LC-04, LC-05, PI-03, PI-05, PI-09) · فجوتا التحقّق → 2 (GAP-A2-01, GAP-A2-02). (المجموع 2+4+6+6+2 = **20**.) منها **5 `BLOCKED`**: PS-03, PS-06, LC-01, LC-05, PI-03.
+- **المفتوحة = 19:** P0 → 2 (PS-03, PS-06) · P1 → 4 (AI-02 `IN_PROGRESS`؛ AI-03, AI-04, AI-05) · P2 → 5 (PR-02, PR-03, PR-06, PR-10, PR-11) · P3 → 6 (LC-01, LC-04, LC-05, PI-03, PI-05, PI-09) · فجوتا التحقّق → 2 (GAP-A2-01, GAP-A2-02). (المجموع 2+4+5+6+2 = **19**.) منها **5 `BLOCKED`**: PS-03, PS-06, LC-01, LC-05, PI-03.
+  > **إغلاق `PR-01` (CART-01 — 2026-11-24):** انتقل من `PENDING` إلى `COMPLETE_VERIFIED` ⇒ **«المفتوحة» 20 → 19** و**«المغلقة» 41 → 42** (P2: 6 → 5). لا تغيير على «الكاذبة» (6) ولا «الخارجية» (10).
   > **`LC-04`** تُحتسب **مرّة واحدة** هنا (صياغتها القانونية مفتوحة) رغم أن **تكاملها المالي `COMPLETE_VERIFIED`**؛ لذلك لا تُحتسب في «المغلقة» تجنّباً للعدّ المزدوج.
   > **سلسلة M2 (§13–§19):** صارت مُدرجة في العدّاد صراحةً اعتباراً من M2.4-CLOSE — مغلقة (4): `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`؛ مفتوحة (1): `M2.5-TX-SELLER-ATTRIBUTION` (أُغلقت في M2.5-T3 — انظر §22).
-- **المغلقة = 41:** §2 (12) — SEC-01, SEC-02, **SEC-03**, SEC-04B, **SEC-XFF-01**, PERM-01A, PERM-01B, **PERM-01 (المتبقّي: سياسة `revenue:read`/`report:read` لـADMIN)**, **SEC-CSRF-01**, PS-01, PS-02, OBS-01 · §3 (3) — AI-01, AI-06, AI-07 · §4 (1) — **PR-05** · §5 (4) — LC-02, LC-03, LC-06, LC-07 · §6 حصراً (14) — PERM-01A-UI, PERM-01B-UI, PERM-01C, `PS-04*`, B1, B2, B7, B10, B12, B14, C1, C2, C4, C5 · §12 (1) — **SEC-011.4** · **سلسلة M2 (6)** — `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`, `M2.4-REFUND-SUBORDER` (§13–§20)، **`M2.5-TX-SELLER-ATTRIBUTION`** (§13 + §21–§22). (المجموع 12+3+1+4+14+1+6 = **41**.)
+- **المغلقة = 42:** §2 (12) — SEC-01, SEC-02, **SEC-03**, SEC-04B, **SEC-XFF-01**, PERM-01A, PERM-01B, **PERM-01 (المتبقّي: سياسة `revenue:read`/`report:read` لـADMIN)**, **SEC-CSRF-01**, PS-01, PS-02, OBS-01 · §3 (3) — AI-01, AI-06, AI-07 · §4 (1) — **PR-05** · §5 (4) — LC-02, LC-03, LC-06, LC-07 · §6 حصراً (14) — PERM-01A-UI, PERM-01B-UI, PERM-01C, `PS-04*`, B1, B2, B7, B10, B12, B14, C1, C2, C4, C5 · §12 (1) — **SEC-011.4** · **سلسلة M2 (6)** — `M2.1-CANCEL-INV`, `M2.1-PARENT-STATUS`, `M2.2-PAYOUT-SUBORDER`, `M2.3-SUBORDER-SETTLEMENT`, `M2.4-REFUND-SUBORDER` (§13–§20)، **`M2.5-TX-SELLER-ATTRIBUTION`** (§13 + §21–§22). (المجموع 12+3+1+4+14+1+6 = **41**) + **PR-01** (§5) = **42**.
 - **الفجوات الكاذبة = 6:** نقاط §7 (قائمة).
 - **الخارجية = 10:** معرّفات §8 بعد فكّ الصيغ المركّبة: `PS-03`, `PS-06`, `LC-01`, `LC-03`, `LC-04`, `LC-05`, `PI-03`, `PI-09`, `BU-01`, `BU-02` (زائد `BU-04`، وهو معرّف بلا صف تفصيلي في المستودع).
 - **إضافة DOC-A2-CLOSE (2026-11-07):** «المفتوحة» **22 → 24** بفجوتَي التحقّق `GAP-A2-01` و`GAP-A2-02` (§11)؛ لم تُغلق ولم تُفتح أي فجوة قائمة أخرى.
@@ -137,6 +138,8 @@
 | **PS-01** | Payment/Settlement | لا واجهة (UI) لأي عملية من: تأكيد تسوية، إنشاء/إرسال دفعة، مواءمة، إيصال. الـBackend موجود لكن غير قابل للاستخدام التشغيلي. | HIGH | P0 | — | **COMPLETED** | E2E: من `/admin/finance` تأكيد تسوية بمرجع + رفض بلا مرجع | ✅ سطح `/admin/finance` مُنفَّذ (5 تبويبات: settlement/payouts/reconciliation/receipts/providers) + 8 دوال api مطابقة + i18n (ar/fr/en/zh) + مسار محروس ADMIN/SUPER_ADMIN؛ Typecheck + Build (server+web) نظيفان؛ **تحقّق حيّ على PostgreSQL 16 معزول (`wasit_test`)**: Backend `finance-routes.test.ts` **16/16**، E2E `admin-finance.spec.ts` **10/10** — الإجمالي **26 passed / 0 failed / 0 skipped**؛ `dispatch`/`sync` لا يُكملان الدفعة (`COMPLETED`) دون إثبات تحويل خارجي. الملفات: `docs/PS-01_ADMIN_FINANCE_DESK.md` + `e2e/admin-finance.spec.ts` + `packages/web/src/pages/AdminFinancePages.tsx` |
 | **PS-02** | Payment/Settlement | لا «settlement desk» لإتمام دفع `manual`/offline من الواجهة. | MEDIUM | P0 | PS-01 | **COMPLETED** | E2E: intent manual → إتمام من الواجهة → PAID | ✅ مكتب إتمام دفع يدوي (DEMO فقط) في تبويب `/admin/finance`: `completeManualPayment` يعيد استخدام `applyPaymentSucceeded` نفسه (لا كاتب جديد)؛ بوّابات مغلقة (503 خارج DEMO، 409 لمزوّد غير `manual`، 422 بلا مرجع)؛ مسار محروس ADMIN/SUPER_ADMIN؛ Audit `PAYMENT.MANUAL_COMPLETED`؛ تأكيد قبل الفعل في الواجهة. الملفات: `docs/PS-02_MANUAL_PAYMENT_COMPLETION.md` + `packages/server/tests/manual-payment-completion{,-guard}.test.ts` + `e2e/manual-payment-completion.spec.ts`. **تحقّق حيّ (PostgreSQL 16 معزول `wasit_test`): Backend 10/10 + بوّابات 4/4 + E2E 5/5 + تراجع PS-01 (finance-routes 16/16, admin-finance E2E 10/10) = 45 passed / 0 failed / 0 skipped** |
 | **PS-03** | Payment/Settlement | قدرة **Split** لدى مزوّد الدفع (iPay/ClicToPay/Flouci) غير مؤكَّدة وغير موثَّقة: لا endpoint منشور للـsplit/sub-merchant، والنموذج المالي (1020 = 980 + 40) يحتاج split أو WASIT كحامل أموال. | CRITICAL | P0 | مزوّد | BLOCKED | — | يحتاج تأكيداً كتابياً موثقاً من المزوّد + تصنيف صريح `Split supported` أو `Provider capability gap` |
+| **SEC-DEP-01** | Security/Supply-chain | **مُغلق (SEC-01، 2026-11-23).** تدقيق اعتماديات كامل (`npm audit --omit=dev` و`npm audit` الكامل) على `package-lock.json` الوحيد للمستودع: 7 ثغرات إنتاج (3 high، 4 moderate، 0 critical) و18 إجمالاً (2 critical في أدوات التطوير). أُصلح ما يُصلَح داخل النطاق الدلالي المعلن بلا كسر: `hono` 4.13.7→**4.13.21** (6 استشارات، منها **`RegExpRouter` يتخطّى wildcard middleware** وهي مسار WASIT الفعلي لـ`app.use('/api/*')`)، `@hono/node-server` 1.19.17→**1.19.19** (backslash كفاصل مسار يتجاوز الحجب عند reverse proxy)، `source-map-js` 1.2.1→**1.2.4**، `postcss-selector-parser` 6.1.4→**6.1.6**. النتيجة: **الإنتاج 7 → 6** (0 critical) و**الإجمالي 18 → 15**. `npm audit fix --dry-run` يؤكد أنه لا يوجد إصلاح آخر ممكن بلا ترقية كاسرة. | MEDIUM | P0 | — | **COMPLETE_VERIFIED** | audit + build + حزمة كاملة | قبل/بعد في §31 · Typecheck (server+web)=0 · Build + `build:prod` · Web 73/73 · Server **2335/2335** · CI أخضر |
+| **SEC-DEP-02** | Security/Supply-chain | **قرار مطلوب — ترقيات كاسرة متبقّية (6 ثغرات إنتاج / 9 حزم).** كل ما تبقّى يتطلّب قفزة major أو كسر 0.x، ولم يُنفَّذ (قاعدة «لا major بلا موافقة»): `zod` 3.25.76→4.6.7 (استنفاد ذاكرة على مجموعات ضخمة — **مُخفَّف** بسقف جسم الطلب 1 MiB + nginx 20m)، `nodemailer` 6.10.1→10.6.1 (22 استشارة؛ القابل للمساس منها فئات addressparser DoS لأن عناوين المستخدمين تُمرَّر إلى `sendMail`)، `drizzle-orm` 0.36.4→0.45.4 (SQL injection عبر **معرّفات** غير مُهرَّبة — **غير قابل للوصول** حالياً: كل `sql.raw` بقيم كودية/مُحقَّقة)، `@hono/node-server` 1.19.19→2.1.11 (`serveStatic` — **غير مستخدم** في WASIT)، `react-router-dom` 6.30.6→7.18.6 (open redirect + SSR `deserializeErrors` — SPA بلا SSR)، وأدوات تطوير فقط: `vite` 5→8، `vitest` 2→5 (+`tinypool`/`vite-node`/`@vitest/mocker`، critical لا يمسّ الإنتاج)، `esbuild` 0.24→0.28، `drizzle-kit` 0.28→0.31. | HIGH | P0 | مراجعة معمارية لكل ترقية | PENDING (قرار مطلوب — لا كود) | ترقية + حزمة كاملة + CI لكل حزمة | خطة الترقية والتصنيف في §31 |
 | **PS-06** | Payment/Settlement | لا مسار استرداد لـClicToPay: `clictopay.refund()` يرفض العملية بـ**503** عمداً (لا endpoint استرداد موثَّق علناً). | HIGH | P0 | مزوّد | BLOCKED | — | يحتاج توثيقاً رسمياً/عقداً من SPS/ClicToPay يحدّد آلية الاسترداد (لا اختراع endpoint) |
 | **OBS-01** | Security/Observability | `/api/payments/webhook-failures` و`/:id/replay` كانا موجودين بلا سطح إداري ولا توثيق للمشغّل. | MEDIUM | P0 | — | **COMPLETED** | E2E: فشل webhook يظهر + replay يعمل | ✅ تبويب `webhooks` في `/admin/observability` + ترقيم (offset/total) + تأكيد قبل الفعل + Audit بالهوية؛ Backend `p6-p7-dispute-webhook.test.ts` **19/19** + الحزمة الكاملة **887/887**؛ E2E `admin-webhook-failures.spec.ts` **4/4** + الحزمة الكاملة **226 passed / 8 skipped** — تحقّق حيّ على PostgreSQL 16 معزول (`wasit_test`). **تحديث 2026-11-20 (OBS-01-RECOVERY):** محرّك استعادة خادمي كامل — تصنيف الفشل (TRANSIENT/CONFLICT/PERMANENT/CAPABILITY/STALE)، backoff أسي محدود (`WEBHOOK_RETRY_*`)، claim ذرّي بـlease يمنع التطبيق المزدوج تحت التزامن، سجل `payment_webhook_attempts` لكل محاولة، سقف `replay` (`WEBHOOK_REPLAY_MAX`) + Audit، ومسار `GET /webhook-failures/:id/attempts`. الاختبارات: وحدة **14/14** + تكامل **13/13** + تراجع الـwebhooks **19/19** على PostgreSQL 17 معزول (`wasit_test`، `127.0.0.1:5434`)؛ التفاصيل: `docs/OBS-01_WEBHOOK_RECOVERY.md` |
 | **SEC-CSRF-01** | Security/API | لا حماية CSRF لمركزية: الطلبات المُغيِّرة للحالة (POST/PUT/PATCH/DELETE) التي تحمل كوكي الجلسة (`wasit_session`، `SameSite=Lax`) تُنفَّذ دون التحقق من `Origin`/`Referer`، فيمكن لموقع خارجي إرغام متصفح المستخدم المصادَق على إرسال طلب كتابة (كوكي `Lax` لا يمنع POST/PUT/PATCH/DELETE عبر fetch/no-cors، ويُرسَل عبر top-level navigations GET فقط). | HIGH | P1 | — | **COMPLETE_VERIFIED** | رفض Origin غير موثوق على طلب يحمل الكوكي؛ قبول same-origin؛ عدم المساس بطلبات بلا كوكي (توكن/webhooks)؛ سلامة GET/HEAD/OPTIONS؛ استمرار CORS/RBAC | ✅ `middleware/csrf.ts` (مركزي، بلا مسارات مستثناة؛ بعد CORS وقبل routing) + `CSRF_PROTECTION` في `env.ts` + ربطه في `app.ts`؛ **تحقق معزول بلا DB/Docker (WASIT-EXECUTION-005):** `packages/server/tests/csrf.test.ts` **21/21** ✅ (يشمل: الطرق الأربع POST/PUT/PATCH/DELETE، `null` origin، Referer أجنبي/مطابق، رفض مغلق بلا origin مع الكوكي، عدم المساس بطلبات بلا كوكي، سلامة GET/HEAD/OPTIONS، inert في off/auto-dev، فرض `auto` الافتراضي في production عبر التطبيق الحقيقي، عدم استثناء المسارات الحسّاسة، وترتيب CORS→CSRF→routes) + `cors.test.ts` **4/4** (تراجع) + `secret-scan.test.ts` **3/3** + `staff-mfa-enforcement.test.ts` **17/17** (تراجع) + Typecheck (server+web) نظيف ✅ |
@@ -171,10 +174,11 @@
 
 | ID | المجال | وصف النقص | الخطورة | الأولوية | الاعتماديات | الحالة | الاختبارات المطلوبة | دليل الإغلاق |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **ORDER-01-FU** | Orders/Data model | ربط طلب الشركة بشركتها محفوظ في `orders.metadata.buyer` (JSONB) لا في عمود `buyer_company_id` مع FK؛ التحقق الخادمي قائم والبيانات لا تُفقد، لكن سلامة المرجعية وتقارير SQL المباشرة على الشركة تحتاج العمود. | LOW | P2 | migration | OPEN | اختبار تكامل يثبت FK + backfill من `metadata.buyer.companyId` للصفوف القائمة | عمود + FK + migration مع backfill واختبار |
 | **PR-02** | Product/Admin | لا Admin Desks لـMerchants/Suppliers/Companies/Categories/Currencies/Languages/Commissions (`grep admin/merchants` = ∅). | HIGH | P2 | — | PENDING | مسارات + صفحة + RBAC + E2E | E2E |
 | **PR-10** | Product | جدول `notification_preferences` موجود في المخطّط بلا أي مسار أو واجهة (تفضيلات الإشعارات). | MEDIUM | P2 | — | PENDING | GET/PUT + E2E | E2E |
 | **PR-11** | Product | لا Support Desk/طابور تذاكر وتصعيد. | MEDIUM | P2 | AI-03 | PENDING | تذكرة + تصعيد + E2E | E2E |
-| **PR-01** | Product | لا Cart دائم/دفع متعدد البنود (`CheckoutPage` = منتج واحد). | MEDIUM | P2 | — | PENDING | سلة + دفع متعدد + E2E | E2E |
+| **PR-01** | Product | لا Cart دائم/دفع متعدد البنود (`CheckoutPage` = منتج واحد). **أُغلق (CART-01):** سلة دائمة في المتصفح (معرّفات+كميات فقط) + `POST /api/orders/quote` يسعّرها من الخادم + `CheckoutPage?cart=1` + idempotency على الإنشاء. | MEDIUM | P2 | — | **COMPLETE_VERIFIED** | سلة + دفع متعدد + E2E | ✅ `packages/server/src/modules/orders/{service.ts,routes.ts}` + `packages/web/src/lib/cart.tsx` + `packages/web/src/pages/{CartPage.tsx,CheckoutPage.tsx,ProductDetailsPage.tsx}` + `packages/server/tests/cart01-multi-product-cart.test.ts` (**17/17**) + `e2e/cart01.spec.ts` (**10/10** متصفّح حقيقي، سطح مكتب + 390×844) |
 | **PR-05** | Product | `/tools/calculator` غير منفَّذ. **أُغلق:** صفحة `BusinessCalculatorPage` على `/tools/calculator` (واجهة عامة) + منطق صرف `lib/business-calculator.ts` يعكس نموذج رسوم الطلب (عمولة البائع على المجموع، عمولة المشتري تُضاف لإجمالي المشتري، رسوم الدفع على البائع، `sellerNet = المجموع − عمولة البائع − رسوم الدفع`)، بنسب افتراضية قابلة للتعديل موسومة كسياسة القاعدة. | LOW | P2 | — | **COMPLETE_VERIFIED** | صفحة + اختبار | ✅ `packages/web/src/lib/business-calculator.ts` + `packages/web/src/pages/BusinessCalculatorPage.tsx` + `packages/web/src/{App.tsx,components/layouts/PublicLayout.tsx,lib/i18n.ts}` + `packages/web/tests/business-calculator.test.ts` (**10/10** معزول بلا DB/DOM) + `e2e/business-calculator.spec.ts` (**4/4** متصفّح حقيقي بلا DB عبر `playwright.tools.config.ts`) |
 | **PR-06** | Product | `/map` (Business/Market Map) غير منفَّذ. | LOW | P2 | — | PENDING | صفحة + اختبار | E2E |
 | **PR-03** | Product | أسطح Placeholder: Branches، Employees بلا Backend. | LOW | P2 | — | PENDING | قرار: تنفيذ أو إزالة | — |
@@ -195,6 +199,7 @@
 | **PI-03** | Infra | النسخ الاحتياطي محلي فقط: لا تشفير ولا نقل offsite ولا WAL streaming. | HIGH | P3 | بنية خارجية | BLOCKED | — | يحتاج وجهة خارجية |
 | **PI-05** | Infra | لا Error tracking (Sentry/Datadog). | MEDIUM | P3 | مزوّد | PENDING | تكامل + اختبار | — |
 | **PI-09** | Infra | لا مفاتيح AI إنتاجية (الافتراضي `local-heuristic`). | MEDIUM | P3 | AI-04 | PENDING | إعداد المزوّد + اختبار | — |
+| **OBS-01-CONTRACT** | Payments/Observability | **قرار مطلوب قبل تفعيل أي مزوّد دفع حقيقي** — عقد HTTP الموجّه للمزوّد في `POST /api/payment-webhooks` لم يُحسم: (أ) الفشل العابر الأول يردّ **404** (دلالياً «لا مسار»، وبعض المزوّدين يعطّلون endpoint يتكرّر 404) بدل `503`؛ (ب) **`NOT_DUE` يردّ 200** أي «توقّف عن إعادة المحاولة» بينما WASIT **لا تملك مؤقّتاً داخلياً** (مبدأ OBS-01 §2: المزوّد هو محرّك إعادة المحاولة) ⇒ حدث فشل عابر قد يبقى `FAILED` بلا مسار، لأن `replay` مقيّد بـ`DEAD_LETTERED` (`replayDeadLetter` يرفض غيره) ولا يظهر للمشغّل أي إجراء. **المطلوب مراجعته**: `503 + Retry-After` للفشل العابر و`NOT_DUE` · `409/422` للدائم/التعارض بلا `Retry-After` · `200` للإقرارات النهائية فقط (مُطبَّق/مكرّر/قديم/قيد التنفيذ/مُسدَّل) · وحلّ بقاء `FAILED` بلا replay (إمّا إقرار غير-2xx لـ`NOT_DUE` أو السماح بـreplay على `FAILED` بنفس السقف). **لم يُنفَّذ عمداً** في CI-01-CLOSEOUT: لا مزوّد حقيقي مُفعَّل، والعقد الحالي مُثبَت في اختبارات التكامل. | HIGH | P3 | مراجعة هندسية + مزوّد دفع حقيقي | PENDING (قرار مطلوب — لا كود) | مراجعة عقد + تحديث `obs01-webhook-recovery` + E2E | — (قرار) |
 
 ---
 
@@ -206,6 +211,7 @@
 
 | ID | البند | دليل الإغلاق |
 | --- | --- | --- |
+| **ORDER-01** | هوية المشتري تُثبت في الخادم لا تُصدَّق من الـpayload: `resolveBuyerIdentity` يتحقّق من ملكية الشركة/الكيان، ويرفض `COMPANY` بلا شركة (`403`) و`companyId` لشركة أخرى (`403`) و`companyId` مع نوع آخر (`422`)؛ `createOrder` يفرض `buyerId === actorId` داخل الخدمة؛ `GET /api/companies/mine` يغذّي خيار الواجهة؛ `CheckoutPage` يرسل `buyerType` (+`companyId`) ويحفظ لقطة الشركة في `orders.metadata.buyer` | `tests/order-buyer-identity.test.ts` **10/10** (فرد/شركة/انتحال/عزل/سلة متعدّدة البائعين/`mine`) + E2E `order-buyer-identity.spec.ts` **3/3** (شركة ⇒ `COMPANY` في DB، تبديل إلى فرد ⇒ `CUSTOMER`، عميل لا يرى الخيار) + تراجعات الطلبات/الدفع **96/96** وE2E الدفع/الطلبات **10/10** + الحزمة الكاملة **2359 ناجحًا** (4 أعطال فيديو سابقة) |
 | **SEC-01** | صلاحيات المنتجات مستمدّة من RBAC (`product:manage`) لا من قائمة أدوار مكتوبة يدوياً؛ `SUPPORT` لم يعد مسؤولاً تلقائياً | `products/routes.ts` (`hasProductManageAuthority`) + `product-suspension.test.ts` (4 حالات جديدة) |
 | **SEC-02** | لا يمكن نشر منتج باسم بائع آخر لغير حامل `product:manage` | نفس الاختبار: SUPPORT→403، ADMIN/SUPER_ADMIN→201، ولا صف مُدسّ في DB |
 | **SEC-03** | تأكيد الطلب (`CONFIRMED`) يتطلّب دفعاً مؤكَّداً قبل خصم المخزون (`assertPaymentConfirmedForOrder`) | `orders/service.ts` (`assertPaymentConfirmedForOrder`) + `order-confirmation-payment-guard.test.ts` |
@@ -275,6 +281,7 @@
 
 | التاريخ | البند | الإجراء | النتيجة |
 | --- | --- | --- | --- |
+| 2026-11-24 | ORDER-01 | **هوية المشتري من الواجهة إلى الصف:** `modules/orders/buyer-identity.ts` (تحقّق ملكية الشركة/الكيان + رفض انتحال شركة أخرى)، `createOrder` يكتب الهوية المُتحقَّق منها ويحفظ `metadata.buyer`، `GET /api/companies/mine`، واختيار الهوية في `CheckoutPage` (بلا إلغاء لاختيار المستخدم عند وصول استجابة متأخرة) | **COMPLETE_VERIFIED** — تكامل **10/10** + E2E **3/3** + تراجعات **96/96** و**10/10** + Typecheck (server+web) نظيف. لا migration ولا seed ولا تغيير RBAC |
 | 2026-11-22 | AI-03 | **أتمتة مساعد النزاعات:** `modules/disputes/assistant.ts` (طلب عند الفتح بلا مالك وهمي، إنشاء عند تعيين مراجع مخوّل، دورة تعيين + `dedupe_key` + إلغاء مهام الدورة السابقة، فشل لا يعطّل النزاع، Audit لكل مرحلة) + `AgentTaskOrigin` في `createAgentTask` (رابط موثوق يُحقن بعد إسقاط مفاتيح الطالب) + حارس تنفيذ يعتمد `requestedBy` من سياق التشغيل + مساران إداريان (`GET .../assistant`, `POST .../assistant/retry`) + بطاقة في `AdminDisputesPage`. **بلا Migration/Seed، بلا صلاحية جديدة، بلا قرار آلي.** الأدلة: `afc08-dispute-assistant-automation` **12/12** + تراجع النزاعات والوكلاء **61/61** + الحزمة الكاملة **2209/2209** (173 ملفًا، EXIT=0) + Typecheck (server+web) exit 0. | **COMPLETED** ✅ |
 | 2026-11-20 | AI-10 | **إعادة بناء `dispute-assistant` على نزاع واحد:** `modules/ai/dispute-summary.ts` (منطق صرف) + إعادة كتابة `execDisputeAssistant` (وضع `summary` بـ`disputeId` ووضع `triage` بلا نصوص) + `disputePolicySnapshot()` في خدمة النزاعات (قراءة بلا كتابة) + حقن `__disputePolicy` في `createAgentTask` مع إسقاط قيمة الطالب + توسيع عقد A2 (evidence/events/appeals/orders، قراءة فقط). **بلا Migration/Seed، بلا صلاحية جديدة.** الأدلة: `unit/dispute-summary` **23/23** + `ai-dispute-assistant` **12/12** (عزل A/B، لا كتابة، رفض CUSTOMER/SUPPORT قبل أي صف، نزاع مجهول ⇒ `failed`) + تراجع AI **101/101** + الحزمة الكاملة **2197/2197** (172 ملفًا، EXIT=0) + Typecheck exit 0. | **COMPLETED** ✅ |
 | 2026-11-08 | SEC-011.4 (011.4) | **تحقّق (011.4):** `sec0114-rate-limit-resource.test.ts` **16/16** على PostgreSQL 17 معزول `wasit_test` (سقف جسم 413، حدّ عام 429+`Retry-After`، استثناءات، AI لكل مستخدم+IP، بحث، فيديو، سقف المهام، **XFF لا يحرّك الدلو**، **fail-closed 503**، `Semaphore`) + تراجع `security-privacy`(19)/`rate-limit`(12)/`client-ip`(32)/`marketing-video`(86) + الحزمة الكاملة **1374/1374** (110 ملف، EXIT=0؛ تشغيل سابق أظهر `read-cache` عابراً) + Typecheck (server) exit 0. **بلا Migration/Seed.** | **COMPLETE_VERIFIED** ✅ |
@@ -402,6 +409,14 @@
 | 2026-11-07 | PERM-01 | **الاختبار (معزول بلا DB، بلا `globalSetup`):** `perm01-admin-revenue-report.test.ts` **17/17** ✅ — مصفوفة RBAC (ADMIN بلا revenue:*/report:read؛ SUPER_ADMIN كامل)، منع ADMIN على `/api/revenue/report|scenarios|scenario`، 401 لغير المصادق، بقاء مكتب التقارير متاحاً لـADMIN (200-class) وممنوعاً لـCUSTOMER/MERCHANT (403)، منع CUSTOMER/MERCHANT/SUPPLIER/COMPANY/MARKETER على `/api/admin/stats`، عدم التسريب عبر endpoint بديل (كل مسارات الإيراد خلف revenue:read/simulate)، التحقق لكل طلب (نفس جلسة ADMIN: 200-class على الإدارة و403 على الإيراد)، وعدم التجاوز بتغيير الدور. | COMPLETE_VERIFIED |
 | 2026-11-07 | PERM-01 | **تراجع + TypeScript:** csrf(21)/cors(4)/secret-scan(3)/staff-mfa-enforcement(17) ✅؛ Typecheck (server+web) نظيف ✅؛ **لا تغيير صلاحيات ولا كود إنتاج ولا schema/migration/seed**؛ الموارد المؤقتة (ملف vitest للعزل) حُذفت. | COMPLETE_VERIFIED |
 | 2026-11-07 | PERM-01 | **إغلاق:** صف PERM-01 (المتبقّي) → `COMPLETE_VERIFIED`؛ «المفتوحة» 20 → 19 و«المغلقة» 28 → 29؛ أُضيف صف §6. | COMPLETE_VERIFIED |
+| 2026-11-23 | CI-01-CLOSEOUT | إغلاق الفشلين المتبقّيين: `WEBHOOK_RETRY_BASE_DELAY_MS: '0'` في `SERVER_ENV` داخل `playwright.config.ts` (بيئة الـE2E فقط) ⇒ كل تسليم فاشل يصبح مستحقاً فوراً فتُستنفد ميزانية الإنتاج (5) ويُبلَغ `DEAD_LETTERED`. لا تغيير في المواصفة ولا في كود الخادم ولا في العقد الإنتاجي ولا في `.env`/Demo | COMPLETE_VERIFIED |
+| 2026-11-23 | CI-01-CLOSEOUT | التحقق: `admin-webhook-failures.spec.ts` **4/4** · المواصفات السبع الأخرى الناشرة لـwebhooks **32/32** · `obs01-webhook-recovery` **13/13** بلا تجاوز (backoff 30s وتضاعفه ورفض NOT_DUE كما هي) · الخادم **2335/2335** · Typecheck+Build نظيفان · إثبات DB: `DEAD_LETTERED/attempts=5/next_attempt_at=NULL` + `REPLAY` بفاعل USER و`DEAD_LETTERED` بفاعل SYSTEM | COMPLETE_VERIFIED |
+| 2026-11-23 | OBS-01-CONTRACT | تسجيل قرار مطلوب (بلا كود): عقد HTTP الموجّه للمزوّد — `503 + Retry-After` للفاشل العابر و`NOT_DUE`، `409/422` للدائم، `200` للإقرارات النهائية فقط، وحلّ بقاء `FAILED` بلا replay. «المفتوحة» 19 → **20** | PENDING (قرار) |
+| 2026-11-23 | CI-01-CLOSEOUT | جرد الـ15 متخطّى في E2E بلا تغيير: `agent-surfaces` 6 (بيئية + فجوة تغطية موثّقة)، `demo-auto-login` 2 و`demo-owner` 7 (مقصودة، والحالة السلبية مُختبَرة) | COMPLETED |
+| 2026-11-23 | SEC-DEP-01 | تدقيق اعتماديات: `npm audit --omit=dev` = **7** (3 high / 4 moderate / 0 critical)، الكامل = **18** (2 critical في أدوات التطوير). كل استشارة فُحصت مقابل الكود (استدعاء الـAPI + مصدر المدخل) قبل التصنيف | COMPLETED |
+| 2026-11-23 | SEC-DEP-01 | إصلاح غير كاسر: `hono` 4.13.7→**4.13.21** (6 استشارات، أهمّها تخطّي wildcard middleware في `RegExpRouter` — عمود حماية WASIT)، `@hono/node-server` 1.19.17→**1.19.19**، `source-map-js` 1.2.1→**1.2.4**، `postcss-selector-parser` 6.1.4→**6.1.6**؛ `package-lock.json` تغيّر في 4 حزم فقط | IMPLEMENTED |
+| 2026-11-23 | SEC-DEP-01 | التحقق: `npm audit --omit=dev` **7→6**، الكامل **18→15**، `npm audit fix --dry-run` = 0 تغييرات (لا إصلاح آخر بلا كسر) · Typecheck server+web = 0 · Build + `build:prod` (bundle 2.79 MB) · Web 73/73 · Server **2335/2335** (179 ملفاً) · لا تغيير في المصادقة/RBAC/الدفع/Webhooks | **COMPLETE_VERIFIED** |
+| 2026-11-23 | SEC-DEP-02 | تسجيل الترقيات الكاسرة المتبقّية كقرار مستقل: zod 3→4، nodemailer 6→10، drizzle-orm 0.36→0.45، @hono/node-server 1→2، react-router-dom 6→7، vite 5→8، vitest 2→5، esbuild 0.24→0.28، drizzle-kit 0.28→0.31. «المفتوحة» 20 → **21** | PENDING (قرار) |
 
 ### تفاصيل إصلاح PERM-01C
 
@@ -1403,3 +1418,215 @@ decide→`dispute:decide`، recompute→`trust:read:all`، review→`verificatio
 
 **حدود مُعلنة:** لا إرسال خارجي، لا شراء حملات، لا تعديل ملفات/مخطط آلياً، لا قراءة ledger،
 ولا ربط لوكيل الفيديو. التفاصيل: `docs/AI-AGENT-MERGE-01.md`، القرار: AD-050.
+
+## 25. GM-ACCESS-01 — دخول المدير العام دون الاعتماد على البريد (2026-11-23)
+
+> **العدّ:** يُضاف معرّف واحد **مغلق** (`GM-ACCESS-01`) ⇒ «المفتوحة» بلا تغيير و«المغلقة» +1.
+> الحالة `COMPLETE_VERIFIED`: كود + Migration + اختبارات ناجحة + توثيق + قرار معماري.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **GM-ACCESS-01** | **حساب `SUPER_ADMIN` لا يستطيع إكمال الدخول**: `loginUser` يرفض أي حساب `emailVerified=false` بـ`403 EMAIL_NOT_VERIFIED` **قبل** أي خطوة، والقناة الوحيدة لإشباع البوابة رابط بريدي بينما `MAIL_TRANSPORT` افتراضيه `log` و`ALLOW_DEV_TOOLING=false` (فلا يصل شيء ولا مسار بديل). وبشكل مستقل: فقدان جهاز TOTP بلا رموز استرداد = قفل دائم (لا مسار استعادة للمشغّل)، و`POST /api/auth/mfa/enroll` كان يقبل جلسة قائمة وحدها ويستبدل السر (جلسة مسروقة تُزيح عامل المالك). **الإصلاح:** البوابة باقية لكل حساب، وتُشبَع (1) بعامل ثانٍ **مؤكَّد** يُقرأ حيًّا (`AUTH.EMAIL_VERIFIED_VIA_MFA`)، أو (2) بتذكرة مشغّل أحادية الاستخدام (15 دقيقة، هاش فقط، مقيَّدة بحساب واحد، تُولَّد من CLI محلي فقط بـ`--confirm` وسبب مُدقّق) لا تتجاوز عاملًا مُفعَّلًا ولا تمنح دورًا ولا تعيد تعيين كلمة مرور؛ و`reset-factor` يحذف العامل المفقود ويُبطل كل الجلسات دون لمس كلمة المرور؛ و`/mfa/enroll` يتطلب كلمة المرور (+رمز حالي إن كان العامل مُفعَّلًا) وتغيير العامل يُبطل الجلسات الأخرى. | CRITICAL | P0 | — | **COMPLETE_VERIFIED** | دخول `SUPER_ADMIN` بلا بريد · رفض تجاوز الحسابات الأخرى · رفض الترقية · جلسات تنتهي وتُبطل · رموز استرداد مرة واحدة · لا أسرار في السجلات · دخول بقية المستخدمين بلا تغيير | `packages/server/tests/gm-access-01.test.ts` (**17/17**) · Migration `0044_gm_access_tickets.sql` · `lib/gm-access.ts` + `lib/session-admin.ts` + `scripts/gm-access.ts` (`npm run gm:access`) · `docs/GM-ACCESS-01.md` · AD-058 · Typecheck (server+web) = 0 |
+
+**حدود الإثبات:** الاختبارات تعمل على `wasit_test` الحقيقية عبر `createApp()` (بلا mocks). قاعدة Demo
+لم تُمسّ، ولم تُعدّل أي كلمة مرور. التذكرة تُثبت باختبار استخدام مزدوج وتقييد بحساب، لكن **لم** يُختبر
+مسار CLI نفسه في CI (يُستدعى `issueGmAccessTicket` التي يستدعيها الـCLI مباشرة).
+
+## 26. GM-ACCESS-02 — تدوير كلمة مرور المدير العام (2026-11-23)
+
+> **العدّ:** يُضاف معرّف واحد **مغلق** (`GM-ACCESS-02`) ⇒ «المفتوحة» بلا تغيير و«المغلقة» +1.
+> الحالة `COMPLETE_VERIFIED` للكود والاختبارات؛ **تطبيقها على الحساب الفعلي ينتظر موافقة المالك**.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **GM-ACCESS-02** | **كلمة مرور `SUPER_ADMIN` مجهولة أو مسرَّبة**: كل مسارات AD-058 تفترض امتلاك كلمة المرور (رابط البريد، العامل المؤكَّد، التذكرة تُدخَل معها، `reset-factor` لا يمسّها)، فلم يكن للمالك أي إجراء. **الإصلاح:** `npm run gm:access -- set-password` يستبدل كلمة مرور **حساب واحد** (`users.password_hash` فقط)، يولّد ٣٢ حرفًا من CSPRNG أو يقرأ من ملف `0600`، يحفظ السر في ملف `0600` داخل مجلد `0700` **خارج Git**، يُبطل كل جلسات الحساب، ويُدقّق السبب والمشغّل وعدد الجلسات **بلا أي سر**. مرفوض: `--password` في argv، الملف المقروء للمجموعة، `--vault` داخل شجرة Git، `Rhimi123`/`Passw0rd!2026`، أقل من ٢٤ حرفًا، وأي حساب ليس `SUPER_ADMIN`. لا يمسّ `email_verified` ولا `mfa_enabled` ولا `authenticator_apps` ولا `user_roles`. | CRITICAL | P0 | GM-ACCESS-01 | **COMPLETE_VERIFIED** (تطبيق الإنتاج بانتظار موافقة) | كلمة مرور جديدة تعمل والقديمة تُرفض · الجلسات القديمة 401 · حساب آخر لم يتغيّر · البوابة والعامل الثاني سليمان · رفض غير `SUPER_ADMIN` · لا سر في التدقيق · الملف `0600` | `packages/server/tests/gm-access-02.test.ts` (**12/12**) · `lib/gm-access.ts` + `scripts/gm-access.ts` · `docs/GM-ACCESS-02.md` · AD-059 · فحص CLI فعلي على `wasit_test` المعزولة · Typecheck (server+web) = 0 |
+
+**حدود الإثبات:** الاختبارات والفحص اليدوي جريا على `wasit_test` المعزولة فقط. لم تُطبَّق أي
+كلمة مرور على `wasit_demo` أو الإنتاج، ولم تُغيَّر كلمة مرور أي حساب آخر. **لا Migration مطلوبة**
+(الأداة تستخدم `users.password_hash` و`sessions` القائمين منذ `0000`).
+
+## 27. GM-ACCESS-04 — حارس بيئة قاعدة البيانات (2026-11-23)
+
+> **العدّ:** يُضاف معرّف واحد **مغلق** (`GM-ACCESS-04`) ⇒ «المفتوحة» بلا تغيير و«المغلقة» +1.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **GM-ACCESS-04** | **`gm:access` تنفّذ `set-password`/`reset-factor` على أي قاعدة**: بعد GM-ACCESS-02 كان يكفي `DATABASE_URL` خاطئ (رأيناه فعليًا يشير إلى `wasit_test`) لتغيير كلمة مرور حساب على قاعدة اختبار أو Demo منشورة. **الإصلاح:** بوابة بثلاثة شروط مستقلة — `NODE_ENV=production` **و** `WASIT_PRODUCTION_DB_NAME` مساوٍ لِـ`current_database()` المقروء من الخادم **و** اسم غير محمي (`wasit_test`/`wasit_demo`/`wasit_dev`/`wasit_staging`/`postgres`/`template*`/`*_test`/`*_demo`…) — مع تثبيت مضيف اختياري. الرفض يسبق البحث عن الحساب فلا يُكتب أي صفّ. | CRITICAL | P0 | GM-ACCESS-02 | **COMPLETE_VERIFIED** | رفض `wasit_test`/`wasit_demo`/`postgres` حتى لو أُعلنت إنتاجًا · رفض بلا `NODE_ENV=production` · رفض بلا إعلان اسم · رفض تعارض الاسم/المضيف · قبول إنتاج مطابق · لا سرّ في الرسائل · الرفض بلا أي كتابة | `packages/server/tests/gm-access-04.test.ts` (**18/18**، منها 4 تشغّل الـCLI كعمليّة فرعية) · `lib/db-target-guard.ts` + `scripts/gm-access.ts` · `docs/GM-ACCESS-04.md` · AD-060 · Typecheck = 0 |
+
+**حدود الإثبات:** لا توجد قاعدة إنتاج في بيئة التطوير، فمسار **القبول** مُثبت على دالّة
+القرار فقط (اسم إنتاج مطابق، اسم مختلف معلن، مضيف مثبَّت، حالة الأحرف)؛ مسار **الرفض**
+مُثبت عبر الـCLI الحقيقي على `wasit_test`. لم تُنفَّذ أي كتابة على أي قاعدة، ولم يُغيَّر
+أي حساب.
+
+## 28. GM-ACCESS-05 — حزمة نشر الاستعادة على الإنتاج (2026-11-23)
+
+> **العدّ:** يُضاف معرّف واحد **مغلق** (`GM-ACCESS-05`) ⇒ «المفتوحة» بلا تغيير و«المغلقة» +1.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **GM-ACCESS-05** | **الاستعادة كانت إجراءً شفهيًا**: بعد GM-ACCESS-02/04 كانت الأداة والحارس جاهزين، لكن المشغّل على الإنتاج لا يملك إلا نصًّا؛ كل خطوة يدوية تُنسى تُنتج سرًّا في سجل الأوامر أو تدويرًا على قاعدة خاطئة. **الإصلاح:** حزمة `deploy/gm-recovery/` — `check-runtime` ثم `precheck` (يكتب baseline) ثم `generate-password` أو ملف `0600` ثم `rotate` (تأكيد بكتابة اسم القاعدة) ثم `verify` (١٠ فحوص مقابل الـbaseline) ثم `login-check` — مع packager يُنتج tar.gz موقّعًا بـSHA256SUMS ويرفض أي ملف يشبه سرًّا. | CRITICAL | P0 | GM-ACCESS-04 | **COMPLETE_VERIFIED** (التنفيذ على الإنتاج بانتظار موافقة المالك) | رفض `wasit_test`/`wasit_demo` في كل طبقة · لا سرّ مطبوع أو في argv · `verify` يفشل عند تغيّر `email_verified`/العامل/الأدوار أو بقاء جلسة أو غياب صفّ تدقيق · `generate-password` لا يمسّ أي حساب · الحزمة تعمل بلا مستودع | `packages/server/tests/gm-access-05.test.ts` (**33/33**) · `lib/gm-recovery.ts` · `deploy/gm-recovery/` · `docs/GM-ACCESS-05.md` · AD-061 · tar.gz ٤٨٨KB استُخرج في مجلد نظيف و٥٩ checksum نجحت · Typecheck = 0 |
+
+**حدود الإثبات:** كل ما سبق جرى على `wasit_test` المعزولة وعلى حزمة مستخرجة بلا مستودع. **لم**
+يُجرَ `precheck → rotate → verify → login-check` على قاعدة إنتاج (لا يوجد مضيف إنتاج متاح من هنا)،
+ولم يُغيَّر أي حساب أو قاعدة.
+
+## 29. CI-01 — إصلاح بوابة الاختبارات (2026-11-23)
+
+> **العدّ:** لا يُغلق هذا البند أي فجوة سابقة ولا يغيّر «المفتوحة/المغلقة» — كان
+> فشل CI **عطلاً في البوابة نفسها** لا فجوة منتج مسجّلة. يُضاف معرّف واحد
+> (`CI-01`) بحالة `COMPLETE_VERIFIED` بعد تشغيل حقيقي، والانحدارات التي كشفها
+> (فشلان في `admin-webhook-failures`) تُسجَّل كبنود مفتوحة تحت **OBS-01**.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **CI-01** | **CI لم يكن يشغّل الاختبارات أصلاً**: (1) `ci.yml` كان يضبط `TEST_DATABASE_URL=...@localhost:5432` بينما `tests/test-db-guard.ts` يرفض كل هدف غير `127.0.0.1:5434` → `vitest.config.ts` يفشل عند التحميل قبل أي اختبار؛ (2) `ffprobe` غير موجود على الـrunner (`ffmpeg-static` يوفّر `ffmpeg` وحده) و`npm ci --ignore-scripts` يمنع تنزيل باينري `ffmpeg-static` → 5 تأكيدات/مواصفات فيديو تفشل؛ (3) piper غير مثبَّت إطلاقاً و`scripts/install-tts.sh` نفسه معطوب من نسخة نظيفة (`cp -a piper/. .` يصطدم بمجلد الأرشيف) → `voice-pack.test.ts` يفشل ومواصفات الصوت تُتخطّى؛ (4) `age` مثبَّت بإصدار دقيق اختفى من أرشيف Ubuntu، و`pg_dump` من الـrunner (Ubuntu 26.04، عميل 18) يكتب `SET transaction_timeout` الذي يرفضه خادم 16 → نصف الاستعادة في فحص النسخ الاحتياطي يفشل؛ (5) مواصفة `e2e/mfa.spec.ts` لا تملأ كلمة المرور التي يشترطها نموذج تفعيل MFA (إعادة مصادقة) → الزر معطّل واختباران يتوقّفان. **الإصلاح:** CI يتبنّى عقد الحارس (خدمة على `127.0.0.1:5434`، `trust`، بلا كلمة مرور)، `npm rebuild argon2 ffmpeg-static`، تثبيت `ffmpeg`+خطوط+piper مع خطوات تحقّق صريحة، خادم الفحص على 17 ليطابق عميل الـrunner، وإصلاح مُثبِّت piper والمواصفة. **بلا `skipIf` جديد وبلا تخفيف أي تأكيد.** | HIGH | P0 | — | **COMPLETE_VERIFIED** | CI أخضر في الوظائف الثلاث القابلة للإغلاق · صفر أسرار في ملف الـworkflow · الاختبارات كلها تُنفَّذ لا تُتخطّى · فيديو يُرسم ويُتحقَّق فعلياً في CI | **تشغيل حقيقي #45133544390**: `Unit & integration tests` ✅ **179 ملف / 2335 اختباراً ناجحاً / 0 فاشل / 0 متخطّى** (353s، ffmpeg/ffprobe 8.0.1، piper ready) · `Backup & restore drill` ✅ **113 PASS** بما فيها E3 (استعادة مشفّرة بهوية صحيحة، 120 صفاً) مع `pg_dump 18.7` وخادم 17 · `Typecheck & build` ✅ · `E2E` **242 ناجح / 15 متخطّى / فشلان** في `admin-webhook-failures` فقط (انظر أدناه) · `actionlint 1.7.12` = 0 · Typecheck محلي (server+web) = 0 |
+
+**سبب المشكلة الأصلي:** الحارس `test-db-guard.ts` أُضيف لحماية مسار `DROP/CREATE DATABASE`
+من قاعدة إنتاج، لكن ملف CI لم يُحدَّث معه؛ فصار الشرط الأمني وملف الـCI يتناقضان،
+وأي تشغيل في CI يفشل **قبل** أول اختبار. أما فشل الفيديو فسببه أن `ffmpeg-static`
+يوفّر `ffmpeg` فقط ولا يوفّر `ffprobe`، وهو ما تستخدمه طبقة التحقّق (`verify.ts`،
+`video-quality.ts`، `tts.ts`).
+
+**حدود الإثبات:** المجموعة الكاملة شُغّلت محلياً على PostgreSQL 17.12
+(`127.0.0.1:5434/wasit_test`) مع `ffprobe 7.1.5` (**2335/2335**)، ثم في CI على
+الـrunner الحقيقي (**2335/2335**، بلا تخطٍّ). قسم E3 من فحص النسخ الاحتياطي لا يعمل
+محلياً لأن الدور `wasit` المحلي ليس superuser (يرفض `pg_authid`)، ويُثبَت في CI حيث
+`POSTGRES_USER=wasit` هو superuser. **لم تُغيَّر أي قاعدة بيانات ولم تُضَف أي Migration.**
+
+**فشلان متبقّيان — خارج نطاق CI-01 (OBS-01):** `e2e/admin-webhook-failures.spec.ts`
+يتوقّع `404` لكل تسليم لحدث «intent غير موجود» ثم `DEAD_LETTERED` بعد 5 محاولات سريعة.
+بعد محرّك الاستعادة (OBS-01-RECOVERY) صار الخادم يردّ `200` (إقرار + تصنيف + backoff
+30s)، فلا تُستنفد المحاولات في 5 تسليمات متتالية. المواصفة لم تُحدَّث مع العقد الجديد،
+وقرار الشكل (`200` مقابل `404`) وتسليط `WEBHOOK_RETRY_*` في بيئة الـE2E يخصّان OBS-01
+ولم يُلمسا هنا. البوابة الآن **تُظهر هذا العيب بدل أن تخفيه**.
+
+> **مُغلق في §30 (CI-01-CLOSEOUT):** الفشلان أُغلقا بتسليط `WEBHOOK_RETRY_BASE_DELAY_MS='0'`
+> في بيئة الـE2E فقط — بلا تغيير في المواصفة ولا في العقد الإنتاجي. قرار عقد الحالة
+> الموجّه للمزوّد سُجِّل كبند مفتوح مستقل: **`OBS-01-CONTRACT`** في §5.
+
+## 30. CI-01-CLOSEOUT — مكتب فشل الـWebhooks من طرف إلى طرف (2026-11-23)
+
+> **العدّ:** لا يُغلق هذا البند فجوة منتج، ولا يُغيّر «المغلقة» (43). يُضيف **بنداً
+> مفتوحاً واحداً** (`OBS-01-CONTRACT` في §5: قرار عقد HTTP قبل أي مزوّد حقيقي) ⇒
+> «المفتوحة» 19 → **20**.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **CI-01-CLOSEOUT** | الفشلان المتبقّيان في `e2e/admin-webhook-failures.spec.ts`: المواصفة تُرسل الحدث الفاشل 5 مرات فوراً وتتوقّع `404` من كل تسليم، لكن محرّك الاستعادة يردّ `200` على التسليمات الواقعة داخل نافذة الـbackoff (`NOT_DUE`) ⇒ لا تُستنفد الميزانية ولا يُبلَغ `DEAD_LETTERED`، فلا يظهر الصف في المكتب ولا يمكن اختبار `replay`. | MEDIUM | P0 | — | **COMPLETE_VERIFIED** | الحدث يصل `DEAD_LETTERED` فعلاً · يظهر في المكتب · `replay` وفق الصلاحيات · Audit بهوية المشغّل · backoff الحقيقي ما زال مُثبَتاً بالقيم الافتراضية · العقد الإنتاجي بلا تغيير · بلا `skip` | `playwright.config.ts` (سطر واحد في `SERVER_ENV` + تعليق) · `admin-webhook-failures.spec.ts` **4/4** · المواصفات السبع الأخرى الناشرة لـwebhooks **32/32** · `obs01-webhook-recovery.test.ts` **13/13** (بلا تجاوز) · الخادم **2335/2335** · Typecheck+Build نظيفان · إثبات DB مباشر: `DEAD_LETTERED/attempts=5/next_attempt_at=NULL` + `REPLAY` بفاعل `USER` |
+
+**لماذا هذا الشكل وليس غيره:**
+- **تعديل المواصفة** (نشر واحد + توقّع `FAILED`) كان سيُفقد الاختبار موضوعه: `replay` يعمل على `DEAD_LETTERED` فقط.
+- **تعديل الخادم** (مثلاً `NOT_DUE` → 404) تغيير عقد موجّه للمزوّد، ويخصّ قراراً مستقلاً (`OBS-01-CONTRACT`).
+- **تسليط `WEBHOOK_RETRY_MAX_ATTEMPTS`** لم يُستعمل: تغيير الميزانية يغيّر عدد المحاولات التي يُثبتها الاختبار؛ تأخير `base` فقط يجعل كل تسليم مستحقاً فوراً ويُبقي الميزانية على قيمة الإنتاج (5).
+- **التسليط على المواصفة وحدها غير ممكن تقنياً**: `webServer.env` في Playwright واحد للعملية كلها. لذلك تحقّق أن الإعداد **خامل** لبقية المواصفات: المواصفة الوحيدة التي تنشر أحداثاً فاشلة هي مكتب الـwebhooks، ولا مواصفة E2E تعتمد `retryScheduled`/`nextAttemptAt`.
+- **الأثر على الإنتاج**: صفر — لا كود خادم، ولا `.env`، ولا Demo، ولا قاعدة بيانات. `WEBHOOK_RETRY_BASE_DELAY_MS` الافتراضي (30s) و`WEBHOOK_RETRY_MAX_ATTEMPTS` (5) بلا تغيير، و`obs01-webhook-recovery` يُثبتهما.
+
+**جرد الـ15 اختباراً المتخطّى (بلا تغيير):** `agent-surfaces` 6 (3 اختبارات × مشروعان؛ `hasCredentials=false` — **بيئية + فجوة تغطية**: مسار توليد/تنزيل الفيديو مُغطّى في اختبارات التكامل على CI نفسه)، `demo-auto-login` 2 و`demo-owner` 7 (**مقصودة**: `DEMO_AUTO_LOGIN=false` افتراضياً، والحالة السلبية مُختبَرة في `demo-auto-login.spec.ts:61` و`demo-owner.spec.ts:182`). الحل المقترح لفجوة `agent-surfaces`: وظيفة CI منفصلة بـ`DEMO_AUTO_LOGIN=true` وكلمتَي مرور الديمو، لأن تفعيله في التشغيل الافتراضي يقلب مواصفات الرفض المقصودة.
+
+## 31. SEC-01 — تدقيق الاعتماديات وإغلاق ما يمكن إغلاقه (2026-11-23)
+
+**المنهج:** `package-lock.json` واحد للمستودع (workspaces). شُغِّل `npm audit --omit=dev` و`npm audit` الكامل، ثم فُحصت **كل** استشارة مقابل الكود الفعلي (هل تُستدعى الـAPI المثابة؟ هل المدخل من مستخدم؟) قبل تصنيفها. الخطورة المعلنة هي خطورة npm كما هي — **لم تُخفَّض ولم يُتجاهل أي بند**.
+
+### 31.1 قبل/بعد
+
+| الحزمة | قبل | بعد | الاستشارات | الخطورة | الإجراء |
+| --- | --- | --- | --- | --- | --- |
+| `hono` | 4.13.7 | **4.13.21** | 6 (serveStatic double-decode، `mount()` bypass، **`RegExpRouter` wildcard middleware skip**، `css` helper، `csrf()` text/ping، `validator('form')` multipart) | moderate | ✅ ترقية داخل `^4` |
+| `@hono/node-server` | 1.19.17 | **1.19.19** | 2 (backslash كفاصل مسار ⇒ تجاوز ACL عند proxy، و`serveStatic` double-decode) | moderate | ✅ جزئياً: أُصلح backslash؛ `serveStatic` يتطلّب 2.x |
+| `source-map-js` | 1.2.1 | **1.2.4** | 1 (DoS عبر إزاحات sections) | high | ✅ `npm update` (نطاق `postcss` يسمح) |
+| `postcss-selector-parser` | 6.1.4 | **6.1.6** | 1 (تعقيد تربيعي ⇒ استهلاك CPU) | moderate | ✅ `npm update` (نطاق `tailwindcss` يسمح) |
+| `zod` | 3.25.76 | 3.25.76 | 1 (استنفاد ذاكرة على مجموعات ضخمة، CVSS 7.5) | high | ⛔ يتطلّب 4.6.7 (major) |
+| `nodemailer` | 6.10.1 | 6.10.1 | 22 (addressparser DoS، تجاوز نطاق المستلم، SMTP command injection، CRLF، file/SSRF عبر `raw`) | high | ⛔ يتطلّب 10.1.4 (major) |
+| `drizzle-orm` | 0.36.4 | 0.36.4 | 1 (SQL injection عبر معرّفات غير مُهرَّبة) | high | ⛔ يتطلّب 0.45.2 (كسر 0.x) |
+| `react-router` / `react-router-dom` | 6.30.6 | 6.30.6 | 2 (open redirect عبر backslash، SSR `deserializeErrors` constructor injection) | moderate | ⛔ يتطلّب 7.18.0 (major) |
+| `vite` | 5.4.21 | 5.4.21 | 8 (path traversal، `server.fs.deny` bypass، launch-editor) | high | ⛔ أدوات تطوير — يتطلّب 8.x |
+| `vitest` (+`tinypool`, `vite-node`, `@vitest/mocker`) | 2.1.9 | 2.1.9 | 4 (منها **critical**: UI server يقرأ/ينفّذ ملفات، prototype pollution ⇒ RCE) | critical | ⛔ أدوات تطوير — يتطلّب 5.1.1 |
+| `esbuild` (مباشر + عبر vite/drizzle-kit) | 0.24.2 | 0.24.2 | 1 (dev server يقرأ استجابات أي موقع) | moderate | ⛔ أدوات تطوير — يتطلّب 0.28.2 |
+| `drizzle-kit` (+`@esbuild-kit/*`) | 0.28.1 | 0.28.1 | 3 | moderate | ⛔ أداة migrations — يتطلّب 0.31.11 |
+
+**النتيجة:** الإنتاج **7 → 6** (critical 0 في الحالتين) · الإجمالي **18 → 15** (critical 2 → 2، كلها في أدوات التطوير) · `npm audit fix --dry-run` = **0 تغييرات** ⇒ لا إصلاح آخر ممكن دون كسر.
+
+### 31.2 قابلية الاستغلال في WASIT (تصنيف، لا تخفيف)
+
+| الاستشارة | قابلية الوصول | الحكم |
+| --- | --- | --- |
+| `hono` — **`RegExpRouter` يتخطّى wildcard middleware** | `app.use('/api/*', …)` هو عمود WASIT الأمني (CSRF، MFA للطاقم، rate-limit، legal gate) | **قابلة للاستغلال — أُصلحت** (الأولوية القصوى في هذا التدقيق) |
+| `hono` — `serveStatic`/`mount()`/`css`/`csrf()`/`validator('form')` | لا استدعاء لأي منها في `src` (CSRF عندنا مكتوب داخلياً؛ الملفات الثابتة من nginx) | غير قابلة للوصول — أُصلحت مجاناً بالترقية |
+| `@hono/node-server` — backslash كفاصل مسار | الخادم خلف nginx يمرّر المسار كما هو | **قابلة للاستغلال — أُصلحت** |
+| `@hono/node-server` — `serveStatic` double-decode | `serveStatic` غير مستخدم | نظرية — ترقية 2.x مؤجّلة |
+| `source-map-js` / `postcss-selector-parser` | وقت البناء فقط (postcss/tailwind) | غير قابلة للوصول في وقت التشغيل — أُصلحت |
+| `zod` — استنفاد ذاكرة | كل جسم طلب يمرّ بـzod، لكن `MAX_REQUEST_BODY_BYTES` (1 MiB) + nginx (20m) يحدّان الحجم | **مُخفَّفة عملياً**؛ الترقية 4.x تبقى مطلوبة |
+| `nodemailer` | `lib/mail/smtp.ts` يمرّر بريد المستخدم إلى `sendMail`؛ لا `raw`/`jsonTransport`/DKIM/OAuth2/`resolveContent` | **DoS/تفسير عنوان** ممكن نظرياً؛ الترقية 6→10 مطلوبة |
+| `drizzle-orm` | كل `sql.raw` بقيم كودية أو `granularity` مُتحقَّق؛ لا معرّف من المستخدم | **غير قابلة للوصول** حالياً — الترقية مطلوبة كتحصين |
+| `react-router` | SPA بلا SSR ⇒ `deserializeErrors` غير مستخدم؛ أهداف التنقّل ثابتة | نظرية |
+| `vite`/`vitest`/`tinypool`/`esbuild`/`drizzle-kit` | لا تُشحن في `dist-bundle` (`--platform=node`، خارجي = argon2 فقط) ولا تُشغَّل في الإنتاج | **خارج سطح الإنتاج**؛ تبقى ديناً تقنياً |
+
+### 31.3 خطة SEC-DEP-02 (مقترحة، غير منفَّذة)
+
+1. `zod` 3→4 (الأوسع أثراً: 42 ملفاً) — فرع مستقل + تحديث `fieldErrors` (شكل `error.issues` لم يتغيّر جوهرياً) + حزمة كاملة.
+2. `nodemailer` 6→10 — مستقل؛ تحقّق من `createTransport`/`sendMail` فقط (واجهة مستقرة) + اختبارات `mail`.
+3. `drizzle-orm` 0.36→0.45 — مستقل؛ يمسّ كل الوحدات ⇒ حزمة كاملة + E2E.
+4. `@hono/node-server` 1→2 — مستقل (لا `serveStatic` عندنا).
+5. `react-router-dom` 6→7 — مستقل (واجهة فقط).
+6. `vite` 5→8 + `vitest` 2→5 + `esbuild`/`drizzle-kit` — حزمة أدوات واحدة، بعد استقرار ما سبق.
+
+> **قاعدة معلنة:** لا تُدمج أي من هذه الترقيات مع إصلاح أمني آخر، ولا بلا حزمة كاملة خضراء + CI أخضر.
+
+## 32. MEDIA-01 — صور المنتجات: رفع البائع ← عرض المتجر (2026-11-23)
+
+> **العدّ:** معرّف واحد **مغلق** (`MEDIA-01`) ⇒ «المغلقة» +1 و«المفتوحة» بلا تغيير.
+> الحالة `COMPLETE_VERIFIED`: كود + اختبارات خادم حقيقية + E2E على متصفح + توثيق. **بلا Migration** (الجداول قائمة، وكانت بلا كاتب).
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **MEDIA-01** | **المنتج يُنشَر بلا صورة**: `product_images`/`media_assets` موجودان لكن لا مسار رفع ولا ربط بمنتج ولا واجهة، فكل بطاقة في المتجر بلا صورة. | HIGH | P1 | — | **COMPLETE_VERIFIED** | بائع يرفع صورة من اللوحة · تُربط بالمنتج وتظهر في `/products/:id` وفي البطاقة · رفض غير الصور (SVG/HTML) بالبايتات لا بالاسم · سقف حجم/عدد من env · ملكية مفروضة (تاجر لا يرفع على منتج غيره) · منتج غير منشور لا يُسرّب صوره · الغلاف يُرقّى عند الحذف · Audit لكل تغيير · i18n ar/fr/en/zh · الهاتف قابل للاستخدام | `modules/media/images.ts` + `lib/media/image-probe.ts` + `lib/media/image-derivative.ts` + `modules/media/routes.ts` (`POST/GET/PATCH/DELETE /api/media/product-images` + `GET /api/media/products/:id/images/:assetId/content`) · `middleware/body-limit.ts` (`resolveMax(path)`) · `components/ProductImageManager.tsx` + `DashboardProductsPage` + `ProductDetailsPage` + `ProductCard` · `AppLayout`/`AppSidebar` (دُرج الهاتف) · `tests/product-images.test.ts` **18/18** · `e2e/product-images.spec.ts` **4/4** · الخادم **2349/2353** (الفشلان الأربعة سابقان ومُثبَتان على `b64394c`) · Typecheck (server+web) = 0 · Build ناجح |
+
+## 33. ENTITY-01 — تحرير بيانات الكيان من مالكه (2026-11-24)
+
+> **العدّ:** معرّف واحد **جديد ومغلق** (`ENTITY-01`) ⇒ «المغلقة» +1 و«المفتوحة» بلا تغيير.
+> **لم يكن مُسجَّلاً سابقًا** تحت هذا المعرّف؛ أُضيف هنا مع دليله. الحالة `COMPLETE_VERIFIED`: كود + اختبارات خادم حقيقية + E2E على متصفح + توثيق. **بلا Migration، بلا Seed، بلا تغيير RBAC.**
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **ENTITY-01** | **لا مسار تحرير كامل لبيانات الكيان**: المورد بلا `PATCH` إطلاقًا؛ التاجر يعدّل 3 حقول فقط (بلا `countryId`/`cityId`) وبلا Audit؛ الشركة تقبل `registrationNumber`/`taxId` في التحقق ثم تتجاهلهما بصمت؛ ولا واجهة تحرير لأي نوع. | HIGH | P1 | — | **COMPLETE_VERIFIED** | قراءة ملف المستدعي وتحديثه لكل نوع · الملكية تُفرض في الخدمة (لا في الواجهة) · قائمة سماح صريحة لكل نوع (الحقول الثلاثة مختلفة) · رفض `verified/isActive/slug/userId/registrationNumber/taxId` بـ**422** لا بتجاهل صامت · Audit `ENTITY.UPDATE` بالحقول المتغيّرة فقط · i18n ar/fr/en/zh + RTL + الهاتف · لا كسر لتدفقات الإنشاء | `packages/server/src/modules/entities/{types,fields,schemas,service,routes}.ts` (جديد) · `modules/{merchants,companies}/service.ts` (تفويض) · `modules/suppliers/{service,routes}.ts` (`PATCH /api/suppliers/:id` جديد) · `app.ts` (`/api/entities`) · `packages/web/src/pages/DashboardEntityPage.tsx` + `App.tsx` + `AppSidebar.tsx` + `lib/{api,types,i18n}.ts` · `tests/entity-profile.test.ts` **21/21** · تراجعات `perm01c` 23/23 + `sec04b` 12/12 + `order-buyer-identity` 10/10 · E2E حقيقي **17/17** (تاجر هاتف/سطح مكتب، مورد، شركة؛ لقطات في `/tmp/entity-*.png`) · Typecheck (server+web) = 0 · Build ناجح |
+
+## 34. RBAC-02 — إدارة الموظفين والأدوار (2026-11-24)
+
+> **العدّ:** معرّف واحد **جديد ومغلق** (`RBAC-02`) ⇒ «المغلقة» +1 و«المفتوحة» بلا تغيير.
+> **لم يكن مُسجَّلاً سابقًا** تحت هذا المعرّف. الحالة `COMPLETE_VERIFIED`: كود + اختبارات خادم حقيقية + E2E على متصفح + توثيق. **بلا Migration، بلا Seed، بلا تغيير في مصفوفة الأدوار/الصلاحيات.**
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **RBAC-02** | **لا سطح لإدارة الموظفين**: `ADMIN` يحمل `user:*` فيمكنه تعطيل **أي** حساب — بما فيه `SUPER_ADMIN` — عبر `PATCH /api/admin/users/:id/status`، ولا قائمة أدوار، ولا تغيير دور، ولا حماية «آخر SUPER_ADMIN»، ولا إبطال جلسات، ولا Audit للأدوار. | HIGH | P1 | — | **COMPLETE_VERIFIED** | سطح `SUPER_ADMIN` فقط (`requireRole`) · `ADMIN` يُرفض على كل المسارات · قائمة موظفين فقط (لا حسابات تجارية، و`404` لا `403` للحساب غير الموظف) · إنشاء بدور من قائمة سماح (SUPPORT/RISK/DISPUTE/ADMIN) وكلمة مرور تُولَّد داخليًا + دعوة بريدية · **SUPER_ADMIN لا يُنشأ ولا يُعاد دوره** · لا تعديل ذاتي (دور/حالة) · لا تعطيل لآخر SUPER_ADMIN نشط · إبطال الجلسات عند تغيير الدور/التعطيل · Audit `RBAC.*` قبل/بعد · لا أسرار في أي استجابة · i18n ar/fr/en/zh + الهاتف | `packages/server/src/modules/staff/{types,service,routes}.ts` (جديد) · `app.ts` (`/api/admin/staff`) · `modules/admin/routes.ts` (تحصين مسار الحالة القديم) · `modules/auth/service.ts` (`revokeAllSessionsForUser`) · `packages/web/src/pages/AdminStaffPage.tsx` + `AdminPages.tsx` (`SuperAdminOnly`) + `App.tsx` + `AppSidebar.tsx` + `lib/{api,types,i18n,rbac}.ts` · `tests/rbac02-staff-management.test.ts` **19/19** · `e2e/rbac02-staff.spec.ts` **5/5** · الحزمة الكاملة **2403/2403** (183 ملفاً) · Typecheck (server+web) = 0 · Web build ناجح |
+
+## 35. B2B-01 — طلب عرض السعر (RFQ) ودورة العروض والتفاوض (2026-11-24)
+
+> **العدّ:** معرّف واحد (`B2B-01`) يغطي أربع مراحل. **المراحل 1 و2 و3 مغلقة اليوم** (`COMPLETE_VERIFIED`)، و**المرحلة 4 (قبول عرض ← طلب) مفتوحة صراحةً** ولم تُنفَّذ.
+> **لم يكن مُسجَّلاً سابقًا** في هذا السجل تحت هذا المعرّف.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **B2B-01 (phase 1)** | **لا وسيلة لشركة أن تطلب عرض سعر من مورّد**: لا كيان RFQ، ولا دعوة بائع، ولا عزل بين المشاركين. | HIGH | P1 | — | **COMPLETE_VERIFIED** | `DRAFT` بملكية شركة مفروضة · إرسال للبائعين المدعوين فقط وبموافقة `RFQ_PARTICIPATION` · عزل المشاركين (غير المشارك `404`) · لا تسريب هوية مستخدم | `modules/rfq/*` + `db/schema/rfq.ts` + migration `0045` + `tests/b2b01-rfq-isolation.test.ts` **24/24** |
+| **B2B-01 (phase 2)** | **بعد الإرسال لا دورة حياة**: لا `VIEWED`، لا رفض دعوة، لا سحب عرض، لا رفض عرض بسبب، ولا انتهاء صلاحية فعلي — والعرض القديم قابل للعبث لأنه لا حالة نهائية ولا حارس في القاعدة. | HIGH | P1 | B2B-01 phase 1 | **COMPLETE_VERIFIED** | آلة حالات صريحة للطلب/الدعوة/العرض · إصدارات محفوظة بلا تعديل · رفض بسبب إلزامي · منع التفاوض بعد الإلغاء/الانتهاء · انتهاء كسول ذرّي بحدث `SYSTEM` واحد · إشعارات داخلية بلا اتصال · لا مال ولا دفتر قيود | `modules/rfq/lifecycle.ts` + migration `0046_rfq_lifecycle` (5 تريغرات) + `modules/rfq/{service,views,routes}.ts` · `tests/b2b01b-lifecycle-unit.test.ts` **8/8** + `tests/b2b01b-rfq-lifecycle.test.ts` **22/22** + `scripts/ui-rfq-check.mjs` **33/33** في متصفح حقيقي (4 لغات) · `docs/B2B-01_RFQ_LIFECYCLE.md` |
+| **B2B-01 (phase 3)** | **لا مقارنة عروض ولا انتهاء موثوق**: المشتري لا يستطيع مقارنة عدة عروض في مكان واحد (سعر/كمية/عملة/مدة توريد/صلاحية/شروط/حالة/إصدار)، و`expires_at`/`valid_until` يُقيَّمان فقط عند وصول أحد الطرفين — فطلب منتهٍ قد يبقى `OPEN` في القاعدة بلا نهاية، وحارس الانتهاء بلا مهمة دورية. | HIGH | P1 | phase 2 | **COMPLETE_VERIFIED** | أحدث مراجعة صالحة فقط · لا خلط عملات في تسعير واحد · استبعاد المنتهي/المسحوب/المرفوض بسبب صريح · لا تسريب عروض المورّدين لغير المشاركين ولا لبائع منافس · إعادة فحص المشاركة كل طلب · لا قبول ولا تحويل إلى طلب · مهمة دورية idempotent تعمل بالتزامن بلا أحداث مكررة · لا تغيّر سجلًا محسومًا · بلا حذف وبلا إشعار خارجي · حدث يحمل وقت الانتهاء والسبب · بلا أثر على المدفوعات/Ledger/Settlement | `modules/rfq/{comparison,expiry,events}.ts` + `GET /api/rfqs/:id/comparison` + migration `0047` (فهرسان جزئيان إضافيان) + `runRfqExpirySweep` موصولة بـ`RFQ_EXPIRY_SWEEP_*` عبر `lib/scheduler.ts` · `tests/b2b01c-comparison-expiry.test.ts` **21/21** (تزامن 5 جولات ⇒ 3/3، جولة ثانية صفر، عدم إحياء، عدم لمس المالي) · تراجعات `b2b01b` 8/8 + 22/22 و`b2b01` 24/24 · `scripts/ui-rfq-check.mjs` **38/38** بمتصفح حقيقي · Typecheck (server+web) = 0 · Web build ناجح |
+| **B2B-01 (phase 4)** | **لا يمكن تحويل عرض مقبول إلى طلب**: `ACCEPTED`/`AWARDED` معلنتان في الآلة لكن لا مسار يكتبهما. | HIGH | P1 | phase 3 | **COMPLETE_VERIFIED** | قبول عرض واحد فقط · إنشاء طلب حقيقي عبر `createOrder` (عمولة من السياسة، هوية COMPANY، لا سعر من العميل) · رفض الباقي · إغلاق الطلب · Audit + إشعارات | `modules/rfq/acceptance.ts` + `POST /api/rfqs/:id/quotes/:quoteId/accept` + migration `0048_rfq_award` (فهرس فريد جزئي `rfq_quotes_one_accepted_idx` + تجميد `ACCEPTED` + `rfqs.awarded_quote_id`/`order_id`) · `tests/b2b01d-award-order.test.ts` **21/21** · الحزمة **2516/2516** (189 ملفاً) · `scripts/ui-rfq-check.mjs` **47/47** · Typecheck (server+web) = 0 · Web build ناجح |
+
+## 36. B2B-01 phase 4 — حدود الترسية عبر المورّدين (DECISION REQUIRED)
+
+> **العدّ:** لا معرّف جديد. هذا **قيد معروف** للمرحلة 4 المسجَّلة في البند 35، يُوثَّق صراحةً بدل افتراض سلوك.
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **B2B-01-P4-A** | **الترسية على مورّد لا يملك منتجات بنود الطلب غير ممكنة**: بند RFQ مرجع لمنتج في الكاتالوج (`rfq_items.product_id`)، والتحويل يبني `order_items` على ذلك المنتج. فعرض منافس أرخص (أو أفضل شروطًا) من بائع آخر يبقى عرضًا صالحًا في المقارنة، لكن `accept` يرفضه 409 «the offer includes a product from another seller». الأثر: في طلب يغطي بنودًا من كاتالوج مورّد واحد، لا يمكن نظريًا إلا ترسية ذلك المورّد. | MEDIUM | P2 | B2B-01 phase 4 | **DECISION REQUIRED** | قرار تجاري/تقني واحد من: (أ) يبقى القيد ويُعلن للمشتري في الواجهة قبل الإرسال («هذا الطلب مرتبط بكاتالوج X»)، (ب) خرائط منتج بديل لكل مورّد (`seller_product_offers`)، (ج) السماح ببنود نص حر مع مطابقة منتج يدوية عند الترسية. لا يُنفَّذ أي منها قبل القرار. | — |
+
+## 37. B2B-01 phase 5 — التكامل وتجربة الاستخدام (مكتملة)
+
+| ID | البند | الخطورة | الأولوية | التبعية | الحالة | معيار القبول | دليل الإغلاق |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **B2B-01 (phase 5)** | **الدورة كاملة غير مُثبتة كرحلة واحدة، وعيبان في القراءة**: (1) لا اختبار يثبت أن المراحل 1–4 تتركّب من مسودّة إلى طلب مع مقارنة وتسجيل قرار؛ (2) بند مرتبط بالكاتالوج كان يُعرض بـUUID في كل الشاشات فلا يعرف البائع ما يُطلب منه؛ (3) لافتة الكوكيز (fixed bottom) كانت تغطي زر «قبول العرض» على الهاتف عند أول زيارة. | MEDIUM | P1 | phase 4 | **COMPLETE_VERIFIED** | رحلة COMPANY كاملة بلا تدخّل API في إجراءات المستخدم · عزل كل بائع عن عروض غيره · حالات نهائية لا تُحيى · لا ترسية من الطاقم ولا من AI · المال كما في الطلب العادي (عمولة من السياسة، `PENDING`/`UNPAID`، صفر settlement/payout) · بند الكاتالوج يظهر باسمه · لا إجراء أساسي تحت لافتة الكوكيز · أربع لغات بلا مفاتيح خامّة ولا فيض أفقي على الهاتف | `tests/b2b01e-journey.test.ts` **11/11** · `RfqItemView.productName` (LEFT JOIN في `loadRfqItems`) + `itemLabel` في الواجهة · `--cookie-banner-h` + حجز المساحة في `AppLayout` · `scripts/ui-rfq-check.mjs` **78/78** · الحزمة **2527/2527** (190 ملفًا) · Typecheck (server+web)=0 · Web build ناجح · `docs/B2B-01_RFQ_LIFECYCLE.md` §14 |
+
+### ملاحظات مفتوحة من المرحلة 5 (ليست عيوب RFQ)
+
+| ID | البند | الخطورة | الأولوية | الحالة | ملاحظة |
+| --- | --- | --- | --- | --- | --- |
+| **I18N-DATE-01** | `formatDate` في `packages/web/src/lib/api.ts` يمرّر `'fr-TN'` صراحةً، فتظهر التواريخ بالفرنسية (`déc. 2026 25`) داخل واجهة عربية أو إنجليزية أو صينية. | LOW | P3 | **DECISION REQUIRED** | يخص كل الشاشات (طلبات، فواتير، RFQ). الإصلاح سطر واحد (ربط لغة الواجهة المخزَّنة بـ`ar-TN`/`fr-TN`/`en-GB`/`zh-CN`) لكنه يغيّر صيغة كل تاريخ في التطبيق — يُنفَّذ بعد قرار على الصيغة المعتمدة (أرقام لاتينية/هندية، ترتيب اليوم/الشهر). لم يُغيَّر في هذه المرحلة حفاظًا على نطاق ضيق. |

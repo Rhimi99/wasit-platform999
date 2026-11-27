@@ -118,7 +118,11 @@ const rendererAvailable = (() => {
   }
 })();
 
-describe('Marketing Video Generation Agent', () => {
+// Every test in this suite drives a real ffmpeg render. The suite-level timeout
+// is raised because renders contend for CPU with the other video suites that
+// vitest runs in parallel; the per-test budget is what proves the render, not a
+// 30s default that a loaded runner can exceed on a healthy renderer.
+describe('Marketing Video Generation Agent', { timeout: 180_000 }, () => {
   beforeAll(() => {
     // The structural renderer requires the bundled ffmpeg binary.
     expect(rendererAvailable, 'bundled ffmpeg must be installed for video tests').toBe(true);
@@ -380,7 +384,9 @@ describe('Marketing Video Generation Agent', () => {
       const rows = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));
       expect(Number(rows[0].durationSeconds)).toBe(requested);
     }
-  }, 30_000);
+    // Two full renders (35s + 120s) in one test: it must outlast a loaded
+    // runner, while still asserting the measured durations above.
+  }, 240_000);
 
   it('measures duration from bytes and rejects an out-of-range rendered asset', async () => {
     // A provider that renders shorter than the policy floor (or longer than the

@@ -37,6 +37,10 @@ export function generateDisputeNumber(): string {
   return generateBusinessNumber('DSP');
 }
 
+export function generateRfqNumber(): string {
+  return generateBusinessNumber('RFQ');
+}
+
 export function generateInvoiceNumber(): string {
   return generateBusinessNumber('INV');
 }

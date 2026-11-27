@@ -8,8 +8,9 @@ import { assertAiExecutionEnabled } from './kill-switch';
 import { ApiError } from '@wasit/shared';
 import type { AIFeatureResult, AIProvider } from './types';
 import { estimateTokens, LocalHeuristicProvider, VENDOR_MODEL_NAMES } from './provider';
-import { configEnvironment, primaryProvider } from './provider-config';
+import { configEnvironment, isPaidProvider, primaryProvider } from './provider-config';
 import { isFreeProvider, releaseSpend, reserveSpend, settleSpend, type SpendReservation } from './spend-limits';
+import { assertSpendGuard } from './spend-guard';
 import { logger } from '../observability/logger';
 import {
   getAgentRunBudget,
@@ -149,6 +150,11 @@ export interface RunFeatureInput {
    * not acceptable.
    */
   allowLocalFallback?: boolean;
+  /**
+   * Deadline for the provider call, forwarded to the adapter. An abort is a
+   * failed attempt: it is recorded as FAILED and any spend reservation released.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunFeatureOutput {
@@ -196,7 +202,7 @@ export async function runAIFeature(
   // in the platform flows through here, so a global disable stops ALL AI work —
   // agent executors, smart features and one-off `/api/ai/run` alike — before any
   // budget reservation or provider call. Fail-closed and LLM-independent.
-  assertAiExecutionEnabled();
+  await assertAiExecutionEnabled(db);
   // Idempotency: a key that is already on the ledger means this logical call
   // completed before (a retried request or a replayed event). Returning the
   // recorded outcome — with no second provider call — is the only way to keep
@@ -257,6 +263,12 @@ export async function runAIFeature(
   const environment = configEnvironment();
   const runCtxForAttribution = getAgentRunContext();
   const agentKey = runCtxForAttribution?.agentKey ?? null;
+
+  // AI-SPEND-GUARD-01. Missing caps are a misconfiguration, not a reached limit,
+  // so they are refused instead of silently falling back: the deployment must not
+  // look like it is running paid AI while nothing bounds the bill. Free providers
+  // never reach the table and keep working.
+  if (isPaidProvider(provider.id)) await assertSpendGuard(db, provider.id, environment);
 
   const period = 'MONTHLY';
   const estimated = estimateBudget({ system: input.system, user: input.user, maxTokens: input.maxTokens }, price);
@@ -329,6 +341,7 @@ export async function runAIFeature(
       temperature: 0.2,
       budgetPeriod: period,
       model: vendorModel,
+      signal: input.signal,
     });
   } catch (err) {
     // The call never produced a billable result, so release the reservation: the

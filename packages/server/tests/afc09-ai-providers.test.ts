@@ -7,8 +7,10 @@ import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
 import { users, roles, userRoles } from '../src/db/schema/auth.js';
 import { aiProviders } from '../src/db/schema/ai_providers.js';
+import { aiSpendLimits } from '../src/db/schema/ai-spend.js';
 import { auditLogs } from '../src/db/schema/audit.js';
 import { env } from '../src/lib/env.js';
+import { setAiExecutionEnabled } from '../src/lib/ai/kill-switch.js';
 import { resolveAiRoute } from '../src/lib/ai/routing.js';
 import { runAIFeature } from '../src/lib/ai/runtime.js';
 import {
@@ -58,12 +60,52 @@ const ENV_KEYS = [
   'AI_PROVIDER_ALLOW_LIVE_TEST',
   'AI_PROVIDER_ALLOWED_HOSTS',
   'AI_CONFIG_ENVIRONMENT',
+  // AI-RATE-LIMIT-01: this suite exercises provider management in bulk (store,
+  // remove, probe, re-configure) for one admin, which is far above the per-user
+  // provider ceiling. The documented master override lifts it for the suite.
+  'RATE_LIMIT_AI_MAX',
 ] as const;
 type EnvKey = (typeof ENV_KEYS)[number];
 let savedEnv: Record<string, unknown>;
 
 beforeEach(() => {
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, env[k as keyof typeof env]]));
+});
+
+/**
+ * AI-SPEND-GUARD-01: enabling or keying a vendor requires an active GLOBAL
+ * daily+monthly cap. Provider management is the subject here, so the ceiling is
+ * a fixture. Inserted idempotently and left in place — another suite shares the
+ * `test` environment and deleting it here would race that suite.
+ */
+const GUARD_FIXTURE_ENVS = [configEnvironment(), 'production'] as const;
+
+async function ensureGuardFixture() {
+  for (const environment of GUARD_FIXTURE_ENVS) {
+    for (const [period, maxCost] of [['DAILY', '1000'], ['MONTHLY', '1000']] as const) {
+      await db
+        .insert(aiSpendLimits)
+        .values({
+          id: randomUUID(),
+          environment,
+          scope: 'GLOBAL',
+          targetKey: '',
+          period,
+          maxCost,
+          maxRequests: null,
+          warnRatio: '0.8000',
+          currencyCode: 'USD',
+          isActive: true,
+        })
+        .onConflictDoNothing();
+    }
+  }
+}
+
+beforeEach(ensureGuardFixture);
+
+beforeEach(() => {
+  (env as Record<string, unknown>).RATE_LIMIT_AI_MAX = 1000;
 });
 
 afterEach(() => {
@@ -424,6 +466,28 @@ describe('AI-04 connection test', () => {
       expect(res.status).toBe(409);
       expect(server.hits()).toBe(0);
     } finally {
+      await server.close();
+    }
+  });
+
+  it('never opens a socket while the central AI switch is stopped', async () => {
+    const server = await startVendorServer();
+    try {
+      env.AI_PROVIDER_ALLOW_LIVE_TEST = true;
+      env.AI_SECRET_ENCRYPTION_KEY = MASTER_KEY;
+      const admin = await login(await emailOf(adminId));
+      await admin.req('/api/admin/ai/providers/openai', { method: 'PATCH', body: { enabled: true, baseUrl: server.baseUrl } });
+      await admin.req('/api/admin/ai/providers/openai/secret', { method: 'PUT', body: { secret: SECRET } });
+
+      await setAiExecutionEnabled(db, false);
+      const res = await admin.req('/api/admin/ai/providers/openai/test', { method: 'POST', body: { mode: 'LIVE' } });
+      expect(res.status).toBe(200);
+      expect(res.data.data.status).toBe('BLOCKED');
+      expect((res.data.data.checks as Array<{ id: string }>).map((c) => c.id)).toContain('kill_switch');
+      // A blocked probe is not a probe: the vendor saw no request at all.
+      expect(server.hits()).toBe(0);
+    } finally {
+      await setAiExecutionEnabled(db, true);
       await server.close();
     }
   });

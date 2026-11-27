@@ -48,6 +48,14 @@ export class PostgresRateLimitStore implements RateLimitStore {
     await this.db.execute(sql`DELETE FROM rate_limit_counters`);
   }
 
+  /**
+   * A read, not a write: proves the table exists and the pool answers without
+   * leaving a probe row behind (this runs on every readiness check).
+   */
+  async probe(): Promise<void> {
+    await this.db.execute(sql`SELECT 1 FROM rate_limit_counters LIMIT 1`);
+  }
+
   async purgeExpired(now = Date.now()): Promise<number> {
     const result = await this.db.execute(
       sql`DELETE FROM rate_limit_counters WHERE expires_at_ms <= ${now} RETURNING bucket_key`,

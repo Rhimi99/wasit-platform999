@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api, apiCall, formatDate, formatMoney } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { useAuth } from '@/lib/auth-context';
+import { useCart } from '@/lib/cart';
 import { Badge, Card, ErrorState, SectionHeader, Spinner } from '@/components/ui';
 import { AdSlot } from '@/components/AdSlot';
 import { SeoHead } from '@/components/SeoHead';
@@ -13,6 +14,8 @@ export function ProductDetailsPage() {
   const { t } = useI18n();
   const { id = '' } = useParams();
   const { user } = useAuth();
+  const cart = useCart();
+  const [added, setAdded] = useState(false);
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [qty, setQty] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -20,9 +23,11 @@ export function ProductDetailsPage() {
   const [isSaved, setIsSaved] = useState(false);
   const [libBusy, setLibBusy] = useState(false);
   const [jsonLd, setJsonLd] = useState<JsonLd | null>(null);
+  const [activeImageId, setActiveImageId] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
+    setActiveImageId(null);
     apiCall(() => api.getProduct(id)).then((res) => {
       if (!mounted) return;
       setProduct(res.data);
@@ -83,6 +88,7 @@ export function ProductDetailsPage() {
   if (!product) return <Spinner />;
 
   const primaryImage = product.images.find((i) => i.isPrimary) ?? product.images[0];
+  const activeImage = product.images.find((i) => i.id === activeImageId) ?? primaryImage;
   const orderUrl = `/checkout?productId=${product.id}`;
 
   return (
@@ -97,8 +103,15 @@ export function ProductDetailsPage() {
         <div className="grid gap-8 lg:grid-cols-2">
           {/* Images */}
           <div>
-            {primaryImage ? (
-              <img src={primaryImage.url} alt={product.name} className="aspect-square w-full rounded-lg object-cover" />
+            {activeImage ? (
+              <img
+                src={activeImage.url}
+                alt={activeImage.altText ?? product.name}
+                loading="eager"
+                decoding="async"
+                className="aspect-square w-full rounded-lg object-cover"
+                data-testid="product-primary-image"
+              />
             ) : (
               <div className="flex aspect-square w-full items-center justify-center rounded-lg bg-slate-100 text-slate-400">
                 {t('product.noImage')}
@@ -107,7 +120,25 @@ export function ProductDetailsPage() {
             {product.images.length > 1 && (
               <div className="mt-3 flex gap-2 overflow-x-auto">
                 {product.images.map((img) => (
-                  <img key={img.id} src={img.url} alt={img.altText ?? product.name} className="h-16 w-16 rounded object-cover" />
+                  <button
+                    key={img.id}
+                    type="button"
+                    onClick={() => setActiveImageId(img.id)}
+                    aria-label={img.altText ?? product.name}
+                    aria-pressed={activeImage?.id === img.id}
+                    className={`shrink-0 rounded ring-offset-2 ${
+                      activeImage?.id === img.id ? 'ring-2 ring-wasit-500' : 'ring-1 ring-slate-200'
+                    }`}
+                    data-testid={`product-image-thumb-${img.id}`}
+                  >
+                    <img
+                      src={img.url}
+                      alt={img.altText ?? product.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-16 w-16 rounded object-cover"
+                    />
+                  </button>
                 ))}
               </div>
             )}
@@ -150,10 +181,35 @@ export function ProductDetailsPage() {
             )}
 
             <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                type="button"
+                className="btn-primary"
+                data-testid="add-to-cart"
+                onClick={() => {
+                  const primary = product.images.find((i) => i.isPrimary) ?? product.images[0];
+                  cart.add({
+                    productId: product.id,
+                    quantity: Math.max(qty, product.moq ?? 1),
+                    name: product.name,
+                    price: product.basePrice,
+                    currencyCode: product.currencyCode,
+                    sellerId: product.sellerId,
+                    sellerType: product.sellerType,
+                    moq: product.moq ?? 1,
+                    image: primary?.url ?? product.image ?? null,
+                  });
+                  setAdded(true);
+                }}
+              >
+                {t('cart.addToCart')}
+              </button>
+              <a href="/cart" className="btn-secondary" data-testid="go-to-cart">
+                {t('cart.viewCart')}{cart.count > 0 ? ` (${cart.count})` : ''}
+              </a>
               {user ? (
-                <a href={orderUrl} className="btn-primary">{t('product.addToOrder')}</a>
+                <a href={orderUrl} className="btn-secondary">{t('product.addToOrder')}</a>
               ) : (
-                <a href="/login" className="btn-primary">{t('auth.login')} {t('product.addToOrder')}</a>
+                <a href="/login" className="btn-secondary">{t('auth.login')} {t('product.addToOrder')}</a>
               )}
               {user && (
                 <>
@@ -166,6 +222,13 @@ export function ProductDetailsPage() {
                 </>
               )}
             </div>
+
+            {added && (
+              <p className="mt-3 rounded bg-green-50 p-2 text-xs text-green-800" role="status" data-testid="cart-added">
+                {t('cart.added')}{' '}
+                <a href="/cart" className="font-semibold underline">{t('cart.viewCart')}</a>
+              </p>
+            )}
 
             {/* Trust placeholder (trust engine is separate; score rendered when backend available) */}
             <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">

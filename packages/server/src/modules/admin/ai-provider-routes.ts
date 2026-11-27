@@ -19,7 +19,7 @@ import {
   updateProviderConfig,
   effectiveKey,
   isEnvSelected,
-  type ProviderRow,
+  maskProvider,
 } from '../../lib/ai/provider-config.js';
 
 /**
@@ -31,33 +31,6 @@ import {
 export const adminAiProviderRoutes = new Hono();
 
 adminAiProviderRoutes.use('*', requireAuth, requirePermission(PERMISSIONS.AI_MANAGE, PERMISSIONS.ADMIN_AI));
-
-/** A provider as the UI sees it: configuration + key presence, never a secret. */
-function maskProvider(row: ProviderRow) {
-  const spec = SUPPORTED_PROVIDERS.find((p) => p.key === row.providerKey);
-  const state = keyState(row);
-  return {
-    key: row.providerKey,
-    displayName: row.displayName,
-    kind: spec?.kind ?? 'vendor',
-    enabled: row.enabled,
-    // A provider named by AI_PROVIDER is usable before any admin edit.
-    activeFromEnv: isEnvSelected(row),
-    isDefault: row.isDefault,
-    isFallback: row.isFallback,
-    model: row.model,
-    baseUrl: row.baseUrl,
-    requiresKey: spec?.requiresKey ?? true,
-    keyState: state,
-    lastTest: {
-      status: row.lastTestStatus,
-      mode: row.lastTestMode,
-      testedAt: row.lastTestedAt?.toISOString() ?? null,
-      detail: row.lastTestDetail ?? null,
-    },
-    updatedAt: row.updatedAt.toISOString(),
-  };
-}
 
 adminAiProviderRoutes.get('/', async (c) => {
   const ctx = getContext(c);

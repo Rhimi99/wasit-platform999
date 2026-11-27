@@ -5,6 +5,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().optional(),
+  /**
+   * The database name this deployment declares as production. The operator CLI
+   * compares it with what the server reports before any credential change, so a
+   * connection string alone can never unlock a sensitive action.
+   */
+  WASIT_PRODUCTION_DB_NAME: z.string().optional(),
+  /** Optional pin: when set, the reported server host must match it too. */
+  WASIT_PRODUCTION_DB_HOST: z.string().optional(),
   JWT_SECRET: z.string().min(32).default('dev-only-secret-not-for-production-please-change-me-1234567890'),
   SESSION_TTL_DAYS: z.coerce.number().default(30),
   MAX_LOGIN_ATTEMPTS: z.coerce.number().default(5),
@@ -221,14 +229,55 @@ const envSchema = z.object({
   RATE_LIMIT_API_MAX: z.coerce.number().int().positive().default(300),
   RATE_LIMIT_API_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   /**
-   * AI endpoints (`/api/ai/*`) are the most expensive per call. A tighter
-   * per-user limit bounds one account, and a per-IP backstop bounds an attacker
-   * rotating accounts from one host. Auth is still required — these limits are
-   * an addition to RBAC, never a replacement.
+   * AI endpoints (`/api/ai/*`, `/api/admin/ai/*`) are the only surfaces where a
+   * request can cost money, so each is assigned a class in
+   * `lib/rate-limit/ai-policy.ts` with its own ceiling. The knobs below are the
+   * per-class defaults; `RATE_LIMIT_AI_MAX`, when set, overrides every class
+   * (the pre-AI-RATE-LIMIT-01 behaviour, kept for operators and existing tests).
+   *
+   * A per-user limit bounds one account; the per-IP backstop below bounds an
+   * attacker rotating accounts from one host. Auth and RBAC still run — these
+   * limits are an addition, never a replacement.
    */
-  RATE_LIMIT_AI_MAX: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_AI_MAX: z.coerce.number().int().positive().optional(),
   RATE_LIMIT_AI_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_AI_IP_MAX: z.coerce.number().int().positive().default(300),
+  /** Read-only AI surfaces (status, listings, activity). */
+  AI_RATE_LIMIT_READ_MAX: z.coerce.number().int().positive().default(120),
+  /** Vendor-backed feature calls — each may reach a paid provider. */
+  AI_RATE_LIMIT_FEATURE_MAX: z.coerce.number().int().positive().default(30),
+  /** Agent task creation and approval decisions. */
+  AI_RATE_LIMIT_AGENT_MAX: z.coerce.number().int().positive().default(15),
+  /** Local agent-memory writes (DB only). */
+  AI_RATE_LIMIT_MEMORY_MAX: z.coerce.number().int().positive().default(60),
+  /** Admin AI dashboards (reads). */
+  AI_RATE_LIMIT_ADMIN_READ_MAX: z.coerce.number().int().positive().default(120),
+  /** Admin AI writes: budgets, models, spend limits, kill switch, runs. */
+  AI_RATE_LIMIT_ADMIN_CONTROL_MAX: z.coerce.number().int().positive().default(30),
+  /** Provider configuration and live probes — the closest thing to a spend. */
+  AI_RATE_LIMIT_PROVIDER_MAX: z.coerce.number().int().positive().default(10),
+  /**
+   * Bounded staff allowance on admin classes. A multiplier, never an exemption:
+   * a compromised admin account is still rate-limited.
+   */
+  AI_RATE_LIMIT_ADMIN_MULTIPLIER: z.coerce.number().int().positive().default(3),
+  /**
+   * Require a shared counter store for paid AI classes. Only meaningful locally:
+   * production and staging always require one, and setting this to `false` there
+   * is refused at boot (AI-RATE-LIMIT-HARDENING-01).
+   */
+  AI_RATE_LIMIT_REQUIRE_DURABLE: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
+  /**
+   * Local-development escape hatch for single-process runs. Refused at boot in
+   * production and staging — it cannot be used to relax a deployment.
+   */
+  AI_RATE_LIMIT_ALLOW_MEMORY_STORE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   /**
    * Search (`/api/search`) is public and relatively costly (multi-entity
    * queries), so it is limited per trusted client IP.
@@ -246,9 +295,9 @@ const envSchema = z.object({
   /**
    * Application-level request body cap (011.4). A request whose body exceeds
    * this is rejected with HTTP 413 before any handler reads it, so a large
-   * payload cannot be buffered into memory by an expensive route. Sized well
-   * above the largest legitimate JSON body (long AI prompts); media assets are
-   * generated server-side, not uploaded, so no route needs a larger cap.
+   * payload cannot be buffered into memory by an expensive route. Sized above
+   * the largest legitimate JSON body (long AI prompts); the one upload route
+   * (product images) declares its own larger cap in `app.ts`, still bounded.
    */
   MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1_048_576),
   /**
@@ -422,6 +471,16 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   DISPUTE_ESCALATION_INTERVAL_MINUTES: z.coerce.number().int().positive().default(30),
+  // RFQ expiry sweep (B2B-01 phase 3). Off by default so tests and one-off
+  // commands never start background work. The sweep only moves rows whose
+  // deadline has already passed and every transition is a guarded UPDATE, so a
+  // duplicate run — another instance or a manual cron — writes nothing twice.
+  RFQ_EXPIRY_SWEEP_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  RFQ_EXPIRY_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
+  RFQ_EXPIRY_SWEEP_BATCH_SIZE: z.coerce.number().int().positive().default(100),
   // Observability. Structured logs go to stdout (single JSON line per record)
   // and a bounded in-process buffer is exposed to admins. `pretty` is for
   // reading along in a terminal; JSON is what a log pipeline should ingest.
@@ -506,6 +565,15 @@ const envSchema = z.object({
   /** Lifetime of a signed media download link, in seconds. */
   MEDIA_DOWNLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   MEDIA_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(52_428_800),
+  /** Ceiling for one uploaded product image (bytes). */
+  MEDIA_MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(5_242_880),
+  /** How many images one product may carry. */
+  MEDIA_MAX_IMAGES_PER_PRODUCT: z.coerce.number().int().positive().default(8),
+  /**
+   * Longest side of the display copy produced at upload. `0` stores the
+   * validated original untouched (useful for debugging or a slim build).
+   */
+  MEDIA_IMAGE_MAX_DIMENSION: z.coerce.number().int().nonnegative().default(1600),
   /**
    * Retention for agent-rendered videos (AFC-05). Retention is per class:
    * temporary test renders (7d) and drafts (30d) expire; approved videos are
@@ -524,6 +592,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
 
 /**
  * Dev-only convenience routes (surfacing verification links, phone codes and

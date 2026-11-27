@@ -5,6 +5,7 @@ import { merchants } from '../../db/schema/trade.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../../lib/audit.js';
 import { isEntityStaff, type EntityViewer } from '../../lib/entity-access.js';
+import { updateEntityById } from '../entities/service.js';
 
 /**
  * The merchant columns a public profile may expose. `userId`, `isActive` and the
@@ -111,25 +112,16 @@ export async function getMerchant(db: DB, id: string, viewer: EntityViewer = {})
   return toPublicMerchant(rows[0] as unknown as Record<string, unknown>);
 }
 
+/**
+ * Addressed update kept for the existing contract. Ownership, the editable
+ * allow-list and the audit entry all live in `modules/entities`.
+ */
 export async function updateMerchant(
   db: DB,
   id: string,
-  input: Partial<CreateMerchantInput>,
+  input: Record<string, unknown>,
   actorId: string,
 ) {
-  const row = await db.select().from(merchants).where(eq(merchants.id, id)).limit(1);
-  if (row.length === 0) throw ApiError.notFound('Merchant not found');
-  if (row[0].userId !== actorId) throw ApiError.forbidden();
-  const before = row[0];
-  await db
-    .update(merchants)
-    .set({
-      storeName: input.storeName ?? before.storeName,
-      description: input.description ?? before.description,
-      logoUrl: input.logoUrl ?? before.logoUrl,
-      updatedAt: new Date(),
-    })
-    .where(eq(merchants.id, id));
-  // The owner just wrote the row, so the private/owner view is the right response.
-  return getMerchant(db, id, { userId: actorId });
+  const { entity } = await updateEntityById(db, 'merchant', id, input, { actorId });
+  return entity;
 }

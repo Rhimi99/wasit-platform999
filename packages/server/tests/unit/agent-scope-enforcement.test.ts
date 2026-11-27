@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { getTableName } from 'drizzle-orm';
 import type { DB } from '../../src/db/client.js';
+import { aiExecutionSwitches } from '../../src/db/schema/ai-execution-switch.js';
+import { openGlobalSwitchRow } from '../support/open-switch-row.js';
 import { withAgentDataScope } from '../../src/modules/ai/agent-scope.js';
 import { executeAgentTask } from '../../src/modules/ai/executors.js';
 import { withAgentRunContext, type AgentRunContext } from '../../src/lib/ai/agent-run-context.js';
@@ -40,6 +42,7 @@ function fakeDb() {
     aiModels: getTableName(aiModels),
     products: getTableName(products),
     categories: getTableName(categories),
+    aiExecutionSwitches: getTableName(aiExecutionSwitches),
   };
   const store: Record<string, Row[]> = {
     [TN.agentRegistry]: [],
@@ -54,6 +57,7 @@ function fakeDb() {
     [TN.aiModels]: [],
     [TN.products]: [{ id: 'p1', isPublished: true }],
     [TN.categories]: [{ id: 'c1', name: 'Cat' }],
+    [TN.aiExecutionSwitches]: [openGlobalSwitchRow()],
   };
   const name = (t: unknown): string => getTableName(t as never);
   const rows = (t: string): Row[] => (store[t] ??= []);

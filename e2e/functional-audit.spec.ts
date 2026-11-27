@@ -409,7 +409,11 @@ test.describe('MERCHANT — full seller surface', () => {
       await page.goto('/dashboard/products');
       await expect(page.getByTestId(`product-suspended-${created!.id}`)).toBeVisible();
       const row = page.locator('table.table-base tbody tr').filter({ has: page.getByTestId(`product-suspended-${created!.id}`) });
-      await expect(row.getByRole('button')).toHaveCount(0);
+      // The publish control is what must be gone. The row still carries unrelated
+      // controls (the media button), so counting every button asserted a layout
+      // detail rather than the enforcement rule.
+      await expect(row.getByTestId(/^product-status-/)).toHaveCount(0);
+      await expect(row.getByTestId(`product-suspended-${created!.id}`)).toBeVisible();
     } finally {
       // Archive the fixture so it leaves no ACTIVE test listing behind.
       await adminCtx.patch(`/api/products/${created!.id}/status`, { data: { status: 'ARCHIVED' } });

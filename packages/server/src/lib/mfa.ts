@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import { authenticatorApp, users } from '../db/schema/auth';
 import { newId } from './ids';
+import { verifyPassword } from './security';
 import { ApiError } from '@wasit/shared';
 
 /**
@@ -302,4 +303,44 @@ export async function getMfaStatus(db: DB, userId: string) {
     mfaEnabled: rows.length > 0 ? rows[0].enabled && mfaEnabledInUser : mfaEnabledInUser,
     pendingEnrollment: rows.length > 0 && !rows[0].enabled,
   };
+}
+
+/**
+ * GM-ACCESS-01: re-proof of identity before a factor is created, replaced or
+ * removed. A session cookie alone must never be enough — otherwise a stolen
+ * cookie could displace the owner's authenticator and take the account over.
+ *
+ * The password is always required. When a factor is already enabled, a current
+ * TOTP (or one unused recovery code) is required as well, so the change needs
+ * both something the owner knows and something the owner holds.
+ */
+export async function assertIdentityForFactorChange(
+  db: DB,
+  userId: string,
+  password: string,
+  code?: string,
+): Promise<void> {
+  const rows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (rows.length === 0) throw ApiError.unauthorized('Invalid credentials');
+  const user = rows[0];
+  if (!(await verifyPassword(password, user.passwordHash))) {
+    throw ApiError.unauthorized('Invalid credentials');
+  }
+
+  const factor = await db
+    .select({ enabled: authenticatorApp.enabled })
+    .from(authenticatorApp)
+    .where(eq(authenticatorApp.userId, userId))
+    .limit(1);
+  const hasFactor = factor.length > 0 && factor[0].enabled === true;
+  if (!hasFactor) return;
+
+  if (!code) {
+    throw ApiError.validation(
+      [{ field: 'code', message: 'Enter your current authenticator or recovery code', code: 'REQUIRED' }],
+      'A current verification code is required to change your second factor',
+    );
+  }
+  const result = await verifyMfaChallenge(db, userId, code);
+  if (!result.valid) throw ApiError.unauthorized('Invalid verification code');
 }

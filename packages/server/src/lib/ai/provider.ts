@@ -58,8 +58,13 @@ export class NoopProvider implements AIProvider {
  * transport failures to a stable 503 without echoing the vendor body (which can
  * contain account identifiers or partial prompts) back to the caller.
  */
-async function vendorFetch(url: string, init: RequestInit): Promise<Response> {
+async function vendorFetch(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
   const controller = new AbortController();
+  const onCallerAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onCallerAbort, { once: true });
+  }
   const timer = setTimeout(() => controller.abort(), env.AI_REQUEST_TIMEOUT_MS);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
@@ -74,6 +79,7 @@ async function vendorFetch(url: string, init: RequestInit): Promise<Response> {
     throw ApiError.serviceUnavailable(aborted ? 'AI provider request timed out' : 'AI provider is unreachable');
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onCallerAbort);
   }
 }
 
@@ -122,7 +128,7 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
         max_tokens: opts.maxTokens ?? 1024,
         temperature: opts.temperature ?? 0.2,
       }),
-    });
+    }, opts.signal);
     if (!res.ok) throw vendorError(res.status);
     const json = (await res.json()) as {
       model?: string;
@@ -175,7 +181,7 @@ export class AnthropicProvider implements AIProvider {
         system: opts.system ?? undefined,
         messages: [{ role: 'user', content: opts.user }],
       }),
-    });
+    }, opts.signal);
     if (!res.ok) throw vendorError(res.status);
     const json = (await res.json()) as {
       model?: string;

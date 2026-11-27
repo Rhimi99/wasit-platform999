@@ -62,10 +62,11 @@ services:
       SMTP_SECURE: ${SMTP_SECURE:-false}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      # Rate-limit counters. Compose runs a single API replica, where the
-      # in-process store is fine; set RATE_LIMIT_STORE=postgres before scaling
-      # to multiple replicas so the counters are actually shared.
-      RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-memory}
+      # Rate-limit counters. production and staging refuse to boot on the
+      # in-process store (AI-RATE-LIMIT-HARDENING-01): with N replicas each one
+      # would enforce its own ceiling. Postgres is a service in this file, so
+      # the shared store is the default.
+      RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-postgres}
       RATE_LIMIT_PURGE_INTERVAL_MINUTES: ${RATE_LIMIT_PURGE_INTERVAL_MINUTES:-15}
       # Observability: structured JSON logs on stdout, Prometheus at /metrics,
       # and alert-rule evaluation driven by the scheduler in this container.

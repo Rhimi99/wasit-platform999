@@ -18,6 +18,9 @@ export type Feature =
   | 'order.manage'
   | 'admin'
   | 'admin.buildDashboard'
+  // RBAC-02: staff/role administration. Held by SUPER_ADMIN only — ADMIN keeps
+  // the business-account surfaces (`admin`) and never sees this desk.
+  | 'admin.staff'
   | 'billing.payments'
   | 'billing.commissions'
   | 'inventory.read'
@@ -31,6 +34,10 @@ export type Feature =
   | 'disputes.manage'
   | 'risk.manage'
   | 'verification.submit'
+  // B2B-01: issuing RFQs (buyer) and answering invitations (seller). The server
+  // still enforces `rfq:*` per request; this only decides what the sidebar shows.
+  | 'rfq.buy'
+  | 'rfq.sell'
   | 'subscriptions.manage'
   | 'subscription.own'
   | 'messages'
@@ -43,18 +50,21 @@ const ROLE_FEATURES: Record<UserRole, ReadonlySet<Feature>> = {
     'subscription.own',
   ]),
   MERCHANT: new Set<Feature>([
+    'rfq.sell',
     'product.create', 'product.manage.own', 'order.create', 'order.manage',
     'inventory.read', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
     'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
     'subscription.own',
   ]),
   SUPPLIER: new Set<Feature>([
+    'rfq.sell',
     'product.create', 'product.manage.own', 'supplier.create', 'supplier.update',
     'order.manage', 'inventory.read', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use',
     'analytics.own', 'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
     'subscription.own',
   ]),
   COMPANY: new Set<Feature>([
+    'rfq.buy', 'rfq.sell',
     'company.create', 'company.update', 'order.create', 'order.manage',
     'inventory.read', 'inventory.manage', 'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.own',
     'billing.payments', 'billing.commissions', 'messages', 'verification.submit', 'library',
@@ -78,7 +88,7 @@ const ROLE_FEATURES: Record<UserRole, ReadonlySet<Feature>> = {
     'risk.manage', 'subscriptions.manage', 'inventory.read',
   ]),
   SUPER_ADMIN: new Set<Feature>([
-    'admin', 'admin.buildDashboard', 'billing.payments', 'billing.commissions',
+    'admin', 'admin.buildDashboard', 'admin.staff', 'billing.payments', 'billing.commissions',
     'ads.manage', 'campaign.manage', 'ai.use', 'media.use', 'analytics.all', 'disputes.manage',
     'risk.manage', 'subscriptions.manage', 'inventory.read',
   ]),

@@ -206,7 +206,7 @@ export async function invokeTool(
   }
 
   // (2) The emergency stop halts every attempt, before any identity or data work.
-  if (!isAiExecutionEnabled()) {
+  if (!(await isAiExecutionEnabled(db, ctx?.agentKey ?? null))) {
     return refuse('AI_EXECUTION_DISABLED', 'AI execution is disabled by the platform kill switch');
   }
 

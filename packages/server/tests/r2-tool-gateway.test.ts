@@ -54,6 +54,8 @@ import {
   type AgentRunContext,
 } from '../src/lib/ai/agent-run-context.js';
 import { setAiExecutionEnabled, isAiExecutionEnabled } from '../src/lib/ai/kill-switch.js';
+import { db as realDb } from '../src/db/client.js';
+import { aiExecutionSwitches } from '../src/db/schema/ai-execution-switch.js';
 import {
   assertTableAccess,
   HARD_DENY_TABLES,
@@ -93,7 +95,13 @@ function fakeDb(): FakeDb {
   const builder = (table: string): unknown => {
     const b: Record<string, unknown> = {
       _table: table,
-      from(t: unknown) { b._table = getTableName(t as never); stats.fromCalls.push(b._table as string); return b; },
+      from(t: unknown) {
+        b._table = getTableName(t as never);
+        // The kill switch is platform control data, not tool data: its read is
+        // not a "table the handler touched" and must not be counted as one.
+        if (b._table !== getTableName(aiExecutionSwitches as never)) stats.fromCalls.push(b._table as string);
+        return b;
+      },
       leftJoin(t: unknown) { stats.fromCalls.push(getTableName(t as never)); return b; },
       innerJoin(t: unknown) { stats.fromCalls.push(getTableName(t as never)); return b; },
       where() { return b; },
@@ -101,6 +109,11 @@ function fakeDb(): FakeDb {
       orderBy() { return b; },
       limit() { return b; },
       then(resolve: (v: Row[]) => unknown) {
+        // The kill switch is an authority, not tool data: always read the REAL
+        // row, so a fake table store can never fake an "enabled" state.
+        if (b._table === getTableName(aiExecutionSwitches as never)) {
+          return realDb.select().from(aiExecutionSwitches).then((rows) => resolve(rows as Row[]));
+        }
         return Promise.resolve((store[b._table as string] ?? []).map((r) => ({ ...r }))).then(resolve);
       },
     };
@@ -441,11 +454,13 @@ describe('R2 — gateway enforces A2 data scope', () => {
 });
 
 describe('R2 — gateway enforces the A1 kill switch', () => {
-  afterEach(() => setAiExecutionEnabled(null));
+  afterEach(async () => {
+    await setAiExecutionEnabled(realDb, null);
+  });
 
   it('refuses every tool while the switch is off', async () => {
-    setAiExecutionEnabled(false);
-    expect(isAiExecutionEnabled()).toBe(false);
+    await setAiExecutionEnabled(realDb, false);
+    expect(await isAiExecutionEnabled(realDb)).toBe(false);
     const db = fakeDb();
     await withAgentRunContext(
       ctx({ requesterRoles: ['SUPER_ADMIN'] }),
@@ -454,7 +469,7 @@ describe('R2 — gateway enforces the A1 kill switch', () => {
   });
 
   it('refuses before any identity or data work', async () => {
-    setAiExecutionEnabled(false);
+    await setAiExecutionEnabled(realDb, false);
     const db = fakeDb();
     await withAgentRunContext(ctx({ allowedTools: [] }), () =>
       expectRefusal(db, PLATFORM_METRICS, 'AI_EXECUTION_DISABLED'),
@@ -463,7 +478,7 @@ describe('R2 — gateway enforces the A1 kill switch', () => {
   });
 
   it('resumes when the switch is turned back on', async () => {
-    setAiExecutionEnabled(true);
+    await setAiExecutionEnabled(realDb, true);
     const db = fakeDb();
     await withAgentRunContext(ctx({ requesterRoles: ['SUPER_ADMIN'] }), async () => {
       const out = await invokeTool(db, PLATFORM_METRICS, {});
@@ -586,10 +601,15 @@ describe('R2 — audit logging', () => {
 
   it('audits a handler failure as AI.TOOL_FAILED', async () => {
     const db = fakeDb();
+    // The authority read must succeed (the switch is checked first); the
+    // handler's own read is what breaks.
+    let selects = 0;
     const failing = {
       ...db,
-      select() {
-        throw new Error('boom');
+      select(...args: unknown[]) {
+        selects += 1;
+        if (selects > 1) throw new Error('boom');
+        return (db.select as (...a: unknown[]) => unknown)(...args);
       },
     } as unknown as DB;
     await withAgentRunContext(ctx({ requesterRoles: ['SUPER_ADMIN'] }), async () => {
