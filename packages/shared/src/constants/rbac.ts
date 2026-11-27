@@ -208,6 +208,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     perm('SUBSCRIPTION_MANAGE'),
     perm('SEARCH_ADVANCED'),
     perm('FAVORITE_MANAGE'), perm('SAVED_ITEM_MANAGE'), perm('SEARCH_HISTORY_MANAGE'),
+    // WCDC-01 — an administrator may see the security centre; containment
+    // (blocking an address, revoking a session, quarantining a file) stays with
+    // the GM, so ADMIN deliberately holds neither RESPOND nor MANAGE.
+    perm('SECURITY_READ'),
   ]),
 
   SUPER_ADMIN: new Set<Permission>(

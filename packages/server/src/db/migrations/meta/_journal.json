@@ -351,6 +351,13 @@
       "when": 1795713963485,
       "tag": "0049_powerful_sandman",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1795800000000,
+      "tag": "0050_wcdc_security_center",
+      "breakpoints": true
     }
   ]
 }

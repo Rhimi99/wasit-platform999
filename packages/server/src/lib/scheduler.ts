@@ -2,6 +2,7 @@ import { db } from '../db/client';
 import { rolloverDueSubscriptions } from '../modules/subscriptions/service';
 import { expireLapsedSubscriptions } from '../modules/subscriptions/collection';
 import { advanceDueDeletionRetentions } from '../modules/privacy/service';
+import { sweepWcdcData } from '../modules/security/service';
 import { runDueAgentSchedules, reclaimExpiredLeases } from '../modules/ai/scheduling';
 import { recoverStuckSteps } from '../modules/ai/dispatcher';
 import { runSupervisorCycle, createSupervisorCycleGuard } from '../modules/ai/supervisor';
@@ -134,6 +135,17 @@ export function startScheduler(options: {
       }
     } catch (err) {
       logger.error('privacy retention sweep failed', { error: (err as Error).message });
+    }
+  };
+
+  const runWcdcSweep = async (): Promise<void> => {
+    try {
+      const result = await sweepWcdcData(db);
+      if (result.prunedEvents > 0 || result.prunedBlocks > 0) {
+        logger.info('wcdc retention sweep', { ...result });
+      }
+    } catch (err) {
+      logger.error('wcdc retention sweep failed', { error: (err as Error).message });
     }
   };
 
@@ -299,6 +311,7 @@ export function startScheduler(options: {
     await runRollover();
     await runExpiry();
     await runRetentionSweep();
+    await runWcdcSweep();
     if (Date.now() - lastPurgeAt >= purgeIntervalMs) {
       lastPurgeAt = Date.now();
       await runRateLimitPurge();

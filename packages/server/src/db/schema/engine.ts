@@ -108,6 +108,7 @@ export const policyScopeEnum = pgEnum('policy_scope', [
   'DISPUTE',
   'ADVERTISING',
   'SUBSCRIPTION',
+  'SECURITY',
   'COUNTRY',
   'CATEGORY',
   'TRADE',

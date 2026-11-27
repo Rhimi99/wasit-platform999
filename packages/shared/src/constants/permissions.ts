@@ -169,6 +169,12 @@ export const PERMISSIONS = {
   REVENUE_MANAGE: 'revenue:manage',
   REVENUE_SIMULATE: 'revenue:simulate',
 
+  // Security centre (WCDC-01). Reads are for ADMIN and SUPER_ADMIN; response
+  // actions are GM-only, because containing a threat can lock a real user out.
+  SECURITY_READ: 'security:read',
+  SECURITY_RESPOND: 'security:respond',
+  SECURITY_MANAGE: 'security:manage',
+
   // Reports
   REPORT_READ: 'report:read',
 } as const;

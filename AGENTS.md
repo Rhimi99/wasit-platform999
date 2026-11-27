@@ -1446,3 +1446,17 @@ npx playwright install --with-deps chromium
 - **الAudit**: `AI.EXECUTION_STOPPED/RESUMED` (`entityType=AI_EXECUTION_SWITCH`)، والمسار القديم `/kill-switch` يحتفظ بـ`AI.KILL_SWITCH_DISABLED/ENABLED` (`AI_KILL_SWITCH`). «لا تغيير ⇒ لا صف» (`changed:false`). الرفض الدوري مرة/دورة: `AI.KILL_SWITCH_{SCHEDULE,SUPERVISOR,RECOVERY}_REFUSED`.
 - **`vitest.config.ts` ⇒ `fileParallelism: false`**: القرار أصبح عالمياً في قاعدة مشتركة، فالتوازي بين الملفات يجعل إيقاف ملف يرفض تنفيذ آخر. لا تُعِد التوازي بلا عزل نطاقات لكل ملف.
 - **لهذا السبب** صار أي fake DB في اختبارات الوحدة يُلزَم بصف `GLOBAL` مفتوح: `tests/support/open-switch-row.ts` (`openGlobalSwitchRow()`); و`fakeDb` في أدوات الاختبار لا يحتسب قراءة `ai_execution_switches` كقراءة بيانات.
+
+## WASIT-WCDC-01 — مركز الأمن السيبراني (2026-11-27، فرع `feat/wcdc-01-security-center`)
+
+- **البنية**: `lib/wcdc/{types,signatures,collector,detector,policy,response,enforcement,middleware}.ts` + `modules/security/{service,routes}.ts` + `db/schema/security.ts` + migration `0050_wcdc_security_center.sql` (+ `meta/0050_snapshot.json` — **بدونه `drizzle-kit generate` يعيد إنشاء نفس الجداول**).
+- **التركيب**: `wcdcGuard()` يُسجَّل في `app.ts` بعد `securityHeaders` وقبل كل المسارات؛ يرى طبقة التطبيق فقط.
+- **الأحداث**: كل إشارة → `security_events` (بلا أي payload أو كلمة مرور أو توكن؛ التوكن hash فقط) وتُجمَّع في `security_incidents` بمفتاح `(ruleId, subjectKey)`.
+- **الإجراءات المسموحة فقط** (`ACTION_SPECS`): `BLOCK_IP`, `UNBLOCK_IP`, `RATE_LIMIT_TIGHTEN`, `REVOKE_SESSION`, `QUARANTINE_ASSET`, `ESCALATE`, `NOTIFY_GM`, `AI_KILL_SWITCH`. أي طلب لـ`FORBIDDEN_ACTIONS` (منح صلاحية/RBAC/MFA/حذف بيانات أو تدقيق/migration/إيقاف خدمة/مدفوعات/تحويل مال) يُرفض 403 ويُسجَّل `REFUSED` + `FORBIDDEN_OPERATION` + audit `SECURITY.ACTION_REFUSED`.
+- **العيون الأربع**: `REVOKE_SESSION`/`QUARANTINE_ASSET`/`AI_KILL_SWITCH` تتطلب `SUPER_ADMIN` **آخر**؛ الاعتماد يُحجز بتحديث شرطي (`WHERE status='REQUIRES_APPROVAL'`) قبل التنفيذ ⇒ إعادة الاعتماد 409 ولا تنفيذ مزدوج.
+- **RBAC**: `SECURITY_READ` لـ`ADMIN`+`SUPER_ADMIN`، `SECURITY_RESPOND`/`SECURITY_MANAGE` لـ`SUPER_ADMIN` فقط. إخفاء الزر ليس صلاحية.
+- **الاحتواء التلقائي**: مطفأ افتراضياً؛ حتى مع `limited` يقتصر على `RATE_BURST`/`RATE_LIMIT_ABUSE` من عنوان معروف، ولا يلمس قواعد على مستوى الحساب.
+- **حدود صريحة**: لا امتصاص DDoS حجمي (CDN/WAF فقط، و`coversVolumetric:false` دائماً)؛ العدّادات والتقييد المؤقت **لكل عملية** (الحجب في DB ويعمّ الكل بكاش 2s)؛ لا فحص لأجسام multipart؛ `x-www-form-urlencoded` يُفحص بعد تحويل `+` إلى مسافة (بدونها يمر `' OR 1=1`).
+- **الصيانة**: `sweepWcdcData` في `lib/scheduler.ts` (tick ساعي) يحذف الأحداث الأقدم من `WCDC_EVENT_RETENTION_DAYS` (30) والحجب المنتهية منذ >7 أيام.
+- **الواجهة**: `/admin/security` (`pages/AdminSecurityPage.tsx`) — نظرة عامة/حوادث/أحداث/إجراءات + بطاقة الحجب مع زر «رفع الحظر» للمدير العام فقط؛ مفاتيح `wcdc.*` في ar/en/fr.
+- **تشغيل اختباراته**: `TEST_DATABASE_URL=...wasit_test npx vitest run tests/wcdc-01.test.ts tests/wcdc-01-rules.test.ts` (الاختبار يشغّل مستمع HTTP حقيقي لأن WCDC يعمل من عنوان العميل، ويعلن loopback كوكيل موثوق).

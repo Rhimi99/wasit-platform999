@@ -64,6 +64,8 @@ import { seoRoutes, seoApiRoutes } from './modules/seo/routes.js';
 import { paymentsRoutes, paymentWebhookRoutes } from './modules/payments/routes.js';
 import { metricsRoutes, adminObservabilityRoutes } from './modules/observability/routes.js';
 import { taxRoutes } from './modules/tax/routes.js';
+import { securityRoutes } from './modules/security/routes.js';
+import { wcdcGuard } from './lib/wcdc/middleware.js';
 import { financeRoutes } from './modules/finance/routes.js';
 import { catalogHeartbeat } from './lib/ai/routing.js';
 import { getDb } from './lib/request-context.js';
@@ -74,6 +76,11 @@ export function createApp(): Hono {
   app.use('*', errorHandlerMiddleware);
   app.use('*', coreMiddleware);
   app.use('*', securityHeaders);
+  // WCDC-01: request-side security collection and bounded containment. It runs
+  // after the trace/context exist and before any route, so a blocked address is
+  // refused before a body is parsed. It never widens access — it can only refuse
+  // more, for a bounded time, and every refusal is recorded.
+  app.use('*', wcdcGuard());
   // Reject an oversized request body before any handler (or the JSON parse)
   // reads it, so a large payload cannot be buffered by an expensive route.
   // The product-image upload is the only route that carries a binary, so it
@@ -259,6 +266,9 @@ export function createApp(): Hono {
   app.route('/api/admin/ai/providers', adminAiProviderRoutes);
   app.route('/api/admin/ai/spend', adminAiSpendRoutes);
   app.route('/api/admin/staff', staffRoutes);
+  // Mounted before the general `/api/admin` router so the security centre's own
+  // per-endpoint permissions (read vs respond) are the ones that apply.
+  app.route('/api/admin/security', securityRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminEnginesRoutes);
   app.route('/api/admin/ai', adminAiRoutes);
