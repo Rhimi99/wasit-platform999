@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '../env.js';
 import { mixVoiceoverTrack } from './audio-mix.js';
+import { ffmpegBin } from './binaries.js';
 import { MUSIC_PROVENANCE, renderMusicBed } from './music.js';
 import { resolveVoice, synthesizeSpeech, type VideoLanguage, type VoiceDefinition } from './tts.js';
 import {
@@ -370,7 +371,7 @@ async function renderSceneClip(
     `:x0=${reverse ? width : 0}:y0=${reverse ? height : 0}:x1=${x1}:y1=${y1}` +
     `:d=${duration.toFixed(3)}:speed=0.06:r=${fps}`;
 
-  await run('ffmpeg', [
+  await run(ffmpegBin(), [
     '-hide_banner', '-loglevel', 'error',
     '-f', 'lavfi', '-i', source,
     '-vf',
@@ -500,7 +501,7 @@ export async function produceMarketingVideo(input: ProduceInput): Promise<Produc
     '-y', input.outFile,
   );
 
-  await run('ffmpeg', args, { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
+  await run(ffmpegBin(), args, { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
 
   return {
     file: input.outFile,

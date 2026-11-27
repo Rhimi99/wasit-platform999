@@ -5,7 +5,8 @@ empty directory extracted from release commit `f3a730c`, so following it
 reproduces a known-good environment.
 
 **Prerequisites:** Node.js 22, npm 10+, PostgreSQL 16 (a 17 client also works),
-and — only if you want to run E2E — a Chromium-capable host.
+and — only if you want to run E2E — a Chromium-capable host. Marketing videos
+and the voiceover engine need `ffmpeg`; see [1.1 Media toolchain](#11-media-toolchain-marketing-video-and-voiceover).
 
 ---
 
@@ -35,6 +36,46 @@ npm rebuild argon2
 `--ignore-scripts` skips lifecycle scripts (supply-chain hygiene); `argon2` is a
 native module and must be rebuilt explicitly for your platform. Both steps are
 what CI does, so a successful `npm ci` here means the lockfile is sound.
+
+### 1.1 Media toolchain (Marketing Video and voiceover)
+
+Two optional subsystems shell out to media binaries. Install them before running
+the media test suites; everything else works without them.
+
+| Need | What provides it | Install |
+| --- | --- | --- |
+| Video render, audio join, audio duration | `ffmpeg` | `npm run media:setup` (bundled, no root) **or** `sudo apt-get install -y ffmpeg fonts-dejavu-core` |
+| Voice synthesis | piper + four MIT voices | `npm run voices:setup` |
+| Video quality gate | `ffprobe` | ships with the system `ffmpeg` package; set `FFPROBE_PATH` if it lives elsewhere |
+
+`ffmpeg-static` ships **no** `ffprobe`, so a machine that installed only npm
+dependencies can render and voice a video but cannot pass the quality gate. That
+is deliberate and fail-closed: the gate refuses to certify a file it could not
+inspect, and says so — `ffprobe is not installed, so the video quality gate
+cannot verify the file`. Install the system `ffmpeg` package (or point
+`FFPROBE_PATH` at a real binary) to run the gate; do not relax the check.
+
+```bash
+npm run media:setup     # ffmpeg-static binary, verified by running `-version`
+npm run voices:setup    # piper + ar/fr/en/zh voices into packages/server/vendor/piper
+npm run voices:check    # verify an existing install without downloading anything
+```
+
+`npm run media:setup` exists because `npm ci --ignore-scripts` skips
+`ffmpeg-static`'s postinstall, and npm 12+ blocks dependency install scripts
+unless each one is approved — so `npm rebuild ffmpeg-static` reports success
+while leaving the binary missing. The script runs the package's own installer
+and refuses to report success unless `ffmpeg -version` works.
+
+`npm run voices:setup` downloads piper 2023.11.14-2 for the host architecture
+(x86_64, aarch64, armv7l), the four MIT voices, then asks **each** voice to speak
+a sentence and validates the resulting WAV (PCM, 22.05 kHz, mono, 16-bit,
+duration, non-silent). It needs no `ffprobe`.
+
+Nothing downloaded here is committed: `packages/server/vendor/` is git-ignored,
+and the voices are MIT-licensed (`rhasspy/piper-voices`). Tunisian Arabic
+(`ar-TN`) has **no** synthetic voice — that language requires a licensed
+recorded voice pack (see `docs/AI-FIRST-COMPLETION-06.md`).
 
 > **Expected:** a few `npm audit` advisories are printed. They are known and
 > listed in [`12-SECURITY-NOTES.md`](./12-SECURITY-NOTES.md); do **not** run
@@ -180,5 +221,9 @@ See [`09-TESTING-GUIDE.md`](./09-TESTING-GUIDE.md) for E2E and the full gate set
 | `Cannot find module '.../dist-bundle/index.cjs'` | Started the bundle from the repo root instead of `packages/server` | `cd packages/server && node dist-bundle/index.cjs` |
 | `Refusing to start: JWT_SECRET is the committed development default` | `NODE_ENV=staging`/`production` with the placeholder secret | Set a real `JWT_SECRET` (≥32 chars) |
 | Migrations fail with `auth_failed` | `drizzle-kit` reads `process.env.DATABASE_URL` directly and ignores a differently-located `.env` | `export DATABASE_URL=...` before `npm run db:migrate` |
-| Video generation returns 502 | `ffmpeg-static` binary missing (installed with `--ignore-scripts` and not rebuilt) | `npm rebuild` in the repo root, or set `VIDEO_FFMPEG_PATH` |
+| Video generation returns 502 | `ffmpeg-static` binary missing (installed with `--ignore-scripts`; npm 12+ also blocks install scripts) | `npm run media:setup`, or set `VIDEO_FFMPEG_PATH` |
+| `scripts/install-tts.sh` says `missing required tool: ffmpeg` (older checkouts) | No `ffmpeg` on `PATH` and the bundled one not installed | `npm run media:setup`, then `npm run voices:setup` |
+| `voiceover` tests skipped with "piper is not installed" | The voice engine was never downloaded (it is git-ignored) | `npm run voices:setup` |
+| `The voice model for fr-FR is missing` | Voices present but the requested `.onnx` was deleted or truncated | `npm run voices:check`, then `npm run voices:setup -- --force` |
+| `Cannot read the duration of …: not a PCM WAV, and ffprobe failed` | A non-WAV clip was handed to the audio path and no `ffprobe` exists | Install the system `ffmpeg` package (provides `ffprobe`) or set `TTS_FFPROBE_PATH` |
 | Tests fail on `devToolingActive` | A shell exported `ALLOW_DEV_TOOLING=true` | The suite now pins this itself; update to the release commit |

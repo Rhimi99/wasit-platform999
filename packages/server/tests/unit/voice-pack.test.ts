@@ -10,13 +10,26 @@ import {
   voiceLineKey,
   voicePackStatus,
 } from '../../src/lib/media/voice-pack.js';
-import { resolveVoice } from '../../src/lib/media/tts.js';
+import { resolveVoice, ttsStatus } from '../../src/lib/media/tts.js';
 import { packReadyLanguages } from '../../src/scripts/voice-recording-brief.js';
 
 const FIXTURE = path.resolve(__dirname, '../fixtures/voice-pack');
 const MANIFEST = JSON.parse(readFileSync(path.join(FIXTURE, 'ar-TN/manifest.json'), 'utf8')) as {
   clips: Array<{ text: string; file: string }>;
 };
+
+// The synthetic engine is a deployment prerequisite, not part of this unit's
+// subject: without the piper binary and its voices, `resolveVoice` correctly
+// reports "not installed". Only the piper-specific assertions are skipped, and
+// the skip names exactly what is missing so a green run is never ambiguous.
+const engineStatus = ttsStatus();
+const piperLanguages = engineStatus.languages.filter((entry) => entry.language !== 'ar-TN');
+const missingVoices = piperLanguages.filter((entry) => !entry.voice).map((entry) => entry.language);
+const piperSkipReason = !engineStatus.binary
+  ? 'piper is not installed — run `npm run voices:setup`'
+  : missingVoices.length > 0
+    ? `piper voice model missing for ${missingVoices.join(', ')} — run \`npm run voices:setup\``
+    : '';
 
 let root: string;
 let previousRoot: string | undefined;
@@ -194,8 +207,27 @@ describe('voice pack — voice resolution', () => {
     expect(status.clips).toBe(MANIFEST.clips.length);
   });
 
-  it('keeps piper for the other languages', () => {
-    expect(resolveVoice('fr').voice?.engine).toBe('piper');
+  it.skipIf(piperSkipReason !== '')(
+    `keeps piper for the other languages${piperSkipReason ? ` (skipped: ${piperSkipReason})` : ''}`,
+    () => {
+      // Strict on purpose: when the engine is installed, every non-Tunisian
+      // language must resolve to a real piper voice, not merely "no error".
+      for (const language of ['ar', 'fr', 'en', 'zh'] as const) {
+        const resolved = resolveVoice(language);
+        expect(resolved.voice?.engine, language).toBe('piper');
+        expect(resolved.engineAvailable, language).toBe(true);
+        expect(resolved.reason, language).toBeNull();
+      }
+    },
+  );
+
+  it.skipIf(piperSkipReason === '')('reports why the synthetic engine is unavailable instead of pretending', () => {
+    const resolved = resolveVoice('fr');
+    expect(resolved.voice).toBeNull();
+    expect(resolved.reason).toMatch(/not installed|missing/i);
+    // The binary and the voice model are separate prerequisites: the reason
+    // must name whichever one is actually absent.
+    expect(resolved.engineAvailable).toBe(engineStatus.binary);
   });
 });
 

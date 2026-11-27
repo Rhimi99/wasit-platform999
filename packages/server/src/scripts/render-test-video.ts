@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { env } from '../lib/env.js';
+import { ffmpegBin, ffprobeBin } from '../lib/media/binaries.js';
 import { StructuralVideoProvider } from '../lib/media/video-provider.js';
 import { measureMp4DurationSeconds } from '../lib/media/mp4.js';
 import type { RenderSpec } from '../lib/media/video-types.js';
@@ -36,7 +37,7 @@ const evidenceDir = path.join(repoRoot, 'docs', 'evidence', 'ai');
 
 function ffprobe(file: string): Record<string, unknown> {
   const raw = execFileSync(
-    'ffprobe',
+    ffprobeBin(),
     ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
     { encoding: 'utf8' },
   );
@@ -46,7 +47,7 @@ function ffprobe(file: string): Record<string, unknown> {
 /** Decodes the whole file: a truncated or corrupt stream makes ffmpeg exit non-zero. */
 function decodeCheck(file: string): { ok: boolean; detail: string } {
   try {
-    execFileSync('ffmpeg', ['-v', 'error', '-i', file, '-f', 'null', '-'], { encoding: 'utf8', stdio: 'pipe' });
+    execFileSync(ffmpegBin(), ['-v', 'error', '-i', file, '-f', 'null', '-'], { encoding: 'utf8', stdio: 'pipe' });
     return { ok: true, detail: 'full decode completed with no errors' };
   } catch (error) {
     const stderr = (error as { stderr?: Buffer }).stderr?.toString().slice(-400) ?? String(error);
@@ -129,7 +130,7 @@ async function main(): Promise<void> {
     },
     renderer: {
       provider: provider.id,
-      ffmpeg: execFileSync('ffmpeg', ['-version'], { encoding: 'utf8' }).split('\n')[0],
+      ffmpeg: execFileSync(ffmpegBin(), ['-version'], { encoding: 'utf8' }).split('\n')[0],
       width: env.VIDEO_WIDTH,
       height: env.VIDEO_HEIGHT,
       fps: env.VIDEO_FPS,
