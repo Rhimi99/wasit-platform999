@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { env } from '../env.js';
-import { ffmpegBin, ffprobeBin } from './binaries.js';
+import { ffmpegBin, ffprobeBin, ffprobeProblem } from './binaries.js';
 import { MARKETING_VIDEO_DURATION } from '@wasit/shared';
 import type { ProducedVideo, SceneTimeline } from './marketing-video.js';
 import type { VideoLanguage } from './tts.js';
@@ -63,6 +63,10 @@ interface ProbeResult {
 }
 
 async function probe(file: string): Promise<ProbeResult> {
+  // Fail closed with an actionable reason: an unverifiable file is not a
+  // passing file.
+  const problem = ffprobeProblem();
+  if (problem) throw new Error(problem);
   const { stdout } = await run(
     ffprobeBin(),
     ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
@@ -145,7 +149,7 @@ interface SilenceGap {
 
 async function detectSilence(file: string, thresholdDb = -45, minSeconds = 0.6): Promise<SilenceGap[]> {
   const { stderr } = await run(
-    'ffmpeg',
+    ffmpegBin(),
     ['-hide_banner', '-nostats', '-i', file, '-af', `silencedetect=n=${thresholdDb}dB:d=${minSeconds}`, '-f', 'null', '-'],
     { timeout: 180_000, maxBuffer: MAX_OUTPUT },
   ).catch((error: { stderr?: Buffer | string }) => ({ stdout: '', stderr: String(error.stderr ?? '') }));
@@ -163,7 +167,7 @@ async function detectSilence(file: string, thresholdDb = -45, minSeconds = 0.6):
 
 async function countBlackSegments(file: string): Promise<number> {
   const { stderr } = await run(
-    'ffmpeg',
+    ffmpegBin(),
     // 0.03, not ffmpeg's 0.10 default: the brand's dark navy (#0B1220) sits at
     // ~0.06 luma and is a deliberate background, not a blank frame.
     ['-hide_banner', '-nostats', '-i', file, '-vf', 'blackdetect=d=0.5:pix_th=0.03', '-f', 'null', '-'],
@@ -176,7 +180,7 @@ async function countBlackSegments(file: string): Promise<number> {
 async function windowRms(file: string, startSeconds: number, durationSeconds: number): Promise<number | null> {
   if (durationSeconds <= 0.15) return null;
   const { stderr } = await run(
-    'ffmpeg',
+    ffmpegBin(),
     [
       '-hide_banner', '-nostats',
       '-ss', startSeconds.toFixed(3), '-t', durationSeconds.toFixed(3),

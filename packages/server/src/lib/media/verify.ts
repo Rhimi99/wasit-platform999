@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ffmpegBin, ffprobeBin } from './binaries.js';
+import { ffmpegBin, ffprobeBin, ffprobeProblem } from './binaries.js';
 
 const run = promisify(execFile);
 const PROBE_TIMEOUT_MS = 60_000;
@@ -24,6 +24,20 @@ export interface Mp4Probe {
  * this reads the container and the video stream that are actually inside it.
  */
 export async function probeMp4File(file: string): Promise<Mp4Probe> {
+  const problem = ffprobeProblem();
+  if (problem) {
+    return {
+      ok: false,
+      formatName: null,
+      durationSeconds: null,
+      codec: null,
+      width: null,
+      height: null,
+      frameRate: null,
+      frames: null,
+      error: problem,
+    };
+  }
   try {
     const { stdout } = await run(
       ffprobeBin(),

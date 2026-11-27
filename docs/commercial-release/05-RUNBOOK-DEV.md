@@ -48,6 +48,13 @@ the media test suites; everything else works without them.
 | Voice synthesis | piper + four MIT voices | `npm run voices:setup` |
 | Video quality gate | `ffprobe` | ships with the system `ffmpeg` package; set `FFPROBE_PATH` if it lives elsewhere |
 
+`ffmpeg-static` ships **no** `ffprobe`, so a machine that installed only npm
+dependencies can render and voice a video but cannot pass the quality gate. That
+is deliberate and fail-closed: the gate refuses to certify a file it could not
+inspect, and says so — `ffprobe is not installed, so the video quality gate
+cannot verify the file`. Install the system `ffmpeg` package (or point
+`FFPROBE_PATH` at a real binary) to run the gate; do not relax the check.
+
 ```bash
 npm run media:setup     # ffmpeg-static binary, verified by running `-version`
 npm run voices:setup    # piper + ar/fr/en/zh voices into packages/server/vendor/piper

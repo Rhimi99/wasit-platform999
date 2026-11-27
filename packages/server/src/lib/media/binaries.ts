@@ -57,6 +57,24 @@ export function ffmpegBin(): string {
   return cachedFfmpeg;
 }
 
+/**
+ * Why the quality gate cannot inspect a file, or null when ffprobe resolves.
+ *
+ * `ffprobe` ships with the system ffmpeg package, not with `ffmpeg-static`, so a
+ * machine that installed only npm dependencies can render a video but cannot
+ * verify it. The gate must say that plainly; a raw `spawn ffprobe ENOENT` reads
+ * like a code fault and invites someone to skip the check.
+ */
+export function ffprobeProblem(): string | null {
+  const resolved = ffprobeBin();
+  const present = resolved === 'ffprobe' ? onPath('ffprobe') !== null : usableFile(resolved) !== null;
+  if (present) return null;
+  return (
+    'ffprobe is not installed, so the video quality gate cannot verify the file. ' +
+    'Install the system ffmpeg package (it ships ffprobe) or set FFPROBE_PATH.'
+  );
+}
+
 export function ffprobeBin(): string {
   cachedFfprobe ??= usableFile(env.TTS_FFPROBE_PATH) ?? usableFile(env.FFPROBE_PATH) ?? onPath('ffprobe') ?? 'ffprobe';
   return cachedFfprobe;

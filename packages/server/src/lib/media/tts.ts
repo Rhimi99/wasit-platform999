@@ -131,7 +131,9 @@ export const VOICE_CATALOGUE: readonly VoiceDefinition[] = [
  */
 const VOICE_GAPS: Partial<Record<VideoLanguage, string>> = {
   'ar-TN':
-    'No commercially licensed Tunisian Arabic voice is available: the public Tunisian TTS models are CC-BY-NC-4.0 or unlicensed. Producing an MSA voiceover and labelling it Tunisian would be a false claim, so the video is withheld.',
+    'No commercially licensed Tunisian Arabic voice is available: the public Tunisian TTS models are CC-BY-NC-4.0 or unlicensed (see docs/VOICE-TUNISIAN.md). '
+    + 'Producing an MSA voiceover and labelling it Tunisian would be a false claim, so the video is withheld. '
+    + 'Record a licensed pack into VOICE_PACK_DIR, or produce the advert in ar, fr, en or zh — the pipeline never substitutes a voice silently.',
 };
 
 function piperPath(): string | null {
