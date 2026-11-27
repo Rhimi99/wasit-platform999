@@ -26,7 +26,7 @@
     "voices:brief": "tsx src/scripts/voice-recording-brief.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^1.19.19",
     "@wasit/shared": "*",
     "argon2": "^0.41.0",
     "cookie": "^1.0.0",
@@ -34,7 +34,7 @@
     "dotenv": "^16.4.0",
     "drizzle-orm": "^0.36.0",
     "ffmpeg-static": "^5.3.0",
-    "hono": "^4.6.0",
+    "hono": "^4.13.21",
     "nodemailer": "^6.10.1",
     "pg": "^8.13.0",
     "zod": "^3.23.0"
