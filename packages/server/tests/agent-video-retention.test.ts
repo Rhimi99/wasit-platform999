@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { purgeAgentVideos, classifyAgentVideo, parseAgentVideoKey } from '../src/modules/ai/agent-videos.js';
 import { db } from '../src/db/client.js';
 import { agentTasks } from '../src/db/schema/agents.js';
@@ -121,9 +121,14 @@ describe('AFC-05 — agent video retention by class', () => {
     const old = new Date(Date.now() - 500 * DAY);
     await utimes(asset, old, old);
 
-    const auditBefore = await db.select({ id: auditLogs.id }).from(auditLogs);
+    // Scoped to the action the purge wrapper writes (src/scripts/purge-agent-videos.ts).
+    // A table-wide count also sees the audit rows other spec files write in the same
+    // window, because the suite runs test files in parallel against one database.
+    const purgeAudit = () =>
+      db.select({ id: auditLogs.id }).from(auditLogs).where(eq(auditLogs.action, 'AI.AGENT_VIDEO_PURGED'));
+    const auditBefore = await purgeAudit();
     await purgeAgentVideos(db);
-    const auditAfter = await db.select({ id: auditLogs.id }).from(auditLogs);
+    const auditAfter = await purgeAudit();
 
     expect(await exists(asset)).toBe(true);
     expect(auditAfter.length).toBe(auditBefore.length);

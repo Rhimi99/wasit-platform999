@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import argon2 from 'argon2';
 import { createApp } from '../src/app.js';
 import { db, closeDb } from '../src/db/client.js';
@@ -557,22 +557,54 @@ describe('P7 — webhook ordering, retry and dead-letter queue', () => {
     expect(row.attempts).toBe(0);
   });
 
+  /**
+   * Ledger rows reachable from a provider reference: intent → transaction → entries.
+   *
+   * The financial-effect assertions are anchored on the reference the event names
+   * rather than on the whole table. The suite runs test files in parallel against
+   * one database, so a table-wide count also counts the rows another spec writes
+   * in the same window — which is what made this case flaky, not a product defect.
+   */
+  async function ledgerForReference(reference: string) {
+    const intents = await db.select().from(paymentIntents).where(eq(paymentIntents.externalRef, reference));
+    const transactions = intents
+      .map((i) => i.transactionId)
+      .filter((id): id is string => id !== null && id !== undefined);
+    return transactions.length === 0
+      ? []
+      : db.select().from(transactionLedger).where(inArray(transactionLedger.transactionId, transactions));
+  }
+
   it('replaying a dead-lettered event creates no financial effect and moves no ledger to SETTLED', async () => {
     // A dead-lettered event for a ghost intent: replay only resets the counter.
-    const { eventId } = await deadLetterEvent('nofin');
+    const { eventId, externalRef } = await deadLetterEvent('nofin');
     const admin = await createStaffUser('ADMIN');
     const item = await findFailure(admin, eventId);
     expect(item).toBeTruthy();
 
-    const before = await db.select().from(transactionLedger);
+    const before = await ledgerForReference(externalRef);
     const beforePaid = before.filter((l) => l.status === 'SETTLED').length;
+    // Premise of the case: the reference resolves to nothing before the replay.
+    expect(before).toHaveLength(0);
 
     const replay = await admin.client.req(`/api/payments/webhook-failures/${item!.id}/replay`, { method: 'POST' });
     expect(replay.status).toBe(200);
 
-    const after = await db.select().from(transactionLedger);
+    const after = await ledgerForReference(externalRef);
     expect(after.length).toBe(before.length);
     expect(after.filter((l) => l.status === 'SETTLED').length).toBe(beforePaid);
+    // No financial row was raised for the reference either.
+    expect(await db.select().from(paymentIntents).where(eq(paymentIntents.externalRef, externalRef))).toHaveLength(0);
+    expect(await db.select().from(payments).where(eq(payments.externalRef, externalRef))).toHaveLength(0);
+    // The replay did happen — it reset the counter — so the assertions above are
+    // not passing because nothing ran.
+    const [replayedEvent] = await db
+      .select()
+      .from(paymentWebhookEvents)
+      .where(eq(paymentWebhookEvents.id, item!.id))
+      .limit(1);
+    expect(replayedEvent.status).toBe('RECEIVED');
+    expect(replayedEvent.attempts).toBe(0);
     // The replay response is honest: it reports the reset, not a completed process.
     expect(replay.data.data.replayed).toBe(true);
     expect(replay.data.data.applied).toBeUndefined();

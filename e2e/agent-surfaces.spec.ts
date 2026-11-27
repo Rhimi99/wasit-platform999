@@ -1,49 +1,39 @@
-import { test, expect, request as playwrightRequest } from '@playwright/test';
+import { request as playwrightRequest } from '@playwright/test';
+import fs from 'node:fs';
+import { test, expect, E2E_WEB_URL, storageFor } from './helpers';
 
 /**
  * AI-FIRST-COMPLETION-05 — operational surfaces, exercised against the real stack.
  *
- * No route interception and no fixtures: the merchant signs in through the API,
- * the page drives the real agent task, a staff account performs the human
- * approval the agent requires, and the video is fetched back from the real
- * storage. The same spec runs on a phone viewport (`mobile-chromium` project).
+ * No route interception and no fixtures: the merchant session is the one
+ * `e2e/global-setup.ts` minted by signing the demo role in through the real
+ * `POST /api/auth/login`, the page drives the real agent task, a staff session
+ * performs the human approval the agent requires, and the video is fetched back
+ * from the real storage. The same spec runs on a phone viewport
+ * (`mobile-chromium` project).
+ *
+ * The spec never handles a password. A missing session file is a setup failure
+ * and fails the run — it is never turned into a silent skip, which would let the
+ * surface rot untested while the suite stays green.
  */
 
-const WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:12000';
+const WEB_URL = E2E_WEB_URL;
 
-const MERCHANT = {
-  email: process.env.E2E_MERCHANT_EMAIL ?? 'merchanta@wasit.tn',
-  password: process.env.DEMO_ACCOUNT_PASSWORD_MERCHANTA ?? '',
-};
-const ADMIN = {
-  email: process.env.E2E_ADMIN_EMAIL ?? 'admin@wasit.tn',
-  password: process.env.DEMO_STAFF_PASSWORD_ADMIN ?? '',
-};
-
-const hasCredentials = Boolean(MERCHANT.password && ADMIN.password);
-
-type StorageState = Awaited<ReturnType<Awaited<ReturnType<typeof playwrightRequest.newContext>>['storageState']>>;
-
-async function signIn(credentials: { email: string; password: string }): Promise<StorageState> {
-  const ctx = await playwrightRequest.newContext({
-    baseURL: WEB_URL,
-    ignoreHTTPSErrors: true,
-    extraHTTPHeaders: { Origin: WEB_URL },
-  });
-  const res = await ctx.post('/api/auth/login', { data: credentials });
-  expect(res.status(), `login ${credentials.email}`).toBe(200);
-  const state = await ctx.storageState();
-  await ctx.dispose();
-  return state;
+function session(role: 'merchant' | 'admin'): string {
+  const file = storageFor(role);
+  if (!fs.existsSync(file)) {
+    throw new Error(
+      `No stored ${role} session at ${file}. Run the suite through Playwright so ` +
+        'e2e/global-setup.ts can sign the demo roles in first.',
+    );
+  }
+  return file;
 }
 
 test.describe('AFC-05 — agent video production surface', () => {
-  test.skip(!hasCredentials, 'demo credentials are not exported (DEMO_ACCOUNT_PASSWORD_MERCHANTA / DEMO_STAFF_PASSWORD_ADMIN)');
-
   test('produces, gates, previews and downloads a real video', async ({ browser }) => {
     test.setTimeout(360_000);
-    const merchantState = await signIn(MERCHANT);
-    const merchant = await browser.newContext({ storageState: merchantState, baseURL: WEB_URL });
+    const merchant = await browser.newContext({ storageState: session('merchant'), baseURL: WEB_URL });
     const page = await merchant.newPage();
 
     await page.goto('/dashboard/agent-video');
@@ -72,11 +62,10 @@ test.describe('AFC-05 — agent video production surface', () => {
     await expect(page.getByTestId('agent-video-approval')).toBeVisible();
     await expect(page.getByTestId('agent-video-status')).toContainText(/انتظار|waiting|attente|等待/i);
 
-    const adminState = await signIn(ADMIN);
     const admin = await playwrightRequest.newContext({
       baseURL: WEB_URL,
       ignoreHTTPSErrors: true,
-      storageState: adminState,
+      storageState: session('admin'),
       extraHTTPHeaders: { Origin: WEB_URL },
     });
     const approve = await admin.post(`/api/ai/tasks/${taskId}/approve`, { data: { decision: 'APPROVE', reason: 'AFC-05 e2e' } });
@@ -135,40 +124,54 @@ test.describe('AFC-05 — agent video production surface', () => {
     await merchant.close();
   });
 
-  test('a stranger cannot read the task or its video', async ({ browser }) => {
-    const merchantState = await signIn(MERCHANT);
+  test('a stranger cannot read the task or its video', async () => {
     const merchant = await playwrightRequest.newContext({
       baseURL: WEB_URL,
       ignoreHTTPSErrors: true,
-      storageState: merchantState,
+      storageState: session('merchant'),
       extraHTTPHeaders: { Origin: WEB_URL },
     });
-    const list = await merchant.get('/api/ai/agents/marketing-video-agent/tasks');
-    expect(list.status()).toBe(200);
-    const items = ((await list.json()) as { data: { items: Array<{ id: string }> } }).data.items;
+    // Open the merchant's own task, so the probe never depends on what an
+    // earlier case left behind (which is why this case used to skip itself).
+    const products = await merchant.get('/api/products/mine?pageSize=100');
+    expect(products.status()).toBe(200);
+    const active = ((await products.json()) as { data: { items: Array<{ id: string; status: string }> } }).data.items.filter(
+      (p) => p.status === 'ACTIVE',
+    );
+    expect(active.length, 'the merchant needs one ACTIVE listing to open a task').toBeGreaterThan(0);
+
+    const created = await merchant.post('/api/ai/agents/marketing-video-agent/tasks', {
+      data: {
+        input: {
+          productId: active[0].id,
+          language: 'ar',
+          objective: 'SALES',
+          audience: 'B2B',
+          style: 'MODERN',
+          durationSeconds: 35,
+        },
+      },
+    });
+    expect([200, 201]).toContain(created.status());
+    const taskId = ((await created.json()) as { data: { id: string } }).data.id;
     await merchant.dispose();
-    test.skip(items.length === 0, 'no task available to probe');
 
     const anon = await playwrightRequest.newContext({
       baseURL: WEB_URL,
       ignoreHTTPSErrors: true,
       extraHTTPHeaders: { Origin: WEB_URL },
     });
-    const task = await anon.get(`/api/ai/tasks/${items[0].id}`);
-    const video = await anon.get(`/api/ai/tasks/${items[0].id}/video`);
+    const task = await anon.get(`/api/ai/tasks/${taskId}`);
+    const video = await anon.get(`/api/ai/tasks/${taskId}/video`);
     expect(task.status()).toBe(401);
     expect(video.status()).toBe(401);
     await anon.dispose();
-    void browser;
   });
 });
 
 test.describe('AFC-05 — partner suggestions surface', () => {
-  test.skip(!hasCredentials, 'demo credentials are not exported');
-
   test('consent gates discovery, and results carry no contact data', async ({ browser }) => {
-    const merchantState = await signIn(MERCHANT);
-    const context = await browser.newContext({ storageState: merchantState, baseURL: WEB_URL });
+    const context = await browser.newContext({ storageState: session('merchant'), baseURL: WEB_URL });
     const page = await context.newPage();
 
     await page.goto('/dashboard/partners');
@@ -191,11 +194,10 @@ test.describe('AFC-05 — partner suggestions surface', () => {
 
     // The agent is human-gated: a staff approval must come first.
     await expect(page.getByTestId('partners-refresh')).toBeVisible({ timeout: 30_000 });
-    const adminState = await signIn(ADMIN);
     const admin = await playwrightRequest.newContext({
       baseURL: WEB_URL,
       ignoreHTTPSErrors: true,
-      storageState: adminState,
+      storageState: session('admin'),
       extraHTTPHeaders: { Origin: WEB_URL },
     });
     const approve = await admin.post(`/api/ai/tasks/${taskId}/approve`, { data: { decision: 'APPROVE', reason: 'AFC-05 e2e' } });
