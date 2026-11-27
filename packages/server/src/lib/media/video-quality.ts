@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { env } from '../env.js';
+import { ffmpegBin, ffprobeBin } from './binaries.js';
 import { MARKETING_VIDEO_DURATION } from '@wasit/shared';
 import type { ProducedVideo, SceneTimeline } from './marketing-video.js';
 import type { VideoLanguage } from './tts.js';
@@ -63,7 +64,7 @@ interface ProbeResult {
 
 async function probe(file: string): Promise<ProbeResult> {
   const { stdout } = await run(
-    'ffprobe',
+    ffprobeBin(),
     ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
     { timeout: 60_000, maxBuffer: MAX_OUTPUT },
   );
@@ -102,7 +103,7 @@ async function probe(file: string): Promise<ProbeResult> {
 
 async function decodesFully(file: string): Promise<{ ok: boolean; detail: string }> {
   try {
-    await run('ffmpeg', ['-v', 'error', '-i', file, '-f', 'null', '-'], {
+    await run(ffmpegBin(), ['-v', 'error', '-i', file, '-f', 'null', '-'], {
       timeout: 180_000,
       maxBuffer: MAX_OUTPUT,
     });
@@ -120,7 +121,7 @@ interface Loudness {
 }
 
 async function measureLoudness(file: string): Promise<Loudness> {
-  const { stderr } = await run('ffmpeg', ['-hide_banner', '-nostats', '-i', file, '-af', 'ebur128=peak=true', '-f', 'null', '-'], {
+  const { stderr } = await run(ffmpegBin(), ['-hide_banner', '-nostats', '-i', file, '-af', 'ebur128=peak=true', '-f', 'null', '-'], {
     timeout: 180_000,
     maxBuffer: MAX_OUTPUT,
   }).catch((error: { stderr?: Buffer | string }) => ({ stdout: '', stderr: String(error.stderr ?? '') }));

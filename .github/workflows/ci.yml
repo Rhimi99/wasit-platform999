@@ -79,9 +79,12 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       # `--ignore-scripts` skips the postinstall that downloads ffmpeg-static's
-      # binary; the video specs render real MP4s with it, so restore it
-      # explicitly instead of dropping the assertions.
-      - run: npm rebuild argon2 ffmpeg-static
+      # binary, and npm 12+ blocks dependency install scripts unless they are
+      # approved, so `npm rebuild ffmpeg-static` is not enough on newer npm.
+      # The repo script runs the package's own installer and refuses to report
+      # success unless `ffmpeg -version` works.
+      - run: npm rebuild argon2
+      - run: npm run media:setup
       # The marketing-video specs render real MP4s with Arabic text through
       # ffmpeg + libass and verify them with ffprobe. They fail — they do not
       # skip — when the renderer is missing, so the toolchain is installed

@@ -553,6 +553,12 @@ const envSchema = z.object({
   TTS_PIPER_PATH: z.string().optional(),
   /** Directory holding the piper `.onnx` voices (never committed). */
   TTS_VOICES_DIR: z.string().optional(),
+  /** Explicit ffmpeg for audio work; falls back to VIDEO_FFMPEG_PATH, then ffmpeg-static. */
+  TTS_FFMPEG_PATH: z.string().optional(),
+  /** Explicit ffprobe for audio duration checks; falls back to PATH. */
+  TTS_FFPROBE_PATH: z.string().optional(),
+  /** Explicit ffprobe for the video quality gate; falls back to PATH. */
+  FFPROBE_PATH: z.string().optional(),
   /**
    * Root of the recorded voice packs (`<dir>/<language>/manifest.json`).
    * A licensed human pack takes precedence over a synthetic voice.

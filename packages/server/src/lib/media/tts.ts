@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '../env.js';
+import { ffmpegBin, ffprobeBin } from './binaries.js';
 import { loadVoicePack, lookupVoiceClip, missingVoiceLines } from './voice-pack.js';
+import { readWavInfo } from './wav.js';
 
 const run = promisify(execFile);
 
@@ -252,7 +254,7 @@ export async function synthesizeSpeech(options: SynthesizeOptions): Promise<Synt
       );
     }
     // Match piper's output shape (22.05 kHz mono) so the mixer sees one format.
-    await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', clip.path,
+    await run(ffmpegBin(), ['-hide_banner', '-loglevel', 'error', '-i', clip.path,
       '-ac', '1', '-ar', '22050', '-y', options.outFile], { timeout: 120_000 });
     const durationSeconds = await probeAudioDuration(options.outFile);
     const bytes = (await readFile(options.outFile)).byteLength;
@@ -286,7 +288,7 @@ export async function synthesizeSpeech(options: SynthesizeOptions): Promise<Synt
     const listFile = path.join(dir, `concat-${path.basename(options.outFile)}.txt`);
     await writeFile(listFile, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
     await run(
-      'ffmpeg',
+      ffmpegBin(),
       ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listFile, '-y', options.outFile],
       { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 },
     );
@@ -324,9 +326,25 @@ export function splitForSpeech(text: string, language: VideoLanguage): string[] 
 }
 
 export async function probeAudioDuration(file: string): Promise<number> {
-  const { stdout } = await run('ffprobe', [
-    '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file,
-  ]);
+  // Voiceover output is PCM WAV, whose header carries an exact duration, so the
+  // audio path does not depend on a system ffprobe. Anything else falls back to
+  // the probe and reports what to install instead of a bare ENOENT.
+  const wav = await readWavInfo(file).catch(() => null);
+  if (wav && wav.durationSeconds > 0) return wav.durationSeconds;
+
+  const probe = ffprobeBin();
+  let stdout: string;
+  try {
+    ({ stdout } = await run(probe, [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file,
+    ]));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot read the duration of ${path.basename(file)}: not a PCM WAV, and ${probe} failed (${reason}). ` +
+        'Install the media toolchain (ffmpeg provides ffprobe) or set TTS_FFPROBE_PATH.',
+    );
+  }
   const value = Number(String(stdout).trim());
   if (!Number.isFinite(value) || value <= 0) throw new Error(`Unreadable audio duration for ${path.basename(file)}`);
   return value;

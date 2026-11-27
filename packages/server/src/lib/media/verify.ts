@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { ffmpegBin, ffprobeBin } from './binaries.js';
 
 const run = promisify(execFile);
 const PROBE_TIMEOUT_MS = 60_000;
@@ -25,7 +26,7 @@ export interface Mp4Probe {
 export async function probeMp4File(file: string): Promise<Mp4Probe> {
   try {
     const { stdout } = await run(
-      'ffprobe',
+      ffprobeBin(),
       ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
       { timeout: PROBE_TIMEOUT_MS, maxBuffer: MAX_OUTPUT },
     );
@@ -69,7 +70,7 @@ export async function probeMp4File(file: string): Promise<Mp4Probe> {
  */
 export async function decodeMp4File(file: string): Promise<{ ok: boolean; detail: string }> {
   try {
-    await run('ffmpeg', ['-v', 'error', '-i', file, '-f', 'null', '-'], {
+    await run(ffmpegBin(), ['-v', 'error', '-i', file, '-f', 'null', '-'], {
       timeout: DECODE_TIMEOUT_MS,
       maxBuffer: MAX_OUTPUT,
     });
