@@ -31,14 +31,17 @@ need ffprobe
 mkdir -p "$TARGET"
 cd "$TARGET"
 
-if [ ! -x ./piper/piper ]; then
+if [ ! -x ./piper ]; then
   echo "downloading piper ${PIPER_VERSION}"
   curl -fsSL -o piper.tar.gz "$PIPER_URL"
-  tar xzf piper.tar.gz
-  # The archive nests everything under piper/; the binary resolves its
-  # espeak-ng data relative to itself, so keep them side by side.
-  cp -a piper/. .
-  rm -rf piper piper.tar.gz
+  # The archive nests everything under piper/. Strip that level while
+  # extracting so the binary lands at ./piper next to the espeak-ng data and
+  # shared libraries it resolves relative to itself — the layout the app
+  # expects (vendor/piper/piper). Flattening afterwards with `cp -a piper/. .`
+  # cannot work: the archive's `piper` entry collides with its own directory.
+  rm -rf ./piper
+  tar xzf piper.tar.gz --strip-components=1
+  rm -f piper.tar.gz
 fi
 
 mkdir -p voices
@@ -54,7 +57,7 @@ for voice in "${VOICES[@]}"; do
 done
 
 echo "smoke test"
-echo "Ceci est un test de la voix WASIT." | ./piper/piper -m voices/fr_FR-upmc-medium.onnx -f /tmp/piper-smoke.wav
+echo "Ceci est un test de la voix WASIT." | ./piper -m voices/fr_FR-upmc-medium.onnx -f /tmp/piper-smoke.wav
 ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/piper-smoke.wav
 rm -f /tmp/piper-smoke.wav
 
