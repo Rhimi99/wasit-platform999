@@ -59,6 +59,16 @@ const SERVER_ENV = {
   // money, so it opts into demo payment mode explicitly.
   DEMO_PAYMENT_MODE: 'true',
   PAYMENT_WEBHOOK_SECRET: E2E_WEBHOOK_SECRET,
+  // The webhook failure desk spec drives an event to DEAD_LETTERED by
+  // re-delivering it five times and expecting every delivery to be an attempt.
+  // With the production 30s base delay the second and later deliveries are
+  // inside the backoff window and are acknowledged with 200 (retryScheduled),
+  // so the attempt budget is never spent and the event never reaches
+  // DEAD_LETTERED. The harness makes each re-delivery due immediately; the
+  // backoff itself (30s default, doubling, not-due refusal) stays asserted
+  // against the production default in
+  // `packages/server/tests/obs01-webhook-recovery.test.ts`.
+  WEBHOOK_RETRY_BASE_DELAY_MS: '0',
   // Point the backup-freshness alert at a scratch heartbeat so the
   // observability spec can age it on disk and prove the alert fires.
   BACKUP_HEARTBEAT_FILE: path.resolve('.e2e/backup-heartbeat.json'),
