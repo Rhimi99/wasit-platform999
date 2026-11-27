@@ -79,12 +79,13 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       # `--ignore-scripts` skips the postinstall that downloads ffmpeg-static's
-      # binary; the video specs assert that bundled binary exists, so restore it
-      # explicitly instead of dropping the assertion.
+      # binary; the video specs render real MP4s with it, so restore it
+      # explicitly instead of dropping the assertions.
       - run: npm rebuild argon2 ffmpeg-static
-      # The marketing-video specs render real MP4s and verify them with ffprobe.
-      # They fail — they do not skip — when the renderer is missing, so the
-      # toolchain is installed rather than the assertions relaxed.
+      # The marketing-video specs render real MP4s with Arabic text through
+      # ffmpeg + libass and verify them with ffprobe. They fail — they do not
+      # skip — when the renderer is missing, so the toolchain is installed
+      # rather than the assertions relaxed.
       - name: Install media toolchain
         run: |
           sudo apt-get update
@@ -94,13 +95,32 @@ jobs:
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
           ffmpeg -hide_banner -filters | grep -q " ass " && echo "libass: present"
-      # Piper is the offline voiceover engine. The voice specs assert it resolves
-      # for every supported language; without it they skip, which would quietly
-      # drop the audio half of the pipeline from the gate.
-      - name: Install voiceover engine
+
+      # The marketing-video agent speaks every scene through piper, and its
+      # delivery gate withholds a video that has no voice, so the voiceover
+      # engine is part of the toolchain rather than an optional extra. The
+      # installer downloads the MIT-licensed piper build and the four voice
+      # models into packages/server/vendor/piper (git-ignored), speaks a test
+      # line and probes the WAV; nothing here is committed.
+      - uses: actions/cache@v4
+        with:
+          path: packages/server/vendor/piper
+          key: piper-2023.11.14-2-voices-v1
+      - name: Install voiceover engine (piper + voices)
+        run: ./scripts/install-tts.sh
+      - name: Verify voiceover engine
         run: |
-          ./scripts/install-tts.sh
-          test -x ./packages/server/vendor/piper/piper
+          bin=packages/server/vendor/piper/piper
+          test -x "$bin"
+          for voice in ar_JO-kareem fr_FR-upmc en_US-lessac zh_CN-huayan; do
+            test -s "packages/server/vendor/piper/voices/$voice-medium.onnx"
+            test -s "packages/server/vendor/piper/voices/$voice-medium.onnx.json"
+          done
+          printf 'Ceci est un test de la voix WASIT.\n' | "$bin" \
+            -m packages/server/vendor/piper/voices/fr_FR-upmc-medium.onnx -f /tmp/tts-check.wav 2>/dev/null
+          seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/tts-check.wav)
+          echo "voiceover engine spoke ${seconds}s of audio"
+          awk -v s="$seconds" 'BEGIN { exit (s > 1.0) ? 0 : 1 }'
       # vitest globalSetup drops/creates wasit_test and runs migrations + seed.
       - run: npm test
 
@@ -193,10 +213,32 @@ jobs:
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
           ffmpeg -hide_banner -filters | grep -q " ass " && echo "libass: present"
-      - name: Install voiceover engine
+
+      # The marketing-video agent speaks every scene through piper, and its
+      # delivery gate withholds a video that has no voice, so the voiceover
+      # engine is part of the toolchain rather than an optional extra. The
+      # installer downloads the MIT-licensed piper build and the four voice
+      # models into packages/server/vendor/piper (git-ignored), speaks a test
+      # line and probes the WAV; nothing here is committed.
+      - uses: actions/cache@v4
+        with:
+          path: packages/server/vendor/piper
+          key: piper-2023.11.14-2-voices-v1
+      - name: Install voiceover engine (piper + voices)
+        run: ./scripts/install-tts.sh
+      - name: Verify voiceover engine
         run: |
-          ./scripts/install-tts.sh
-          test -x ./packages/server/vendor/piper/piper
+          bin=packages/server/vendor/piper/piper
+          test -x "$bin"
+          for voice in ar_JO-kareem fr_FR-upmc en_US-lessac zh_CN-huayan; do
+            test -s "packages/server/vendor/piper/voices/$voice-medium.onnx"
+            test -s "packages/server/vendor/piper/voices/$voice-medium.onnx.json"
+          done
+          printf 'Ceci est un test de la voix WASIT.\n' | "$bin" \
+            -m packages/server/vendor/piper/voices/fr_FR-upmc-medium.onnx -f /tmp/tts-check.wav 2>/dev/null
+          seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/tts-check.wav)
+          echo "voiceover engine spoke ${seconds}s of audio"
+          awk -v s="$seconds" 'BEGIN { exit (s > 1.0) ? 0 : 1 }'
       # Prepare the dev database the webServer/globalSetup run against.
       - run: npm run db:migrate
       - run: npm run db:seed
