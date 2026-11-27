@@ -56,6 +56,26 @@ const envSchema = z.object({
   AI_BUDGET_MONTHLY_USD: z.coerce.number().default(100),
   /** Hard ceiling on a single outbound provider call, so a hung vendor cannot pin a request. */
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * AI provider configuration scope. Settings written for one environment are
+   * never read by another, so a demo key can never serve production traffic.
+   * Defaults to NODE_ENV.
+   */
+  AI_CONFIG_ENVIRONMENT: z.enum(['production', 'staging', 'development', 'test']).optional(),
+  /**
+   * Master key for secrets stored in the database (32 bytes, base64). It lives
+   * outside the database on purpose: without it, stored provider keys cannot be
+   * decrypted. Absent → the admin API refuses to store keys and only
+   * environment-referenced keys are usable.
+   */
+  AI_SECRET_ENCRYPTION_KEY: z.string().optional(),
+  /** Live provider probes are opt-in: they cost money and leave the platform. */
+  AI_PROVIDER_ALLOW_LIVE_TEST: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** Comma-separated host:port allowlist for provider base URLs (SSRF guard). */
+  AI_PROVIDER_ALLOWED_HOSTS: z.string().optional(),
   // Payments — provider-agnostic. `PAYMENT_PROVIDER=noop` keeps the platform
   // from taking money until an acquirer is contracted and configured.
   // `flouci` and `clictopay` are online adapters; `manual` is the offline desk
@@ -464,9 +484,35 @@ const envSchema = z.object({
   VIDEO_ARABIC_FONT: z.string().default('Noto Sans Arabic'),
   /** Directory of bundled fonts passed to libass; autodetected when unset. */
   VIDEO_FONTS_DIR: z.string().optional(),
+  /**
+   * Voiceover engine for marketing videos (AFC-06). `piper` is a local neural
+   * TTS (MIT) that runs offline; `none` disables voiceover, which the quality
+   * gate then reports as a hard failure instead of shipping a silent advert.
+   */
+  TTS_ENGINE: z.enum(['piper', 'none']).default('piper'),
+  /** Explicit piper binary path; autodetected when unset. */
+  TTS_PIPER_PATH: z.string().optional(),
+  /** Directory holding the piper `.onnx` voices (never committed). */
+  TTS_VOICES_DIR: z.string().optional(),
+  /**
+   * Root of the recorded voice packs (`<dir>/<language>/manifest.json`).
+   * A licensed human pack takes precedence over a synthetic voice.
+   */
+  VOICE_PACK_DIR: z.string().optional(),
+  /** Music bed level relative to the voiceover, in dB (negative = quieter). */
+  VIDEO_MUSIC_GAIN_DB: z.coerce.number().default(-21),
+  /** Ceiling for the mixed programme loudness target (EBU R128, LUFS). */
+  VIDEO_LOUDNESS_TARGET_LUFS: z.coerce.number().default(-16),
   /** Lifetime of a signed media download link, in seconds. */
   MEDIA_DOWNLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   MEDIA_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(52_428_800),
+  /**
+   * Retention for agent-rendered videos (AFC-05). Retention is per class:
+   * temporary test renders (7d) and drafts (30d) expire; approved videos are
+   * never removed automatically. Reads never delete.
+   */
+  AGENT_VIDEO_TEST_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  AGENT_VIDEO_DRAFT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 const parsed = envSchema.safeParse(process.env);

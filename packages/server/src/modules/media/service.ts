@@ -9,6 +9,7 @@ import { writeAudit, type AuditContext } from '../../lib/audit.js';
 import { assertSellerOwnership, resolveSellerUserId } from '../../lib/seller-ownership.js';
 import { newId } from '../../lib/ids.js';
 import { assertWithinBudget, recordAiRequest, resolveLimit, upsertAiUsage } from '../../lib/ai/cost-control.js';
+import { configEnvironment } from '../../lib/ai/provider-config.js';
 import { env } from '../../lib/env.js';
 import { Semaphore } from '../../lib/concurrency/semaphore.js';
 import { resolveMediaStorage, resolveVideoProvider } from '../../lib/media/resolve.js';
@@ -304,10 +305,14 @@ export async function generateMarketingVideo(
       .where(eq(mediaAssets.id, assetId))
       .returning();
 
-    requestId = await recordAiRequest(db, {
+    requestId = (await recordAiRequest(db, {
       userId: actor.userId,
       requestType: VIDEO_REQUEST_TYPE,
       model: `video:${rendered.provider}`,
+      providerKey: 'video-render',
+      vendorModel: rendered.provider,
+      environment: configEnvironment(),
+      costSource: 'ESTIMATED',
       tokensInput: 0,
       tokensOutput: 0,
       cost: RENDER_ESTIMATED_COST_USD,
@@ -315,7 +320,7 @@ export async function generateMarketingVideo(
       status: 'SUCCESS',
       latencyMs: Date.now() - startedAt,
       metadata: { assetId, productId: product.id, language, style, audience, bytes: stored.size },
-    });
+    })).id;
     await upsertAiUsage(db, actor.userId, 'MONTHLY', periodWindow, {
       requests: 1,
       cost: RENDER_ESTIMATED_COST_USD,
@@ -336,10 +341,14 @@ export async function generateMarketingVideo(
       .update(mediaAssets)
       .set({ status: 'FAILED', error: { message }, updatedAt: new Date() })
       .where(eq(mediaAssets.id, assetId));
-    requestId = await recordAiRequest(db, {
+    requestId = (await recordAiRequest(db, {
       userId: actor.userId,
       requestType: VIDEO_REQUEST_TYPE,
       model: `video:${provider.id}`,
+      providerKey: 'video-render',
+      vendorModel: provider.id,
+      environment: configEnvironment(),
+      costSource: 'UNKNOWN',
       tokensInput: 0,
       tokensOutput: 0,
       cost: '0',
@@ -347,7 +356,7 @@ export async function generateMarketingVideo(
       status: 'FAILED',
       latencyMs: Date.now() - startedAt,
       metadata: { assetId, productId: product.id, error: message },
-    });
+    })).id;
     await writeAudit(db, { actorId: actor.userId, ...audit }, {
       action: 'MEDIA.MARKETING_VIDEO_FAILED',
       entityType: 'MEDIA_ASSET',

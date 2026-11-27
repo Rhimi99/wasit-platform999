@@ -27,15 +27,10 @@ import type { DB } from '../../src/db/client.js';
  * They are DB-free: runnability is a code property, not a registry row.
  */
 
-const DECLARED_ONLY = [
-  'marketing-video-agent',
-  'payment-settlement-agent',
-  'compliance-agent',
-  'supplier-agent',
-  'merchant-agent',
-  'customer-intelligence-agent',
-  'operations-agent',
-].sort();
+const DECLARED_ONLY: string[] = [
+  // AI-FIRST-COMPLETION-04 wired the six supporting agents, so this list is now
+  // empty by design. The array stays so the assertion still reads as a list.
+];
 
 const ENFORCED_PERMISSIONS: Record<string, string[]> = {
   'sales-agent': ['ai:use'],
@@ -51,6 +46,12 @@ const ENFORCED_PERMISSIONS: Record<string, string[]> = {
   'development-agent': ['ai:use'],
   'finance-agent': ['ai:use', 'revenue:read'],
   'outreach-acquisition-agent': ['ai:use'],
+  'payment-settlement-agent': ['ai:use', 'order:read'],
+  'compliance-agent': ['ai:use', 'order:read'],
+  'supplier-agent': ['ai:use'],
+  'merchant-agent': ['ai:use'],
+  'customer-intelligence-agent': ['ai:use', 'analytics:read:own'],
+  'operations-agent': ['ai:use'],
 };
 
 function stubDb(): { db: DB; inserts: unknown[] } {
@@ -78,8 +79,8 @@ describe('AI-REG-01 — the agent layer is one source of truth', () => {
       total: 21,
       specialised: 20,
       supervisor: 1,
-      executable: 13,
-      declared: 7,
+      executable: 20,
+      declared: 0,
       copilot: 1,
     });
   });
@@ -98,7 +99,7 @@ describe('AI-REG-01 — the agent layer is one source of truth', () => {
     expect(fromCatalogue).toEqual([...EXECUTABLE_AGENT_KEYS].sort());
     expect(RUNTIME_CATALOGUE.map((a) => a.key).sort()).toEqual(fromCatalogue);
     expect(RUNTIME_CATALOGUE.every((a) => a.executable === true)).toBe(true);
-    expect(fromCatalogue).toHaveLength(13);
+    expect(fromCatalogue).toHaveLength(20);
   });
 
   it('keeps a scope contract for every executable agent and none for the rest', () => {
@@ -113,12 +114,12 @@ describe('AI-REG-01 — the agent layer is one source of truth', () => {
     }
   });
 
-  it('declares the nine declared-only agents explicitly', () => {
+  it('leaves no specialised agent without an executor (AFC-04)', () => {
     expect(declaredOnlyAgents().map((a) => a.key).sort()).toEqual(DECLARED_ONLY);
   });
 
   it('refuses every agent without an executor, and the supervisor by name', () => {
-    expect(declaredOnlyAgents()).toHaveLength(7);
+    expect(declaredOnlyAgents()).toHaveLength(0);
     for (const agent of declaredOnlyAgents()) {
       const refusal = agentRunRefusal(agent);
       expect(refusal?.code).toBe('AGENT_NOT_EXECUTABLE');

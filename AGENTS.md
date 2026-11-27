@@ -406,11 +406,14 @@ npx playwright install --with-deps chromium
 - **`CORE_SPECIALIST_KEYS`** هي القائمة الرسمية المرتّبة: sales, marketing, ads, product, support,
   analytics, market-research, b2b, risk, dispute-assistant, development, **marketing-video**.
   `catalogueIntegrity()` يفحص الاتجاهين — لا تعدّل أحدهما وحده.
-- **العدّ الحالي (بعد AI-AGENT-MERGE-01)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
-  `allAgentSpecs()` = 22 (مع Copilot)، `declaredOnlyAgents()` = **7**، `executableAgents()` = **13**.
+- **العدّ الحالي (بعد AI-FIRST-COMPLETION-03)**: `agentCount()` = 21 (20 متخصصاً + المشرف)،
+  `allAgentSpecs()` = 22 (مع Copilot)، `declaredOnlyAgents()` = **6**، `executableAgents()` = **14**،
+  `requiresPlatformScope` = **11** (`b2b-agent` أُضيف).
   أي اختبار يثبّت رقماً يجب تحديثه معاً (r1 · ai-reg01 unit+HTTP · phase14 · a2 · r2 · agent-scope-contract).
-- **`marketing-video-agent` هوية بلا منفّذ** (`executable: false`): قدرة الرندر موجودة في `lib/media/*`
-  ويشغّلها المالك عبر API الوسائط، لكن إسناد مهمة للوكيل مرفوض `AGENT_NOT_EXECUTABLE`.
+- **`marketing-video-agent` يخطّط ويرندر ويتحقق داخل المهمة** (`plan_video`): يقرأ منتجاً حقيقياً بملكية محققة،
+  يرندر محلياً (ffmpeg+libass) إلى `agent-videos/<requester>/<taskId>-<sha12>.mp4`، ثم `ffprobe` + فك ترميز كامل،
+  ويُعيد `video{storageKey,bytes,sha256,durationSeconds,codec,width,height,frames,decode,verified}` و`steps[]`.
+  **لا يكتب `media_assets` ولا `audit_logs`** (A2) ولا ينشر. `render:false` يطلب خطة فقط.
   `video.publish`/`video.render_paid` إجراءان حسّاسان (موافقة بشرية دائماً).
 - **`validatePlan` يرفض وقت التخطيط** أي خطوة تستهدف وكيلاً غير قابل للتنفيذ أو المشرف أو Copilot —
   قبل كتابة صف تشغيل. لا تعد إلى قبولها «لأن الإرسال يرفضها»: الرفض المبكر هو العقد.
@@ -499,6 +502,18 @@ npx playwright install --with-deps chromium
 - استجابة `createOrder` والـ Audit يعرضان `paymentFeePolicyId`/`feePolicyId`.
 - الاختبارات: `tests/payment-fee-policy.test.ts` يثبت أن تغيير السياسة يغيّر الرسوم (مضاد Hardcoding).
 
+## AI-04 — Secure AI Provider Management (2026-11-22, `afc-09`)
+
+- **`ai_providers`** (`schema/ai_providers.ts`, migration `0042`): one row per (environment, provider). `model` holds a **catalogue key** (`ai_models.key`), never a vendor name — `VENDOR_MODEL_NAMES` translates at the adapter boundary. Validation rejects a model that is unknown or belongs to another provider.
+- **Secrets never leave**: `lib/ai/secret-box.ts` seals with AES-256-GCM under `AI_SECRET_ENCRYPTION_KEY` (32B base64, env only) and `aad = environment:provider:v1`. No route returns a key; `keyState` exposes presence/source/`sha256[:16]` fingerprint only. No master key → `409 SECRET_STORAGE_DISABLED`, nothing written. A stored key is invisible to another `AI_CONFIG_ENVIRONMENT`.
+- **Chain**: `default → fallback → local-heuristic`, resolved by `resolveProviderChain` (never throws). A fallback serves **its own** model/price; a vendor never receives another vendor's model name. `noop` is refused in production. No key anywhere → the platform runs on the local engine at zero cost.
+- **Backward compatibility**: a provider row no admin has touched (`updatedBy IS NULL`) stays active when `AI_PROVIDER` names it, so env-only deployments need no migration step.
+- **Agent isolation**: `ai_providers` is in `HARD_DENY_TABLES`; platform resolution inside an agent run unwraps the scoped handle via `platformDb()` (`PLATFORM_DB` symbol in `db/client.ts`). An agent's own query is still refused — proven in `tests/afc09-ai-providers.test.ts`.
+- **Live probes are opt-in** (`AI_PROVIDER_ALLOW_LIVE_TEST=true`), send only `ping`/`max_tokens:1`, and `baseUrl` must be HTTPS + allowlisted (`AI_PROVIDER_ALLOWED_HOSTS`) — SSRF guard.
+- **API**: `/api/admin/ai/providers` (list, `-readiness`, `:key`, PATCH, `PUT/DELETE :key/secret`, `POST :key/test`, `GET :key/usage`) under `AI_MANAGE`/`ADMIN_AI`, audited as `AI_PROVIDER.*`. Mounted **before** `app.route('/api/admin', ...)` — Hono dispatches to the first matching mount.
+- **UI**: tab «المزوّدون» in `/admin/ai` (`components/AiProvidersPanel.tsx`), i18n `adminAi.providers.*` in ar/en/fr/zh.
+- **Tests**: `tests/afc09-ai-providers.test.ts` (23). Full suite after AI-04: **174 files / 2233 tests**.
+
 ## Money Path Invariants (2026-09-24)
 
 - **`Payment ≠ Settlement`** (عقد مُنفَّذ في الكود): تأكيد الدفع (`applyPaymentSucceeded`) **لا يكتب** `transaction_ledger.status='SETTLED'` أبداً — القيود تبقى `PENDING`. الكاتب **الوحيد** لـ`SETTLED` هو `applySettlementConfirmed` في `modules/payments/service.ts`، ولا يُستدعى إلا من حدث webhook نوعه `settlement.confirmed` من مزوّد يعلن `capabilities.settlementEvidence`.
@@ -525,6 +540,54 @@ npx playwright install --with-deps chromium
 - **تدوير بيانات الاعتماد**: `DEMO_ACCOUNT_PASSWORD` (اختياري) يحل محل `Passw0rd!2026` لحسابات العرض الأربعة + `demo@wasit.tn`؛ وجوده يجعل `seed-demo` يعيد هاش كل حساب (تدوير فعلي). غيابه = احتياطي التطوير/E2E فقط.
 - **لا كلمات مرور في السجلات**: `seed-demo` لم يعد يطبع كلمة المرور المنشورة ولا كلمة مرور الموظفين المولَّدة.
 - **الاختبارات**: `tests/unit/demo-audit-authorization.test.ts` (قاعدة السقف)، `tests/demo-auto-login.test.ts` (401/403/404 + منع التصعيد + جلسة العميل)، `e2e/demo-owner.spec.ts` (زائر/SUPER_ADMIN/ADMIN).
+
+## Public demo (DEMO-02 — 2026-11-22)
+
+- الرابط العام الحالي يُخدَم من `vite preview` على 12000 + API على 3000 + PostgreSQL 17 على
+  `127.0.0.1:5434` بقاعدة **`wasit_demo` معزولة** (migrate + `seed.ts` + `seed-demo.ts`).
+  التفاصيل والاستعادة في `docs/DEMO-01_PUBLIC_DEMO.md` (لا يوجد مستند DEMO-02 على هذا الفرع).
+- **سبب تعطّل الرابط السابق**: قاعدة `wasit_demo` كانت في حاوية Docker اختفت مع إعادة إنشاء
+  الحاوية، و`vite preview` يرفض أي Host غير مُدرج. الآن `allowedHosts` يُشتق من `APP_URL`
+  و`CORS_ORIGIN` و`WEB_ALLOWED_HOSTS` (`packages/web/vite.config.ts`, اختبار
+  `tests/preview-hosts.test.ts`) — فلا حاجة لتعديل الكود عند تغيّر اسم نطاق التشغيل.
+- **إعدادان إلزاميان للعرض العام في `.env.demo`**: `DEMO_AUTO_LOGIN=false` (لا جلسة بلا بيانات
+  اعتماد) و`ALLOW_DEV_TOOLING=false` (وإلا صار `devResetToken` متاحاً لأي بريد بما فيه
+  `admin@wasit.tn`). `DEMO_SKIP_EMAIL_VERIFICATION=true` يبقى لأن البريد `log` فقط.
+- **شريط التنقّل**: `AppSidebar` صار drawer تحت `lg` (زر في `TopHeader`، إغلاق تلقائي عند
+  التنقّل) — كان يُضغط محتوى لوحة التحكم على هواتف 412px.
+
+## Demo credentials (DEMO-SEC-03 — 2026-11-22)
+
+- كل حساب تجريبي له **كلمة مرور فريدة** (`DEMO_ACCOUNT_PASSWORD_<NAME>`) وليس واحدة مشتركة،
+  والـstaff له `DEMO_STAFF_PASSWORD_ADMIN` / `_ADMIN2`. المنطق في `lib/demo-credentials.ts`
+  (يستخدمه `seed-demo` وسكربت التدوير معاً)، والاختبار `tests/demo-credentials.test.ts`.
+- التدوير: `npx tsx src/scripts/rotate-demo-credentials.ts --include-staff` — يولّد أسراراً
+  جديدة، يبطل كل الجلسات + رموز إعادة التعيين + تحديات MFA، ويكتب `AUTH.DEMO_CREDENTIAL_ROTATED`.
+  لا Migration ولا RBAC change.
+- الأسرار في `.env.demo.secrets` و`.env.demo` بصلاحية 0600 ومستبعدة من git (`.env.demo.*`).
+  **لا تُطبع ولا تُنسخ إلى تقرير أو commit.**
+- أعد تشغيل `seed-demo` مع `.env.demo` الكامل (يحوي مفاتيح كل حساب) كي لا تعود كلمة المرور
+  المنشورة. التفاصيل: `docs/DEMO-03_CREDENTIAL_ROTATION.md`.
+
+## AFC-06.1 — الصوت التونسي (حزمة تسجيل مرخَّصة) — 2026-11-22
+
+- **لا نموذج تونسي بترخيص تجاري**: Piper فيه صوتان عربيان فقط (`ar_JO-kareem`)، وكل نماذج الدارجة المنشورة `CC-BY-NC-4.0` (`Ghazouaniwala/silma-tts-derja`, `Nouira-Oussema/Tunisian-TTS`) أو بلا ترخيص (`amenIKh/Tunisian_TTS`). الأساسات نفسها NC: XTTS-v2 (CPML)، F5-TTS، MMS.
+- **المسار المعتمد**: `lib/media/voice-pack.ts` — `VOICE_PACK_DIR` أو `vendor/voices/<lang>/manifest.json` + WAV، مطابقة `sha256` على السطر بعد تطبيع المسافات. الحزمة تسبق أي صوت صناعي في `resolveVoice`.
+- **حرس الترخيص (لا يُتجاوَز)**: رفض عند `license.commercialUse !== true`، غياب `license.holder`/`terms`، غياب `consent.reference`، انتهاء `validUntil`، ملف مفقود، سطر مكرَّر، و`dialectNative !== true` لأي حزمة `ar-TN`.
+- **قيد تصميمي**: نص `ar-TN` صار ثابتًا (اسم المنتج/السوم/البائع على الشاشة فقط) لأن الحزمة المسجَّلة لا تنطق أسماء متغيّرة. `npm run voices:brief -w @wasit/server` يولّد `artifacts/voice-packs/ar-TN/{brief.md,lines.json}`: **6 أسطر / 60 كلمة** تغطي كل الفيديوهات.
+- **لا تسمية فصحى بتونسي**: الحزمة التجريبية `tests/fixtures/voice-pack/ar-TN` صوت Piper فصحى ومعلَّمة `dialectNative:false` ⇒ مرفوضة (اختبار صريح). أي إثبات بـ`dialectNative:true` هو سباكة فقط وليس ادعاء لهجة.
+- **الوضع الحالي**: `ar-TN` محجوب (`audio.voiceover`)، والبقية `DELIVERED` — `verify:videos` يحتاج `DATABASE_URL` من `.env.demo`.
+- **بديل التوسع**: Azure `ar-TN-ReemNeural`/`ar-TN-HediNeural` ($15/1M حرف، 0.5M مجانًا/شهر على F0) أو Custom Neural Voice ($4.032/ساعة استضافة) — يحتاج موافقة مالية واختبار سماع. التفاصيل في `docs/VOICE-TUNISIAN.md` وAD-053.
+
+## AFC-07 — مساعد النزاعات يلخّص نزاعًا واحدًا (2026-11-20)
+
+- **العيب الذي أُغلق:** `dispute-assistant` كان يتجاهل `input.disputeId`، ويجمع آخر 5 رسائل من كل النزاعات في مخرج واحد، ويعيد جملة ثابتة كتوصية. وجود executor + اختبار يفحص وجود الحقل لم يكونا دليل اكتمال.
+- **الوضعان:** `summary` (مع `disputeId`: وقائع + مبلغ الطلب + أدلة + أحداث + استئنافات + مهل + ثغرات + مسارات + توصية) و`triage` (بلا `disputeId`: أعداد وأعمار فقط، **بلا أي نص رسالة**).
+- **السياسة:** `policies` محجوب عن كل الوكلاء (`HARD_DENY_TABLES`). تُقرأ في طبقة الخدمة عبر `disputePolicySnapshot(db, disputeId|null)` (بلا كتابة `country_policy_gaps`) وتُحقن في `input.__disputePolicy` بعد إسقاط قيمة الطالب — نفس نمط `__partnerConsent`.
+- **عقد A2 للوكيل:** `disputes, dispute_messages, dispute_evidence, dispute_events, dispute_appeals, orders` + نطاق `COMMERCE`، قراءة فقط ومقيدة بـ`disputeId`. أي قراءة خارجها ترمي `AgentScopeError`.
+- **قاعدة:** أي أثر مالي في المخرج يأتي من `rules.decisionEffects` في اللقطة؛ غيابه = `DECISION_REQUIRED` (مثل `SPLIT`)، ولا يُخترع.
+- **الأدلة:** `tests/unit/dispute-summary.test.ts` (23) + `tests/ai-dispute-assistant.test.ts` (12، منها عزل نزاع A عن B ورفض CUSTOMER/SUPPORT قبل أي صف وعدم الكتابة).
+- **AI-03 يبقى مفتوحًا:** الإنشاء التلقائي لمهمة عند فتح النزاع يحتاج مالكًا من نطاق المنصة (`agent_tasks.requested_by` غير قابل للـNULL) — قرار في AD-054.
 
 ## Landing page (public marketing surface)
 
@@ -1078,3 +1141,91 @@ npx playwright install --with-deps chromium
 - **الاختبار العملي**: `./scripts/session/session-selftest.sh` (22 فحصًا على فرع اختبار، لا master) — النتائج في `docs/session/08-test-results.md`.
 - **الأدلة**: `docs/session/README.md` + 9 أدلة (بداية، checkpoint، إغلاق، استعادة، backup، تعارضات، احتفاظ، نتائج، نسخة خارجية).
 - **عزل وسائط الاختبار (2026-11-21)**: `vitest.config.ts` يفرض `MEDIA_STORAGE_DIR=.wasit-media-test` (ويحذف أي قيمة موروثة من الـshell)، و`tests/setup.ts` يمسح المجلد قبل التشغيل وبعده عبر `tests/test-media-dir.ts` (حارس مسار يمنع أي هدف غير `.wasit-media-test`). `LocalMediaStorage` يرمي استثناءً عند `NODE_ENV=test`/`VITEST` إذا أُشير إلى `.wasit-media` الحقيقي — فوسائط المستخدم لا تُلمس. إثبات: `tests/media-storage-isolation.test.ts` (6 حالات، DB-free).
+
+## AI-FIRST COMPLETION (2026-11-22) — وكيل الصيانة + بوابة نطاق المنصة
+
+- **`modules/ai/diagnostics.ts`** (جديد، دوال نقية بلا DB/IO): `classifyFamily` (11 عائلة + `UNKNOWN`)، `failureSignature` (تطبيع UUID/بريد/أرقام ⇒ سبب واحد = بصمة واحدة)، `clusterFailures` (ترتيب بالتكرار + ثقة: 3+=high، 2=medium، 1/UNKNOWN=low)، `proposePatch`، `analyseFailures`، `buildReviewReport`. تُستدعى من `execDevelopmentAgent` فقط؛ لا تكتب شيئاً — المخرجات في `agent_tasks.result`.
+- **قاعدة صارمة**: أي مسار في `likelyFiles` يجب أن يكون ملفاً موجوداً فعلاً — `tests/unit/ai-maintenance-rootcause.test.ts` يفحص كل العائلات بـ`existsSync`. لا تُضِف مساراً غير موجود.
+- **ما لا يفعله الوكيل ومصرَّح به**: لا تشغيل اختبارات معزولة ولا `apply_patch`/`merge` (لا منفّذ، AD-050). `reviewReport.checklist` يقول `blocked`/`pending_approval` صراحةً بدل تخطّي الخطوة؛ `repairProtocol.blocked` يحمل نفس القائمة.
+- **`requiresPlatformScope` صار مفروضاً** في `createAgentTask`: `PLATFORM_SCOPE_ROLES = ADMIN, SUPER_ADMIN`. 11 وكيلاً بعرض المنصة (ads, analytics, b2b, compliance, development, dispute-assistant, finance, market-research, operations, outreach-acquisition, risk) صارت للطاقم فقط، والرفض يُدقَّق `AI.AGENT_RUN_REFUSED`/`PLATFORM_SCOPE_REQUIRED` + metric `blocked` **قبل** كتابة أي صف. لا تُعِد فتحها لعميل/تاجر: A2 يحدّ الجداول لا الصفوف، فأي وكيل بعرض المنصة يقرأ صفوف كل المستأجرين (فلترة الصفوف فجوة مفتوحة، §6.4 في `docs/AI-FIRST-COMPLETION-01.md`).
+- **حدود الجداول فقط**: `withAgentDataScope` يتحقق من اسم الجدول؛ لا فلتر صفوف تلقائي. **الفلترة الصفية منفَّذة في المنفّذات**: `execSupportAgent` (خيوط المشارك)، و`execSalesAgent`/`execMarketingAgent`/`execProductAgent` عبر `resolveRequesterScope` (ملكية `suppliers/merchants/companies.user_id` + `orders.buyer_id` + `order_items.seller_id`)، و`execB2BAgent` يرفض غير الطاقم. `execSupportAgent` يفلتر بـ`threads.participant_ids @> [requesterId]` + حصر الرسائل في خيوط المشارك، و`activeUsers = null` لغير الموظفين. أي وكيل آخر يعلن `*:read:own` ويعيد تجميعات منصة هو خلل تصميم لا خطأ في الصلاحية.
+- **تشغيل الاختبارات**: `TEST_DATABASE_URL=postgresql://wasit:wasit_dev_password@127.0.0.1:5434/wasit_test npx vitest run` (بلا هذا المتغير يرفض `vitest.config.ts` الإقلاع). الحزمة الكاملة بعد هذه المرحلة: **160 ملفاً / 2068 اختباراً / exit 0**.
+- **ملفات الاختبار الجديدة**: `tests/unit/ai-maintenance-rootcause.test.ts` (15)، `tests/ai-maintenance-rootcause.test.ts` (6)، `tests/ai-platform-scope.test.ts` (10)، `tests/ai-video-agent.test.ts` (5)، `tests/unit/ai-video-plan.test.ts` (5)، `tests/ai-support-scope.test.ts` (3).
+
+## AI-FIRST COMPLETION 04 (2026-11-20) — الوكلاء الستة المتبقّون + B2B بالموافقة + تنزيل الفيديو
+
+- **القابلون للتنفيذ 14 → 20** (من 20 مختصاً + المشرف). الستة الجدد: `payment-settlement-agent`، `compliance-agent`، `supplier-agent`، `merchant-agent`، `customer-intelligence-agent`، `operations-agent`. لكل واحد منفّذ حتمي في `executors.ts` + عقد A2 في `agent-scope.ts`.
+- **`payment-settlement-agent` لا يمسّ المال**: يقرأ حالة الدفع/التسوية المسجّلة على `orders` فقط؛ `payment_intents`/`payment_webhook_events`/`payouts`/`transaction_ledger` ممنوعة بنيوياً على كل وكيل. المخرجات تحمل `moneyMovement: false` و`blindSpots` صريحة.
+- **`compliance-agent` findings فقط**: يقرأ verified/risk/disputes/`country_policy_gaps` ويعيد `findings[]` + `nextStep`، و`findingsOnly: true`. لا حكم ولا إجراء.
+- **`supplier-agent`/`merchant-agent` ملكية صارمة**: الكيان يُحدَّد من `userId` للطالب (الطاقم قد يمرّر `entityId`)، وإلا `ENTITY_NOT_FOUND`. لا مراجعة كيان غيره أبداً.
+- **`customer-intelligence-agent`**: شرائح RFM من `orders` مقيّدة بـ`orderScope`؛ `customerRef` = SHA-256 مقطوع 10 hex، `pii: 'masked'`. لا معرّف مشترٍ خام في أي حقل.
+- **`operations-agent`**: `healthScore` + `blockers[]` من عدّادات حقيقية (طلبات/مهام/تشغيلات/مخزون/رسائل). منصّي.
+- **`b2b-agent` تغيير ضمان**: `requiresPlatformScope: true → false`. الفلتر صار **موافقة**: نوع جديد `B2B_PARTNER_DISCOVERY` في `CONSENT_TYPES`. `createAgentTask` تحسب `resolvePartnerConsent()` (لأن `consents` ممنوع على الوكلاء) وتحقنها في `input.__partnerConsent`، **وأي لقطة يرسلها العميل تُحذف**. بدون موافقة الطالب ⇒ `CONSENT_REQUIRED` + `howToGrant`. المنفّذ يرى الموافقين فقط، أدواراً تكميلية، بلا بريد/هاتف/معرّف خام، ومع `reasons[]` و`score`.
+- **تحديث اختبارات الضمان**: `ai-platform-scope` (أُخرج `b2b`، أُضيف `payment-settlement`) و`ai-agent-data-scope` (عيّنة «الرفض قبل كتابة صف» انتقلت إلى `compliance-agent`). لا تُعِد `b2b` إلى منصّي بلا إعادة تصميم الفلتر.
+- **تنزيل فيديو الوكيل**: `GET /api/ai/tasks/:taskId/video` — بالمعرّف المهمة فقط (المفتاح من `result.advice.video.storageKey`)، مالك أو `ADMIN`/`SUPER_ADMIN`، غير ذلك **404**، `Range` ⇒ **206**، `private, no-store`، تدقيق `AI.AGENT_VIDEO_DOWNLOADED`. لا مجلد عام ولا رابط موقّع.
+- **احتفاظ الفيديو**: `AGENT_VIDEO_RETENTION_DAYS` (7) + `purgeAgentVideos()` + `npx tsx src/scripts/purge-agent-videos.ts [--days N] [--dry-run]`. يحذف `agent-videos/` فقط — لا يلمس `media_assets`.
+- **وكيل التطوير يبقى بلا PR آلي** (AD-050/AD-051): حزمة إصلاح + موافقة بشرية. `DECISION REQUIRED` مسجّل.
+- **الاختبارات**: `tests/ai-first-04.test.ts` (11) · `tests/agent-video-download.test.ts` (6) + تحديث عدّادات 8 ملفات. `ffmpeg` مطلوب لاختبارات الفيديو (`apt-get install -y ffmpeg` — غير مثبّت افتراضياً في الحاوية).
+
+## AI-FIRST COMPLETION 03 (2026-11-22) — نطاق البيانات الصفّي + رندر داخل المهمة
+
+- **`resolveRequesterScope(db, input)`** في `executors.ts`: تعيد `{ requesterId, isStaff, sellerIds }` من `getAgentRunContext()` (لا من `input`)، وتقرأ الملكية من `suppliers/merchants/companies.user_id` عبر `select` عادي (**لا `db.execute`** — A2 يرفض SQL الخام).
+- **`orderScope`**: `buyer_id = requester` أو `seller_id ∈ ملكه` أو `exists(order_items.seller_id ∈ ملكه)` (الطلب الأب متعدد البائعين). **`seller_orders` ممنوع منيع** (`HARD_DENY_TABLES`) — لا تستخدمه.
+- **`productScope`**: `inArray(products.sellerId, sellerIds)`؛ لا ملكية ⇒ شرط SQL ثابت `false` (لا استعلام بلا شرط).
+- **أرقام المنصة `null` لغير الطاقم**: `kpi.suppliers/merchants/companies`, `leadsPotential`. `PLATFORM_VIEW_ROLES = ADMIN, SUPER_ADMIN` فقط (SUPPORT ليس منها).
+- **`product-agent` لا يكشف الوجود**: منتج الغير وغير الموجود يعطيان نفس `PRODUCT_NOT_AVAILABLE` بلا اسم/SKU.
+- **`b2b-agent` إداري فقط**: `requiresPlatformScope: true` + رفض `SCOPE_REQUIRED` داخل المنفّذ (دفاع مزدوج).
+- **رندر الوكيل**: `lib/media/verify.ts` (`probeMp4File`, `decodeMp4File` — spawn لـffprobe/ffmpeg بمهلة) + `resolveMediaStorage().put()` بمفتاح `agent-videos/...`. الفحوص: h264 · 720×1280 · المدة 35–120 ومطابقة ±0.5s · مدة الحاوية = ffprobe ±0.5s · decode كامل · حجم المخزَّن = البايتات.
+- **لا تكتب الوكيل `media_assets` ولا `audit_logs`**: الملف على القرص + البيانات في `agent_tasks.result`. لا تنزيل عبر API لهذا الملف (قرار مطلوب، موثّق).
+- **الاختبارات**: `tests/ai-agent-data-scope.test.ts` (15) · `tests/ai-video-agent.test.ts` (6، رندر حقيقي) · `tests/unit/ai-video-plan.test.ts` (5).
+- **عزل معروف**: `ai-met01-agent-metrics` يعدّ صفوفاً عالمية ⇒ يتأثر بالتوازي؛ ينجح منفرداً (18/18).
+
+## AI-FIRST COMPLETION 02 (2026-11-22) — القرارات المعتمدة + الوكلاء التنفيذيون
+
+- **القرار (1) مُنفَّذ**: لا صلاحية جديدة ولا تعديل `ROLE_PERMISSIONS`؛ `requiresPlatformScope` مفروض على 10 وكلاء (أُضيف `market-research-agent` الذي كان يعلن `scope: 'platform'` بلا تفعيل)، و**فلترة صفية حقيقية** لوكيل الدعم بدل حرمان العملاء منه.
+- **القرار (2) مُنفَّذ**: `buildRepairPackage(cluster, proposal, now)` في `diagnostics.ts` يُنتج `branch: ai-repair/<slug>`, `baseBranch: master`, `prTitle`, `prBody` (سبب/أدلة/اختبارات/تحقق/**تراجع**/بوابات موافقة), `approvalStatus: 'NOT_RECORDED'`, `delivery: { appliedBy: 'human', mergeBlockedUntilApproval: true }`. **لا diff ولا تطبيق**؛ التطبيق والموافقة بشريان.
+- **وكيل الفيديو**: منفّذ تخطيط (`plan_video`) يقرأ منتجاً حقيقياً بملكية محققة، ويعيد `plan` (4 شرائح من `planRenderSlides` — نفس دالة الرندر) + `readiness` من فحص ffmpeg الحقيقي + `renderRequest` جاهز. لا رندر/نشر/إنفاق.
+- **`planRenderSlides` مصدر واحد**: أي تغيير في الشرائح يغيّر الخطة والفيديو معاً. `buildAss` مُصدَّر للاختبار (فاصل السطر `\N` الحقيقي — كان `\\N` يطبع حرفياً).
+- **إثبات الفيديو الحقيقي**: `npx tsx src/scripts/render-test-video.ts --seconds=35 --language=ar` ⇒ MP4 35.000s، h264 High/yuv420p/720×1280/25fps/875 إطاراً، فك ترميز كامل، وتقرير في `docs/evidence/ai/`. الفيديو نفسه في `backups/media/` (git-ignored).
+- **حدود معروفة (لا تُخفى)**: خمسة وكلاء يعلنون `own`/بلا نطاق ويُعيدون **مجاميع منصة** (`sales`, `marketing`, `product`, `b2b`, `finance`, `outreach`) — أرقام لا صفوف مستخدمين، لكنها تكشف مؤشرات أعمال؛ تحتاج فلترة صفية أو تقييداً (قرار مطلوب).
+- **الاختبارات**: 163 ملفاً · 2085 اختباراً · exit 0 · `tsc --noEmit` = 0. التفاصيل: `docs/AI-FIRST-COMPLETION-02.md`.
+
+## AI-FIRST COMPLETION 05 — واجهات تشغيل الفيديو/الشركاء + احتفاظ + جدولة (2026-11-20)
+
+- **`/dashboard/agent-video`** (`DashboardAgentVideoPage.tsx`): تشغيل حقيقي لـ`marketing-video-agent` — منتج مملوك (`/api/products/mine`)، مدة داخل حدود `MARKETING_VIDEO_DURATION`، ثم معاينة `<video>` وتنزيل عبر `GET /api/ai/tasks/:id/video[?download=1]` فقط. **`storageKey` لا يصل الواجهة أبداً.**
+- **حالتان نهائيتان**: المهمة غير المُبوَّبة تنتهي `succeeded`، والمُبوَّبة (`requiresHumanApproval`) تنتهي **`approved`**. أي واجهة تستقصي الحالة يجب أن تعتبر `approved` مكتملة، و`awaiting_approval` نهائية للاستقصاء (زر تحديث بدل انتظار أبدي).
+- **`/dashboard/partners`** (`DashboardPartnersPage.tsx`): موافقة `B2B_PARTNER_DISCOVERY` عبر `/api/privacy/consents`، ثم `b2b-agent` (مُبوَّب أيضاً) — بلا بريد/هاتف/عنوان ولا مراسلة تلقائية؛ السحب يمسح النتائج.
+- **احتفاظ الفيديو**: `purgeAgentVideos` يصنّف من DB — `TEST` 7 أيام، `DRAFT` 30 يوماً، `APPROVED` لا يُحذف، `UNKNOWN` يُحفظ. الجدولة **خارج العملية**: `scripts/agent-video-purge.sh` (flock + سطر JSON) عبر `scripts/deploy/wasit-agent-video-purge.{service,timer}` أو `agent-video-purge.cron`.
+- **`e2e/global-setup.ts`** يقرأ الآن `DEMO_ACCOUNT_PASSWORD_*` / `DEMO_STAFF_PASSWORD_*` — كلمة المرور المنشورة لم تعد صالحة على بيئة مُدوَّرة (DEMO-SEC-03).
+- **CSRF**: أي `request.newContext` في Playwright يستدعي مساراً يغيّر الحالة يجب أن يرسل `Origin` (وإلا 403 `Request origin could not be verified`).
+- **E2E**: `e2e/agent-surfaces.spec.ts` — 6/6 (Desktop Chrome + Pixel 7 project `mobile-chromium`).
+
+## AFC-06 — Marketing video agent, commercial grade (2026-11-20)
+
+- **Pipeline**: `lib/media/video-script.ts` (script from real product facts) → `tts.ts` (Piper, local, MIT) → `music.ts` (procedural bed) → `audio-mix.ts` (loudnorm + ducking) → `marketing-video.ts` (`produceMarketingVideo`, `planTimeline`, `buildMarketingAss`, `fitTitle`) → `video-quality.ts` (18-check gate).
+- **Nothing ships ungated**: `evaluateMarketingVideo()` must pass before the file is stored; the UI hides preview/download unless `qualityGate.passed === true`. Checks cover voiceover presence, −16…−13 LUFS, ≤ −1 dBTP, h264/yuv420p/720×1280/25fps, AAC stereo 44.1kHz, subtitle cues, and every number in the copy traced to product data.
+- **Languages**: ar / fr / en / zh deliver; **ar-TN is withheld on purpose** — the public Tunisian models are CC-BY-NC or unlicensed, so labelling an MSA voice "Tunisian" would be a false claim. `resolveVoice()` returns `{voice: null, reason}` and the gate fails `audio.voiceover`.
+- **TTS install**: `scripts/install-tts.sh` (also `npm run install:tts -w @wasit/server`) extracts Piper into `packages/server/vendor/piper/` (git-ignored) with `espeak-ng-data` beside the binary — the binary resolves its data relative to itself, so an unflattened `piper/piper/` breaks with `EACCES`/missing `phontab`.
+- **Evidence**: `npm run verify:videos -w @wasit/server` renders one advert per language against a real `products` row and writes `packages/server/artifacts/marketing-videos/report.{json,md}` (build output, git-ignored). Last run: 4 delivered, ar-TN withheld, verdict PASS.
+- **Fonts**: `assets/fonts/NotoSansSC-Regular.otf` (CJK) + `NotoSansArabic-Regular.ttf`; `VIDEO_FONTS_DIR` autodetected.
+- **Rendering pitfalls worth remembering**: fit every headline/CTA with `fitTitle` (libass clips silently), keep price and currency on separate lines (a mixed-direction line splits into two mis-sized boxes in RTL), and drop the `•` prefix in Arabic copy.
+
+## DEMO-01 — تشغيل الرابط التجريبي العام (2026-11-22)
+
+- **التشغيل/الإيقاف/الفحص**: `bash scripts/demo-up.sh [--build]` (يتحقق من PostgreSQL، يشغّل API ثم `vite preview`، وينتظر `/api/health/ready` عبر الـproxy) · `bash scripts/demo-health.sh` (pg + api + web + proxy + الرابط العام) · `bash scripts/demo-down.sh`. ملفات pid والسجلات في `.demo-run/` (git-ignored) — لا `pkill -f node`.
+- **الأسرار**: `scripts/lib/demo-credentials.mjs` (`demoPasswordFor(email)`) يقرأ `DEMO_ACCOUNT_PASSWORD_*`/`DEMO_STAFF_PASSWORD_*` من البيئة أو `.env.demo` (0600، غير متعقّب). **لا كلمة مرور حرفية في أي سكربت** — و`scripts/session/secret-allowlist.txt` بلا استثناءات لكلمات المرور، فأي ظهور لها يُعدّ finding.
+- **فخ تسرّب `.env.demo` إلى الاختبارات**: `set -a; . ./.env.demo; set +a` في shell دائم يترك `APP_URL`/`NODE_ENV`/`DATABASE_URL` مُصدَّرة، فيرثها `vitest` وتفشل مواصفات تعتمد القيم الافتراضية (كانت `seo.test.ts` تفترض `http://localhost:5173`). شغّل الاختبارات بـ`env -u APP_URL -u WEB_URL -u NODE_ENV ...`، و`tests/seo.test.ts` صار يشتق الأصل من `env.APP_URL` بدل قيمة ثابتة.
+- **التحقق على الرابط العام**: `scripts/demo-security-smoke.sh` (74 فحصاً)، `scripts/ui-demo-audit.mjs` (69 فحصاً: 4 لغات + شاشة هاتف + رفض RBAC)، `scripts/ui-mobile-smoke.mjs` (16)، `scripts/ui-flows-check.mjs` (6).
+
+## AI-05 / AFC-10 — ضبط الاستهلاك والتكلفة (2026-11-23)
+
+- **Reserve-before-call / settle-after-call**: `lib/ai/spend-limits.ts` (`reserveSpend`/`settleSpend`/`releaseSpend`). الحجز عبارة عن بيان واحد محروس (`INSERT … SELECT … WHERE` + `ON CONFLICT … DO UPDATE … WHERE`) على `ai_spend_counters`، فطلبان متزامنان لا يستهلكان نفس المتاح. الفشل يعيد `rows=[]` فقط — إشارة الرفض.
+- **حدود من DB لا من الكود**: `ai_spend_limits` بمفاتيح (`environment`, `scope` = GLOBAL|PROVIDER|AGENT, `targetKey`, `period`) + `maxCost`/`maxRequests`/`warnRatio`. صف بلا أي سقف مرفوض (422) — وإلا لأذِن بإنفاق غير محدود.
+- **الرفض ليس عطلاً**: عند بلوغ السقف يتراجع الـruntime إلى `LocalHeuristicProvider` (مجاني) ما لم يمرّر المستدعي `allowLocalFallback: false` (حينها 429). سقف المزوّد لا يُسقط المسار الآمن أبداً. `routing.ts` يتخطى المزوّد المحظور مسبقاً حتى لا يختار الـrouter مزوّداً سيرفضه الـruntime.
+- **`releaseSpend` مقيَّد بالبيئة**: `SpendReservation` يحمل `environment`؛ بدونه كان `release` قد ينقص عدّاد بيئة أخرى له نفس `period_start`.
+- **تكلفة مجهولة ≠ صفر**: `resolveModelPrice().registered === false` ⇒ `costSource: 'UNKNOWN'`. لا تُسجَّل تكلفة صفرية كأنها مجانية، ولا تُتخذ قرارات ميزانية على سعر غير مسجّل.
+- **Idempotency**: `ai_requests.request_key` (فهرس فريد). إعادة المحاولة/الحدث المُعاد تُرجع الصف الأول بلا نداء مزوّد ثانٍ ولا حجز ثانٍ؛ التسابق يحسمه `23505` فيقرأ الخاسر صف الفائز.
+- **الجداول الأربعة (`ai_requests`، `ai_usage`، `ai_budgets`، `ai_spend_*`) ليست ضمن نطاق الوكيل**: `modules/ai/agent-scope.ts` يمنعها في `HARD_DENY`، والقراءات المالية تمرّ عبر `platformDb(db)`.
+- **إدارة**: `/api/admin/ai/spend` (`AI_MANAGE`/`ADMIN_AI`) — overview + limits PUT/DELETE، كل تغيير في `audit_logs` (`AI_SPEND.LIMIT_UPDATED`/`LIMIT_DELETED`). الواجهة: تبويب «الاستهلاك» في `AdminAiPage` (`components/AiSpendPanel.tsx`).
+- **فخ بيئي (ليس عطلاً في الكود)**: مسار TTS يستدعي `ffprobe` من النظام. `ffmpeg-static` يوفّر `ffmpeg` فقط؛ بدون `apt-get install -y ffmpeg` تفشل 4 اختبارات فيديو بـ`spawn ffprobe ENOENT`. الصورة الإنتاجية تُثبّت `ffmpeg`+`ffprobe` عبر apt.
+- **اختبارات**: `tests/afc10-ai-spend.test.ts` (22). لا تُنشئ SUPER_ADMIN في اختبار جديد: `super-admin-bootstrap.test.ts` يفشل إن وُجد صف SUPER_ADMIN أثناء تشغيله (تلوّث بين الملفات).

@@ -2,15 +2,32 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
-/** Public runtime hosts allowed to reach the demo web server. */
-const ALLOWED_HOSTS = [
-  'work-1-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
-  'work-2-hnqubekeiztmrmck.prod-runtime.all-hands.dev',
-  'work-1-qpzssfljriaoounj.prod-runtime.all-hands.dev',
-  'work-2-qpzssfljriaoounj.prod-runtime.all-hands.dev',
-  'work-1-wqozutzaflweunqz.prod-runtime.all-hands.dev',
-  'work-2-wqozutzaflweunqz.prod-runtime.all-hands.dev',
-] as const;
+/**
+ * Hosts allowed to reach the web server.
+ *
+ * The preview URL is the runtime's public origin, which changes whenever the
+ * workspace is recreated, so the list is derived from the environment rather
+ * than pinned to one deployment: `APP_URL`/`API_URL` contribute their host,
+ * `WEB_ALLOWED_HOSTS` (comma separated) adds extras, and the runtime wildcard
+ * covers the rotating `work-N-<id>` subdomains. Vite treats a leading dot as a
+ * subdomain wildcard.
+ */
+function resolveAllowedHosts(): string[] {
+  const hosts = new Set<string>(['localhost', '127.0.0.1', '.prod-runtime.all-hands.dev']);
+  for (const raw of (process.env.WEB_ALLOWED_HOSTS ?? '').split(',')) {
+    const host = raw.trim();
+    if (host) hosts.add(host);
+  }
+  for (const key of ['APP_URL', 'API_URL'] as const) {
+    try {
+      const url = new URL(process.env[key] ?? '');
+      if (url.hostname) hosts.add(url.hostname);
+    } catch {
+      // Not a URL: nothing to add.
+    }
+  }
+  return [...hosts];
+}
 
 const API_FALLBACK = 'http://localhost:3000';
 
@@ -95,7 +112,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.WEB_PORT ?? 5173),
     host: true,
-    allowedHosts: [...ALLOWED_HOSTS],
+    allowedHosts: resolveAllowedHosts(),
     proxy: proxyToApi(),
   },
   // The public demo serves the built SPA through `vite preview` rather than the
@@ -104,7 +121,7 @@ export default defineConfig({
   preview: {
     port: Number(process.env.WEB_PORT ?? 4173),
     host: true,
-    allowedHosts: [...ALLOWED_HOSTS],
+    allowedHosts: resolveAllowedHosts(),
     proxy: proxyToApi(),
   },
 });

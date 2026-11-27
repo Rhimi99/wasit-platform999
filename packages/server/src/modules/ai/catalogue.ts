@@ -75,6 +75,19 @@ export const CORE_SPECIALIST_KEYS = [
 export type CoreSpecialistKey = (typeof CORE_SPECIALIST_KEYS)[number];
 
 /**
+ * Roles that may run an agent whose data is platform-wide.
+ *
+ * `requiresPlatformScope` has been declared on eight agents since the catalogue
+ * existed, but nothing enforced it: A2 bounds an agent to *tables*, not rows, so
+ * a platform-wide agent reads every tenant's rows. A caller holding only
+ * `ai:use` could therefore run the maintenance agent and read other principals'
+ * stored task errors, or run the growth agent and enumerate every supplier,
+ * merchant and company. Enforcing the declared flag closes that; it grants
+ * nothing new and removes no permission from any role.
+ */
+export const PLATFORM_SCOPE_ROLES: readonly string[] = ['ADMIN', 'SUPER_ADMIN'];
+
+/**
  * Actions that always require an explicit human approval, regardless of which
  * agent performs them. Declarative in R1: the live approval gate is still
  * `requiresHumanApproval` on the executable catalogue plus the A1/A2 boundary.
@@ -455,6 +468,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     scope: 'platform',
+    // It reads every seller, product and order on the platform, so it is a
+    // platform tool: only roles with platform authority may run it (AI-07).
+    requiresPlatformScope: true,
     requiresHumanApproval: false,
     executable: true,
   },
@@ -484,6 +500,12 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use'],
+    // AI-FIRST-COMPLETION-04: the row filter is consent, not role. Only tenants
+    // holding an active B2B_PARTNER_DISCOVERY consent are visible, and the
+    // requester needs the same consent, so a tenant run can no longer disclose
+    // another tenant. The snapshot is resolved by the service layer; the
+    // executor narrows it and never widens it.
+    requiresPlatformScope: false,
     requiresHumanApproval: true,
     executable: true,
   },
@@ -697,9 +719,11 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     // Production (render) and publication are distinct approvals; publishing is
     // always external and therefore always human.
     requiresHumanApproval: true,
-    // No executor on this branch: no approved production tool exists, so the
-    // agent is declared, described and REFUSED for execution (fail-closed).
-    executable: false,
+    // Planning, readiness and the render request run here. The render itself is
+    // executed by the media module: it writes a media_assets row and an audit
+    // entry, and agents may not write audit_logs (A2). Publishing still has no
+    // executor at all.
+    executable: true,
   },
 
   // ------------------------------- 12–20: restored organisational definitions
@@ -802,8 +826,9 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     ],
 
     permissionsRequired: ['ai:use', 'order:read'],
+    requiresPlatformScope: true,
     requiresHumanApproval: true,
-    executable: false,
+    executable: true,
   },
   {
     key: 'compliance-agent',
@@ -843,7 +868,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     permissionsRequired: ['ai:use', 'order:read'],
     requiresPlatformScope: true,
     requiresHumanApproval: true,
-    executable: false,
+    executable: true,
   },
   {
     key: 'supplier-agent',
@@ -882,7 +907,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'merchant-agent',
@@ -921,7 +946,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
 
     permissionsRequired: ['ai:use'],
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'customer-intelligence-agent',
@@ -960,7 +985,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     permissionsRequired: ['ai:use', 'analytics:read:own'],
     scope: 'own',
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'operations-agent',
@@ -1000,7 +1025,7 @@ export const AGENT_CATALOGUE: AgentDefinition[] = [
     permissionsRequired: ['ai:use'],
     requiresPlatformScope: true,
     requiresHumanApproval: false,
-    executable: false,
+    executable: true,
   },
   {
     key: 'outreach-acquisition-agent',

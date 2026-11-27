@@ -1,0 +1,14 @@
+# WASIT BUSINESS GLOBAL — agent video retention purge (cron format)
+#
+# Prefer the systemd timer (wasit-agent-video-purge.timer); use this file when
+# the host has cron only. Install as /etc/cron.d/wasit-agent-video-purge:
+#
+#   cp scripts/deploy/agent-video-purge.cron /etc/cron.d/wasit-agent-video-purge
+#
+# The wrapper takes a flock, so overlapping ticks are safe. Retention is applied
+# per class by the script itself; this line only has to run.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 03:15 UTC daily.
+15 3 * * * wasit /srv/wasit/scripts/agent-video-purge.sh >> /var/log/wasit-agent-video-purge.log 2>&1

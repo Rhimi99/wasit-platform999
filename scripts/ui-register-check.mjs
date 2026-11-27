@@ -32,7 +32,7 @@ check('register form exposes the expected fields', n >= 4, `${n} input(s)`);
 await inputs.nth(0).fill('Ui');
 await inputs.nth(1).fill(`Reg${RUN}`);
 await page.locator('form input[type="email"]').fill(EMAIL);
-await page.locator('form input[type="password"]').fill('Passw0rd!2026');
+await page.locator('form input[type="password"]').fill(`Ui!${Math.random().toString(36).slice(2)}A9`);
 
 const roleSel = page.locator('form select').first();
 if ((await roleSel.count()) > 0) {

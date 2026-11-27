@@ -1,4 +1,5 @@
 import { getTableName } from 'drizzle-orm';
+import { PLATFORM_DB } from '../../db/client';
 import { ApiError } from '@wasit/shared';
 import type { DB } from '../../db/client';
 import { getAgentRunContext, type AgentRunContext } from '../../lib/ai/agent-run-context';
@@ -23,9 +24,10 @@ import {
  * Enforcement model (fail-closed at every step):
  *  - Business tables are **read-only** and only the tables the agent's executor
  *    actually needs. A read of any other table is refused.
- *  - Platform accounting tables (`ai_models`/`ai_requests`/`ai_usage`/
- *    `ai_budgets`) are runtime-owned and allowed for every agent (the AI ledger
- *    is infrastructure, not agent data).
+ *  - The model catalogue (`ai_models`) is platform metadata and readable by
+ *    every agent. The AI usage ledger and the spend controls are NOT: they name
+ *    other agents' work and money, so they are hard-denied to every agent and
+ *    reached only by platform code through `platformDb()` (AI-05).
  *  - A hard-deny set (credentials, sessions, financial mutation, audit) is
  *    refused for EVERY agent, even if a contract listed it by mistake.
  *  - Owner-scoped tables (`agent_metrics`/`agent_memory`) additionally require a
@@ -84,10 +86,9 @@ export interface AgentScopeContract {
  * NOT agent business data, so allowing them does not widen any data domain.
  */
 export const PLATFORM_INFRA_TABLES: ReadonlySet<string> = new Set([
+  // Model catalogue only: pricing metadata an executor may need to reason about
+  // routing. It carries no other user's activity.
   'ai_models',
-  'ai_requests',
-  'ai_usage',
-  'ai_budgets',
 ]);
 
 /**
@@ -103,6 +104,18 @@ export const HARD_DENY_TABLES: ReadonlySet<string> = new Set([
   'phone_verification_tokens',
   'mfa_challenges',
   'authenticator_apps',
+  // AI provider credentials (AI-04): agents never read provider configuration.
+  'ai_providers',
+  // AI usage ledger and spend controls (AI-05). An agent must never read another
+  // agent's (or another tenant's) requests, tokens or cost, and must never read
+  // or alter a limit. Platform bookkeeping reaches these tables through
+  // `platformDb()`, which the agent's own query builder cannot obtain.
+  'ai_requests',
+  'ai_usage',
+  'ai_budgets',
+  'ai_spend_limits',
+  'ai_spend_counters',
+  'ai_spend_alerts',
   'security_settings',
   'rate_limit_counters',
   'profiles',
@@ -172,7 +185,7 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'sales-agent',
     specialization: 'Sales / lead identification',
     allowedDomains: ['COMMERCE', 'MARKETPLACE', 'B2B', 'TRUST'],
-    allowedTables: ['orders', 'products', 'suppliers', 'merchants', 'companies', 'trust_scores'],
+    allowedTables: ['orders', 'order_items', 'products', 'suppliers', 'merchants', 'companies', 'trust_scores'],
     readOnly: true,
     prohibitedDomains: prohibited(['COMMERCE', 'MARKETPLACE', 'B2B', 'TRUST']),
     canDelegate: false,
@@ -182,9 +195,24 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'marketing-agent',
     specialization: 'Marketing content & channel mix',
     allowedDomains: ['MARKETPLACE', 'MEDIA'],
-    allowedTables: ['products', 'categories', 'media_assets'],
+    // suppliers/merchants/companies are read only to resolve which listings
+    // the requester owns; every product query is filtered by that ownership.
+    allowedTables: ['products', 'categories', 'media_assets', 'suppliers', 'merchants', 'companies'],
     readOnly: true,
     prohibitedDomains: prohibited(['MARKETPLACE', 'MEDIA']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'marketing-video-agent': {
+    agentKey: 'marketing-video-agent',
+    specialization: 'Marketing video planning',
+    allowedDomains: ['MARKETPLACE', 'MEDIA', 'B2B'],
+    // Reads the product it is planning for, its seller's display name and the
+    // videos already produced for it. It cannot write any of them: a render is
+    // an audited business write and stays in the media module (A2).
+    allowedTables: ['products', 'media_assets', 'suppliers', 'merchants', 'companies'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['MARKETPLACE', 'MEDIA', 'B2B']),
     canDelegate: false,
     ownerScoped: true,
   },
@@ -202,7 +230,8 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'product-agent',
     specialization: 'Product listing analysis',
     allowedDomains: ['MARKETPLACE'],
-    allowedTables: ['products', 'categories', 'product_variants', 'product_images', 'inventory_items'],
+    // suppliers/merchants/companies resolve product ownership for the requester.
+    allowedTables: ['products', 'categories', 'product_variants', 'product_images', 'inventory_items', 'suppliers', 'merchants', 'companies'],
     readOnly: true,
     prohibitedDomains: prohibited(['MARKETPLACE']),
     canDelegate: false,
@@ -242,7 +271,7 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     agentKey: 'b2b-agent',
     specialization: 'B2B partner matching',
     allowedDomains: ['B2B'],
-    allowedTables: ['suppliers', 'merchants', 'companies'],
+    allowedTables: ['suppliers', 'merchants', 'companies', 'products'],
     readOnly: true,
     prohibitedDomains: prohibited(['B2B']),
     canDelegate: false,
@@ -261,10 +290,20 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
   'dispute-assistant': {
     agentKey: 'dispute-assistant',
     specialization: 'Dispute context summarisation',
-    allowedDomains: ['DISPUTE'],
-    allowedTables: ['disputes', 'dispute_messages'],
+    allowedDomains: ['DISPUTE', 'COMMERCE'],
+    // A summary that cannot see the evidence, the timeline, the appeals or the
+    // disputed amount is not a summary. Every read is scoped to ONE dispute (its
+    // own rows, and the single order that dispute names) and stays read-only.
+    allowedTables: [
+      'disputes',
+      'dispute_messages',
+      'dispute_evidence',
+      'dispute_events',
+      'dispute_appeals',
+      'orders',
+    ],
     readOnly: true,
-    prohibitedDomains: prohibited(['DISPUTE']),
+    prohibitedDomains: prohibited(['DISPUTE', 'COMMERCE']),
     canDelegate: false,
     ownerScoped: true,
   },
@@ -299,6 +338,85 @@ export const AGENT_SCOPE_CONTRACTS: Record<string, AgentScopeContract> = {
     allowedTables: ['orders', 'campaigns', 'ad_events'],
     readOnly: true,
     prohibitedDomains: prohibited(['COMMERCE', 'ADS', 'OPS']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'payment-settlement-agent': {
+    agentKey: 'payment-settlement-agent',
+    specialization: 'Payment & settlement monitoring (read-only status, never funds)',
+    // Provider intents, webhooks, payouts and the ledger are hard-denied; the
+    // only payment signal an agent may read is the status recorded on the order.
+    allowedDomains: ['COMMERCE', 'B2B'],
+    allowedTables: ['orders', 'suppliers', 'merchants', 'companies'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['COMMERCE', 'B2B']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'compliance-agent': {
+    agentKey: 'compliance-agent',
+    specialization: 'Compliance findings over verification, risk, disputes and policy gaps',
+    allowedDomains: ['B2B', 'RISK', 'DISPUTE', 'OPS'],
+    allowedTables: [
+      'suppliers',
+      'merchants',
+      'companies',
+      'risk_profiles',
+      'risk_events',
+      'disputes',
+      'country_policy_gaps',
+    ],
+    readOnly: true,
+    prohibitedDomains: prohibited(['B2B', 'RISK', 'DISPUTE', 'OPS']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'supplier-agent': {
+    agentKey: 'supplier-agent',
+    specialization: 'Supplier onboarding review',
+    allowedDomains: ['B2B', 'MARKETPLACE', 'TRUST'],
+    allowedTables: ['suppliers', 'merchants', 'companies', 'products', 'trust_scores'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['B2B', 'MARKETPLACE', 'TRUST']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'merchant-agent': {
+    agentKey: 'merchant-agent',
+    specialization: 'Merchant onboarding review',
+    allowedDomains: ['B2B', 'MARKETPLACE', 'TRUST'],
+    allowedTables: ['merchants', 'suppliers', 'companies', 'products', 'trust_scores'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['B2B', 'MARKETPLACE', 'TRUST']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'customer-intelligence-agent': {
+    agentKey: 'customer-intelligence-agent',
+    specialization: 'Customer segmentation over the caller\'s own orders',
+    allowedDomains: ['COMMERCE', 'MARKETPLACE', 'B2B'],
+    allowedTables: ['orders', 'order_items', 'products', 'suppliers', 'merchants', 'companies'],
+    readOnly: true,
+    prohibitedDomains: prohibited(['COMMERCE', 'MARKETPLACE', 'B2B']),
+    canDelegate: false,
+    ownerScoped: true,
+  },
+  'operations-agent': {
+    agentKey: 'operations-agent',
+    specialization: 'Operational health check (orders, agent layer, inventory, support)',
+    allowedDomains: ['COMMERCE', 'OPS', 'MESSAGING', 'MARKETPLACE', 'B2B'],
+    allowedTables: [
+      'orders',
+      'agent_tasks',
+      'agent_runs',
+      'inventory_items',
+      'messages',
+      'suppliers',
+      'merchants',
+      'companies',
+    ],
+    readOnly: true,
+    prohibitedDomains: prohibited(['COMMERCE', 'OPS', 'MESSAGING', 'MARKETPLACE', 'B2B']),
     canDelegate: false,
     ownerScoped: true,
   },
@@ -460,6 +578,7 @@ export function withAgentDataScope(db: DB): DB {
 
   return new Proxy(db as object, {
     get(target, prop) {
+      if (prop === PLATFORM_DB) return db;
       if (prop === 'select') {
         return (...args: unknown[]) =>
           wrapBuilder((target as unknown as { select: AnyFn }).select(...args) as object);

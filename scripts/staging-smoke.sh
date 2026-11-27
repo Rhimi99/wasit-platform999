@@ -166,7 +166,7 @@ fi
 # Real register → verify → login through nginx, then a market/product read.
 # ---------------------------------------------------------------------------
 EMAIL="staging-smoke-$$@wasit.tn"
-PASSWORD="Passw0rd!2026"
+PASSWORD="${DEMO_ACCOUNT_PASSWORD:?set DEMO_ACCOUNT_PASSWORD (never hardcode a demo password)}"
 
 say "Register → verify email → login (through nginx)"
 REG_STATUS="$(http_status -X POST "$BASE_URL/api/auth/register" \

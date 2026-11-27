@@ -39,7 +39,10 @@ export type ErrorCode =
   | 'MEMORY_CONTENT_REFUSED'
   | 'MEMORY_LIMIT_REACHED'
   | 'MEMORY_INTEGRITY_FAILED'
-  | 'MEMORY_REVISION_MISMATCH';
+  | 'MEMORY_REVISION_MISMATCH'
+  // AI-04 — provider credential storage is unavailable (no master key outside
+  // the database). Fail closed instead of storing a secret in plaintext.
+  | 'SECRET_STORAGE_DISABLED';
 
 export interface ApiErrorBody {
   error: {

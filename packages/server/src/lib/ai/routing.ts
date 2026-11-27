@@ -4,7 +4,10 @@ import Decimal from 'decimal.js';
 import type { DB } from '../../db/client';
 import { aiModels } from '../../db/schema/ai';
 import { ApiError } from '@wasit/shared';
-import { resolveProvider, LocalHeuristicProvider } from './provider';
+import { LocalHeuristicProvider, VENDOR_MODEL_NAMES } from './provider';
+import { configEnvironment, resolveProviderChain } from './provider-config';
+import { spendStatus } from './spend-limits';
+import { getAgentRunContext } from './agent-run-context';
 import type { AIProvider } from './types';
 import { resolveModelPrice, type ModelPrice } from './runtime';
 import { env } from '../env';
@@ -51,12 +54,6 @@ export interface ResolvedRoute {
   vendorModel: string;
 }
 
-/** Catalogue key → vendor-facing model name. Unknown keys pass through unchanged. */
-const VENDOR_MODEL_NAMES: Record<string, string> = {
-  'openai-gpt-4o-mini': 'gpt-4o-mini',
-  'anthropic-claude-sonnet-4': 'claude-sonnet-4-20250514',
-};
-
 /**
  * Resolves a routable provider+model for a capability (task type).
  *
@@ -86,20 +83,56 @@ export async function resolveAiRoute(
     ? (preferred === allowedMax ? preferred : allowedMax)
     : preferred;
 
-  // Prefer a live (configured) provider for the target model.
-  const provider = resolveProvider();
-  const targetProviderId = provider.id;
+  // The provider chain is admin-configured per environment and allowlisted:
+  // default → fallback → the free local engine. It never throws and never
+  // yields a provider outside the allowlist.
+  const chain = await resolveProviderChain(db);
   const wantsPaid = targetKey !== 'local-heuristic' && targetKey !== 'noop';
+  const environment = configEnvironment();
+  const agentKey = getAgentRunContext()?.agentKey ?? null;
+  // A provider that is already out of budget is skipped here so the router never
+  // selects a vendor the runtime would refuse. A GLOBAL or AGENT cap blocks every
+  // vendor; a PROVIDER cap blocks only its own provider. Routing to a different
+  // vendor would evade a provider cap, so it is not used as an escape.
+  const blocked = async (providerKey: string): Promise<boolean> =>
+    (await spendStatus(db, { environment, providerKey, agentKey })).blocked;
 
-  if (wantsPaid && provider.isAvailable() && targetProviderId !== 'local-heuristic' && targetProviderId !== 'noop') {
-    const price = await resolveModelPrice(db, targetKey);
-    return {
-      modelKey: targetKey,
-      providerId: targetProviderId,
-      provider,
-      price,
-      vendorModel: VENDOR_MODEL_NAMES[targetKey] ?? targetKey,
-    };
+  if (wantsPaid) {
+    const catalogue = await db
+      .select({ provider: aiModels.provider })
+      .from(aiModels)
+      .where(eq(aiModels.key, targetKey))
+      .limit(1);
+    const vendor = catalogue[0]?.provider ?? null;
+
+    // 1) The provider that owns the requested model.
+    const owner = chain.find((e) => e.key === vendor && e.provider.isAvailable());
+    if (owner && !(await blocked(owner.key))) {
+      return {
+        modelKey: targetKey,
+        providerId: owner.key,
+        provider: owner.provider,
+        price: await resolveModelPrice(db, targetKey),
+        vendorModel: VENDOR_MODEL_NAMES[targetKey] ?? targetKey,
+      };
+    }
+
+    // 2) The configured fallback, serving ITS OWN model: one vendor cannot run
+    // another vendor's model, so both the model and its price follow the
+    // fallback instead of being borrowed from the unavailable primary.
+    const fallback = chain.find(
+      (e) => e.key !== 'local-heuristic' && e.key !== 'noop' && e.key !== vendor && e.provider.isAvailable(),
+    );
+    if (fallback && !(await blocked(fallback.key))) {
+      const price = await resolveModelPrice(db, fallback.model);
+      return {
+        modelKey: fallback.model,
+        providerId: fallback.key,
+        provider: fallback.provider,
+        price,
+        vendorModel: VENDOR_MODEL_NAMES[fallback.model] ?? fallback.model,
+      };
+    }
   }
 
   // Degrade to the deterministic local engine (free, real WASIT analytics).

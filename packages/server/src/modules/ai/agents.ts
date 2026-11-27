@@ -1,11 +1,13 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import Decimal from 'decimal.js';
 import { ApiError, type UserRole } from '@wasit/shared';
-import type { DB } from '../../db/client';
+import { platformDb, type DB } from '../../db/client';
 import { agentRegistry, agentTasks } from '../../db/schema/agents';
 import { agentRunSteps } from '../../db/schema/agent_runs';
 import { aiRequests } from '../../db/schema/ai';
 import { roles, userRoles } from '../../db/schema/auth';
+import { resolvePartnerConsent } from './partner-consent';
+import { disputePolicySnapshot } from '../disputes/service';
 import { writeAudit, type AuditContext } from '../../lib/audit';
 import { buildPriorContext, recordTaskOutcomeMemory } from './memory.js';
 import { recordMetricSafely } from './metrics.js';
@@ -29,6 +31,7 @@ import {
   agentRunRefusal,
   executableAgents,
   findAgentSpec,
+  PLATFORM_SCOPE_ROLES,
   type AgentLayerCounts,
 } from './catalogue.js';
 import { assertAgentScopeContract, assertRunOwnerScope } from './agent-scope.js';
@@ -48,6 +51,25 @@ export interface AgentTaskFencing {
   runId: string;
   stepId: string;
   claimToken: number;
+}
+
+/**
+ * Trusted, server-side provenance for a task created by an internal automation
+ * (AI-03). Every field is produced by the service layer that owns the trigger —
+ * never read from a request body — so a caller can neither choose the dedupe key
+ * nor forge the record a task is linked to.
+ */
+export interface AgentTaskOrigin {
+  /** Idempotency key; the open-task unique index is (requested_by, dedupe_key). */
+  dedupeKey?: string;
+  /** What produced the task. Stored on the row for filtering and audit. */
+  triggeredBy?: 'user' | 'scheduler' | 'dispute-assignment';
+  /**
+   * Link to the dispute assignment cycle that produced the task. Injected into
+   * the stored input as `__dispute*` fields *after* caller input is stripped, so
+   * the executor can verify the owner still holds the assignment.
+   */
+  disputeLink?: { disputeId: string; cycle: string };
 }
 
 /**
@@ -322,6 +344,7 @@ export async function createAgentTask(
   input: CreateAgentTaskInput,
   audit: AuditContext,
   fencing?: AgentTaskFencing,
+  origin?: AgentTaskOrigin,
 ): Promise<ResolvedAgentTask> {
   // Central AI Kill Switch (A1): no NEW AI task may be created while disabled —
   // user requests, scheduler dispatches and approval-triggered runs all pass
@@ -356,6 +379,33 @@ export async function createAgentTask(
     throw ApiError.conflict(refusal.message);
   }
 
+  // A platform-wide agent reads rows that belong to every tenant (A2 bounds
+  // tables, not rows), so the declared `requiresPlatformScope` is enforced here
+  // rather than trusted. Without this a customer holding `ai:use` could run the
+  // maintenance agent and read other principals' stored errors.
+  if (agent.requiresPlatformScope && !role.some((r) => PLATFORM_SCOPE_ROLES.includes(r))) {
+    await writeAudit(db, audit, {
+      action: 'AI.AGENT_RUN_REFUSED',
+      entityType: 'AGENT',
+      entityId: agent.key,
+      metadata: {
+        agentKey: agent.key,
+        code: 'PLATFORM_SCOPE_REQUIRED',
+        reason: 'This agent operates on platform-wide data.',
+        requestedBy,
+        roles: role,
+      },
+    });
+    await recordMetricSafely(db, {
+      agentKey: agent.key,
+      taskId: null,
+      scopeOwner: requestedBy,
+      outcome: 'blocked',
+      errorCode: 'PLATFORM_SCOPE_REQUIRED',
+    });
+    throw ApiError.forbidden('This agent operates on platform-wide data and is limited to platform administrators');
+  }
+
   if (!role.includes('ADMIN') && !role.includes('SUPER_ADMIN')) {
     // Secondary guard: every required permission must be present.
     const { ROLE_PERMISSIONS } = await import('@wasit/shared');
@@ -387,6 +437,52 @@ export async function createAgentTask(
   }
 
   const id = newId();
+
+  // AI-FIRST-COMPLETION-04: partner matching names other tenants, so the consent
+  // snapshot is resolved HERE (the service layer may read `consents`, agents may
+  // not) and passed in as immutable input. Any caller-supplied `__partnerConsent`
+  // is dropped first, so a request cannot forge or widen its own visibility.
+  let effectiveInput = input.input as Record<string, unknown>;
+  if (agent.key === 'b2b-agent') {
+    const { __partnerConsent: _ignored, ...rest } = effectiveInput as Record<string, unknown>;
+    void _ignored;
+    effectiveInput = { ...rest, __partnerConsent: await resolvePartnerConsent(db, requestedBy) };
+  }
+  if (agent.key === 'dispute-assistant') {
+    // The dispute policy lives in `policies`, which every agent is hard-denied
+    // from reading, so it is resolved here (service layer) and frozen into the
+    // task. Every internal marker is dropped first: a request cannot rewrite the
+    // rules its own advice will be judged against, and it cannot claim to be an
+    // assignment-triggered task for a dispute (or an owner) it does not own.
+    const {
+      __disputePolicy: _policy,
+      __disputeId: _disputeId,
+      __disputeCycle: _cycle,
+      __disputeSource: _source,
+      ...rest
+    } = effectiveInput as Record<string, unknown>;
+    void _policy; void _disputeId; void _cycle; void _source;
+    // A linked task (AI-03) summarises exactly the dispute the service attached;
+    // a caller-supplied `disputeId` cannot redirect it.
+    const disputeId = origin?.disputeLink
+      ? origin.disputeLink.disputeId
+      : typeof rest.disputeId === 'string'
+        ? rest.disputeId
+        : null;
+    const snapshot = await disputePolicySnapshot(db, disputeId);
+    effectiveInput = {
+      ...rest,
+      ...(origin?.disputeLink
+        ? {
+            disputeId: origin.disputeLink.disputeId,
+            __disputeId: origin.disputeLink.disputeId,
+            __disputeCycle: origin.disputeLink.cycle,
+            __disputeSource: 'ASSIGNMENT',
+          }
+        : {}),
+      __disputePolicy: snapshot,
+    };
+  }
 
   if (fencing) {
     // Service-level fencing (AI-02.3.2). The task is created only if the step is
@@ -430,10 +526,12 @@ export async function createAgentTask(
         id,
         agentKey: agent.key,
         requestedBy,
-        input: input.input as never,
+        input: effectiveInput as never,
         status: initialStatus,
         requiresApproval,
         model: 'local-heuristic',
+        ...(origin?.dedupeKey ? { dedupeKey: origin.dedupeKey } : {}),
+        ...(origin?.triggeredBy ? { triggeredBy: origin.triggeredBy } : {}),
       });
     });
   } else {
@@ -441,10 +539,12 @@ export async function createAgentTask(
       id,
       agentKey: agent.key,
       requestedBy,
-      input: input.input as never,
+      input: effectiveInput as never,
       status: initialStatus,
       requiresApproval,
       model: 'local-heuristic',
+      ...(origin?.dedupeKey ? { dedupeKey: origin.dedupeKey } : {}),
+      ...(origin?.triggeredBy ? { triggeredBy: origin.triggeredBy } : {}),
     });
   }
 
@@ -979,7 +1079,7 @@ export async function reconcileTaskCostFromLedger(
   // already settled (succeeded/failed/approved/rejected) is left untouched.
   if (task.status !== 'running') return { recovered: false, reason: 'not_running' };
 
-  const ledger = await db
+  const ledger = await platformDb(db)
     .select()
     .from(aiRequests)
     // Key on the SERVER-OWNED evidence id, never the caller-supplied `taskId`.

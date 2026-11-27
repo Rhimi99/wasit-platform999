@@ -6,7 +6,7 @@ import type {
   AdminStats, AdminAdSummary, AdminCampaignRow, ApiResponse, CampaignDetail, CampaignListResponse, CampaignStats,
   AdminDisputePolicy, AdminRetentionPolicy, CountryPolicyGap,
   Category, CompanySummary, ConversionSnapshot, Country, Currency, MediaAsset,
-  DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
+  DailyKpiRow, DashboardReportRow, CohortRow, UnitEconomics, DisputeAppealRow, DisputeAssistantView, DisputeDetail, DisputeSummary, InventoryItem, InventoryItemDetail, InventoryMovement, Language, LedgerEntry,
   MerchantSummary, MessagingSearchResponse, MyAnalyticsOverview, NotificationListResponse, Order, OrderStatus, PaginationInfo,
   FavoriteRow, LibraryEntityType, LibraryListResponse, SavedItemRow, SearchHistoryRow,
   JsonLd, LoginResponse, MfaEnrollment, MfaStatus,
@@ -17,6 +17,8 @@ import type {
   PlanTarget, BillingCycle, SubscriptionPlan, MySubscription, SubscriptionInvoice,
   AdminSubscription, AdminSubscriptionInvoice, CollectResult, RolloverResult, ExpireLapsedResult,
   AiAdminUsage, AiAdminModel, AiAdminBudget, AiAdminRequestRow, AgentRegistryRow, AgentLayerCounts, AgentTaskRow, AgentTaskDecision, AiKillSwitchState, CompanyMetrics,
+  AiProviderList, AiProviderRow, AiProviderUsage, AiProviderTestResult,
+  AiSpendOverview, AiSpendLimitList, AiSpendLimitRow,
   ObservabilityDashboard, ObservabilityLogRecord, ObservabilityFiringAlert, AlertEventRow, AlertEvaluationResult,
   WebhookFailureRow, WebhookFailuresResponse,
   DeletionRequestRow, DeletionStage, RetentionSweepResult, FieldError,
@@ -737,6 +739,15 @@ export const api = {
   async adminUpdateDisputeStatus(id: string, status: string, note?: string) {
     return request<{ id: string }>(`/api/admin/disputes/${id}/status`, { method: 'POST', body: JSON.stringify({ status, note }) });
   },
+  async adminDisputeAssistant(id: string) {
+    return request<DisputeAssistantView>(`/api/admin/disputes/${id}/assistant`);
+  },
+  async adminRetryDisputeAssistant(id: string) {
+    return request<{ disputeId: string; state: string; reason: string | null; taskId: string | null }>(
+      `/api/admin/disputes/${id}/assistant/retry`,
+      { method: 'POST' },
+    );
+  },
   async adminDecideDispute(id: string, decision: string, note?: string) {
     return request<{ id: string }>(`/api/admin/disputes/${id}/decide`, { method: 'POST', body: JSON.stringify({ decision, note }) });
   },
@@ -955,6 +966,13 @@ export const api = {
       copilot: { key: string; name: string; description: string };
     }>('/api/ai/agents');
   },
+  async aiVoiceCapabilities() {
+    return request<{
+      engine: string;
+      ready: boolean;
+      languages: Array<{ language: string; voice: string | null; available: boolean; reason: string | null }>;
+    }>('/api/ai/voice-capabilities');
+  },
   async aiCreateAgentTask(agentKey: string, input: Record<string, unknown>, requestedModel?: string) {
     return request<{
       id: string;
@@ -980,6 +998,26 @@ export const api = {
         createdAt: string;
       }>;
     }>(path);
+  },
+  /** One task, owner-scoped server-side (403 for a stranger). */
+  async aiTask(taskId: string) {
+    return request<AgentTaskRow>(`/api/ai/tasks/${encodeURIComponent(taskId)}`);
+  },
+  /**
+   * Same-origin URL of the rendered MP4. The server resolves the storage key
+   * from the task row and checks ownership, so no key ever reaches the client.
+   */
+  aiTaskVideoUrl(taskId: string, download = false) {
+    return `/api/ai/tasks/${encodeURIComponent(taskId)}/video${download ? '?download=1' : ''}`;
+  },
+  async privacyConsents() {
+    return request<Array<{ type: string; label: string; granted: boolean }>>('/api/privacy/consents');
+  },
+  async setPrivacyConsent(consentType: string, granted: boolean) {
+    return request<{ success: boolean }>('/api/privacy/consents', {
+      method: 'PUT',
+      body: JSON.stringify({ consentType, granted }),
+    });
   },
   async aiSmartFeatures(path: 'smart-search' | 'recommendations' | 'supplier-recommendations', body: Record<string, unknown>) {
     return request<{ kind: string; model: string; data: Record<string, unknown>; estimate: string }>(`/api/ai/${path}`, {
@@ -1188,6 +1226,77 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision, reason: reason ?? null }),
     });
+  },
+
+  // ---- AI provider management (server enforces AI_MANAGE / ADMIN_AI) ----
+  async adminAiProviders() {
+    return request<AiProviderList>('/api/admin/ai/providers');
+  },
+  async adminAiProvider(key: string) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}`);
+  },
+  async adminUpdateAiProvider(
+    key: string,
+    patch: {
+      enabled?: boolean;
+      model?: string;
+      baseUrl?: string | null;
+      keyEnvVar?: string | null;
+      role?: 'DEFAULT' | 'FALLBACK' | 'NONE';
+    },
+  ) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+  /** Write-only: the value is never read back. */
+  async adminSetAiProviderSecret(key: string, secret: string) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}/secret`, {
+      method: 'PUT',
+      body: JSON.stringify({ secret }),
+    });
+  },
+  async adminClearAiProviderSecret(key: string) {
+    return request<AiProviderRow>(`/api/admin/ai/providers/${encodeURIComponent(key)}/secret`, {
+      method: 'DELETE',
+    });
+  },
+  async adminTestAiProvider(key: string, mode: 'CONFIG' | 'LIVE' = 'CONFIG') {
+    return request<AiProviderTestResult>(`/api/admin/ai/providers/${encodeURIComponent(key)}/test`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    });
+  },
+  async adminAiSpend(params: { days?: number; environment?: string } = {}) {
+    const q = new URLSearchParams();
+    if (params.days) q.set('days', String(params.days));
+    if (params.environment) q.set('environment', params.environment);
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return request<AiSpendOverview>(`/api/admin/ai/spend${suffix}`);
+  },
+  async adminAiSpendLimits(environment?: string) {
+    const suffix = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+    return request<AiSpendLimitList>(`/api/admin/ai/spend/limits${suffix}`);
+  },
+  async adminUpsertAiSpendLimit(body: {
+    environment?: string;
+    scope: 'GLOBAL' | 'PROVIDER' | 'AGENT';
+    targetKey?: string | null;
+    period: 'DAILY' | 'MONTHLY';
+    maxCost?: string | null;
+    maxRequests?: number | null;
+    warnRatio?: string;
+    isActive?: boolean;
+  }) {
+    return request<AiSpendLimitRow>('/api/admin/ai/spend/limits', { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async adminDeleteAiSpendLimit(id: string) {
+    return request<{ deleted: boolean }>(`/api/admin/ai/spend/limits/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  async adminAiProviderUsage(key: string, days = 30) {
+    return request<AiProviderUsage>(`/api/admin/ai/providers/${encodeURIComponent(key)}/usage?days=${days}`);
   },
 
   // ---- Admin observability (server enforces ADMIN_SYSTEM) ----

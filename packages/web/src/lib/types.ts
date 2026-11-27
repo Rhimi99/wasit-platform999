@@ -791,6 +791,142 @@ export interface AiAdminModel {
   updatedAt: string;
 }
 
+/**
+ * AI provider configuration as the admin UI sees it. A key is described, never
+ * returned: `keyState` says whether one exists and where it comes from.
+ */
+export interface AiProviderKeyState {
+  present: boolean;
+  source: 'DB' | 'ENV' | 'NONE';
+  envVar: string | null;
+  fingerprint: string | null;
+  updatedAt: string | null;
+}
+
+export interface AiProviderUsage {
+  provider: string;
+  windowDays: number;
+  models: { key: string; displayName: string; isActive: boolean }[];
+  requests: number;
+  tokensInput: number;
+  tokensOutput: number;
+  cost: string;
+  agents: { agentKey: string; model: string; tasks: number }[];
+}
+
+export interface AiProviderRow {
+  key: string;
+  displayName: string;
+  kind: 'vendor' | 'local' | 'test';
+  enabled: boolean;
+  activeFromEnv: boolean;
+  isDefault: boolean;
+  isFallback: boolean;
+  model: string;
+  baseUrl: string | null;
+  requiresKey: boolean;
+  keyState: AiProviderKeyState;
+  lastTest: { status: string; mode: string | null; testedAt: string | null; detail: unknown };
+  updatedAt: string;
+  usage?: AiProviderUsage;
+}
+
+/** AI-05 consumption desk: every figure comes from recorded request rows. */
+export interface AiSpendTotals {
+  requests: number;
+  succeeded: number;
+  failed: number;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCost: string;
+  vendorCost: string;
+  localRequests: number;
+  unknownCostRequests: number;
+}
+
+export interface AiSpendByAgent {
+  agentKey: string;
+  providerKey: string;
+  vendorModel: string;
+  requests: number;
+  failed: number;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCost: string;
+  vendorCost: string;
+}
+
+export interface AiSpendByProviderModel {
+  providerKey: string;
+  vendorModel: string;
+  environment: string;
+  requests: number;
+  failed: number;
+  tokensInput: number;
+  tokensOutput: number;
+  estimatedCost: string;
+  vendorCost: string;
+}
+
+export interface AiSpendLimitRow {
+  id: string;
+  scope: 'GLOBAL' | 'PROVIDER' | 'AGENT';
+  targetKey: string;
+  period: 'DAILY' | 'MONTHLY';
+  maxCost: string | null;
+  maxRequests: number | null;
+  warnRatio: string;
+  currencyCode: string;
+  isActive: boolean;
+  spent: string;
+  requests: number;
+  state: 'OK' | 'WARNING' | 'BLOCKED';
+}
+
+export interface AiSpendAlertRow {
+  id: string;
+  scope: string;
+  targetKey: string;
+  period: string;
+  level: string;
+  spent: string;
+  limitAmount: string | null;
+  currencyCode: string;
+  createdAt: string;
+}
+
+export interface AiSpendOverview {
+  from: string;
+  to: string;
+  environment: string;
+  totals: AiSpendTotals;
+  byAgent: AiSpendByAgent[];
+  byProviderModel: AiSpendByProviderModel[];
+  limits: AiSpendLimitRow[];
+  alerts: AiSpendAlertRow[];
+}
+
+export interface AiSpendLimitList {
+  environment: string;
+  limits: Omit<AiSpendLimitRow, 'spent' | 'requests' | 'state'>[];
+}
+
+export interface AiProviderList {
+  environment: string;
+  secretStorage: { available: boolean; reason: string };
+  liveTestAllowed: boolean;
+  items: AiProviderRow[];
+}
+
+export interface AiProviderTestResult {
+  provider: string;
+  mode: 'CONFIG' | 'LIVE';
+  status: 'OK' | 'FAILED' | 'CONFIG_ONLY' | 'BLOCKED';
+  checks: { id: string; ok: boolean; detail: string }[];
+  latencyMs: number | null;
+  testedAt: string;
+}
+
 /** Aggregated usage for the current monthly window + every configured budget. */
 export interface AiAdminUsage {
   window: { start: string; end: string };
@@ -1179,6 +1315,46 @@ export interface DisputeDetail extends DisputeSummary {
   messages: DisputeMessageRow[];
   evidence: DisputeEvidenceRow[];
   appeals: DisputeAppealRow[];
+}
+
+/** AI-03 — the automatic dispute-assistant state for one case (admin only). */
+export interface DisputeAssistantSummary {
+  disputeNumber: string | null;
+  status: string | null;
+  recommendation: { action: string; confidence: number; rationale: string } | null;
+  gaps: string[];
+  evidenceCount: number | null;
+  messages: number | null;
+  deadlines: Record<string, unknown> | null;
+}
+
+export interface DisputeAssistantTask {
+  id: string;
+  status: string;
+  requestedBy: string;
+  reviewerEmail: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  requiresApproval: boolean;
+  summary: DisputeAssistantSummary | null;
+  error: string | null;
+}
+
+export interface DisputeAssistantView {
+  disputeId: string;
+  state:
+    | 'CLOSED_CASE'
+    | 'PENDING_NO_REVIEWER'
+    | 'PENDING_REVIEWER_NOT_QUALIFIED'
+    | 'PENDING_TASK'
+    | 'TASK_CREATED'
+    | 'TASK_EXISTS'
+    | 'TASK_FAILED';
+  reason: string | null;
+  assignmentCycle: string | null;
+  reviewer: { id: string; email: string | null; qualified: boolean; qualificationReason: string | null } | null;
+  task: DisputeAssistantTask | null;
+  supersededTaskCount: number;
 }
 
 /** Public legal document as disclosed by GET /api/public/legal/documents (no session). */

@@ -109,8 +109,8 @@ describe('AI-AGENT-MERGE-01 — identity is preserved', () => {
       total: 21,
       specialised: 20,
       supervisor: 1,
-      executable: 13,
-      declared: 7,
+      executable: 20,
+      declared: 0,
       copilot: 1,
     });
 
@@ -127,12 +127,18 @@ describe('AI-AGENT-MERGE-01 — identity is preserved', () => {
     }
   });
 
-  it('keeps the marketing video agent declared and refused', () => {
-    const video = findAgentSpec('marketing-video-agent');
-    expect(video?.executable).toBe(false);
-    expect(video?.tier).toBe('CORE_SPECIALIST');
-    expect(EXECUTABLE_AGENT_KEYS).not.toContain('marketing-video-agent');
-    expect(EXECUTOR_ACTION['marketing-video-agent']).toBeUndefined();
+  it('keeps the marketing video agent planning-only: no render or publish executor', () => {
+    const video = findAgentSpec('marketing-video-agent')!;
+    // GM decision (AI-FIRST-COMPLETION-02): the agent plans a video; the render
+    // runs in the media module (an audited write agents may not perform) and
+    // publication has no executor at all.
+    expect(video.executable).toBe(true);
+    expect(video.tier).toBe('CORE_SPECIALIST');
+    expect(EXECUTABLE_AGENT_KEYS).toContain('marketing-video-agent');
+    expect(EXECUTOR_ACTION['marketing-video-agent']).toBe('plan_video');
+    for (const gated of ['render_video', 'publish_video']) {
+      expect(video.capabilities.find((c) => c.action === gated)?.requiresApproval, gated).toBe(true);
+    }
   });
 });
 

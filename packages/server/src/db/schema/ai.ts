@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
 
@@ -24,12 +25,32 @@ export const aiRequests = pgTable(
     status: varchar('status', { length: 30 }).notNull().default('SUCCESS'),
     latencyMs: integer('latency_ms').notNull().default(0),
     metadata: jsonb('metadata'),
+    /**
+     * AI-05 attribution. These describe the call that actually happened (after
+     * routing and fallback), so usage is never inferred from a model name:
+     * `provider_key` is the provider that ran it, `vendor_model` the string sent
+     * to it, `agent_key` the agent that consumed it, and `cost_source` says
+     * whether the cost is vendor-reported, catalogue-estimated, free (local
+     * engine) or unknown (no usage to price).
+     */
+    providerKey: varchar('provider_key', { length: 100 }),
+    vendorModel: varchar('vendor_model', { length: 160 }),
+    agentKey: varchar('agent_key', { length: 100 }),
+    environment: varchar('environment', { length: 30 }),
+    costSource: varchar('cost_source', { length: 20 }),
+    /** Caller-supplied idempotency key; a repeat never creates a second row. */
+    requestKey: varchar('request_key', { length: 160 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     userIdx: index('ai_requests_user_idx').on(t.userId),
     typeIdx: index('ai_requests_type_idx').on(t.requestType),
     createdIdx: index('ai_requests_created_idx').on(t.createdAt),
+    providerIdx: index('ai_requests_provider_idx').on(t.providerKey, t.createdAt),
+    agentIdx: index('ai_requests_agent_idx').on(t.agentKey, t.createdAt),
+    envIdx: index('ai_requests_env_idx').on(t.environment, t.createdAt),
+    // Postgres treats NULLs as distinct, so only non-null keys are deduplicated.
+    requestKeyUq: uniqueIndex('ai_requests_request_key_uq').on(t.requestKey),
   }),
 );
 

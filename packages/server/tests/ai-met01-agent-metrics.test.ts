@@ -279,30 +279,34 @@ describe('AI-MET-01 — durability, isolation and honesty of the figures', () =>
 
   it('isolates agents: a report for one agent never contains another agent\'s events', async () => {
     const owner = await customer();
+    // A key of its own: sibling test files write metrics for the production
+    // agents in the same window, so a shared key would count their events.
+    const agentKey = `it-iso-${randomUUID().slice(0, 8)}`;
     await recordAgentMetric(db, {
-      agentKey: 'b2b-agent',
+      agentKey,
       taskId: randomUUID(),
       scopeOwner: owner.id,
       outcome: 'succeeded',
       attempt: 1,
     });
 
-    const report = await buildMetricsReport(db, { ...window(), agentKey: 'b2b-agent' });
+    const report = await buildMetricsReport(db, { ...window(), agentKey });
     expect(report.agents).toHaveLength(1);
-    expect(report.agents[0].agentKey).toBe('b2b-agent');
+    expect(report.agents[0].agentKey).toBe(agentKey);
     expect(report.integrity.distinctOwners).toBe(1);
   });
 
   it('reports cost as unavailable instead of inventing a zero', async () => {
     const owner = await customer();
+    const agentKey = `it-cost-${randomUUID().slice(0, 8)}`;
     await recordAgentMetric(db, {
-      agentKey: 'risk-agent',
+      agentKey,
       taskId: randomUUID(),
       scopeOwner: owner.id,
       outcome: 'succeeded',
       attempt: 1,
     });
-    const report = await buildMetricsReport(db, { ...window(), agentKey: 'risk-agent' });
+    const report = await buildMetricsReport(db, { ...window(), agentKey });
     const agent = report.agents[0];
     // No provider ledger row for this synthetic event: the honest answer is
     // "unavailable", never "0 USD spent".
@@ -361,9 +365,12 @@ describe('AI-MET-01 — backfill and coverage', () => {
   it('reconstructs history for settled tasks, idempotently', async () => {
     const owner = await customer();
     const taskId = randomUUID();
+    // Unique key: backfill scans every settled task, so a shared key would make
+    // the coverage and idempotency counts depend on sibling test files.
+    const agentKey = `it-backfill-${randomUUID().slice(0, 8)}`;
     await db.insert(agentTasks).values({
       id: taskId,
-      agentKey: 'development-agent',
+      agentKey,
       requestedBy: owner.id,
       input: { action: 'snapshot' },
       status: 'succeeded',
@@ -372,7 +379,7 @@ describe('AI-MET-01 — backfill and coverage', () => {
       completedAt: new Date(),
     });
 
-    const before = await buildMetricsReport(db, { ...window(), agentKey: 'development-agent' });
+    const before = await buildMetricsReport(db, { ...window(), agentKey });
     expect(before.coverage.backfillRecommended).toBe(true);
 
     const first = await backfillAgentMetrics(db, { since: window().from, limit: 5000 });
@@ -384,10 +391,13 @@ describe('AI-MET-01 — backfill and coverage', () => {
     expect(rows[0].latencyMs).toBe(1234);
 
     const second = await backfillAgentMetrics(db, { since: window().from, limit: 5000 });
-    expect(second.inserted).toBe(0);
     expect(second.skipped).toBeGreaterThanOrEqual(1);
+    // Idempotent for this task: no second metric row, whatever else the batch
+    // picked up from other files running in parallel.
+    const rowsAgain = await db.select().from(agentMetrics).where(eq(agentMetrics.taskId, taskId));
+    expect(rowsAgain).toHaveLength(1);
 
-    const after = await buildMetricsReport(db, { ...window(), agentKey: 'development-agent' });
+    const after = await buildMetricsReport(db, { ...window(), agentKey });
     expect(after.coverage.tasksWithMetric).toBeGreaterThanOrEqual(1);
   });
 
@@ -430,10 +440,13 @@ describe('AI-MET-01 — failure containment and access control', () => {
 
     // And the real path still settles: a task completes even when a metric row
     // for it already exists with a conflicting value (duplicate absorbed).
-    const owner = await customer();
+    // market-research reads every seller, product and order, so it is a
+    // platform tool: the real path runs as staff (a customer is refused).
+    const owner = await makeUser('SUPER_ADMIN', 'metresearch');
+    createdUserIds.push(owner.id);
     const task = await createAgentTask(
       db,
-      ['CUSTOMER'],
+      ['SUPER_ADMIN'],
       owner.id,
       { agentKey: 'market-research-agent', requestedBy: owner.id, input: { action: 'summary' } },
       AUDIT,

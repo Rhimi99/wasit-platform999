@@ -31,6 +31,12 @@ export interface AIProviderCallResult {
   tokensOutput: number;
   cost: string;
   currencyCode: string;
+  /**
+   * Set to 'VENDOR' only when the response itself carried a billed amount. The
+   * runtime then records the cost as vendor-reported instead of an estimate;
+   * omitting it means the catalogue price is an estimate and is labelled so.
+   */
+  costSource?: 'VENDOR';
 }
 
 /**

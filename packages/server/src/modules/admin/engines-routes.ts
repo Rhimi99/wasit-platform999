@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { PERMISSIONS } from '@wasit/shared';
+import { ApiError, PERMISSIONS } from '@wasit/shared';
 import { getContext } from '../../lib/request-context';
 import { validateBody, getValidatedBody } from '../../middleware/validate';
-import { requireAuth, requirePermission } from '../../middleware/auth';
+import { requireAuth, requirePermission, requireRole } from '../../middleware/auth';
 import { listAllVerificationRequests, reviewVerificationRequest } from '../verification/service';
 import { adminRecomputeFor, listAllLatestTrustScores } from '../trust/service';
 import { getRiskProfile, listRiskProfiles, reassessUserRisk } from '../risk/service';
@@ -18,6 +18,7 @@ import {
   updateDisputeStatus,
 } from '../disputes/service';
 import { listRiskEvents } from '../risk/service';
+import { readDisputeAssistant, requestDisputeAssistant } from '../disputes/assistant';
 import { writeAudit } from '../../lib/audit';
 import { resolveRateLimitStore } from '../../lib/rate-limit/resolve';
 import { parsePositiveIntParam } from '../../lib/query';
@@ -172,7 +173,38 @@ adminEnginesRoutes.get('/disputes/:id', async (c) => {
 adminEnginesRoutes.post('/disputes/:id/assign', validateBody(assignSchema), requirePermission(PERMISSIONS.DISPUTE_ASSIGN), async (c) => {
   const ctx = getContext(c);
   const body = getValidatedBody<z.infer<typeof assignSchema>>(c);
-  const result = await assignDispute(ctx.db, c.req.param('id')!, ctx.user!.id, body.reviewerUserId);
+  const result = await assignDispute(ctx.db, c.req.param('id')!, ctx.user!.id, body.reviewerUserId, {
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
+  return c.json({ success: true, data: result });
+});
+
+// AI-03 — read-only view of the dispute assistant for this case: current state,
+// the reviewer, and (once it ran) the stored summary. No side effects.
+// Restricted to platform administrators: only they can hold the assignment
+// the task is owned by, so only they need this view.
+adminEnginesRoutes.get('/disputes/:id/assistant', requireRole('ADMIN', 'SUPER_ADMIN'), async (c) => {
+  const ctx = getContext(c);
+  const view = await readDisputeAssistant(ctx.db, c.req.param('id')!);
+  if (view.reason === 'DISPUTE_NOT_FOUND') throw ApiError.notFound('Dispute');
+  return c.json({ success: true, data: view });
+});
+
+// Retry the automatic task. Safe and idempotent: it creates nothing when the
+// cycle already has a task, refuses when no qualified reviewer is assigned, and
+// never grants the caller the reviewer's authority — the task is still owned by
+// the assigned reviewer and still needs a separate approval to run.
+adminEnginesRoutes.post('/disputes/:id/assistant/retry', requireRole('ADMIN', 'SUPER_ADMIN'), async (c) => {
+  const ctx = getContext(c);
+  const disputeId = c.req.param('id')!;
+  const result = await requestDisputeAssistant(ctx.db, {
+    disputeId,
+    trigger: 'MANUAL_RETRY',
+    actorId: ctx.user!.id,
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  });
   return c.json({ success: true, data: result });
 });
 

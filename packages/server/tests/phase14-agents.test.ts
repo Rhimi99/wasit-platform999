@@ -85,7 +85,7 @@ async function runTask(agentKey: string, input: Record<string, unknown>, request
 }
 
 describe('Phase 14 — specialised agent executors (real DB-backed capabilities)', () => {
-  it('registers the agent layer with exactly 13 executable agents', async () => {
+  it('registers the agent layer with every specialised agent executable', async () => {
     const agents = await listAgents(db);
     const executableKeys = agents.filter((a) => a.executable === true).map((a) => a.key).sort();
     expect(executableKeys).toEqual(
@@ -97,19 +97,26 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
         'dispute-assistant',
         'finance-agent',
         'marketing-agent',
+        'marketing-video-agent',
         'market-research-agent',
         'outreach-acquisition-agent',
         'product-agent',
         'risk-agent',
         'sales-agent',
         'support-agent',
+        'payment-settlement-agent',
+        'compliance-agent',
+        'supplier-agent',
+        'merchant-agent',
+        'customer-intelligence-agent',
+        'operations-agent',
       ].sort(),
     );
     // AI-REG-01: the layer is 20 specialised agents + the supervisor, and every
     // one of them is registered — registration is identity, not runnability.
     expect(agents).toHaveLength(21);
     expect(new Set(agents.map((a) => a.key)).size).toBe(21);
-    expect(AGENT_CATALOGUE).toHaveLength(13);
+    expect(AGENT_CATALOGUE).toHaveLength(20);
     // Every executable entry must carry a capability + permissions.
     for (const def of agents.filter((a) => a.executable === true)) {
       expect(def.capabilities.length).toBeGreaterThan(0);
@@ -141,7 +148,7 @@ describe('Phase 14 — specialised agent executors (real DB-backed capabilities)
     ['support-agent', { action: 'draft_reply' }, 'snapshot'],
     ['analytics-agent', { action: 'generate_report' }, 'snapshot'],
     ['market-research-agent', { action: 'market_overview' }, 'snapshot'],
-    ['b2b-agent', { action: 'match_b2b' }, 'matches'],
+    ['b2b-agent', { action: 'match_b2b' }, 'suggestions'],
     ['risk-agent', { action: 'assess_risk' }, 'riskPosture'],
     ['dispute-assistant', { action: 'summarize_dispute' }, 'recommendation'],
     ['development-agent', { action: 'dev_plan' }, 'nextSteps'],

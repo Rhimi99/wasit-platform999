@@ -7,6 +7,7 @@
  * Usage: DEMO_STAFF_PASSWORD=... node scripts/ui-verification-check.mjs <baseURL>
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:12000').replace(/\/+$/, '');
 const steps = [];
@@ -25,7 +26,7 @@ let submittedNow = false;
   const page = await ctx.newPage();
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 60000 });
   await page.fill('input[type="email"]', 'customer1@wasit.tn');
-  await page.fill('input[type="password"]', 'Passw0rd!2026');
+  await page.fill('input[type="password"]', demoPasswordFor('customer1@wasit.tn'));
   await page.click('button[type="submit"]');
   await page.waitForURL(/dashboard/, { timeout: 30000 });
 
@@ -98,7 +99,7 @@ let submittedNow = false;
   const custPage = await custCtx.newPage();
   await custPage.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 60000 });
   await custPage.fill('input[type="email"]', 'customer1@wasit.tn');
-  await custPage.fill('input[type="password"]', 'Passw0rd!2026');
+  await custPage.fill('input[type="password"]', demoPasswordFor('customer1@wasit.tn'));
   await custPage.click('button[type="submit"]');
   await custPage.waitForURL(/dashboard/, { timeout: 30000 });
   const st = await custPage.request.get(`${BASE}/api/verification/me`);

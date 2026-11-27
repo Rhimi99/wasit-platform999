@@ -209,6 +209,13 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Phone viewport for the operational surfaces (AFC-05). Scoped to that spec
+    // so the rest of the suite keeps its single desktop project.
+    {
+      name: 'mobile-chromium',
+      use: { ...devices['Pixel 7'] },
+      testMatch: /agent-surfaces\.spec\.ts/,
+    },
   ],
   webServer: [
     {

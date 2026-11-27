@@ -3,7 +3,7 @@ import { api, apiCall, formatDate } from '@/lib/api';
 import { useI18n } from '@/lib/i18n-context';
 import { AppLayout } from '@/components/layouts/AppLayout';
 import { Badge, Card, EmptyState, ErrorState, SectionHeader, Spinner } from '@/components/ui';
-import type { DisputeDetail, DisputeSummary, RiskEventRow, RiskProfileRow, VerificationRequestRow, TrustScoreRow } from '@/lib/types';
+import type { DisputeAssistantView, DisputeDetail, DisputeSummary, RiskEventRow, RiskProfileRow, VerificationRequestRow, TrustScoreRow } from '@/lib/types';
 
 type AdminVerificationRow = VerificationRequestRow & { userId: string; email: string | null };
 
@@ -269,6 +269,8 @@ export function AdminDisputesPage() {
   const [decisionNote, setDecisionNote] = useState('');
   const [decideNotice, setDecideNotice] = useState<string | null>(null);
   const [appealNote, setAppealNote] = useState('');
+  const [assistant, setAssistant] = useState<DisputeAssistantView | null>(null);
+  const [assistantBusy, setAssistantBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -283,9 +285,23 @@ export function AdminDisputesPage() {
 
   async function selectDetail(id: string) {
     setDetail(null);
+    setAssistant(null);
     const res = await apiCall(() => api.adminDispute(id));
     if (res.error) { setError(res.error); return; }
     setDetail(res.data);
+    const ai = await apiCall(() => api.adminDisputeAssistant(id));
+    // A missing assistant view must not hide the dispute itself: the case data is
+    // already loaded, so a failure here only leaves the card in its error state.
+    if (!ai.error) setAssistant(ai.data);
+  }
+
+  async function retryAssistant(id: string) {
+    setAssistantBusy(true);
+    const res = await apiCall(() => api.adminRetryDisputeAssistant(id));
+    setAssistantBusy(false);
+    if (res.error) { setError(res.error); return; }
+    const view = await apiCall(() => api.adminDisputeAssistant(id));
+    if (!view.error) setAssistant(view.data);
   }
 
   async function assign(id: string) {
@@ -392,6 +408,74 @@ export function AdminDisputesPage() {
                   <input className="input flex-1" dir="ltr" value={reviewerId} onChange={(e) => setReviewerId(e.target.value)} placeholder={t('disputes.admin.reviewerUserId')} />
                   <button className="btn-primary" onClick={() => assign(detail.id)}>{t('disputes.admin.assign')}</button>
                 </div>
+              </Card>
+
+              <Card>
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-sm font-semibold text-slate-700">{t('disputes.assistant.title')}</h4>
+                  {assistant && (
+                    <Badge color={assistant.state === 'TASK_EXISTS' || assistant.state === 'TASK_CREATED' ? 'teal' : assistant.state === 'TASK_FAILED' ? 'red' : 'amber'}>
+                      {t(`disputes.assistant.state.${assistant.state}`)}
+                    </Badge>
+                  )}
+                </div>
+                {!assistant ? (
+                  <p className="mt-2 text-xs text-slate-400">{t('disputes.assistant.loading')}</p>
+                ) : (
+                  <div className="mt-2 space-y-2 text-xs text-slate-600" data-testid="admin-dispute-assistant">
+                    <p>
+                      {t('disputes.assistant.reviewer')}:{' '}
+                      {assistant.reviewer ? (assistant.reviewer.email ?? assistant.reviewer.id) : t('disputes.assistant.none')}
+                      {assistant.reviewer && !assistant.reviewer.qualified && (
+                        <span className="ms-1 text-amber-700">({t(`disputes.assistant.why.${assistant.reviewer.qualificationReason ?? 'UNKNOWN'}`)})</span>
+                      )}
+                    </p>
+                    {assistant.task && (
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <p>
+                          <span className="text-slate-400">{t('disputes.assistant.taskStatus')}:</span>{' '}
+                          <Badge color={assistant.task.status === 'approved' ? 'green' : assistant.task.status === 'failed' ? 'red' : 'slate'}>
+                            {t(`disputes.assistant.task.${assistant.task.status}`)}
+                          </Badge>
+                          <span className="ms-2 text-slate-400" dir="ltr">{assistant.task.id}</span>
+                        </p>
+                        {assistant.task.error && <p className="mt-1 text-red-700">{assistant.task.error}</p>}
+                        {assistant.task.requiresApproval && assistant.task.status === 'awaiting_approval' && (
+                          <p className="mt-1 text-amber-700">{t('disputes.assistant.needsApproval')}</p>
+                        )}
+                        {assistant.task.summary?.recommendation && (
+                          <div className="mt-2 space-y-1" data-testid="admin-dispute-assistant-summary">
+                            <p>
+                              <span className="text-slate-400">{t('disputes.assistant.recommendation')}:</span>{' '}
+                              {t(`disputes.assistant.action.${assistant.task.summary.recommendation.action}`)}
+                              {' '}({Math.round(assistant.task.summary.recommendation.confidence * 100)}%)
+                            </p>
+                            <p className="text-slate-500">{assistant.task.summary.recommendation.rationale}</p>
+                            <p className="text-slate-400">
+                              {t('disputes.assistant.gaps')}: {assistant.task.summary.gaps.length} ·{' '}
+                              {t('disputes.assistant.evidence')}: {assistant.task.summary.evidenceCount ?? 0} ·{' '}
+                              {t('disputes.assistant.messages')}: {assistant.task.summary.messages ?? 0}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {assistant.supersededTaskCount > 0 && (
+                      <p className="text-slate-400">{t('disputes.assistant.superseded')}: {assistant.supersededTaskCount}</p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="btn-secondary"
+                        onClick={() => retryAssistant(assistant.disputeId)}
+                        disabled={assistantBusy || assistant.state === 'CLOSED_CASE'}
+                        data-testid="admin-dispute-assistant-retry"
+                      >
+                        {assistantBusy ? t('disputes.assistant.working') : t('disputes.assistant.retry')}
+                      </button>
+                      <span className="text-slate-400">{t('disputes.assistant.readOnly')}</span>
+                    </div>
+                  </div>
+                )}
               </Card>
 
               <Card>

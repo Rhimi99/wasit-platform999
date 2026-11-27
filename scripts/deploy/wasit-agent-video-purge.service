@@ -1,0 +1,18 @@
+[Unit]
+Description=WASIT BUSINESS GLOBAL — agent video retention purge
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+# Run as the deploy user that owns the media directory: the purge deletes files
+# there, so it must not run as root or as a user without write access.
+User=wasit
+Group=wasit
+WorkingDirectory=/srv/wasit
+# DATABASE_URL comes from the app environment file, never from this unit.
+EnvironmentFile=/srv/wasit/.env
+ExecStart=/srv/wasit/scripts/agent-video-purge.sh
+# A purge that hangs must not pile up behind the next timer tick.
+TimeoutStartSec=900
+SuccessExitStatus=0

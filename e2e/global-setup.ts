@@ -6,7 +6,19 @@ import { CONSENT_STORAGE_KEY, consentRecord, E2E_WEB_URL } from './helpers';
 
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000';
 const WEB_URL = E2E_WEB_URL;
+// Dev default only. Rotated deployments (DEMO-SEC-03) export a unique password
+// per account, and the fixture must follow it instead of assuming the published
+// one — otherwise rotation silently breaks every role-based spec.
 const PASSWORD = 'Passw0rd!2026';
+
+const CREDENTIALS = {
+  customer: process.env.DEMO_ACCOUNT_PASSWORD_CUSTOMER1 ?? PASSWORD,
+  supplier: process.env.DEMO_ACCOUNT_PASSWORD_SUPPLIERA ?? PASSWORD,
+  merchant: process.env.DEMO_ACCOUNT_PASSWORD_MERCHANTA ?? PASSWORD,
+  company: process.env.DEMO_ACCOUNT_PASSWORD_COMPANYA ?? PASSWORD,
+  admin: process.env.DEMO_STAFF_PASSWORD_ADMIN ?? process.env.DEMO_STAFF_PASSWORD ?? PASSWORD,
+  admin2: process.env.DEMO_STAFF_PASSWORD_ADMIN2 ?? process.env.DEMO_STAFF_PASSWORD ?? PASSWORD,
+} as const;
 
 const ROLES = {
   customer: 'customer1@wasit.tn',
@@ -45,8 +57,9 @@ export default async function globalSetup(): Promise<void> {
   fs.mkdirSync(authDir, { recursive: true });
 
   for (const [role, email] of Object.entries(ROLES)) {
+    const password = CREDENTIALS[role as keyof typeof CREDENTIALS];
     const ctx = await request.newContext({ baseURL: API_URL });
-    let res = await ctx.post('/api/auth/login', { data: { email, password: PASSWORD } });
+    let res = await ctx.post('/api/auth/login', { data: { email, password } });
     if (res.status() === 401) {
       // A previous interrupted run (e.g. the password-recovery spec) may have left a
       // demo account on a different password. Repair it through the real reset flow so
@@ -54,9 +67,9 @@ export default async function globalSetup(): Promise<void> {
       const forgot = await ctx.post('/api/auth/forgot-password', { data: { email } });
       const token = (await forgot.json())?.data?.devResetToken;
       if (!token) throw new Error(`Cannot repair password for ${email}: no dev reset token`);
-      const reset = await ctx.post('/api/auth/reset-password', { data: { token, newPassword: PASSWORD } });
+      const reset = await ctx.post('/api/auth/reset-password', { data: { token, newPassword: password } });
       if (!reset.ok()) throw new Error(`Cannot repair password for ${email}: HTTP ${reset.status()}`);
-      res = await ctx.post('/api/auth/login', { data: { email, password: PASSWORD } });
+      res = await ctx.post('/api/auth/login', { data: { email, password } });
     }
     if (!res.ok()) {
       throw new Error(`Login failed for ${role} (${email}): HTTP ${res.status()}`);

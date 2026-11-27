@@ -28,6 +28,8 @@ import { DashboardInventoryPage, DashboardComparisonPage, DashboardSalesPage } f
 import { DashboardListPage, DashboardFinancePage, DashboardReportsPage, DashboardCustomersPage, DashboardBuyersPage, DashboardSuppliersPage, DashboardMerchantsListPage, DashboardMySuppliersPage, DashboardMyMerchantsPage } from './pages/DashboardListPages';
 import { DashboardLibraryPage } from './pages/DashboardLibraryPage';
 import { DashboardVideoStudioPage } from './pages/DashboardVideoStudioPage';
+import { DashboardAgentVideoPage } from './pages/DashboardAgentVideoPage';
+import { DashboardPartnersPage } from './pages/DashboardPartnersPage';
 import { AdminOnly, StaffOnly, AdminAnalyticsPage, AdminDashboardPage, AdminUsersPage, AdminOrdersPage, AdminTransactionsPage, AdminLedgerPage, AdminAuditPage, AdminProductsPage } from './pages/AdminPages';
 import { AdminVerificationPage, AdminTrustPage, AdminRiskPage, AdminDisputesPage } from './pages/AdminEnginesPages';
 import { AdminPoliciesPage } from './pages/AdminPolicyPages';
@@ -124,6 +126,8 @@ export default function App() {
       <Route path="/dashboard/analytics" element={<RequireAuth><DashboardAnalyticsPage /></RequireAuth>} />
       <Route path="/dashboard/ai" element={<RequireAuth><DashboardAIPage /></RequireAuth>} />
       <Route path="/dashboard/video-studio" element={<RequireAuth><DashboardVideoStudioPage /></RequireAuth>} />
+      <Route path="/dashboard/agent-video" element={<RequireAuth><DashboardAgentVideoPage /></RequireAuth>} />
+      <Route path="/dashboard/partners" element={<RequireAuth><DashboardPartnersPage /></RequireAuth>} />
       <Route path="/dashboard/subscriptions" element={<RequireAuth><DashboardSubscriptionsPage /></RequireAuth>} />
 
       {/* Admin */}

@@ -88,9 +88,13 @@ function vendorError(status: number): ApiError {
  * /chat/completions shape so any compatible endpoint (OpenAI, providers
  * exposing the same API) can be plugged without core changes.
  */
-class OpenAIChatCompletionsProvider implements AIProvider {
+export class OpenAIChatCompletionsProvider implements AIProvider {
   readonly id = 'openai';
-  constructor(private readonly apiKey: string, private readonly model: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly model: string,
+    private readonly baseUrl?: string,
+  ) {}
 
   isAvailable(): boolean {
     return this.apiKey.length > 0 && this.model.length > 0;
@@ -100,7 +104,7 @@ class OpenAIChatCompletionsProvider implements AIProvider {
     if (!this.isAvailable()) {
       throw ApiError.serviceUnavailable('AI provider is not configured');
     }
-    const base = env.AI_BASE_URL?.trim() || 'https://api.openai.com/v1';
+    const base = this.baseUrl?.trim() || env.AI_BASE_URL?.trim() || 'https://api.openai.com/v1';
     // A per-call model (from the router/catalogue) wins over the configured default.
     const model = opts.model?.trim() || this.model;
     const res = await vendorFetch(`${base}/chat/completions`, {
@@ -140,9 +144,13 @@ class OpenAIChatCompletionsProvider implements AIProvider {
 }
 
 /** Anthropic Messages provider — registered for multi-vendor support. */
-class AnthropicProvider implements AIProvider {
+export class AnthropicProvider implements AIProvider {
   readonly id = 'anthropic';
-  constructor(private readonly apiKey: string, private readonly model: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly model: string,
+    private readonly baseUrl?: string,
+  ) {}
 
   isAvailable(): boolean {
     return this.apiKey.length > 0 && this.model.length > 0;
@@ -152,7 +160,7 @@ class AnthropicProvider implements AIProvider {
     if (!this.isAvailable()) {
       throw ApiError.serviceUnavailable('AI provider is not configured');
     }
-    const base = env.AI_ANTHROPIC_BASE_URL?.trim() || 'https://api.anthropic.com/v1';
+    const base = this.baseUrl?.trim() || env.AI_ANTHROPIC_BASE_URL?.trim() || 'https://api.anthropic.com/v1';
     const model = opts.model?.trim() || this.model;
     const res = await vendorFetch(`${base}/messages`, {
       method: 'POST',
@@ -195,6 +203,16 @@ export const VENDOR_DEFAULT_MODELS = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-sonnet-4-20250514',
 } as const;
+
+/**
+ * Catalogue key → vendor-facing model name. Kept next to the adapters so every
+ * caller that reaches a vendor (router, runtime, provider tests) translates the
+ * same way; unknown keys pass through unchanged.
+ */
+export const VENDOR_MODEL_NAMES: Record<string, string> = {
+  'openai-gpt-4o-mini': 'gpt-4o-mini',
+  'anthropic-claude-sonnet-4': 'claude-sonnet-4-20250514',
+};
 
 /**
  * Resolves the configured AI provider. The resolver is deliberately small and

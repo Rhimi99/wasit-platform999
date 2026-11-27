@@ -16,7 +16,7 @@ import {
   isSensitiveAction,
   supportingAgents,
 } from '../../src/modules/ai/catalogue.js';
-import { EXECUTABLE_AGENT_KEYS } from '../../src/modules/ai/executors.js';
+import { EXECUTABLE_AGENT_KEYS, EXECUTOR_ACTION } from '../../src/modules/ai/executors.js';
 
 /**
  * AI-ARCH-ALIGN-01 — the official WASIT AI structure, as code.
@@ -164,13 +164,19 @@ describe('AI-ARCH-ALIGN-01 — Marketing Video Agent contract', () => {
     expect(spec.scope).toBe('own');
   });
 
-  it('is declared but NOT executable: no production tool exists on this branch', () => {
+  it('is executable for planning only: no render or publish executor', () => {
     const spec = video();
-    expect(spec.executable).toBe(false);
-    expect(executableAgents().map((a) => a.key)).not.toContain('marketing-video-agent');
-    expect([...EXECUTABLE_AGENT_KEYS]).not.toContain('marketing-video-agent');
-    expect(declaredOnlyAgents().map((a) => a.key)).toContain('marketing-video-agent');
-    expect(agentRunRefusal(spec)).toMatchObject({ code: 'AGENT_NOT_EXECUTABLE' });
+    expect(spec.executable).toBe(true);
+    expect(executableAgents().map((a) => a.key)).toContain('marketing-video-agent');
+    expect([...EXECUTABLE_AGENT_KEYS]).toContain('marketing-video-agent');
+    expect(declaredOnlyAgents().map((a) => a.key)).not.toContain('marketing-video-agent');
+    expect(agentRunRefusal(spec)).toBeNull();
+    // The executor's action is the read-only one; production and publication
+    // stay approval actions with no executor.
+    expect(EXECUTOR_ACTION['marketing-video-agent']).toBe('plan_video');
+    for (const gated of ['render_video', 'publish_video']) {
+      expect(spec.capabilities.find((c) => c.action === gated)?.requiresApproval, gated).toBe(true);
+    }
   });
 
   it('does not duplicate the Marketing Agent: different task types, same department', () => {
@@ -200,10 +206,11 @@ describe('AI-ARCH-ALIGN-01 — runnability is not identity', () => {
     }
   });
 
-  it('keeps the executable set at eleven core specialists after AI-AGENT-MERGE-01', () => {
+  it('keeps every specialised agent executable after AI-FIRST-COMPLETION-04', () => {
     // The three new executors are supporting/growth agents; the twelve core
-    // specialists still carry exactly eleven executors (video is identity-only).
-    expect(coreSpecialistAgents().filter((a) => a.executable === true)).toHaveLength(11);
-    expect(executableAgents()).toHaveLength(13);
+    // specialists now carry twelve executors — the video agent plans, it does
+    // not render or publish (those stay approval actions with no executor).
+    expect(coreSpecialistAgents().filter((a) => a.executable === true)).toHaveLength(12);
+    expect(executableAgents()).toHaveLength(20);
   });
 });

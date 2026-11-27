@@ -1,7 +1,7 @@
 import { and, eq, gte, lt, sql } from 'drizzle-orm';
 import Decimal from 'decimal.js';
 import { ApiError, type UserRole } from '@wasit/shared';
-import type { DB } from '../../db/client';
+import { platformDb, type DB } from '../../db/client';
 import { aiBudgets, aiRequests, aiUsage } from '../../db/schema/ai';
 import { newId } from '../ids';
 
@@ -35,7 +35,7 @@ async function usageSum(db: DB, userId: string, window: PeriodWindow): Promise<{
   tokensOut: number;
   cost: Decimal;
 }> {
-  const rows = await db
+  const rows = await platformDb(db)
     .select({
       requests: sql<number>`coalesce(sum(case when request_type <> 'AGENT_TASK' then 1 else 0 end), 0)`,
       tokensIn: sql<number>`coalesce(sum(tokens_input), 0)`,
@@ -72,7 +72,7 @@ export async function resolveLimit(
   envMonthlyCap: number,
 ): Promise<{ limit: AiLimit; periodWindow: PeriodWindow; source: string; currencyCode: string }> {
   const window = currentPeriodWindow(period);
-  const rows = await db
+  const rows = await platformDb(db)
     .select()
     .from(aiBudgets)
     .where(and(eq(aiBudgets.period, period), eq(aiBudgets.isActive, true)));
@@ -177,25 +177,87 @@ export interface RecordAiRequestInput {
   status?: string;
   latencyMs?: number;
   metadata?: Record<string, unknown>;
+  /** Attribution of the call that actually ran (after routing/fallback). */
+  providerKey?: string | null;
+  vendorModel?: string | null;
+  agentKey?: string | null;
+  environment?: string | null;
+  costSource?: CostSource | null;
+  /** Idempotency key: a repeat returns the existing row instead of a second one. */
+  requestKey?: string | null;
 }
 
-/** Records a single AI request row in ai_requests. */
-export async function recordAiRequest(db: DB, input: RecordAiRequestInput): Promise<string> {
+export type CostSource = 'VENDOR' | 'ESTIMATED' | 'FREE' | 'UNKNOWN';
+
+/** The ledger row already recorded for an idempotency key, if any. */
+export async function findRequestByKey(db: DB, requestKey: string) {
+  const rows = await platformDb(db)
+    .select()
+    .from(aiRequests)
+    .where(eq(aiRequests.requestKey, requestKey))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export interface RecordAiRequestResult {
+  id: string;
+  duplicate: boolean;
+}
+
+/**
+ * Records a single AI request row in ai_requests.
+ *
+ * With a `requestKey`, the row is written at most once: a retried call or a
+ * replayed event returns the original id and is flagged `duplicate`, so the
+ * ledger — and the usage rollup that follows it — never counts the same call
+ * twice. The unique index is the arbiter, so two concurrent retries cannot both
+ * insert: the loser reads the winner's row.
+ */
+export async function recordAiRequest(db: DB, input: RecordAiRequestInput): Promise<RecordAiRequestResult> {
+  const cfg = platformDb(db);
+  const requestKey = input.requestKey?.trim() || null;
+  if (requestKey) {
+    const existing = await cfg
+      .select({ id: aiRequests.id })
+      .from(aiRequests)
+      .where(eq(aiRequests.requestKey, requestKey))
+      .limit(1);
+    if (existing[0]) return { id: existing[0].id, duplicate: true };
+  }
   const id = newId();
-  await db.insert(aiRequests).values({
-    id,
-    userId: input.userId,
-    requestType: input.requestType,
-    model: input.model,
-    tokensInput: input.tokensInput,
-    tokensOutput: input.tokensOutput,
-    cost: input.cost,
-    currencyCode: input.currencyCode,
-    status: input.status ?? 'SUCCESS',
-    latencyMs: input.latencyMs ?? 0,
-    metadata: input.metadata ?? null,
-  });
-  return id;
+  try {
+    await cfg.insert(aiRequests).values({
+      id,
+      userId: input.userId,
+      requestType: input.requestType,
+      model: input.model,
+      tokensInput: input.tokensInput,
+      tokensOutput: input.tokensOutput,
+      cost: input.cost,
+      currencyCode: input.currencyCode,
+      status: input.status ?? 'SUCCESS',
+      latencyMs: input.latencyMs ?? 0,
+      metadata: input.metadata ?? null,
+      providerKey: input.providerKey ?? null,
+      vendorModel: input.vendorModel ?? null,
+      agentKey: input.agentKey ?? null,
+      environment: input.environment ?? null,
+      costSource: input.costSource ?? null,
+      requestKey,
+    });
+  } catch (err) {
+    // 23505 = unique_violation: a concurrent caller inserted the same key.
+    if (requestKey && (err as { code?: string }).code === '23505') {
+      const winner = await cfg
+        .select({ id: aiRequests.id })
+        .from(aiRequests)
+        .where(eq(aiRequests.requestKey, requestKey))
+        .limit(1);
+      if (winner[0]) return { id: winner[0].id, duplicate: true };
+    }
+    throw err;
+  }
+  return { id, duplicate: false };
 }
 
 /**
@@ -209,14 +271,15 @@ export async function upsertAiUsage(
   window: PeriodWindow,
   deltas: { requests?: number; tokensInput?: number; tokensOutput?: number; cost?: string; currencyCode: string },
 ): Promise<void> {
-  const existing = await db
+  const cfg = platformDb(db);
+  const existing = await cfg
     .select()
     .from(aiUsage)
     .where(and(eq(aiUsage.userId, userId), eq(aiUsage.periodStart, window.start), eq(aiUsage.periodEnd, window.end)))
     .limit(1);
 
   if (existing.length === 0) {
-    await db.insert(aiUsage).values({
+    await cfg.insert(aiUsage).values({
       id: newId(),
       userId,
       periodStart: window.start,
@@ -230,7 +293,7 @@ export async function upsertAiUsage(
     return;
   }
 
-  await db
+  await cfg
     .update(aiUsage)
     .set({
       requestCount: sql`${aiUsage.requestCount} + ${deltas.requests ?? 1}`,
@@ -248,7 +311,7 @@ export async function aiUsageForPeriod(
   periodStart: Date,
   periodEnd: Date,
 ): Promise<{ requests: number; tokensIn: number; tokensOut: number; cost: Decimal }> {
-  const rows = await db
+  const rows = await platformDb(db)
     .select({
       requests: sql<number>`coalesce(sum(case when request_type <> 'AGENT_TASK' then 1 else 0 end), 0)`,
       tokensIn: sql<number>`coalesce(sum(tokens_input), 0)`,

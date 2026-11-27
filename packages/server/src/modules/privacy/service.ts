@@ -29,6 +29,9 @@ export const CONSENT_TYPES = [
   'DATA_PROCESSING',
   'ANALYTICS',
   'THIRD_PARTY_SHARING',
+  // AI-FIRST-COMPLETION-04: opt-in for appearing in another tenant's B2B
+  // partner suggestions, and for receiving suggestions yourself.
+  'B2B_PARTNER_DISCOVERY',
 ] as const;
 
 export type ConsentType = (typeof CONSENT_TYPES)[number];

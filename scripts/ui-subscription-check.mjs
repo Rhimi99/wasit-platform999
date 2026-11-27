@@ -7,6 +7,7 @@
  * Usage: node scripts/ui-subscription-check.mjs <baseURL>
  */
 import { chromium } from 'playwright';
+import { demoPasswordFor } from './lib/demo-credentials.mjs';
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:12000').replace(/\/+$/, '');
 const steps = [];
@@ -18,7 +19,7 @@ const page = await ctx.newPage();
 
 await page.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 60000 });
 await page.fill('input[type="email"]', 'merchanta@wasit.tn');
-await page.fill('input[type="password"]', 'Passw0rd!2026');
+await page.fill('input[type="password"]', demoPasswordFor('merchanta@wasit.tn'));
 await page.click('button[type="submit"]');
 await page.waitForURL(/dashboard/, { timeout: 30000 });
 

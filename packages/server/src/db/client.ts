@@ -21,6 +21,19 @@ export const db = drizzle(pool, { schema });
 
 export type DB = typeof db;
 
+/**
+ * Set on an agent-scoped handle (`withAgentDataScope`) and pointing at the raw
+ * client. Platform plumbing that must read a table no agent may touch — AI
+ * provider configuration — unwraps it with `platformDb`. Agent query builders
+ * never expose this symbol, so an executor's own reads stay denied.
+ */
+export const PLATFORM_DB = Symbol.for('wasit.platformDb');
+
+export function platformDb(handle: DB): DB {
+  const raw = (handle as unknown as Record<symbol, DB | undefined>)[PLATFORM_DB];
+  return raw ?? handle;
+}
+
 export async function closeDb(): Promise<void> {
   await pool.end();
 }

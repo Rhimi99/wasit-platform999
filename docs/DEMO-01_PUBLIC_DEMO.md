@@ -1,8 +1,8 @@
 # DEMO-01 — PUBLIC DEMO (رابط تجريبي عام)
 
-> **التاريخ**: 2026-11-06 · **النطاق**: نسخة تجريبية عامة قابلة للاستخدام من الهاتف.
-> **الحكم**: ✅ **يعمل** — Frontend + Backend + PostgreSQL تجريبية معزولة على رابط HTTPS عام.
-> **لا علاقة له بأي بيئة إنتاج.** لا مزوّد دفع حقيقي، لا بيانات حقيقية، لا Migration على قاعدة غير تجريبية.
+> **النطاق**: نسخة تجريبية عامة قابلة للاستخدام من الهاتف.
+> **الحكم**: ✅ **يعمل** — واجهة + خادم + PostgreSQL تجريبية معزولة على رابط HTTPS عام.
+> **لا علاقة له بأي بيئة إنتاج.** لا مزوّد دفع حقيقي، ولا بيانات حقيقية، ولا migration على قاعدة غير تجريبية.
 
 ---
 
@@ -10,103 +10,109 @@
 
 | البند | القيمة |
 | --- | --- |
-| Public URL | `https://work-1-wqozutzaflweunqz.prod-runtime.all-hands.dev` |
+| Public URL | `https://work-1-jbrbmtqnypyjfriv.prod-runtime.all-hands.dev` |
 | Frontend | Vite production build عبر `vite preview`، المنفذ 12000 |
-| Backend | Hono، `NODE_ENV=staging`، المنفذ 3000 |
-| Database | PostgreSQL 16 معزولة: حاوية `wasit-demo-pg`، منفذ `127.0.0.1:5433`، قاعدة `wasit_demo` |
-| Proxy | نفس الأصل: `/api` يمرّ عبر أصل الواجهة (كما في dev/prod) — لا CORS متقاطع |
+| Backend | Hono، `NODE_ENV=staging`، المنفذ 3000 (غير منشور مباشرة) |
+| Database | PostgreSQL 17 على `127.0.0.1:5434`، قاعدة `wasit_demo` |
+| Proxy | نفس الأصل: `/api` يمرّ عبر أصل الواجهة — لا CORS متقاطع |
 | Payments | `PAYMENT_PROVIDER=manual` — مكتب offline، **بلا أي نداء مزوّد حقيقي** |
 | AI | `AI_PROVIDER=local-heuristic` — محلي حتمي بلا مفتاح |
-| الأسرار | `.env.demo` (git-ignored)، أسرار عشوائية لكل تشغيل |
+| الأسرار | `.env.demo` (غير متعقّب، صلاحية `0600`)، كلمة مرور عشوائية **لكل حساب** |
 
-**منافذ API المنشورة:** لا شيء. الـAPI يُخدَم فقط عبر وكيل الواجهة (same-origin)؛ قاعدة البيانات ليست منشورة إلا على `127.0.0.1:5433`.
+**منافذ API المنشورة:** لا شيء. الـAPI يُخدَم فقط عبر وكيل الواجهة (same-origin)؛ قاعدة البيانات
+غير منشورة إلا على `127.0.0.1:5434`.
 
 ---
 
 ## 2. الحسابات التجريبية
 
-**لا كلمة مرور منشورة بعد DEMO-SEC-01.** حسابات العرض الأربعة + حساب العرض الرسمي تشترك في
-بيانات اعتماد واحدة تُولَّد عشوائيًا لكل نشر وتُقرأ من `DEMO_ACCOUNT_PASSWORD` في `.env.demo`
-(git-ignored، mode 0600). إعادة تشغيل `seed-demo` مع قيمة جديدة **تدوّر** كلمات المرور (يُعاد
-هاش كل حساب)، فلا تبقى أي بيانات اعتماد قديمة صالحة.
+**لا كلمة مرور منشورة.** منذ `DEMO-SEC-03` لكل حساب كلمة مرور فريدة عشوائية (24 حرفاً
+`base64url` ≈ 144 بت)، مخزّنة فقط في `.env.demo` (غير متعقّب) و`.env.demo.secrets` (`0600`).
+إعادة التدوير: `rotate-demo-credentials.ts --include-staff` (يُبطل كل الجلسات ويُغلق رموز
+إعادة تعيين كلمة المرور وتحديات MFA).
 
-| الحساب | الدور | مصدر كلمة المرور |
+| الحساب | الدور | مفتاح كلمة المرور في `.env.demo` |
 | --- | --- | --- |
-| `customer1@wasit.tn` | CUSTOMER | `DEMO_ACCOUNT_PASSWORD` |
-| `merchantA@wasit.tn` | MERCHANT | `DEMO_ACCOUNT_PASSWORD` |
-| `supplierA@wasit.tn` | SUPPLIER | `DEMO_ACCOUNT_PASSWORD` |
-| `companyA@wasit.tn` | COMPANY | `DEMO_ACCOUNT_PASSWORD` |
-| `demo@wasit.tn` | CUSTOMER (حساب العرض الرسمي) | `DEMO_ACCOUNT_PASSWORD` |
+| `customer1@wasit.tn` | CUSTOMER | `DEMO_ACCOUNT_PASSWORD_CUSTOMER1` |
+| `merchanta@wasit.tn` | MERCHANT | `DEMO_ACCOUNT_PASSWORD_MERCHANTA` |
+| `suppliera@wasit.tn` | SUPPLIER | `DEMO_ACCOUNT_PASSWORD_SUPPLIERA` |
+| `companya@wasit.tn` | COMPANY | `DEMO_ACCOUNT_PASSWORD_COMPANYA` |
+| `demo@wasit.tn` | CUSTOMER (حساب العرض الرسمي) | `DEMO_ACCOUNT_PASSWORD_DEMO` |
+| `admin@wasit.tn` | SUPER_ADMIN + ADMIN | `DEMO_STAFF_PASSWORD_ADMIN` |
+| `admin2@wasit.tn` | ADMIN | `DEMO_STAFF_PASSWORD_ADMIN2` |
 
-حساب العرض الرسمي صار عنوانًا محايدًا (`demo@wasit.tn`) بدل أي بريد شخصي: لا يُستخدم حساب
-شخص حقيقي كـDemo، ولا يُرسل إليه بريد (`MAIL_TRANSPORT=log`).
-
-**حسابات الإدارة** (`admin@wasit.tn` SUPER_ADMIN، `admin2@wasit.tn` ADMIN): كلمة مرور
-**منفصلة وعشوائية** (`DEMO_STAFF_PASSWORD`)، غير منشورة، ولا تفتحها بيانات اعتماد العرض
-(`401`). لا تُطبع في السجلات.
+- **لا طباعة في السجلات**: `scripts/lib/demo-credentials.mjs` يقرأ كلمة المرور عند الحاجة فقط.
+- **حساب العرض الرسمي** عنوان محايد (`demo@wasit.tn`) بدل أي بريد شخصي؛ `MAIL_TRANSPORT=log`.
+- **حسابات الإدارة** لا تفتحها بيانات اعتماد العرض (`401`)، وكلمة مرور الإدارة لا تفتح حسابات العرض.
 
 **مسارات دخول تجريبي:**
-- `POST /api/auth/demo-session` — يفتح حساب العرض الرسمي (`demo@wasit.tn`، CUSTOMER فقط). محصور
-  بـ`DEMO_AUTO_LOGIN=true` (404 في الإنتاج).
-- `POST /api/auth/demo-audit-session` — **أداة تشغيلية، ليست مدخلًا عامًا (DEMO-SEC-01)**:
-  تتطلب جلسة موظف حقيقية (`401` للزائر، `403` لغير الموظف)، والشخصية لا تتجاوز صلاحية
-  المستدعي (ADMIN لا يفتح SUPER_ADMIN). صفحة `/demo/owner` تعرض إشعار «للموظفين فقط» بدل
-  فتح جلسة تلقائيًا.
+- `POST /api/auth/demo-session` — يفتح حساب العرض الرسمي فقط، محصور بـ`DEMO_AUTO_LOGIN=true`
+  (`404` وهو مطفأ في هذا النشر).
+- `POST /api/auth/demo-audit-session` — **أداة تشغيلية، ليست مدخلاً عاماً (DEMO-SEC-01)**:
+  تتطلب جلسة موظف حقيقية (`401` للزائر، `403` لغير الموظف)، والشخصية لا تتجاوز صلاحية المستدعي.
 
 ---
 
 ## 3. الأمان المطبّق (مُتحقَّق)
 
-- كلمة المرور المنشورة **لا** تفتح أي حساب إداري (`401`)، وكلمة مرور الإدارة **لا** تفتح حسابات العرض.
-- CUSTOMER/MERCHANT/SUPPLIER/COMPANY وanonymous: `401/403` على كل مسارات `/api/admin/*` (34 فحص أمني ناجح).
-- CORS: طلب من أصل أجنبي لا يحصل على `Access-Control-Allow-Origin`؛ preflight لأصل المنصة `204`.
-- Bundle عام نظيف من الأسرار/علامات الإنتاج (`JWT_SECRET`, `DATABASE_URL`, `postgresql://`, مزوّدو الدفع…).
-- لافتة DEMO ظاهرة (وضع العرض التجريبي — بيانات وهمية، لا مدفوعات حقيقية).
-- `.env.demo` غير مُتتبَّع في Git؛ الأسرار عشوائية ولا تُكتب في الكود أو السجل.
+- كل حساب له كلمة مرور خاصة: كلمة حساب لا تفتح حساباً آخر، ولا حساب إدارة (`401`).
+- CUSTOMER/MERCHANT/SUPPLIER/COMPANY وanonymous: `401/403` على كل مسارات `/api/admin/*`.
+- `demo-session` و`demo-audit-session` مغلقان للزائر (`404`) ولغير الموظف (`403`).
+- CORS: أصل أجنبي لا يحصل على `Access-Control-Allow-Origin`.
+- الحزمة العامة نظيفة من الأسرار وعلامات الإنتاج، ولافتة DEMO ظاهرة.
+- `.env.demo` غير متعقّب في Git؛ الأسرار عشوائية ولا تُكتب في الكود أو السجل.
+- حدّ المحاولات: `RATE_LIMIT_LOGIN_MAX=60` لكل IP (عدة مختبِرين قد يتشاركون عنوان NAT واحد)،
+  مع قفل الحساب المنفصل عند 5 محاولات خاطئة (15 دقيقة) — مُثبت في التجربة.
 
 ---
 
 ## 4. سلامة المال (مُتحقَّق)
 
-- إنشاء نية دفع → `provider: "manual"`, `status: "PENDING"`, `checkoutUrl: null` (لا مزوّد).
-- `POST /api/admin/finance/manual-completions` متاح **فقط** في وضع العرض (`demoMode: true`) → الطلب `paymentStatus=PAID`.
-- **لا `SETTLED`** في `transaction_ledger` (كل الصفوف `PENDING`)، و**0** في `payouts`. لا Settlement/Payout/Wallet من دفعة العرض.
-- الحساب البنكي/المزوّد الحقيقي غير متصل إطلاقاً.
+- إنشاء نية دفع → `provider: "manual"`، `status: "PENDING"`، `checkoutUrl: null` (لا مزوّد).
+- **لا `SETTLED`** في `transaction_ledger` (كل الصفوف `PENDING`)؛ لا يُكتب `SETTLED` إلا من حدث
+  `settlement.confirmed` لمزوّد يعلن `capabilities.settlementEvidence`.
+- الحساب البنكي والمزوّد الحقيقي غير متصلين إطلاقاً.
 
 ---
 
-## 5. إعادة التشغيل / الإيقاف
+## 5. إعادة التشغيل / الإيقاف / المراقبة
 
 ```bash
 # التشغيل (من جذر المستودع)
-sudo dockerd > /tmp/dockerd-demo.log 2>&1 &
-sudo docker start wasit-demo-pg          # قاعدة البيانات التجريبية
-set -a; . ./.env.demo; set +a
-( cd packages/server && nohup npx tsx src/index.ts > /tmp/demo-api.log 2>&1 & )
-( cd packages/web && VITE_DEMO_MODE=true nohup npx vite preview --port 12000 --host 0.0.0.0 > /tmp/demo-web.log 2>&1 & )
+bash scripts/demo-up.sh            # يتحقق من PostgreSQL ثم يشغّل API + web وينتظر الجهوزية
+bash scripts/demo-up.sh --build    # مع بناء جديد للواجهة (VITE_DEMO_MODE=true)
 
-# الإيقاف
-pkill -f "tsx src/index.ts"; pkill -f "vite preview"
-sudo docker stop wasit-demo-pg           # البيانات تبقى في الحاوية
+# الصحة
+bash scripts/demo-health.sh        # pg، api، web، proxy، الرابط العام
+
+# الإيقاف (PostgreSQL يبقى يعمل: قواعد أخرى على نفس العنقود)
+bash scripts/demo-down.sh
 ```
 
-لإعادة بناء البيانات: `drizzle-kit migrate` ثم `tsx src/scripts/seed.ts` ثم `tsx src/scripts/seed-demo.ts` مع `.env.demo`.
+- ملفات pid والسجلات في `.demo-run/` (غير متعقّبة): `api.pid`، `web.pid`، `api.log`، `web.log`.
+- PostgreSQL: `sudo pg_ctlcluster 17 main start` إن كان متوقفاً.
+- إعادة بناء البيانات: `drizzle-kit migrate` ثم `tsx src/scripts/seed.ts` ثم `tsx src/scripts/seed-demo.ts`
+  مع `.env.demo` (يحفظ كلمات المرور المدوّرة).
 
 ---
 
-## 6. نتائج الاختبار
+## 6. نتائج الاختبار (على الرابط العام)
 
-- `scripts/demo-security-smoke.sh` على الرابط العام: **34 ناجح / 1 "فشل"** — والفحص الوحيد عبارة عن تعبير grep قديم في السكربت (`VITE_DEMO_MODE` صار مُضمَّناً وقت البناء)؛ نص اللافتة موجود فعلاً في الحزمة (`لا مدفوعات حقيقية`).
-- دخول حقيقي عبر المتصفح من الرابط العام: `merchantA` → `/dashboard` مع طلبات/منتجات حقيقية.
-- تسجيل حساب جديد `201` ثم دخول `200` (مع `DEMO_SKIP_EMAIL_VERIFICATION=true`).
-- دورة طلب: إنشاء `201` → نية دفع `manual/PENDING` → إكمال تجريبي → `PAID` (Ledger يبقى `PENDING`).
-- الصحة: `/api/health/live` و`/api/health/ready` = `200` (`db: connected`).
-- لا أخطاء `error`/`warn` في سجل الخادم، ولا استجابات `5xx`.
+- `scripts/demo-security-smoke.sh` → **74 ناجح / 0 فاشل**: 4 حسابات + رفض الإدارة لكل دور +
+  مسارات الدخول التجريبي + CORS + طلب/نية دفع + نظافة الحزمة + قيد الكتابة في `wasit_demo`.
+- `scripts/ui-demo-audit.mjs` → **69 ناجح / 0 فاشل** (Chromium حقيقي): الرئيسية، السوق، صفحة منتج،
+  تسجيل جديد، دخول 5 أدوار، صفحات الإدارة، رفض `/admin/users` للأدوار التجريبية، 4 لغات
+  (`ar` RTL و`fr`/`en`/`zh` LTR)، شاشة هاتف 390×844 بلا تجاوز أفقي، وصدق مزوّد AI.
+- `scripts/ui-mobile-smoke.mjs` → **16/16**، و`scripts/ui-flows-check.mjs` → **6/6**.
+- الصحة: `/api/health/live` و`/api/health/ready` و`/api/health/channels` = `200` (`db: connected`).
+- لا استجابات `5xx` ولا أخطاء JavaScript في Console (يُستثنى `401 /api/auth/me` وهو سبر عادي قبل الدخول).
 
 ---
 
 ## 7. قيود متبقية
 
 - الرابط مؤقت بطبيعته (بيئة تشغيل محلية مع نفق عام)؛ يتوقف بإيقاف العمليات أعلاه.
-- لا Retry/Kill-Switch/Tool-Gateway (خارج نطاق AI-02).
-- `DEMO_SKIP_EMAIL_VERIFICATION`/`DEMO_AUTO_LOGIN`/`DEMO_PAYMENT_MODE`/`ALLOW_DEV_TOOLING` كلها **تسمح** الخادم بالرفض في الإنتاج — لا يمكن أن تُرخي بوابة بيئة حقيقية.
+- منتجات العرض 13 منتجاً، جميعها لها صور الآن.
+- لا فيديوهات تسويقية مُسبقة (مكتبة الفيديو متاحة وتُنفَّذ عند الطلب؛ `items=0` حالياً).
+- `DEMO_SKIP_EMAIL_VERIFICATION`/`DEMO_AUTO_LOGIN`/`DEMO_PAYMENT_MODE` كلها تجعل الخادم يرفض
+  الإقلاع في `production` — لا يمكن أن تُرخي بوابة بيئة حقيقية.

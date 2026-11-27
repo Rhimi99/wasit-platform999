@@ -7,7 +7,9 @@ import { env } from '../env';
 import { assertAiExecutionEnabled } from './kill-switch';
 import { ApiError } from '@wasit/shared';
 import type { AIFeatureResult, AIProvider } from './types';
-import { resolveProvider, estimateTokens } from './provider';
+import { estimateTokens, LocalHeuristicProvider, VENDOR_MODEL_NAMES } from './provider';
+import { configEnvironment, primaryProvider } from './provider-config';
+import { isFreeProvider, releaseSpend, reserveSpend, settleSpend, type SpendReservation } from './spend-limits';
 import { logger } from '../observability/logger';
 import {
   getAgentRunBudget,
@@ -23,6 +25,8 @@ import {
   upsertAiUsage,
   currentPeriodWindow,
   type BudgetSnapshot,
+  type CostSource,
+  findRequestByKey,
 } from './cost-control';
 
 export interface ModelPrice {
@@ -32,6 +36,8 @@ export interface ModelPrice {
   currencyCode: string;
   inputPer1k: Decimal;
   outputPer1k: Decimal;
+  /** False when no catalogue row exists — the price is unknown, not zero. */
+  registered: boolean;
 }
 
 /**
@@ -74,6 +80,7 @@ export async function resolveModelPrice(db: DB, modelKey: string): Promise<Model
       currencyCode: 'USD',
       inputPer1k: new Decimal(0),
       outputPer1k: new Decimal(0),
+      registered: false,
     };
   }
   const m = rows[0];
@@ -84,6 +91,7 @@ export async function resolveModelPrice(db: DB, modelKey: string): Promise<Model
     currencyCode: m.currencyCode,
     inputPer1k: parsePricePer1k(m.inputPer1k),
     outputPer1k: parsePricePer1k(m.outputPer1k),
+    registered: true,
   };
 }
 
@@ -129,6 +137,18 @@ export interface RunFeatureInput {
    */
   provider?: AIProvider;
   metadata?: Record<string, unknown>;
+  /**
+   * Idempotency key for this logical call. A retry or a replayed event with the
+   * same key is recorded once; the second attempt returns the first row.
+   */
+  requestKey?: string;
+  /**
+   * When an external provider is out of spend budget, run on the local engine
+   * instead of failing the caller. Defaults to true: the local engine is free and
+   * must not be disabled by a vendor cap. Set false where a degraded answer is
+   * not acceptable.
+   */
+  allowLocalFallback?: boolean;
 }
 
 export interface RunFeatureOutput {
@@ -139,6 +159,10 @@ export interface RunFeatureOutput {
   cost: string;
   currencyCode: string;
   requestId: string;
+  providerKey: string;
+  costSource: CostSource;
+  /** True when the idempotency key was already recorded; nothing new was spent. */
+  duplicate?: boolean;
 }
 
 /**
@@ -173,17 +197,66 @@ export async function runAIFeature(
   // agent executors, smart features and one-off `/api/ai/run` alike — before any
   // budget reservation or provider call. Fail-closed and LLM-independent.
   assertAiExecutionEnabled();
-  // Precedence: explicit caller model → deployment AI_MODEL → AI_DEFAULT_MODEL.
-  const requestedModelKey = input.modelKey?.trim() || env.AI_MODEL?.trim() || env.AI_DEFAULT_MODEL;
-  // The router may have chosen a provider; otherwise resolve from configuration.
-  const provider = input.provider ?? resolveProvider();
+  // Idempotency: a key that is already on the ledger means this logical call
+  // completed before (a retried request or a replayed event). Returning the
+  // recorded outcome — with no second provider call — is the only way to keep
+  // both the ledger AND the spend counter exact. The content is not stored, so
+  // `duplicate: true` tells the caller the result was already delivered.
+  if (input.requestKey) {
+    const existing = await findRequestByKey(db, input.requestKey);
+    if (existing) {
+      return {
+        content: '',
+        model: existing.model,
+        tokensInput: existing.tokensInput,
+        tokensOutput: existing.tokensOutput,
+        cost: existing.cost,
+        currencyCode: existing.currencyCode,
+        requestId: existing.id,
+        providerKey: existing.providerKey ?? 'unknown',
+        costSource: (existing.costSource as CostSource) ?? 'UNKNOWN',
+        duplicate: true,
+      };
+    }
+  }
+  // A caller that did not route (feature endpoints, structured runs) gets the
+  // admin-configured chain: default → fallback → local. It never throws, so a
+  // deployment with no vendor key keeps working on the local engine.
+  let chainedModel: string | null = null;
+  let provider = input.provider;
+  if (!provider) {
+    const entry = await primaryProvider(db);
+    provider = entry.provider;
+    if (entry.key !== 'local-heuristic' && entry.key !== 'noop') chainedModel = entry.model;
+  }
+  // Precedence: explicit caller model → routed/configured model → deployment
+  // AI_MODEL → AI_DEFAULT_MODEL.
+  const requestedModelKey =
+    input.modelKey?.trim() || chainedModel || env.AI_MODEL?.trim() || env.AI_DEFAULT_MODEL;
   // Price follows the provider that actually runs the call. A free local engine
   // must not be billed at a paid model's catalogue rate just because a paid
   // model was requested and then degraded away for lack of credentials.
-  const isFree = provider.id === 'local-heuristic' || provider.id === 'noop';
-  const modelKey = isFree ? 'local-heuristic' : requestedModelKey;
-  const price = await resolveModelPrice(db, modelKey);
-  const vendorModel = isFree ? 'local-heuristic' : (input.vendorModel?.trim() || modelKey);
+  let isFree = isFreeProvider(provider.id);
+  let modelKey = isFree ? 'local-heuristic' : requestedModelKey;
+  let price = await resolveModelPrice(db, modelKey);
+  let vendorModel = isFree
+    ? 'local-heuristic'
+    : (input.vendorModel?.trim() || VENDOR_MODEL_NAMES[modelKey] || modelKey);
+
+  // A paid call with no catalogue price cannot be measured, so it cannot be
+  // bounded. Refusing is the only honest option: treating an unregistered model
+  // as free would spend real money while recording zero.
+  if (!isFree && !price.registered) {
+    throw ApiError.serviceUnavailable(
+      `AI model pricing is not configured for "${modelKey}" — refusing an unmeasurable paid call`,
+    );
+  }
+
+  // Environment scopes usage and limits, so a demo run can never consume or be
+  // charged against a production budget in the same database.
+  const environment = configEnvironment();
+  const runCtxForAttribution = getAgentRunContext();
+  const agentKey = runCtxForAttribution?.agentKey ?? null;
 
   const period = 'MONTHLY';
   const estimated = estimateBudget({ system: input.system, user: input.user, maxTokens: input.maxTokens }, price);
@@ -205,6 +278,33 @@ export async function runAIFeature(
   const runBudget = getAgentRunBudget();
   if (runBudget && !runBudget.reserve(estimated.cost)) {
     throw new AgentRunBudgetExceededError(runBudget.maxCostUsd!.toFixed(10), runBudget.spentUsd.toFixed(10));
+  }
+
+  // Outbound spend limits (AI-05). The reservation is atomic per limit, so
+  // concurrent calls cannot both spend the same remaining headroom. A refusal is
+  // NOT a platform failure: the free local engine answers instead, because a
+  // vendor cap must never take the platform's safe fallback offline.
+  let spendCtx = { environment, providerKey: provider.id, agentKey };
+  let reservations: SpendReservation[] = [];
+  let spendLimitBlocked: { scope: string; targetKey: string; period: string; reason: string } | null = null;
+  if (!isFree) {
+    const decision = await reserveSpend(db, spendCtx, estimated.cost);
+    if (!decision.allowed) {
+      if (input.allowLocalFallback === false) {
+        throw ApiError.tooManyRequests(
+          `AI spend limit reached for ${decision.blockedBy?.scope.toLowerCase()} ${decision.blockedBy?.targetKey || ''}`.trim(),
+        );
+      }
+      spendLimitBlocked = decision.blockedBy ?? { scope: 'GLOBAL', targetKey: '', period: 'MONTHLY', reason: 'cost' };
+      provider = new LocalHeuristicProvider();
+      isFree = true;
+      modelKey = 'local-heuristic';
+      vendorModel = 'local-heuristic';
+      price = await resolveModelPrice(db, modelKey);
+      spendCtx = { environment, providerKey: provider.id, agentKey };
+    } else {
+      reservations = decision.reservations;
+    }
   }
 
   // Attribute this request to the running agent task, if any. With a trusted run
@@ -234,6 +334,9 @@ export async function runAIFeature(
     // The call never produced a billable result, so release the reservation: the
     // run must not be charged for a call that did not complete.
     runBudget?.release(estimated.cost);
+    await releaseSpend(db, reservations).catch((releaseErr) => {
+      logger.error('Failed to release an AI spend reservation', { error: (releaseErr as Error).message });
+    });
     const latencyMs = Date.now() - started;
     // Persist the failed attempt (no tokens billed) so the ledger and the audit
     // trail reflect that a provider call was made and did not succeed.
@@ -247,6 +350,13 @@ export async function runAIFeature(
       currencyCode: price.currencyCode,
       status: (err as { statusCode?: number }).statusCode === 503 ? 'UNAVAILABLE' : 'FAILED',
       latencyMs,
+      providerKey: provider.id,
+      vendorModel,
+      agentKey,
+      environment,
+      // A failure bills nothing measurable: recorded as unknown, never as free.
+      costSource: 'UNKNOWN',
+      requestKey: input.requestKey ? `${input.requestKey}:failed` : null,
       metadata: {
         ...requestMetadata,
         provider: provider.id,
@@ -277,9 +387,20 @@ export async function runAIFeature(
   // error is preserved as the `cause` (never hidden behind a secondary error) and
   // surfaced as `AgentCostRecordingError`, which is retryable so a later attempt
   // re-enters this path with the correct spend.
+  // A vendor that reports its own invoice is recorded as such; otherwise the
+  // catalogue price times measured tokens is an ESTIMATE and says so.
+  const costSource: CostSource = isFree ? 'FREE' : result.costSource === 'VENDOR' ? 'VENDOR' : 'ESTIMATED';
+
+  // Move the reservation to the measured cost before recording it, so a later
+  // call in the same period sees the true spend rather than the estimate.
+  await settleSpend(db, spendCtx, reservations, actualCost).catch((settleErr) => {
+    logger.error('Failed to settle an AI spend reservation', { error: (settleErr as Error).message });
+  });
+
   let requestId: string;
+  let duplicate = false;
   try {
-    requestId = await recordAiRequest(db, {
+    const recorded = await recordAiRequest(db, {
       userId: input.userId,
       requestType: input.requestType,
       model: result.model,
@@ -289,22 +410,37 @@ export async function runAIFeature(
       currencyCode: price.currencyCode,
       status: overBudget ? 'OVER_BUDGET' : 'SUCCESS',
       latencyMs,
-      metadata: overBudget
-        ? { ...requestMetadata, provider: provider.id, runBudgetExceeded: true }
-        : { ...requestMetadata, provider: provider.id },
+      providerKey: provider.id,
+      vendorModel: result.model || vendorModel,
+      agentKey,
+      environment,
+      costSource,
+      requestKey: input.requestKey ?? null,
+      metadata: {
+        ...requestMetadata,
+        provider: provider.id,
+        ...(spendLimitBlocked ? { spendLimitBlocked } : {}),
+        ...(overBudget ? { runBudgetExceeded: true } : {}),
+      },
     });
+    requestId = recorded.id;
+    duplicate = recorded.duplicate;
   } catch (err) {
     throw new AgentCostRecordingError(actualCost.toFixed(10), err instanceof Error ? err.message : String(err));
   }
 
-  const window = currentPeriodWindow(period);
-  await upsertAiUsage(db, input.userId, period, window, {
-    requests: 1,
-    tokensInput: result.tokensInput,
-    tokensOutput: result.tokensOutput,
-    cost: actualCost.toFixed(10),
-    currencyCode: price.currencyCode,
-  });
+  // A duplicate key means this exact call is already on the ledger: adding its
+  // tokens and cost again would double-count a single request.
+  if (!duplicate) {
+    const window = currentPeriodWindow(period);
+    await upsertAiUsage(db, input.userId, period, window, {
+      requests: 1,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      cost: actualCost.toFixed(10),
+      currencyCode: price.currencyCode,
+    });
+  }
 
   if (overBudget) {
     // Refuse the run only AFTER the full cost is on the ledger. The accumulator
@@ -327,6 +463,8 @@ export async function runAIFeature(
     cost: actualCost.toFixed(10),
     currencyCode: price.currencyCode,
     requestId,
+    providerKey: provider.id,
+    costSource,
   };
 }
 
