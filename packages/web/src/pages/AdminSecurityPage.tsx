@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, apiCall } from '@/lib/api';
+import { SECURITY_READ_SCOPES, api, apiCall } from '@/lib/api';
 import type {
   SecurityActionRow,
+  SecurityDelegationRow,
+  SecurityMyDelegation,
   SecurityActionSpec,
   SecurityAtRiskSession,
   SecurityBlockRow,
@@ -100,6 +102,9 @@ export function AdminSecurityPage() {
   const [specs, setSpecs] = useState<SecurityActionSpec[]>([]);
   const [atRisk, setAtRisk] = useState<SecurityAtRiskSession[]>([]);
   const [blocks, setBlocks] = useState<SecurityBlockRow[]>([]);
+  const [delegations, setDelegations] = useState<SecurityDelegationRow[]>([]);
+  const [myDelegation, setMyDelegation] = useState<SecurityMyDelegation | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [edge, setEdge] = useState<{ provider: string; coversVolumetricDdos: boolean; recommendation: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,9 +116,19 @@ export function AdminSecurityPage() {
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
 
+  const [grantEmail, setGrantEmail] = useState('');
+  const [grantScopes, setGrantScopes] = useState<string[]>(['overview']);
+  const [grantDays, setGrantDays] = useState('7');
+  const [grantReason, setGrantReason] = useState('');
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setAccessDenied(false);
+
+    const meCall = await apiCall(() => api.adminSecurityMyDelegation());
+    if (meCall.data) setMyDelegation(meCall.data);
+
     const [overviewCall, incidentsCall, eventsCall, actionsCall, rulesCall, sessionsCall, edgeCall, blocksCall] = await Promise.all([
       apiCall(() => api.adminSecurityOverview()),
       apiCall(() => api.adminSecurityIncidents({ limit: 50 })),
@@ -135,9 +150,22 @@ export function AdminSecurityPage() {
     if (sessionsCall.data) setAtRisk(sessionsCall.data.items);
     if (edgeCall.data) setEdge(edgeCall.data);
     if (blocksCall.data) setBlocks(blocksCall.data.items);
-    setError(overviewCall.error ?? incidentsCall.error ?? eventsCall.error ?? null);
+
+    // A 403 here is the policy at work, not a broken screen: the account holds
+    // neither SECURITY_READ nor a live delegation. Say so plainly.
+    if (overviewCall.errorObject?.statusCode === 403) {
+      setAccessDenied(true);
+      setError(null);
+    } else {
+      setError(overviewCall.error ?? incidentsCall.error ?? eventsCall.error ?? null);
+    }
+
+    if (isGm) {
+      const delegationsCall = await apiCall(() => api.adminSecurityDelegations(false));
+      if (delegationsCall.data) setDelegations(delegationsCall.data.items);
+    }
     setLoading(false);
-  }, []);
+  }, [isGm]);
 
   useEffect(() => {
     void load();
@@ -215,6 +243,61 @@ export function AdminSecurityPage() {
     await load();
   }
 
+  async function createDelegation() {
+    setBusy(true);
+    setNotice(null);
+    const result = await apiCall(() =>
+      api.adminSecurityCreateDelegation({
+        adminEmail: grantEmail.trim(),
+        scopes: grantScopes,
+        expiresInDays: Number(grantDays),
+        reason: grantReason,
+      }),
+    );
+    setBusy(false);
+    if (result.error) {
+      setNotice(result.error);
+      return;
+    }
+    setNotice(t('wcdc.delegation.created'));
+    setGrantReason('');
+    await load();
+  }
+
+  async function extendDelegation(row: SecurityDelegationRow) {
+    setBusy(true);
+    setNotice(null);
+    const result = await apiCall(() =>
+      api.adminSecurityAmendDelegation(row.id, { expiresInDays: Number(grantDays) || 7, reason: 'extended from the GM screen' }),
+    );
+    setBusy(false);
+    if (result.error) {
+      setNotice(result.error);
+      return;
+    }
+    setNotice(t('wcdc.delegation.extended'));
+    await load();
+  }
+
+  async function revokeDelegation(row: SecurityDelegationRow) {
+    setBusy(true);
+    setNotice(null);
+    const result = await apiCall(() => api.adminSecurityRevokeDelegation(row.id, 'revoked from the GM screen'));
+    setBusy(false);
+    if (result.error) {
+      setNotice(result.error);
+      return;
+    }
+    setNotice(t('wcdc.delegation.revokedNotice'));
+    await load();
+  }
+
+  function toggleGrantScope(scope: string) {
+    setGrantScopes((current) =>
+      current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope],
+    );
+  }
+
   async function setStatus(incident: SecurityIncidentRow, status: SecurityIncidentStatus) {
     setBusy(true);
     const result = await apiCall(() => api.adminSecuritySetStatus(incident.id, status));
@@ -251,7 +334,14 @@ export function AdminSecurityPage() {
         />
 
         {!isGm ? (
-          <p className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">{t('wcdc.readOnly')}</p>
+          <p className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
+            {t('wcdc.readOnly')}
+            {myDelegation?.grant
+              ? ` · ${t('wcdc.delegation.youHave')}: ${myDelegation.grant.scopes
+                  .map((scope) => t(`wcdc.scope.${scope}`))
+                  .join('، ')} · ${t('wcdc.delegation.until')} ${shortDate(myDelegation.grant.expiresAt, locale)}`
+              : ''}
+          </p>
         ) : null}
 
         {notice ? (
@@ -281,6 +371,11 @@ export function AdminSecurityPage() {
           <div className="mt-6 flex justify-center">
             <Spinner />
           </div>
+        ) : accessDenied ? (
+          <Card className="mt-4 p-5" testId="wcdc-no-access">
+            <h3 className="text-sm font-semibold text-slate-900">{t('wcdc.delegation.noAccess')}</h3>
+            <p className="mt-2 text-sm text-slate-600">{t('wcdc.delegation.noAccessHint')}</p>
+          </Card>
         ) : error && !overview ? (
           <div className="mt-6">
             <ErrorState message={error} onRetry={load} />
@@ -421,6 +516,135 @@ export function AdminSecurityPage() {
                     </ul>
                   )}
                 </Card>
+
+                {isGm ? (
+                  <Card className="p-4" testId="wcdc-delegations">
+                    <h3 className="text-sm font-semibold text-slate-900">{t('wcdc.delegation.title')}</h3>
+                    <p className="mt-1 text-xs text-slate-500">{t('wcdc.delegation.subtitle')}</p>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <label className="text-xs font-medium text-slate-600">
+                        {t('wcdc.delegation.email')}
+                        <input
+                          data-testid="wcdc-delegation-email"
+                          type="email"
+                          value={grantEmail}
+                          onChange={(event) => setGrantEmail(event.target.value)}
+                          className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm"
+                          dir="ltr"
+                          placeholder="admin@example.com"
+                        />
+                      </label>
+                      <label className="text-xs font-medium text-slate-600">
+                        {t('wcdc.delegation.days')}
+                        <input
+                          data-testid="wcdc-delegation-days"
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={grantDays}
+                          onChange={(event) => setGrantDays(event.target.value)}
+                          className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm"
+                          dir="ltr"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="mt-3">
+                      <p className="text-xs font-medium text-slate-600">{t('wcdc.delegation.scopes')}</p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {SECURITY_READ_SCOPES.map((scope) => (
+                          <label
+                            key={scope}
+                            className={`min-h-11 cursor-pointer rounded-lg border px-3 text-xs leading-[2.75rem] ${
+                              grantScopes.includes(scope)
+                                ? 'border-slate-900 bg-slate-900 text-white'
+                                : 'border-slate-300 text-slate-700'
+                            }`}
+                          >
+                            <input
+                              data-testid={`wcdc-delegation-scope-${scope}`}
+                              type="checkbox"
+                              className="sr-only"
+                              checked={grantScopes.includes(scope)}
+                              onChange={() => toggleGrantScope(scope)}
+                            />
+                            {t(`wcdc.scope.${scope}`)}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <label className="mt-3 block text-xs font-medium text-slate-600">
+                      {t('wcdc.delegation.reason')}
+                      <input
+                        data-testid="wcdc-delegation-reason"
+                        value={grantReason}
+                        onChange={(event) => setGrantReason(event.target.value)}
+                        className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      data-testid="wcdc-delegation-create"
+                      onClick={createDelegation}
+                      disabled={busy || !grantEmail.trim() || grantScopes.length === 0 || grantReason.trim().length < 8}
+                      className="mt-3 min-h-11 rounded-lg bg-slate-900 px-4 text-sm font-medium text-white disabled:opacity-50"
+                    >
+                      {t('wcdc.delegation.create')}
+                    </button>
+
+                    <div className="mt-4">
+                      {delegations.length === 0 ? (
+                        <p className="text-sm text-slate-500">{t('wcdc.delegation.empty')}</p>
+                      ) : (
+                        <ul className="divide-y divide-slate-100">
+                          {delegations.map((row) => (
+                            <li
+                              key={row.id}
+                              data-testid="wcdc-delegation-row"
+                              className="flex flex-wrap items-center justify-between gap-2 py-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-slate-900" dir="ltr">
+                                  {row.adminEmail ?? row.adminUserId}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  {row.scopes.map((scope) => t(`wcdc.scope.${scope}`)).join('، ')} ·{' '}
+                                  {t('wcdc.delegation.expires')}: {shortDate(row.expiresAt, locale)}
+                                </p>
+                                <p className="text-xs text-slate-400">
+                                  {t('wcdc.delegation.issuedBy')}: <span dir="ltr">{row.grantedById}</span>
+                                </p>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  data-testid={`wcdc-delegation-extend-${row.id}`}
+                                  onClick={() => extendDelegation(row)}
+                                  disabled={busy}
+                                  className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm text-slate-700 disabled:opacity-50"
+                                >
+                                  {t('wcdc.delegation.extend')}
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`wcdc-delegation-revoke-${row.id}`}
+                                  onClick={() => revokeDelegation(row)}
+                                  disabled={busy}
+                                  className="min-h-11 rounded-lg border border-red-300 px-3 text-sm text-red-700 disabled:opacity-50"
+                                >
+                                  {t('wcdc.delegation.revoke')}
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </Card>
+                ) : null}
 
                 <Card className="p-4">
                   <h3 className="text-sm font-semibold text-slate-900">{t('wcdc.policy')}</h3>

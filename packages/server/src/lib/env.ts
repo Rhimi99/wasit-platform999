@@ -249,6 +249,12 @@ const envSchema = z.object({
   /** How long security events are kept before the scheduler prunes them. */
   WCDC_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   /**
+   * Upper bound on how far ahead a SUPER_ADMIN may set a delegated security
+   * read grant (WCDC-02). Short by design: a delegation is for a shift or a
+   * handover, not a permanent role.
+   */
+  SECURITY_DELEGATION_MAX_DAYS: z.coerce.number().int().positive().max(365).default(30),
+  /**
    * External edge protection (CDN/WAF/DDoS). WCDC never calls it: the value is
    * reported so the GM screen can say whether the platform sits behind an edge
    * that can absorb a volumetric flood. Configuring a provider here does not

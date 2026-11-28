@@ -249,6 +249,44 @@ export interface SecurityBlockRow {
   active: boolean;
 }
 
+export const SECURITY_READ_SCOPES = [
+  'overview',
+  'incidents',
+  'events',
+  'actions',
+  'blocks',
+  'rules',
+  'sessions',
+  'external',
+] as const;
+
+export type SecurityReadScope = (typeof SECURITY_READ_SCOPES)[number];
+
+export interface SecurityDelegationRow {
+  id: string;
+  adminUserId: string;
+  adminEmail: string | null;
+  scopes: string[];
+  reason: string;
+  grantedById: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  revokedById: string | null;
+  expiredAt: string | null;
+  createdAt: string;
+}
+
+export interface SecurityMyDelegation {
+  heldByRole: boolean;
+  grant: {
+    id: string;
+    scopes: string[];
+    expiresAt: string;
+    grantedById: string;
+    reason: string;
+  } | null;
+}
+
 export interface SecurityAtRiskSession {
   sessionId: string;
   userId: string;
@@ -1883,6 +1921,40 @@ export const api = {
       `/api/admin/security/blocks/${id}/revoke`,
       { method: 'POST' },
     );
+  },
+  async adminSecurityDelegations(includeClosed = false) {
+    return request<{ items: SecurityDelegationRow[]; scopes: readonly string[]; maxDays: number }>(
+      `/api/admin/security/delegations?includeClosed=${includeClosed ? 'true' : 'false'}`,
+    );
+  },
+  async adminSecurityMyDelegation() {
+    return request<SecurityMyDelegation>('/api/admin/security/delegations/me');
+  },
+  async adminSecurityCreateDelegation(body: {
+    adminEmail: string;
+    scopes: string[];
+    expiresInDays: number;
+    reason: string;
+  }) {
+    return request<SecurityDelegationRow>('/api/admin/security/delegations', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  async adminSecurityAmendDelegation(
+    id: string,
+    body: { scopes?: string[]; expiresInDays?: number; reason?: string },
+  ) {
+    return request<SecurityDelegationRow>(`/api/admin/security/delegations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+  async adminSecurityRevokeDelegation(id: string, reason?: string) {
+    return request<SecurityDelegationRow>(`/api/admin/security/delegations/${id}/revoke`, {
+      method: 'POST',
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
   },
   async adminSecuritySessionsAtRisk() {
     return request<{ items: SecurityAtRiskSession[] }>('/api/admin/security/sessions/at-risk');
