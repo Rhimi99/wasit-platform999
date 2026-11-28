@@ -228,6 +228,34 @@ const envSchema = z.object({
    */
   RATE_LIMIT_API_MAX: z.coerce.number().int().positive().default(300),
   RATE_LIMIT_API_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  // ── WCDC-01 — Cyber Defence Centre ────────────────────────────────────────
+  /** Turns request-side collection and block enforcement on or off. */
+  WCDC_ENABLED: z.enum(['on', 'off']).default('on'),
+  /**
+   * Automatic containment. `off` (default) means WCDC observes and recommends,
+   * and every containment action needs a GM. `limited` lets only a request
+   * flood from one address be tightened/blocked automatically; nothing that
+   * touches accounts, files, RBAC, MFA or money is ever automatic.
+   */
+  WCDC_AUTO_CONTAINMENT: z.enum(['off', 'limited']).default('off'),
+  /** How long an automatic or manual IP block lasts, in minutes. */
+  WCDC_BLOCK_TTL_MINUTES: z.coerce.number().int().positive().default(60),
+  /** How long a tightened rate limit lasts, in minutes. */
+  WCDC_TIGHTEN_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+  /** Requests per window from one address before a flood is recorded. */
+  // 120 requests in 10s clears a busy shared NAT and still catches a flood.
+  WCDC_BURST_MAX: z.coerce.number().int().positive().default(120),
+  WCDC_BURST_WINDOW_SECONDS: z.coerce.number().int().positive().default(10),
+  /** How long security events are kept before the scheduler prunes them. */
+  WCDC_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  /**
+   * External edge protection (CDN/WAF/DDoS). WCDC never calls it: the value is
+   * reported so the GM screen can say whether the platform sits behind an edge
+   * that can absorb a volumetric flood. Configuring a provider here does not
+   * create an account, change DNS or spend money.
+   */
+  WCDC_EDGE_PROVIDER: z.enum(['none', 'cloudflare', 'fastly', 'aws-shield', 'other']).default('none'),
+  WCDC_EDGE_NOTES: z.string().optional(),
   /**
    * AI endpoints (`/api/ai/*`, `/api/admin/ai/*`) are the only surfaces where a
    * request can cost money, so each is assigned a class in

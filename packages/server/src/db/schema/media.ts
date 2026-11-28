@@ -17,6 +17,7 @@ export const mediaAssetStatusEnum = pgEnum('media_asset_status', [
   'READY',
   'FAILED',
   'DELETED',
+  'QUARANTINED',
 ]);
 
 export const mediaAssets = pgTable(

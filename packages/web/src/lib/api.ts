@@ -122,6 +122,142 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return body.data as T;
 }
 
+
+// ── WCDC-01 — GM Security Center ────────────────────────────────────────────
+export type SecuritySeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type SecurityIncidentStatus = 'OPEN' | 'ACKNOWLEDGED' | 'CONTAINED' | 'RESOLVED' | 'CLOSED';
+
+export interface SecurityOverview {
+  posture: { level: 'CALM' | 'ELEVATED' | 'HIGH' | 'CRITICAL'; score: number; basis: string; worstRule: string | null };
+  counts: {
+    events24h: number;
+    incidentsOpen: number;
+    incidentsContained: number;
+    incidentsResolved24h: number;
+    criticalOpen: number;
+    blockedAddresses: number;
+    atRiskSessions: number;
+    pendingApprovals: number;
+  };
+  bySeverity: Record<SecuritySeverity, number>;
+  topRules: Array<{ ruleId: string; title: string; count: number; severity: SecuritySeverity }>;
+  protection: {
+    api: {
+      enabled: boolean;
+      blockedAddresses: number;
+      tightened: string;
+      addressControls: 'forwarded' | 'socket';
+    };
+    uploads: { rejected24h: number; quarantinedAssets: number };
+    agents: { outOfScope24h: number; aiExecutionStopped: boolean | null };
+    audit: { tamperAttempts24h: number; lastWriteAt: string | null };
+    edge: {
+      provider: string;
+      note: string | null;
+      providerConfigured: boolean;
+      coversVolumetric: boolean;
+    };
+  };
+  policy: {
+    autoContainment: 'off' | 'limited';
+    source: 'default' | 'policy';
+    policyId: string | null;
+    version: number | null;
+    burstMax: number;
+    burstWindowSeconds: number;
+    blockTtlMinutes: number;
+  };
+  generatedAt: string;
+}
+
+export interface SecurityEventRow {
+  id: string;
+  occurredAt: string;
+  source: string;
+  category: string;
+  ruleId: string;
+  severity: SecuritySeverity;
+  actorId: string | null;
+  ipAddress: string | null;
+  method: string | null;
+  route: string | null;
+  statusCode: number | null;
+  sessionHash: string | null;
+  incidentId: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface SecurityIncidentRow {
+  id: string;
+  ruleId: string;
+  category: string;
+  title: string;
+  severity: SecuritySeverity;
+  status: SecurityIncidentStatus;
+  riskScore: number;
+  actorId: string | null;
+  ipAddress: string | null;
+  eventCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  containment: Record<string, unknown> | null;
+  resolutionNote: string | null;
+}
+
+export interface SecurityActionRow {
+  id: string;
+  incidentId: string | null;
+  actionType: string;
+  status: 'EXECUTED' | 'REQUIRES_APPROVAL' | 'REFUSED' | 'FAILED';
+  mode: 'AUTO' | 'MANUAL';
+  target: string | null;
+  reason: string | null;
+  requestedById: string | null;
+  approvedById: string | null;
+  result: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface SecurityRuleRow {
+  id: string;
+  category: string;
+  title: string;
+  severity: SecuritySeverity;
+  threshold: number;
+  windowSeconds: number;
+  autoEligible: boolean;
+  effectiveThreshold: number;
+  effectiveWindowSeconds: number;
+}
+
+export interface SecurityActionSpec {
+  action: string;
+  label: string;
+  requiresApproval: boolean;
+  autoEligible: boolean;
+  targetKind: 'ip' | 'user' | 'session' | 'asset' | 'incident' | 'none';
+}
+
+export interface SecurityBlockRow {
+  id: string;
+  kind: 'IP' | 'SESSION';
+  target: string;
+  reason: string | null;
+  expiresAt: string;
+  createdAt: string;
+  revokedAt: string | null;
+  active: boolean;
+}
+
+export interface SecurityAtRiskSession {
+  sessionId: string;
+  userId: string;
+  email: string | null;
+  sessionIp: string | null;
+  lastSeenAt: string | null;
+  addressesSeen: number;
+}
+
 export const api = {
   // ---- Auth ----
   /**
@@ -1681,6 +1817,87 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ reason }) },
     );
   },
+  // ── WCDC-01 — GM Security Center ──────────────────────────────────────────
+  async adminSecurityOverview() {
+    return request<SecurityOverview>('/api/admin/security/overview');
+  },
+  async adminSecurityRules() {
+    return request<{ rules: SecurityRuleRow[]; actions: SecurityActionSpec[]; forbiddenActions: string[]; policy: Record<string, unknown> }>(
+      '/api/admin/security/rules',
+    );
+  },
+  async adminSecurityEvents(params: { ruleId?: string; severity?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.ruleId) qs.set('ruleId', params.ruleId);
+    if (params.severity) qs.set('severity', params.severity);
+    qs.set('limit', String(params.limit ?? 50));
+    return request<{ items: SecurityEventRow[]; total: number }>(`/api/admin/security/events?${qs}`);
+  },
+  async adminSecurityIncidents(params: { status?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    qs.set('limit', String(params.limit ?? 50));
+    return request<{ items: SecurityIncidentRow[]; total: number }>(`/api/admin/security/incidents?${qs}`);
+  },
+  async adminSecurityIncident(id: string) {
+    return request<{ incident: SecurityIncidentRow; events: SecurityEventRow[]; actions: SecurityActionRow[] }>(
+      `/api/admin/security/incidents/${id}`,
+    );
+  },
+  async adminSecuritySetStatus(id: string, status: SecurityIncidentStatus, note?: string) {
+    return request<SecurityIncidentRow>(`/api/admin/security/incidents/${id}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, note }),
+    });
+  },
+  async adminSecurityRespond(id: string, body: { action: string; target?: string; reason: string }) {
+    return request<{ id: string; status: string; detail: string; requiresApproval: boolean }>(
+      `/api/admin/security/incidents/${id}/respond`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  },
+  async adminSecurityApprove(actionId: string) {
+    return request<{ id: string; status: string; detail: string }>(`/api/admin/security/actions/${actionId}/approve`, {
+      method: 'POST',
+    });
+  },
+  async adminSecurityActions(params: { status?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    qs.set('limit', String(params.limit ?? 50));
+    return request<{ items: SecurityActionRow[] }>(`/api/admin/security/actions?${qs}`);
+  },
+  async adminSecurityScan(windowMinutes = 60) {
+    return request<{ scanned: number; recorded: number; incidentsOpened: number; windowMinutes: number }>(
+      '/api/admin/security/scan',
+      { method: 'POST', body: JSON.stringify({ windowMinutes }) },
+    );
+  },
+  async adminSecurityBlocks(activeOnly = true) {
+    return request<{ items: SecurityBlockRow[] }>(
+      `/api/admin/security/blocks?activeOnly=${activeOnly ? 'true' : 'false'}`,
+    );
+  },
+  async adminSecurityRevokeBlock(id: string) {
+    return request<{ id: string; status: string; target: string | null; detail: string }>(
+      `/api/admin/security/blocks/${id}/revoke`,
+      { method: 'POST' },
+    );
+  },
+  async adminSecuritySessionsAtRisk() {
+    return request<{ items: SecurityAtRiskSession[] }>('/api/admin/security/sessions/at-risk');
+  },
+  async adminSecurityExternal() {
+    return request<{
+      provider: string;
+      configured: boolean;
+      notes: string | null;
+      coversVolumetricDdos: boolean;
+      recommendation: string;
+      integrationMode: string;
+    }>('/api/admin/security/external');
+  },
+
 };
 
 function directoryQuery(params: { q?: string; page?: number; pageSize?: number; buyerType?: 'CUSTOMER' | 'MERCHANT' | 'COMPANY' }): string {
