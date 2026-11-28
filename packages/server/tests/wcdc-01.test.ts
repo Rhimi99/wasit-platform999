@@ -169,11 +169,12 @@ describe('WCDC access control', () => {
     expect((await customer.client.req('/api/admin/security/incidents')).status).toBe(403);
   });
 
-  it('lets an ADMIN read the centre but not contain anything', async () => {
+  it('keeps an ADMIN out of the centre until the GM delegates a scope', async () => {
+    // WCDC-02: ADMIN no longer holds SECURITY_READ by role. The delegation path
+    // itself is covered end to end in tests/wcdc-02-delegation.test.ts.
     const overview = await admin.client.req('/api/admin/security/overview');
-    expect(overview.status).toBe(200);
-    expect(overview.data.success).toBe(true);
-    expect(overview.data.data.counts).toBeDefined();
+    expect(overview.status).toBe(403);
+    expect((await admin.client.req('/api/admin/security/incidents')).status).toBe(403);
 
     const [incident] = await db.select().from(securityIncidents).limit(1);
     const respond = await admin.client.req(`/api/admin/security/incidents/${incident?.id ?? randomUUID()}/respond`, {

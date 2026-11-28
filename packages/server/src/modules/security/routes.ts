@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { ApiError, PERMISSIONS } from '@wasit/shared';
-import { requireAuth, requirePermission } from '../../middleware/auth.js';
+import { requireAuth, requirePermission, requireRole } from '../../middleware/auth.js';
 import { getValidatedBody, getValidatedQuery, validateBody, validateQuery } from '../../middleware/validate.js';
 import { getContext, getDb } from '../../lib/request-context.js';
+import { users } from '../../db/schema/auth.js';
 import { writeAudit } from '../../lib/audit.js';
 import { env } from '../../lib/env.js';
 import { resolveWcdcPolicy } from '../../lib/wcdc/policy.js';
@@ -16,6 +18,15 @@ import {
   SECURITY_RULES,
   isForbiddenAction,
 } from '../../lib/wcdc/types.js';
+import { auditContext, requireSecurityRead } from './guard.js';
+import {
+  SECURITY_READ_SCOPES,
+  amendSecurityReadGrant,
+  createSecurityReadGrant,
+  findActiveSecurityReadGrant,
+  listSecurityReadGrants,
+  revokeSecurityReadGrant,
+} from './delegations.js';
 import {
   getIncident,
   listActions,
@@ -31,9 +42,10 @@ import {
 /**
  * GM Security Center API — `/api/admin/security`.
  *
- * Reads need `SECURITY_READ` (ADMIN or SUPER_ADMIN). Everything that changes
- * state needs `SECURITY_RESPOND`, which only the GM (SUPER_ADMIN) holds, and
- * every such call is audited with who/what/why.
+ * Reads are gated by `requireSecurityRead(scope)`: `SUPER_ADMIN` holds
+ * `SECURITY_READ`, and an `ADMIN` reads only through a live, scoped grant that a
+ * named `SUPER_ADMIN` issued (WCDC-02). Everything that changes state needs
+ * `SECURITY_RESPOND`, which no delegation can satisfy.
  */
 export const securityRoutes = new Hono();
 
@@ -80,17 +92,8 @@ const scanBodySchema = z.object({
   windowMinutes: z.coerce.number().int().min(5).max(24 * 60).optional(),
 });
 
-function auditContext(c: Parameters<typeof getContext>[0]) {
-  const ctx = getContext(c);
-  return {
-    actorId: ctx?.user?.id ?? null,
-    ipAddress: ctx?.ipAddress ?? null,
-    userAgent: ctx?.userAgent ?? null,
-  };
-}
-
 /** Rule catalogue, with the effective thresholds and the policy in force. */
-securityRoutes.get('/rules', requirePermission(PERMISSIONS.SECURITY_READ), async (c) => {
+securityRoutes.get('/rules', requireSecurityRead('rules'), async (c) => {
   const db = getDb(c);
   const policy = await resolveWcdcPolicy(db);
   return c.json({
@@ -115,14 +118,14 @@ securityRoutes.get('/rules', requirePermission(PERMISSIONS.SECURITY_READ), async
   });
 });
 
-securityRoutes.get('/overview', requirePermission(PERMISSIONS.SECURITY_READ), async (c) => {
+securityRoutes.get('/overview', requireSecurityRead('overview'), async (c) => {
   const overview = await securityOverview(getDb(c));
   return c.json({ success: true, data: overview });
 });
 
 securityRoutes.get(
   '/events',
-  requirePermission(PERMISSIONS.SECURITY_READ),
+  requireSecurityRead('events'),
   validateQuery(eventsQuerySchema),
   async (c) => {
     const query = getValidatedQuery<z.infer<typeof eventsQuerySchema>>(c);
@@ -133,7 +136,7 @@ securityRoutes.get(
 
 securityRoutes.get(
   '/incidents',
-  requirePermission(PERMISSIONS.SECURITY_READ),
+  requireSecurityRead('incidents'),
   validateQuery(incidentsQuerySchema),
   async (c) => {
     const query = getValidatedQuery<z.infer<typeof incidentsQuerySchema>>(c);
@@ -142,7 +145,7 @@ securityRoutes.get(
   },
 );
 
-securityRoutes.get('/incidents/:id', requirePermission(PERMISSIONS.SECURITY_READ), async (c) => {
+securityRoutes.get('/incidents/:id', requireSecurityRead('incidents'), async (c) => {
   const detail = await getIncident(getDb(c), c.req.param('id')!);
   if (!detail) throw ApiError.notFound('Incident');
   return c.json({ success: true, data: detail });
@@ -221,7 +224,7 @@ securityRoutes.post(
 
 securityRoutes.get(
   '/actions',
-  requirePermission(PERMISSIONS.SECURITY_READ),
+  requireSecurityRead('actions'),
   validateQuery(actionsQuerySchema),
   async (c) => {
     const query = getValidatedQuery<z.infer<typeof actionsQuerySchema>>(c);
@@ -261,7 +264,7 @@ securityRoutes.post('/actions/:id/approve', requirePermission(PERMISSIONS.SECURI
   return c.json({ success: true, data: outcome });
 });
 
-securityRoutes.get('/sessions/at-risk', requirePermission(PERMISSIONS.SECURITY_READ), async (c) => {
+securityRoutes.get('/sessions/at-risk', requireSecurityRead('sessions'), async (c) => {
   const items = await sessionsAtRisk(getDb(c));
   return c.json({ success: true, data: { items } });
 });
@@ -274,7 +277,7 @@ const blocksQuerySchema = z.object({
 /** What is blocked right now, and until when. The GM must be able to see it. */
 securityRoutes.get(
   '/blocks',
-  requirePermission(PERMISSIONS.SECURITY_READ),
+  requireSecurityRead('blocks'),
   validateQuery(blocksQuerySchema),
   async (c) => {
     const query = getValidatedQuery<z.infer<typeof blocksQuerySchema>>(c);
@@ -329,7 +332,7 @@ securityRoutes.post(
 );
 
 /** Edge protection status. Reporting only — WCDC never calls the provider. */
-securityRoutes.get('/external', requirePermission(PERMISSIONS.SECURITY_READ), async (c) => {
+securityRoutes.get('/external', requireSecurityRead('external'), async (c) => {
   const provider = env.WCDC_EDGE_PROVIDER;
   return c.json({
     success: true,
@@ -350,3 +353,145 @@ securityRoutes.get('/external', requirePermission(PERMISSIONS.SECURITY_READ), as
     },
   });
 });
+
+/* ── Delegated read access (WCDC-02) ───────────────────────────────────────
+ * Only a SUPER_ADMIN issues, amends or revokes these. There is no route that
+ * lets the beneficiary — or any agent, or any other ADMIN — touch its own
+ * grant: the delegation table is append-only from the outside, and the audit
+ * trail records every change with the issuer's identity.
+ */
+
+const grantScopesBody = z.array(z.string().min(2).max(40)).min(1).max(SECURITY_READ_SCOPES.length);
+
+const createGrantSchema = z
+  .object({
+    adminUserId: z.string().min(8).max(36).optional(),
+    adminEmail: z.string().email().max(200).optional(),
+    scopes: grantScopesBody,
+    expiresInDays: z.coerce.number().int().min(1).max(365).optional(),
+    expiresAt: z.string().datetime().optional(),
+    reason: z.string().min(8).max(500),
+  })
+  .refine((value) => Boolean(value.adminUserId) !== Boolean(value.adminEmail), {
+    message: 'Give exactly one of adminUserId or adminEmail',
+    path: ['adminUserId'],
+  })
+  .refine((value) => Boolean(value.expiresInDays) !== Boolean(value.expiresAt), {
+    message: 'Give exactly one of expiresInDays or expiresAt',
+    path: ['expiresAt'],
+  });
+
+const amendGrantSchema = z
+  .object({
+    scopes: grantScopesBody.optional(),
+    expiresInDays: z.coerce.number().int().min(1).max(365).optional(),
+    expiresAt: z.string().datetime().optional(),
+    reason: z.string().max(500).optional(),
+  })
+  .refine((value) => Boolean(value.scopes) || Boolean(value.expiresInDays) || Boolean(value.expiresAt), {
+    message: 'Nothing to change',
+    path: ['scopes'],
+  });
+
+async function resolveBeneficiaryId(
+  db: ReturnType<typeof getDb>,
+  body: { adminUserId?: string; adminEmail?: string },
+): Promise<string> {
+  if (body.adminUserId) return body.adminUserId;
+  const email = (body.adminEmail ?? '').trim().toLowerCase();
+  const [row] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+  if (!row) throw ApiError.notFound('Administrator account');
+  return row.id;
+}
+
+function expiryFrom(body: { expiresInDays?: number; expiresAt?: string }): Date {
+  if (body.expiresAt) return new Date(body.expiresAt);
+  return new Date(Date.now() + (body.expiresInDays ?? 7) * 24 * 3600 * 1000);
+}
+
+/** The caller's own delegation, so an ADMIN can see what it may read. */
+securityRoutes.get('/delegations/me', async (c) => {
+  const ctx = getContext(c);
+  const user = ctx?.user;
+  if (!user) throw ApiError.unauthorized('Authentication required');
+  const heldByRole = user.roles.includes('SUPER_ADMIN');
+  const grant = heldByRole ? null : await findActiveSecurityReadGrant(getDb(c), user.id);
+  return c.json({
+    success: true,
+    data: {
+      heldByRole,
+      grant: grant
+        ? {
+            id: grant.id,
+            scopes: grant.scopes,
+            expiresAt: grant.expiresAt,
+            grantedById: grant.grantedById,
+            reason: grant.reason,
+          }
+        : null,
+    },
+  });
+});
+
+securityRoutes.get('/delegations', requireRole('SUPER_ADMIN'), async (c) => {
+  const includeClosed = c.req.query('includeClosed') === 'true';
+  const items = await listSecurityReadGrants(getDb(c), { includeClosed });
+  return c.json({
+    success: true,
+    data: {
+      items,
+      scopes: SECURITY_READ_SCOPES,
+      maxDays: env.SECURITY_DELEGATION_MAX_DAYS,
+    },
+  });
+});
+
+securityRoutes.post(
+  '/delegations',
+  requireRole('SUPER_ADMIN'),
+  validateBody(createGrantSchema),
+  async (c) => {
+    const db = getDb(c);
+    const body = getValidatedBody<z.infer<typeof createGrantSchema>>(c);
+    const grant = await createSecurityReadGrant(db, {
+      adminUserId: await resolveBeneficiaryId(db, body),
+      scopes: body.scopes,
+      expiresAt: expiryFrom(body),
+      reason: body.reason,
+      actor: auditContext(c),
+    });
+    return c.json({ success: true, data: grant });
+  },
+);
+
+securityRoutes.patch(
+  '/delegations/:id',
+  requireRole('SUPER_ADMIN'),
+  validateBody(amendGrantSchema),
+  async (c) => {
+    const body = getValidatedBody<z.infer<typeof amendGrantSchema>>(c);
+    const grant = await amendSecurityReadGrant(getDb(c), {
+      id: c.req.param('id')!,
+      scopes: body.scopes,
+      expiresAt: body.expiresInDays || body.expiresAt ? expiryFrom(body) : undefined,
+      reason: body.reason,
+      actor: auditContext(c),
+    });
+    return c.json({ success: true, data: grant });
+  },
+);
+
+securityRoutes.post(
+  '/delegations/:id/revoke',
+  requireRole('SUPER_ADMIN'),
+  validateBody(z.object({ reason: z.string().max(500).optional() }).optional().default({})),
+  async (c) => {
+    const body = getValidatedBody<{ reason?: string }>(c) ?? {};
+    const grant = await revokeSecurityReadGrant(getDb(c), {
+      id: c.req.param('id')!,
+      reason: body.reason,
+      actor: auditContext(c),
+    });
+    return c.json({ success: true, data: grant });
+  },
+);

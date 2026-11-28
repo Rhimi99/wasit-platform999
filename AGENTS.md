@@ -1454,9 +1454,19 @@ npx playwright install --with-deps chromium
 - **الأحداث**: كل إشارة → `security_events` (بلا أي payload أو كلمة مرور أو توكن؛ التوكن hash فقط) وتُجمَّع في `security_incidents` بمفتاح `(ruleId, subjectKey)`.
 - **الإجراءات المسموحة فقط** (`ACTION_SPECS`): `BLOCK_IP`, `UNBLOCK_IP`, `RATE_LIMIT_TIGHTEN`, `REVOKE_SESSION`, `QUARANTINE_ASSET`, `ESCALATE`, `NOTIFY_GM`, `AI_KILL_SWITCH`. أي طلب لـ`FORBIDDEN_ACTIONS` (منح صلاحية/RBAC/MFA/حذف بيانات أو تدقيق/migration/إيقاف خدمة/مدفوعات/تحويل مال) يُرفض 403 ويُسجَّل `REFUSED` + `FORBIDDEN_OPERATION` + audit `SECURITY.ACTION_REFUSED`.
 - **العيون الأربع**: `REVOKE_SESSION`/`QUARANTINE_ASSET`/`AI_KILL_SWITCH` تتطلب `SUPER_ADMIN` **آخر**؛ الاعتماد يُحجز بتحديث شرطي (`WHERE status='REQUIRES_APPROVAL'`) قبل التنفيذ ⇒ إعادة الاعتماد 409 ولا تنفيذ مزدوج.
-- **RBAC**: `SECURITY_READ` لـ`ADMIN`+`SUPER_ADMIN`، `SECURITY_RESPOND`/`SECURITY_MANAGE` لـ`SUPER_ADMIN` فقط. إخفاء الزر ليس صلاحية.
+- **RBAC (WCDC-02)**: `SECURITY_READ` لـ`SUPER_ADMIN` فقط. `ADMIN` لا يقرأ المركز إلا بتفويض صريح (`security_read_grants`: مستفيد + نطاق + انتهاء + مُصدر) قابل للسحب فوراً، ويُقرأ من DB عند **كل** طلب (ليس claim في الجلسة). `SECURITY_RESPOND`/`SECURITY_MANAGE` لـ`SUPER_ADMIN` فقط ولا يجوز تفويضهما. إخفاء الزر ليس صلاحية.
 - **الاحتواء التلقائي**: مطفأ افتراضياً؛ حتى مع `limited` يقتصر على `RATE_BURST`/`RATE_LIMIT_ABUSE` من عنوان معروف، ولا يلمس قواعد على مستوى الحساب.
 - **حدود صريحة**: لا امتصاص DDoS حجمي (CDN/WAF فقط، و`coversVolumetric:false` دائماً)؛ العدّادات والتقييد المؤقت **لكل عملية** (الحجب في DB ويعمّ الكل بكاش 2s)؛ لا فحص لأجسام multipart؛ `x-www-form-urlencoded` يُفحص بعد تحويل `+` إلى مسافة (بدونها يمر `' OR 1=1`).
 - **الصيانة**: `sweepWcdcData` في `lib/scheduler.ts` (tick ساعي) يحذف الأحداث الأقدم من `WCDC_EVENT_RETENTION_DAYS` (30) والحجب المنتهية منذ >7 أيام.
 - **الواجهة**: `/admin/security` (`pages/AdminSecurityPage.tsx`) — نظرة عامة/حوادث/أحداث/إجراءات + بطاقة الحجب مع زر «رفع الحظر» للمدير العام فقط؛ مفاتيح `wcdc.*` في ar/en/fr.
-- **تشغيل اختباراته**: `TEST_DATABASE_URL=...wasit_test npx vitest run tests/wcdc-01.test.ts tests/wcdc-01-rules.test.ts` (الاختبار يشغّل مستمع HTTP حقيقي لأن WCDC يعمل من عنوان العميل، ويعلن loopback كوكيل موثوق).
+- **تشغيل اختباراته**: `TEST_DATABASE_URL=...wasit_test npx vitest run tests/wcdc-01.test.ts tests/wcdc-01-rules.test.ts tests/wcdc-02-delegation.test.ts` (الاختبار يشغّل مستمع HTTP حقيقي لأن WCDC يعمل من عنوان العميل، ويعلن loopback كوكيل موثوق).
+
+## WASIT-WCDC-02 — تفويض قراءة مركز الأمن (SECURITY_READ)
+
+- **الملفات**: `db/schema/security-delegations.ts` (جدول `security_read_grants`)، `modules/security/delegations.ts` (الخدمة)، `modules/security/guard.ts` (`requireSecurityRead(scope)` + `auditContext`)، migration `0051_amused_tattoo.sql`.
+- **الحراسة**: كل مسار قراءة في `modules/security/routes.ts` يستخدم `requireSecurityRead('<scope>')` بدل `requirePermission(SECURITY_READ)`. النطاقات: `overview|incidents|events|actions|blocks|rules|sessions|external`.
+- **الإصدار/التعديل/السحب**: `POST|GET /api/admin/security/delegations`، `PATCH /:id`، `POST /:id/revoke` كلها `requireRole('SUPER_ADMIN')`. `GET /delegations/me` لأي موظف مسجّل.
+- **التدقيق**: `SECURITY.DELEGATION_{GRANTED,UPDATED,REVOKED,EXPIRED}` + `SECURITY.READ_REFUSED` + `SECURITY.READ_SCOPE_REFUSED` + `SECURITY.DELEGATED_READ`. لا مسار يعدّل/يحذف `audit_logs`.
+- **السقف**: `SECURITY_DELEGATION_MAX_DAYS` (30). الانتهاء يُرفض عند كل طلب + يُسجَّل بـ`expired_at` من `sweepWcdcData`.
+- **E2E**: `e2e/wcdc-security.spec.ts` — يشغَّل على `wasit_dev` محلي: `DATABASE_URL=...wasit_dev E2E_API_URL=http://localhost:3100 E2E_WEB_URL=http://localhost:5199 npx playwright test e2e/wcdc-security.spec.ts` (4 اختبارات؛ الاختبار ينشئ التفويض ويسحبه بنفسه فلا يترك أثراً).
+- **التوثيق**: `docs/WCDC-02_SECURITY_READ_DELEGATION.md`.

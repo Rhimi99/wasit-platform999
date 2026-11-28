@@ -13,6 +13,7 @@ import { sessions, users } from '../../db/schema/auth';
 import { env } from '../../lib/env';
 import { recordSecurityEvent } from '../../lib/wcdc/collector';
 import { resolveWcdcPolicy, type WcdcPolicy } from '../../lib/wcdc/policy';
+import { expireSecurityReadGrants } from './delegations';
 import {
   postureLevel,
   riskScore,
@@ -577,14 +578,18 @@ export async function listBlocks(
  * long ago. Retention is a promise the centre makes on the GM screen, so it is
  * enforced by the scheduler rather than left to an operator.
  */
-export async function sweepWcdcData(db: DB): Promise<{ prunedEvents: number; prunedBlocks: number }> {
+export async function sweepWcdcData(
+  db: DB,
+): Promise<{ prunedEvents: number; prunedBlocks: number; expiredGrants: number }> {
   const prunedEvents = await pruneSecurityEvents(db);
+  // A grant that ran out must be recorded as expired, not left looking live.
+  const expiredGrants = await expireSecurityReadGrants(db);
   const cutoff = new Date(Date.now() - 7 * 24 * 3600 * 1000);
   const pruned = await db
     .delete(securityBlocks)
     .where(sql`${securityBlocks.expiresAt} < ${cutoff.toISOString()}`)
     .returning({ id: securityBlocks.id });
-  return { prunedEvents, prunedBlocks: pruned.length };
+  return { prunedEvents, prunedBlocks: pruned.length, expiredGrants };
 }
 
 /** Retention sweep; the scheduler calls it daily. */
